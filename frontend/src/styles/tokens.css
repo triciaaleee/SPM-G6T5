@@ -1,0 +1,66 @@
+/* Design tokens sourced from Style.md — reuse these variables, never
+   re-derive hex/px values inline (Style.md Section 0.9). */
+:root {
+  /* Colours — Base & Grey */
+  --color-base-white: #FFFFFF;
+  --color-base-black: #121212;
+  --color-grey-25: #FCFCFC;
+  --color-grey-50: #F7F7F7;
+  --color-grey-75: #F0F0F0;
+  --color-grey-100: #E5E5E5;
+  --color-grey-200: #CCCCCC;
+  --color-grey-300: #ABABAB;
+  --color-grey-400: #999999;
+  --color-grey-500: #7A7A7A;
+  --color-grey-600: #5E5E5E;
+  --color-grey-700: #454545;
+  --color-grey-800: #2F2F2F;
+  --color-grey-900: #222222;
+
+  /* Purple Primary */
+  --color-purple-100: #F3EAFC;
+  --color-purple-200: #E5D3F7;
+  --color-purple-300: #CEABF1;
+  --color-purple-600: #701EC2;
+  --color-purple-700: #5A04AF;
+  --color-purple-800: #3F037A;
+
+  /* Semantic */
+  --color-error-200: #FFE3E0;
+  --color-error-600: #CC1000;
+  --color-warning-400: #F5A01A;
+  --color-warning-600: #F2721B;
+  --color-success-600: #008545;
+
+  /* Typography */
+  --font-family-lato: "Lato", sans-serif;
+
+  /* Spacing (4px base unit) */
+  --spacing-4: 4px;
+  --spacing-8: 8px;
+  --spacing-12: 12px;
+  --spacing-16: 16px;
+  --spacing-24: 24px;
+  --spacing-32: 32px;
+  --spacing-40: 40px;
+  --spacing-80: 80px;
+
+  /* Grid */
+  --grid-desktop-margin: 80px;
+  --grid-desktop-gutter: 32px;
+  --grid-tablet-margin: 32px;
+  --grid-tablet-gutter: 32px;
+  --grid-mobile-margin: 6px;
+  --grid-mobile-gutter: 16px;
+
+  /* Radius */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-lg: 16px;
+  --radius-full: 128px;
+
+  /* Focus rings */
+  --ring-brand: #701EC2;
+  --ring-light: rgba(112, 30, 194, 0.24);
+  --ring-error: #FFE3E0;
+}

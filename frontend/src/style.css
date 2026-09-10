@@ -1,0 +1,45 @@
+@import "./styles/tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family-lato);
+  font-weight: 400;
+  font-size: 1rem;
+  line-height: 1.25rem;
+  color: var(--color-grey-700);
+  background: var(--color-grey-25);
+}
+
+a {
+  color: var(--color-purple-600);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--color-purple-700);
+}
+
+/* Non-input interactive elements: single ring-brand outline (Style.md 8.2) */
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+/* Form inputs/selects: two-layer focus treatment (Style.md 8.2) */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  border-color: var(--ring-brand);
+  box-shadow: 0 0 0 4px var(--ring-light);
+}
