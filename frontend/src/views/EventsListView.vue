@@ -33,8 +33,18 @@ function statusClass(status: string): string {
   -->
   <div class="page">
     <div class="content">
-      <h1 class="h2">My events</h1>
-      <p class="subheading">Only events you created appear here.</p>
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <h1 class="h2">My events</h1>
+          <p class="subheading">Only events you created appear here.</p>
+        </div>
+        <RouterLink
+          :to="{ name: 'new-event-request' }"
+          class="shrink-0 rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700"
+        >
+          New event request
+        </RouterLink>
+      </div>
 
       <p v-if="loading" class="body-default muted">Loading your events…</p>
       <p v-else-if="errorMessage" class="body-default error-text">{{ errorMessage }}</p>

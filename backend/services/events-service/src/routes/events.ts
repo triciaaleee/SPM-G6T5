@@ -1,10 +1,48 @@
 import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
+import { validateEventRequest } from "../lib/validateEventRequest.js";
 
 export const eventsRouter = Router();
 
 eventsRouter.use(requireAuth);
+
+/**
+ * E2-1: submit a new event request. Validates the mandatory fields per the
+ * story's acceptance criteria, then inserts with status "Requested" — RLS
+ * (organisers_insert_own_events) still enforces organiser_id = auth.uid()
+ * at the DB layer.
+ */
+eventsRouter.post("/", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const result = validateEventRequest(req.body ?? {});
+  if (!result.valid) {
+    res.status(400).json({ error: "Validation failed", fields: result.fields });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .insert({
+      organiser_id: user.id,
+      status: "Requested",
+      submitted_details: result.value,
+    })
+    .select("id, status, submitted_details, coordinator_id, review_outcome, created_at")
+    .single();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to submit event request" });
+    return;
+  }
+
+  res.status(201).json({ event: data, message: "Your event request has been submitted." });
+});
 
 /**
  * List events belonging to the authenticated organiser only.

@@ -24,7 +24,44 @@ export async function fetchMyEvents(): Promise<EventSummary[]> {
   return body.events as EventSummary[];
 }
 
+export interface EventRequestPayload {
+  name: string;
+  purpose: string;
+  description: string;
+  proposedDate: string;
+  startTime: string;
+  endTime: string;
+  expectedAttendance: number | string;
+}
+
+export class ValidationError extends Error {
+  fields: Record<string, string>;
+  constructor(fields: Record<string, string>) {
+    super("Validation failed");
+    this.fields = fields;
+  }
+}
+
 export class AccessDeniedError extends Error {}
+
+export async function submitEventRequest(payload: EventRequestPayload): Promise<EventSummary> {
+  const res = await fetch(apiBase, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify(payload),
+  });
+
+  const body = await res.json();
+
+  if (res.status === 400) {
+    throw new ValidationError(body.fields ?? {});
+  }
+  if (!res.ok) {
+    throw new Error(body.error ?? "Failed to submit event request");
+  }
+
+  return body.event as EventSummary;
+}
 
 export async function fetchEventById(id: string): Promise<EventSummary> {
   const res = await fetch(`${apiBase}/${id}`, { headers: await authHeader() });

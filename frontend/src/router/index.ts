@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 import EventsListView from "../views/EventsListView.vue";
 import EventDetailView from "../views/EventDetailView.vue";
+import NewEventRequestView from "../views/NewEventRequestView.vue";
 import LoginView from "../views/LoginView.vue";
 import { supabase } from "../lib/supabase";
 
@@ -9,6 +10,12 @@ export const router = createRouter({
   routes: [
     { path: "/login", name: "login", component: LoginView },
     { path: "/", name: "events-list", component: EventsListView, meta: { requiresAuth: true } },
+    {
+      path: "/events/new",
+      name: "new-event-request",
+      component: NewEventRequestView,
+      meta: { requiresAuth: true },
+    },
     {
       path: "/events/:id",
       name: "event-detail",

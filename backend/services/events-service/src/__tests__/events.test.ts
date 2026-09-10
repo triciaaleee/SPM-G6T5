@@ -14,6 +14,16 @@ vi.mock("../middleware/auth.js", async () => {
   };
 });
 
+const validPayload = {
+  name: "Freshman Orientation",
+  purpose: "Welcome new students",
+  description: "Campus tour and icebreakers",
+  proposedDate: "2099-01-01",
+  startTime: "09:00",
+  endTime: "11:00",
+  expectedAttendance: 50,
+};
+
 function buildApp(mockSupabase: unknown) {
   (globalThis as any).__mockSupabase = mockSupabase;
   const app = express();
@@ -83,5 +93,90 @@ describe("GET /api/events/:id", () => {
     expect(res.status).toBe(200);
     expect(res.body.event.id).toBe("e1");
     expect(res.body.event.organiser_id).toBeUndefined();
+  });
+});
+
+describe("POST /api/events", () => {
+  it("creates the request with status Requested when all fields are valid", async () => {
+    const single = vi.fn().mockResolvedValue({
+      data: {
+        id: "e2",
+        status: "Requested",
+        submitted_details: validPayload,
+        coordinator_id: null,
+        review_outcome: null,
+        created_at: "2026-01-01",
+      },
+      error: null,
+    });
+    const select = vi.fn().mockReturnValue({ single });
+    const insert = vi.fn().mockReturnValue({ select });
+    const from = vi.fn().mockReturnValue({ insert });
+
+    const app = buildApp({ from });
+    const res = await request(app).post("/api/events").send(validPayload);
+
+    expect(res.status).toBe(201);
+    expect(res.body.event.status).toBe("Requested");
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ organiser_id: "user-1", status: "Requested" }),
+    );
+  });
+
+  it("blocks submission and identifies every missing mandatory field", async () => {
+    const from = vi.fn();
+    const app = buildApp({ from });
+
+    const res = await request(app).post("/api/events").send({});
+
+    expect(res.status).toBe(400);
+    expect(Object.keys(res.body.fields)).toEqual(
+      expect.arrayContaining([
+        "name",
+        "purpose",
+        "description",
+        "proposedDate",
+        "startTime",
+        "endTime",
+        "expectedAttendance",
+      ]),
+    );
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("blocks submission when the proposed date is in the past", async () => {
+    const from = vi.fn();
+    const app = buildApp({ from });
+
+    const res = await request(app)
+      .post("/api/events")
+      .send({ ...validPayload, proposedDate: "2000-01-01" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields.proposedDate).toBeDefined();
+  });
+
+  it("blocks submission when expected attendance is zero or less", async () => {
+    const from = vi.fn();
+    const app = buildApp({ from });
+
+    const res = await request(app)
+      .post("/api/events")
+      .send({ ...validPayload, expectedAttendance: 0 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields.expectedAttendance).toBeDefined();
+  });
+
+  it("blocks submission when end time is at or before start time", async () => {
+    const from = vi.fn();
+    const app = buildApp({ from });
+
+    const res = await request(app)
+      .post("/api/events")
+      .send({ ...validPayload, startTime: "10:00", endTime: "10:00" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields.endTime).toBeDefined();
   });
 });
