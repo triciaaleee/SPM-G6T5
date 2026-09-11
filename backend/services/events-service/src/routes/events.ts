@@ -2,6 +2,22 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validateEventRequest } from "../lib/validateEventRequest.js";
+import { isUuid } from "../lib/validation.js";
+
+async function recordAccessDenial(
+  supabase: NonNullable<AuthedRequest["supabase"]>,
+  userId: string,
+  eventId: string,
+  reason: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from("access_denials")
+    .insert({ user_id: userId, event_id: eventId, reason });
+
+  if (error) {
+    console.error("Failed to record access_denials row", { userId, eventId, reason, error });
+  }
+}
 
 export const eventsRouter = Router();
 
@@ -81,7 +97,13 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = req.params.id;
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+
+  if (!isUuid(eventId)) {
+    await recordAccessDenial(supabase, user.id, eventId, "invalid_id_format");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
 
   const { data, error } = await supabase
     .from("events")
@@ -95,11 +117,7 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   }
 
   if (!data) {
-    await supabase.from("access_denials").insert({
-      user_id: user.id,
-      event_id: eventId,
-      reason: "not_found_or_not_owner",
-    });
+    await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
     res.status(403).json({ error: "Access denied" });
     return;
   }

@@ -51,6 +51,8 @@ describe("GET /api/events", () => {
 });
 
 describe("GET /api/events/:id", () => {
+  const otherUsersEventId = "bbbbbbbb-0000-0000-0000-000000000001";
+
   it("denies access and logs when the event isn't owned by the caller", async () => {
     const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
     const eq = vi.fn().mockReturnValue({ maybeSingle });
@@ -62,18 +64,56 @@ describe("GET /api/events/:id", () => {
     });
 
     const app = buildApp({ from });
-    const res = await request(app).get("/api/events/other-users-event");
+    const res = await request(app).get(`/api/events/${otherUsersEventId}`);
 
     expect(res.status).toBe(403);
     expect(insert).toHaveBeenCalledWith(
-      expect.objectContaining({ user_id: "user-1", event_id: "other-users-event" }),
+      expect.objectContaining({ user_id: "user-1", event_id: otherUsersEventId }),
     );
   });
 
+  it("denies access and logs when the id is not a valid UUID, without querying the DB", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const select = vi.fn();
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert };
+      return { select };
+    });
+
+    const app = buildApp({ from });
+    const res = await request(app).get("/api/events/abc");
+
+    expect(res.status).toBe(403);
+    expect(select).not.toHaveBeenCalled();
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: "user-1", reason: "invalid_id_format" }),
+    );
+  });
+
+  it("logs server-side but still returns 403 if the audit insert itself fails", async () => {
+    const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const select = vi.fn().mockReturnValue({ eq });
+    const insert = vi.fn().mockResolvedValue({ error: { message: "insert failed" } });
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert };
+      return { select };
+    });
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const app = buildApp({ from });
+    const res = await request(app).get(`/api/events/${otherUsersEventId}`);
+
+    expect(res.status).toBe(403);
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
   it("returns the event when the caller owns it", async () => {
+    const ownedEventId = "aaaaaaaa-0000-0000-0000-000000000001";
     const maybeSingle = vi.fn().mockResolvedValue({
       data: {
-        id: "e1",
+        id: ownedEventId,
         status: "approved",
         submitted_details: {},
         coordinator_id: "coord-1",
@@ -88,10 +128,10 @@ describe("GET /api/events/:id", () => {
     const from = vi.fn().mockReturnValue({ select });
 
     const app = buildApp({ from });
-    const res = await request(app).get("/api/events/e1");
+    const res = await request(app).get(`/api/events/${ownedEventId}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.event.id).toBe("e1");
+    expect(res.body.event.id).toBe(ownedEventId);
     expect(res.body.event.organiser_id).toBeUndefined();
   });
 });
