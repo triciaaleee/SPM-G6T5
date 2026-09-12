@@ -1,21 +1,20 @@
 import type { NextFunction, Request, Response } from "express";
-import { createUserScopedClient } from "../lib/supabase.js";
+import { supabaseAdmin } from "../lib/supabaseAdmin.js";
+import { verifyToken } from "../lib/jwt.js";
 
 export interface AuthedRequest extends Request {
-  user?: { id: string; role: string | undefined };
-  supabase?: ReturnType<typeof createUserScopedClient>;
+  user?: { id: string; role: string };
+  supabase?: typeof supabaseAdmin;
 }
 
 /**
- * Expects `Authorization: Bearer <supabase access token>`. Verifies the
- * token with Supabase and attaches a user-scoped client (so RLS applies)
- * plus req.user for downstream ownership checks.
+ * Expects `Authorization: Bearer <token>` where the token was issued by
+ * this backend's own /api/auth/login (not Supabase Auth). Verifies it
+ * with our JWT secret and attaches the service-role Supabase client —
+ * routes are responsible for enforcing ownership/role checks themselves,
+ * since RLS no longer has a per-user identity to scope against.
  */
-export async function requireAuth(
-  req: AuthedRequest,
-  res: Response,
-  next: NextFunction,
-): Promise<void> {
+export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
 
@@ -24,22 +23,12 @@ export async function requireAuth(
     return;
   }
 
-/*
-
-uses user's own access token as authorisation header on DB request instead of privilleged 
-service-role key as postgres RLS policies only allows the user to the rows they own. 
-
-*/
-
-  const supabase = createUserScopedClient(token);
-  const { data, error } = await supabase.auth.getUser(token);
-
-  if (error || !data.user) {
+  try {
+    const payload = verifyToken(token);
+    req.user = { id: payload.sub, role: payload.role };
+    req.supabase = supabaseAdmin;
+    next();
+  } catch {
     res.status(401).json({ error: "Invalid or expired token" });
-    return;
   }
-
-  req.user = { id: data.user.id, role: data.user.app_metadata?.role as string | undefined };
-  req.supabase = supabase;
-  next();
 }

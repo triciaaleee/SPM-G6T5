@@ -66,7 +66,7 @@ function statusClass(status: string): string {
           class="event-card"
         >
           <span class="badge" :class="statusClass(event.status)">{{ event.status }}</span>
-          <p class="card-title">Event {{ event.id.slice(0, 8) }}</p>
+          <p class="card-title">Event #{{ event.id }}</p>
           <p class="body-small muted">Created {{ new Date(event.created_at).toLocaleDateString() }}</p>
         </RouterLink>
       </div>

@@ -3,6 +3,12 @@
 -- automatically after migrations. DO NOT run against production; the
 -- passwords below are fixed, publicly-known test credentials.
 --
+-- Custom auth: users are rows in public.users, not Supabase Auth. The
+-- password hash below uses pgcrypto's crypt()/gen_salt('bf'), which
+-- produces a standard bcrypt hash string ($2a$/$2b$ prefixed) — the same
+-- format the backend's bcryptjs verifies on login, so these seed users
+-- can log in normally through POST /api/auth/login.
+--
 -- Manual test flow:
 --   1. Sign in as organiser-one@example.com / password123 in the frontend.
 --   2. Confirm the events list shows only organiser-one's 4 events.
@@ -10,104 +16,85 @@
 --   4. Confirm the app shows "Access denied" and a row appears in
 --      access_denials (user_id = organiser-one's id, event_id = that id).
 
--- Test organisers -----------------------------------------------------
+create extension if not exists pgcrypto;
 
-insert into auth.users (
-  id, instance_id, aud, role, email, encrypted_password,
-  email_confirmed_at, created_at, updated_at,
-  raw_app_meta_data, raw_user_meta_data
-) values
-  (
-    '11111111-1111-1111-1111-111111111111',
-    '00000000-0000-0000-0000-000000000000',
-    'authenticated', 'authenticated',
-    'organiser-one@example.com',
-    crypt('password123', gen_salt('bf')),
-    now(), now(), now(),
-    '{"provider":"email","providers":["email"]}',
-    '{"name":"Organiser One"}'
-  ),
-  (
-    '22222222-2222-2222-2222-222222222222',
-    '00000000-0000-0000-0000-000000000000',
-    'authenticated', 'authenticated',
-    'organiser-two@example.com',
-    crypt('password123', gen_salt('bf')),
-    now(), now(), now(),
-    '{"provider":"email","providers":["email"]}',
-    '{"name":"Organiser Two"}'
-  ),
-  (
-    '33333333-3333-3333-3333-333333333333',
-    '00000000-0000-0000-0000-000000000000',
-    'authenticated', 'authenticated',
-    'coordinator-one@example.com',
-    crypt('password123', gen_salt('bf')),
-    now(), now(), now(),
-    '{"provider":"email","providers":["email"],"role":"coordinator"}',
-    '{"name":"Coordinator One"}'
-  )
+-- Test accounts ---------------------------------------------------------
+
+insert into users (id, name, email, password_hash, role) values
+  ('ORG-0001', 'Organiser One', 'organiser-one@example.com', crypt('password123', gen_salt('bf')), 'organiser'),
+  ('ORG-0002', 'Organiser Two', 'organiser-two@example.com', crypt('password123', gen_salt('bf')), 'organiser'),
+  ('COORD-0001', 'Coordinator One', 'coordinator-one@example.com', crypt('password123', gen_salt('bf')), 'coordinator')
 on conflict (id) do nothing;
 
 -- Events ----------------------------------------------------------------
+
+-- submitted_details uses the same field names NewEventRequestView.vue's
+-- form submits (name/purpose/description/proposedDate/startTime/endTime/
+-- expectedAttendance) — matching EventRequestPayload in eventsApi.ts — so
+-- the "Event details" panel in EventDetailView.vue renders these fields
+-- instead of falling back to "—".
 
 insert into events (
   id, organiser_id, status, submitted_details, coordinator_id, review_outcome, created_at
 ) values
   -- organiser-one's events
   (
-    'aaaaaaaa-0000-0000-0000-000000000001',
-    '11111111-1111-1111-1111-111111111111',
+    1,
+    'ORG-0001',
     'approved',
-    '{"title":"Freshman Orientation Fair","venue":"Hall A","expected_attendees":300}',
-    '33333333-3333-3333-3333-333333333333',
+    '{"name":"Freshman Orientation Fair","purpose":"Welcome new students to campus","description":"Booths, campus tours, and icebreaker activities for incoming freshmen.","proposedDate":"2026-09-20","startTime":"09:00","endTime":"15:00","expectedAttendance":300}',
+    'COORD-0001',
     'Approved with minor notes on AV setup',
     now() - interval '10 days'
   ),
   (
-    'aaaaaaaa-0000-0000-0000-000000000002',
-    '11111111-1111-1111-1111-111111111111',
+    2,
+    'ORG-0001',
     'submitted',
-    '{"title":"Career Networking Night","venue":"Auditorium","expected_attendees":150}',
+    '{"name":"Career Networking Night","purpose":"Connect students with industry recruiters","description":"An evening networking session with alumni and partner companies.","proposedDate":"2026-09-25","startTime":"18:00","endTime":"21:00","expectedAttendance":150}',
     null,
     null,
     now() - interval '3 days'
   ),
   (
-    'aaaaaaaa-0000-0000-0000-000000000003',
-    '11111111-1111-1111-1111-111111111111',
+    3,
+    'ORG-0001',
     'rejected',
-    '{"title":"Late-Night Study Jam","venue":"Library Rooftop","expected_attendees":80}',
-    '33333333-3333-3333-3333-333333333333',
+    '{"name":"Late-Night Study Jam","purpose":"Provide a late-night study space during finals","description":"Extended library hours with snacks and quiet study zones.","proposedDate":"2026-09-18","startTime":"22:00","endTime":"23:59","expectedAttendance":80}',
+    'COORD-0001',
     'Rejected — venue unavailable after 10pm',
     now() - interval '20 days'
   ),
   (
-    'aaaaaaaa-0000-0000-0000-000000000004',
-    '11111111-1111-1111-1111-111111111111',
+    4,
+    'ORG-0001',
     'submitted',
-    '{"title":"Alumni Homecoming Mixer","venue":"Sports Hall","expected_attendees":500}',
+    '{"name":"Alumni Homecoming Mixer","purpose":"Reconnect alumni with current students and staff","description":"A homecoming social with games, food, and a keynote from a notable alum.","proposedDate":"2026-10-05","startTime":"17:00","endTime":"20:00","expectedAttendance":500}',
     null,
     null,
     now() - interval '1 day'
   ),
   -- organiser-two's events (used to test cross-owner access denial)
   (
-    'bbbbbbbb-0000-0000-0000-000000000001',
-    '22222222-2222-2222-2222-222222222222',
+    5,
+    'ORG-0002',
     'approved',
-    '{"title":"Design Club Showcase","venue":"Gallery Room","expected_attendees":120}',
-    '33333333-3333-3333-3333-333333333333',
+    '{"name":"Design Club Showcase","purpose":"Exhibit student design projects","description":"An open gallery night showcasing student design portfolios and projects.","proposedDate":"2026-09-22","startTime":"14:00","endTime":"17:00","expectedAttendance":120}',
+    'COORD-0001',
     'Approved',
     now() - interval '7 days'
   ),
   (
-    'bbbbbbbb-0000-0000-0000-000000000002',
-    '22222222-2222-2222-2222-222222222222',
+    6,
+    'ORG-0002',
     'submitted',
-    '{"title":"Robotics Demo Day","venue":"Engineering Atrium","expected_attendees":200}',
+    '{"name":"Robotics Demo Day","purpose":"Demonstrate student robotics projects","description":"Robotics club teams demo their builds and compete in mini-challenges.","proposedDate":"2026-09-28","startTime":"10:00","endTime":"13:00","expectedAttendance":200}',
     null,
     null,
     now() - interval '2 days'
   )
 on conflict (id) do nothing;
+
+-- Keep the identity sequence ahead of these explicit ids so the next
+-- app-created event doesn't collide with id 1-6 above.
+select setval(pg_get_serial_sequence('events', 'id'), 6);

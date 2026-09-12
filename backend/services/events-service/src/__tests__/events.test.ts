@@ -7,7 +7,7 @@ import { eventsRouter } from "../routes/events.js";
 vi.mock("../middleware/auth.js", async () => {
   return {
     requireAuth: (req: AuthedRequest, _res: unknown, next: () => void) => {
-      req.user = { id: "user-1" };
+      req.user = { id: "user-1", role: "organiser" };
       req.supabase = (globalThis as any).__mockSupabase;
       next();
     },
@@ -51,7 +51,7 @@ describe("GET /api/events", () => {
 });
 
 describe("GET /api/events/:id", () => {
-  const otherUsersEventId = "bbbbbbbb-0000-0000-0000-000000000001";
+  const otherUsersEventId = "42";
 
   it("denies access and logs when the event isn't owned by the caller", async () => {
     const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
@@ -72,7 +72,7 @@ describe("GET /api/events/:id", () => {
     );
   });
 
-  it("denies access and logs when the id is not a valid UUID, without querying the DB", async () => {
+  it("denies access and logs when the id is not a valid integer, without querying the DB", async () => {
     const insert = vi.fn().mockResolvedValue({ error: null });
     const select = vi.fn();
     const from = vi.fn().mockImplementation((table: string) => {
@@ -110,10 +110,10 @@ describe("GET /api/events/:id", () => {
   });
 
   it("returns the event when the caller owns it", async () => {
-    const ownedEventId = "aaaaaaaa-0000-0000-0000-000000000001";
+    const ownedEventId = "1";
     const maybeSingle = vi.fn().mockResolvedValue({
       data: {
-        id: ownedEventId,
+        id: Number(ownedEventId),
         status: "approved",
         submitted_details: {},
         coordinator_id: "coord-1",
@@ -131,7 +131,7 @@ describe("GET /api/events/:id", () => {
     const res = await request(app).get(`/api/events/${ownedEventId}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.event.id).toBe(ownedEventId);
+    expect(res.body.event.id).toBe(Number(ownedEventId));
     expect(res.body.event.organiser_id).toBeUndefined();
   });
 });
