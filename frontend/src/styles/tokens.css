@@ -32,6 +32,10 @@
   --color-warning-600: #F2721B;
   --color-success-600: #008545;
 
+  /* Secondary Blue (Style.md Section 2.8) */
+  --color-blue-100: #F4F5FB;
+  --color-blue-600: #3F52AA;
+
   /* Typography */
   --font-family-lato: "Lato", sans-serif;
 

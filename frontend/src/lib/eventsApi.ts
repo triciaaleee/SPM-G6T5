@@ -6,6 +6,8 @@ export interface EventSummary {
   submitted_details: Record<string, unknown>;
   coordinator_id: string | null;
   review_outcome: string | null;
+  decided_at: string | null;
+  decided_by: string | null;
   created_at: string;
 }
 
@@ -108,4 +110,45 @@ export async function fetchEventById(id: string): Promise<EventSummary> {
 export async function getCurrentUser(): Promise<{ id: string; role: string | undefined }> {
   const user = getStoredUser();
   return { id: user?.id ?? "", role: user?.role };
+}
+
+/**
+ * Thrown by the three coordinator decision actions below when the backend
+ * refuses the transition (wrong status, another coordinator owns it,
+ * missing reason/message). Message is server-provided and safe to show
+ * directly — see the "generic error, pass it through" pattern in auth.ts.
+ */
+export class ReviewActionError extends Error {}
+
+async function postReviewAction(id: number, action: string, body?: Record<string, unknown>): Promise<EventSummary> {
+  const res = await fetch(`${apiBase}/${id}/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify(body ?? {}),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const responseBody = await res.json();
+
+  if (!res.ok) {
+    throw new ReviewActionError(responseBody.error ?? "That action couldn't be completed");
+  }
+
+  return responseBody.event as EventSummary;
+}
+
+/** E1-4.2 AC1: approve as the assigned (or self-assigning) coordinator. */
+export function approveEvent(id: number): Promise<EventSummary> {
+  return postReviewAction(id, "approve");
+}
+
+/** E1-4.2 AC2/AC3: reject with a mandatory reason. */
+export function rejectEvent(id: number, reason: string): Promise<EventSummary> {
+  return postReviewAction(id, "reject", { reason });
+}
+
+/** Requests clarification/amendment from the Organiser with a message. */
+export function requestClarification(id: number, message: string): Promise<EventSummary> {
+  return postReviewAction(id, "request-clarification", { message });
 }

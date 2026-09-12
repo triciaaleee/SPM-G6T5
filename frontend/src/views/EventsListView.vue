@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { fetchMyEvents, getCurrentUser, type EventSummary } from "../lib/eventsApi";
+import { statusBadgeClass } from "../lib/eventStatus";
 
 const events = ref<EventSummary[]>([]);
 const loading = ref(true);
@@ -19,11 +20,6 @@ onMounted(async () => {
   }
 });
 
-function statusClass(status: string): string {
-  if (status === "approved") return "status-success";
-  if (status === "rejected") return "status-error";
-  return "status-warning";
-}
 </script>
 
 <template>
@@ -65,7 +61,7 @@ function statusClass(status: string): string {
           :to="{ name: 'event-detail', params: { id: event.id } }"
           class="event-card"
         >
-          <span class="badge" :class="statusClass(event.status)">{{ event.status }}</span>
+          <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
           <p class="card-title">Event #{{ event.id }}</p>
           <p class="body-small muted">Created {{ new Date(event.created_at).toLocaleDateString() }}</p>
         </RouterLink>
@@ -211,5 +207,10 @@ function statusClass(status: string): string {
 .status-error {
   background: var(--color-error-200);
   color: var(--color-error-600);
+}
+
+.status-info {
+  background: var(--color-blue-100);
+  color: var(--color-blue-600);
 }
 </style>
