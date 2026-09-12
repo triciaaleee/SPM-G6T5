@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validateEventRequest } from "../lib/validateEventRequest.js";
-import { isUuid } from "../lib/validation.js";
+import { isPositiveInteger } from "../lib/validation.js";
 
 async function recordAccessDenial(
   supabase: NonNullable<AuthedRequest["supabase"]>,
@@ -25,9 +25,10 @@ eventsRouter.use(requireAuth);
 
 /**
  * E2-1: submit a new event request. Validates the mandatory fields per the
- * story's acceptance criteria, then inserts with status "Requested" — RLS
- * (organisers_insert_own_events) still enforces organiser_id = auth.uid()
- * at the DB layer.
+ * story's acceptance criteria, then inserts with status "Requested".
+ * Authorization is enforced here in application code — the service-role
+ * client bypasses RLS, so organiser_id is always set from the verified
+ * JWT's subject, never trusted from the request body.
  */
 eventsRouter.post("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -61,9 +62,10 @@ eventsRouter.post("/", async (req: AuthedRequest, res) => {
 });
 
 /**
- * List events belonging to the authenticated organiser only.
- * RLS on the events table already restricts rows to organiser_id = auth.uid();
- * the explicit filter here is defense-in-depth, not the primary control.
+ * List events. Coordinators get full pipeline visibility (all events);
+ * everyone else sees only events they organised. Since the service-role
+ * client bypasses RLS, this filter is the actual enforcement, not just
+ * defense-in-depth.
  */
 eventsRouter.get("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -72,10 +74,15 @@ eventsRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("events")
-    .select("id, status, submitted_details, coordinator_id, review_outcome, created_at")
-    .eq("organiser_id", user.id);
+    .select("id, status, submitted_details, coordinator_id, review_outcome, created_at");
+
+  if (user.role !== "coordinator") {
+    query = query.eq("organiser_id", user.id);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     res.status(500).json({ error: "Failed to load events" });
@@ -86,9 +93,10 @@ eventsRouter.get("/", async (req: AuthedRequest, res) => {
 });
 
 /**
- * Fetch a single event by id. RLS guarantees a non-owner query returns no
- * row, which is indistinguishable at the DB level from "not found" — so we
- * treat both as 403 and record the attempt for audit purposes.
+ * Fetch a single event by id. The service-role client returns any row
+ * regardless of ownership, so ownership/role is checked explicitly here;
+ * a non-owner (and non-coordinator) request is treated the same as
+ * "not found" and the attempt is recorded for audit purposes.
  */
 eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -99,7 +107,7 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
 
   const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
 
-  if (!isUuid(eventId)) {
+  if (!isPositiveInteger(eventId)) {
     await recordAccessDenial(supabase, user.id, eventId, "invalid_id_format");
     res.status(403).json({ error: "Access denied" });
     return;
@@ -108,7 +116,7 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   const { data, error } = await supabase
     .from("events")
     .select("id, status, submitted_details, coordinator_id, review_outcome, created_at, organiser_id")
-    .eq("id", eventId)
+    .eq("id", Number(eventId))
     .maybeSingle();
 
   if (error) {
@@ -116,7 +124,10 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  if (!data) {
+  const isOwner = data?.organiser_id === user.id;
+  const isCoordinator = user.role === "coordinator";
+
+  if (!data || (!isOwner && !isCoordinator)) {
     await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
     res.status(403).json({ error: "Access denied" });
     return;

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
-import { login } from "../lib/auth";
+import { signup } from "../lib/auth";
 
+const name = ref("");
 const email = ref("");
 const password = ref("");
 const errorMessage = ref<string | null>(null);
@@ -13,10 +14,10 @@ async function handleSubmit() {
   errorMessage.value = null;
   submitting.value = true;
   try {
-    await login(email.value, password.value);
+    await signup(name.value, email.value, password.value);
     router.push({ name: "events-list" });
   } catch (err) {
-    errorMessage.value = err instanceof Error ? err.message : "Login failed";
+    errorMessage.value = err instanceof Error ? err.message : "Signup failed";
   } finally {
     submitting.value = false;
   }
@@ -25,15 +26,18 @@ async function handleSubmit() {
 
 <template>
   <!--
-    Column mapping — Login
+    Column mapping — Signup
     Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); form card col 5-8, centred.
     Tablet (6-col): form card col 2-5, centred, grid-tablet-margin 32px.
     Mobile (4-col): form card col 1-4, full width, grid-mobile-margin 6px.
   -->
   <div class="page">
     <form class="form-card" @submit.prevent="handleSubmit">
-      <h1 class="h3">Sign in</h1>
-      <p class="subheading">Sign in to view the events you've submitted.</p>
+      <h1 class="h3">Create an account</h1>
+      <p class="subheading">New accounts start as an Attendee.</p>
+
+      <label class="field-label" for="name">Name</label>
+      <input id="name" v-model="name" type="text" required class="text-input" autocomplete="name" />
 
       <label class="field-label" for="email">Email</label>
       <input id="email" v-model="email" type="email" required class="text-input" autocomplete="email" />
@@ -44,18 +48,19 @@ async function handleSubmit() {
         v-model="password"
         type="password"
         required
+        minlength="8"
         class="text-input"
-        autocomplete="current-password"
+        autocomplete="new-password"
       />
 
       <p v-if="errorMessage" class="body-small error-text">{{ errorMessage }}</p>
 
       <button type="submit" class="btn-primary" :disabled="submitting">
-        {{ submitting ? "Signing in…" : "Sign in" }}
+        {{ submitting ? "Creating account…" : "Sign up" }}
       </button>
 
       <p class="body-small muted signup-hint">
-        No account yet? <RouterLink to="/signup">Sign up</RouterLink>
+        Already have an account? <RouterLink to="/login">Sign in</RouterLink>
       </p>
     </form>
   </div>
@@ -145,6 +150,10 @@ async function handleSubmit() {
   margin: 0 0 var(--spacing-16);
 }
 
+.muted {
+  color: var(--color-grey-500);
+}
+
 .btn-primary {
   font-family: var(--font-family-lato);
   font-size: 0.875rem;
@@ -165,10 +174,6 @@ async function handleSubmit() {
   background: var(--color-grey-200);
   color: var(--color-grey-400);
   cursor: not-allowed;
-}
-
-.muted {
-  color: var(--color-grey-500);
 }
 
 .signup-hint {

@@ -3,12 +3,14 @@ import EventsListView from "../views/EventsListView.vue";
 import EventDetailView from "../views/EventDetailView.vue";
 import NewEventRequestView from "../views/NewEventRequestView.vue";
 import LoginView from "../views/LoginView.vue";
-import { supabase } from "../lib/supabase";
+import SignupView from "../views/SignupView.vue";
+import { isAuthenticated } from "../lib/auth";
 
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/login", name: "login", component: LoginView },
+    { path: "/signup", name: "signup", component: SignupView },
     { path: "/", name: "events-list", component: EventsListView, meta: { requiresAuth: true } },
     {
       path: "/events/new",
@@ -25,11 +27,10 @@ export const router = createRouter({
   ],
 });
 
-router.beforeEach(async (to) => {
+router.beforeEach((to) => {
   if (!to.meta.requiresAuth) return true;
 
-  const { data } = await supabase.auth.getSession();
-  if (!data.session) {
+  if (!isAuthenticated()) {
     return { name: "login" };
   }
   return true;

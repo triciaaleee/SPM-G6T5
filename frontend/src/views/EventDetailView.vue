@@ -63,7 +63,7 @@ onMounted(async () => {
 
       <div v-else-if="event" class="detail-panel">
         <span class="badge">{{ event.status }}</span>
-        <p class="card-title">Event {{ event.id.slice(0, 8) }}</p>
+        <p class="card-title">Event #{{ event.id }}</p>
 
         <dl class="detail-list">
           <div class="detail-row">

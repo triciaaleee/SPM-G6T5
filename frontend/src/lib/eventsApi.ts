@@ -1,7 +1,7 @@
-import { supabase } from "./supabase";
+import { getToken } from "./auth";
 
 export interface EventSummary {
-  id: string;
+  id: number;
   status: string;
   submitted_details: Record<string, unknown>;
   coordinator_id: string | null;
@@ -11,9 +11,8 @@ export interface EventSummary {
 
 const apiBase = import.meta.env.VITE_EVENTS_API_URL as string;
 
-async function authHeader(): Promise<HeadersInit> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+function authHeader(): HeadersInit {
+  const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 

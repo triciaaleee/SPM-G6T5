@@ -16,7 +16,7 @@ const form = reactive<EventRequestPayload>({
 const fieldErrors = ref<Record<string, string>>({});
 const generalError = ref<string | null>(null);
 const submitting = ref(false);
-const submittedEventId = ref<string | null>(null);
+const submittedEventId = ref<number | null>(null);
 
 async function handleSubmit() {
   generalError.value = null;
