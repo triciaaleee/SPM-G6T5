@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { createUserScopedClient } from "../lib/supabase.js";
 
 export interface AuthedRequest extends Request {
-  user?: { id: string };
+  user?: { id: string; role: string | undefined };
   supabase?: ReturnType<typeof createUserScopedClient>;
 }
 
@@ -39,7 +39,7 @@ service-role key as postgres RLS policies only allows the user to the rows they 
     return;
   }
 
-  req.user = { id: data.user.id };
+  req.user = { id: data.user.id, role: data.user.app_metadata?.role as string | undefined };
   req.supabase = supabase;
   next();
 }
