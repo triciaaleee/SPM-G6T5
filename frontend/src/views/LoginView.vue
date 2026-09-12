@@ -1,22 +1,41 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { useRouter } from "vue-router";
-import { login } from "../lib/auth";
+import { useRoute, useRouter } from "vue-router";
+import { LockedOutError, landingRouteForRole, login } from "../lib/auth";
 
 const email = ref("");
 const password = ref("");
 const errorMessage = ref<string | null>(null);
+const lockedOut = ref(false);
 const submitting = ref(false);
 const router = useRouter();
+const route = useRoute();
 
 async function handleSubmit() {
   errorMessage.value = null;
+  lockedOut.value = false;
   submitting.value = true;
   try {
-    await login(email.value, password.value);
-    router.push({ name: "events-list" });
+    const user = await login(email.value, password.value);
+
+    // AC5: if the guard bounced us here from a protected URL, go back to
+    // it. Otherwise fall through to the landing view for this user's role
+    // (AC1).
+    const redirect = route.query.redirect;
+    if (typeof redirect === "string" && redirect.startsWith("/")) {
+      router.replace(redirect);
+    } else {
+      router.replace({ name: landingRouteForRole(user.role) });
+    }
   } catch (err) {
-    errorMessage.value = err instanceof Error ? err.message : "Login failed";
+    if (err instanceof LockedOutError) {
+      // AC3: the account is locked, so keep the message on screen and stop
+      // offering the button — retrying now can only fail.
+      lockedOut.value = true;
+      errorMessage.value = err.message;
+    } else {
+      errorMessage.value = err instanceof Error ? err.message : "Login failed";
+    }
   } finally {
     submitting.value = false;
   }
@@ -48,9 +67,16 @@ async function handleSubmit() {
         autocomplete="current-password"
       />
 
-      <p v-if="errorMessage" class="body-small error-text">{{ errorMessage }}</p>
+      <p
+        v-if="errorMessage"
+        class="body-small"
+        :class="lockedOut ? 'lockout-text' : 'error-text'"
+        role="alert"
+      >
+        {{ errorMessage }}
+      </p>
 
-      <button type="submit" class="btn-primary" :disabled="submitting">
+      <button type="submit" class="btn-primary" :disabled="submitting || lockedOut">
         {{ submitting ? "Signing in…" : "Sign in" }}
       </button>
 
@@ -142,6 +168,16 @@ async function handleSubmit() {
 
 .error-text {
   color: var(--color-error-600);
+  margin: 0 0 var(--spacing-16);
+}
+
+/* A lockout isn't a form mistake the user can correct by retyping, so it
+   reads as a warning to wait rather than an error to fix. */
+.lockout-text {
+  color: var(--color-warning-600);
+  background: var(--color-grey-75);
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-12);
   margin: 0 0 var(--spacing-16);
 }
 

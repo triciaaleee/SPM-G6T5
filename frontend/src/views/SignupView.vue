@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
-import { signup } from "../lib/auth";
+import { landingRouteForRole, signup } from "../lib/auth";
 
 const name = ref("");
 const email = ref("");
@@ -14,8 +14,11 @@ async function handleSubmit() {
   errorMessage.value = null;
   submitting.value = true;
   try {
-    await signup(name.value, email.value, password.value);
-    router.push({ name: "events-list" });
+    const user = await signup(name.value, email.value, password.value);
+    // Same role-driven landing as login (AC1). New accounts are always
+    // attendees today, but routing through the map keeps the two paths
+    // consistent if that ever changes.
+    router.replace({ name: landingRouteForRole(user.role) });
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : "Signup failed";
   } finally {
