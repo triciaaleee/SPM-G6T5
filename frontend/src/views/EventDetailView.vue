@@ -3,11 +3,25 @@ import { onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { AccessDeniedError, fetchEventById, type EventSummary } from "../lib/eventsApi";
 
+interface SubmittedEventDetails {
+  name?: string;
+  purpose?: string;
+  description?: string;
+  proposedDate?: string;
+  startTime?: string;
+  endTime?: string;
+  expectedAttendance?: number;
+}
+
 const route = useRoute();
 const event = ref<EventSummary | null>(null);
 const loading = ref(true);
 const accessDenied = ref(false);
 const errorMessage = ref<string | null>(null);
+
+function asSubmittedDetails(value: EventSummary["submitted_details"]): SubmittedEventDetails {
+  return value as SubmittedEventDetails;
+}
 
 onMounted(async () => {
   const id = route.params.id as string;
@@ -60,11 +74,40 @@ onMounted(async () => {
             <dt class="body-small muted">Review outcome</dt>
             <dd class="body-default">{{ event.review_outcome ?? "Pending" }}</dd>
           </div>
+        </dl>
+      </div>
+
+      <div v-if="event" class="detail-panel event-details-panel">
+        <p class="card-title">Event details</p>
+
+        <dl class="detail-list">
           <div class="detail-row">
-            <dt class="body-small muted">Submitted details</dt>
+            <dt class="body-small muted">Event name</dt>
+            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).name || "—" }}</dd>
+          </div>
+          <div class="detail-row">
+            <dt class="body-small muted">Purpose</dt>
+            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).purpose || "—" }}</dd>
+          </div>
+          <div class="detail-row">
+            <dt class="body-small muted">Description</dt>
+            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).description || "—" }}</dd>
+          </div>
+          <div class="detail-row">
+            <dt class="body-small muted">Proposed date</dt>
+            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).proposedDate || "—" }}</dd>
+          </div>
+          <div class="detail-row">
+            <dt class="body-small muted">Time</dt>
             <dd class="body-default">
-              <pre class="details-json">{{ JSON.stringify(event.submitted_details, null, 2) }}</pre>
+              {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
+              –
+              {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
             </dd>
+          </div>
+          <div class="detail-row">
+            <dt class="body-small muted">Expected attendance</dt>
+            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).expectedAttendance ?? "—" }}</dd>
           </div>
         </dl>
       </div>
@@ -161,6 +204,10 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
+.event-details-panel {
+  margin-top: var(--spacing-24);
+}
+
 .detail-list {
   margin: var(--spacing-24) 0 0;
   display: flex;
@@ -170,14 +217,5 @@ onMounted(async () => {
 
 .detail-row dt {
   margin-bottom: var(--spacing-4);
-}
-
-.details-json {
-  background: var(--color-grey-75);
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-12);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  overflow-x: auto;
 }
 </style>
