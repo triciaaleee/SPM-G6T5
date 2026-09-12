@@ -193,7 +193,7 @@ function statusClass(status: string): string {
 }
 
 .status-success {
-  background: #F3F9F3;
+  background: var(--color-success-200);
   color: var(--color-success-600);
 }
 

@@ -14,6 +14,8 @@ const apiBase = import.meta.env.VITE_EVENTS_API_URL as string;
 async function authHeader(): Promise<HeadersInit> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
+  console.log(data.session?.user?.id);
+  console.log(data.session?.user?.email);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 

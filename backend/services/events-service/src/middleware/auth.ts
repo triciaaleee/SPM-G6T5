@@ -6,6 +6,7 @@ export interface AuthedRequest extends Request {
   supabase?: ReturnType<typeof createUserScopedClient>;
 }
 
+
 /**
  * Expects `Authorization: Bearer <supabase access token>`. Verifies the
  * token with Supabase and attaches a user-scoped client (so RLS applies)
