@@ -44,7 +44,7 @@ insert into auth.users (
     'coordinator-one@example.com',
     crypt('password123', gen_salt('bf')),
     now(), now(), now(),
-    '{"provider":"email","providers":["email"]}',
+    '{"provider":"email","providers":["email"],"role":"coordinator"}',
     '{"name":"Coordinator One"}'
   )
 on conflict (id) do nothing;

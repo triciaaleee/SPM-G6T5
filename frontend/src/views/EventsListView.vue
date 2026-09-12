@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { fetchMyEvents, type EventSummary } from "../lib/eventsApi";
+import { fetchMyEvents, getCurrentUser, type EventSummary } from "../lib/eventsApi";
 
 const events = ref<EventSummary[]>([]);
 const loading = ref(true);
 const errorMessage = ref<string | null>(null);
+const isCoordinator = ref(false);
 
 onMounted(async () => {
   try {
-    events.value = await fetchMyEvents();
+    const [eventsData, user] = await Promise.all([fetchMyEvents(), getCurrentUser()]);
+    events.value = eventsData;
+    isCoordinator.value = user.role === "coordinator";
   } catch (err) {
     errorMessage.value = "We couldn't load your events. Please try again.";
   } finally {
@@ -35,10 +38,13 @@ function statusClass(status: string): string {
     <div class="content">
       <div class="flex items-start justify-between gap-4">
         <div>
-          <h1 class="h2">My events</h1>
-          <p class="subheading">Only events you created appear here.</p>
+          <h1 class="h2">{{ isCoordinator ? "All events" : "My events" }}</h1>
+          <p class="subheading">
+            {{ isCoordinator ? "All events in the pipeline." : "Only events you created appear here." }}
+          </p>
         </div>
         <RouterLink
+          v-if="!isCoordinator"
           :to="{ name: 'new-event-request' }"
           class="shrink-0 rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700"
         >
@@ -46,10 +52,10 @@ function statusClass(status: string): string {
         </RouterLink>
       </div>
 
-      <p v-if="loading" class="body-default muted">Loading your events…</p>
+      <p v-if="loading" class="body-default muted">Loading events…</p>
       <p v-else-if="errorMessage" class="body-default error-text">{{ errorMessage }}</p>
       <p v-else-if="events.length === 0" class="body-default muted">
-        You haven't submitted any events yet.
+        {{ isCoordinator ? "No events in the system yet." : "You haven't submitted any events yet." }}
       </p>
 
       <div v-else class="card-grid">

@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
-import { AccessDeniedError, fetchEventById, type EventSummary } from "../lib/eventsApi";
+import {
+  AccessDeniedError,
+  NotFoundError,
+  fetchEventById,
+  getCurrentUser,
+  type EventSummary,
+} from "../lib/eventsApi";
 
 interface SubmittedEventDetails {
   name?: string;
@@ -17,7 +23,20 @@ const route = useRoute();
 const event = ref<EventSummary | null>(null);
 const loading = ref(true);
 const accessDenied = ref(false);
+const notFound = ref(false);
 const errorMessage = ref<string | null>(null);
+const currentUser = ref<{ id: string; role: string | undefined }>({ id: "", role: undefined });
+
+const isCoordinator = computed(() => currentUser.value.role === "coordinator");
+const isAssignedCoordinator = computed(
+  () => isCoordinator.value && event.value?.coordinator_id === currentUser.value.id,
+);
+const isOtherCoordinatorEvent = computed(
+  () =>
+    isCoordinator.value &&
+    event.value?.coordinator_id !== null &&
+    event.value?.coordinator_id !== currentUser.value.id,
+);
 
 function asSubmittedDetails(value: EventSummary["submitted_details"]): SubmittedEventDetails {
   return value as SubmittedEventDetails;
@@ -26,10 +45,14 @@ function asSubmittedDetails(value: EventSummary["submitted_details"]): Submitted
 onMounted(async () => {
   const id = route.params.id as string;
   try {
-    event.value = await fetchEventById(id);
+    const [eventData, user] = await Promise.all([fetchEventById(id), getCurrentUser()]);
+    event.value = eventData;
+    currentUser.value = user;
   } catch (err) {
     if (err instanceof AccessDeniedError) {
       accessDenied.value = true;
+    } else if (err instanceof NotFoundError) {
+      notFound.value = true;
     } else {
       errorMessage.value = "We couldn't load this event. Please try again.";
     }
@@ -48,7 +71,7 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="content">
-      <RouterLink to="/" class="back-link">Back to my events</RouterLink>
+      <RouterLink to="/" class="back-link">Back to events</RouterLink>
 
       <p v-if="loading" class="body-default muted">Loading…</p>
 
@@ -59,11 +82,33 @@ onMounted(async () => {
         </p>
       </div>
 
+      <div v-else-if="notFound" class="denied-panel">
+        <p class="card-title">Event not found</p>
+        <p class="body-default muted">This event does not exist.</p>
+      </div>
+
       <p v-else-if="errorMessage" class="body-default error-text">{{ errorMessage }}</p>
 
       <div v-else-if="event" class="detail-panel">
         <span class="badge">{{ event.status }}</span>
         <p class="card-title">Event {{ event.id.slice(0, 8) }}</p>
+
+        <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
+        <div v-if="isCoordinator" class="coordinator-panel" :class="{
+          'coordinator-panel--assigned': isAssignedCoordinator,
+          'coordinator-panel--blocked': isOtherCoordinatorEvent,
+          'coordinator-panel--unassigned': !isAssignedCoordinator && !isOtherCoordinatorEvent,
+        }">
+          <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
+            You are the assigned coordinator for this event. Coordinator actions will appear here.
+          </p>
+          <p v-else-if="isOtherCoordinatorEvent" class="body-default coordinator-panel__text">
+            This event is assigned to another coordinator. Coordinator actions are not available.
+          </p>
+          <p v-else class="body-default coordinator-panel__text">
+            No coordinator has been assigned to this event yet.
+          </p>
+        </div>
 
         <dl class="detail-list">
           <div class="detail-row">
@@ -206,6 +251,41 @@ onMounted(async () => {
 
 .event-details-panel {
   margin-top: var(--spacing-24);
+}
+
+/* Coordinator assignment panel */
+.coordinator-panel {
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-12) var(--spacing-16);
+  margin: var(--spacing-16) 0;
+  border: 1px solid;
+}
+
+.coordinator-panel--assigned {
+  background: var(--color-purple-100);
+  border-color: var(--color-purple-300);
+}
+
+.coordinator-panel--assigned .coordinator-panel__text {
+  color: var(--color-purple-800);
+}
+
+.coordinator-panel--blocked {
+  background: var(--color-grey-75);
+  border-color: var(--color-grey-200);
+}
+
+.coordinator-panel--blocked .coordinator-panel__text {
+  color: var(--color-grey-600);
+}
+
+.coordinator-panel--unassigned {
+  background: var(--color-grey-50);
+  border-color: var(--color-grey-100);
+}
+
+.coordinator-panel--unassigned .coordinator-panel__text {
+  color: var(--color-grey-500);
 }
 
 .detail-list {

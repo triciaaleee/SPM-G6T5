@@ -72,10 +72,17 @@ eventsRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const { data, error } = await supabase
+  const isCoordinator = user.role === "coordinator";
+
+  let query = supabase
     .from("events")
-    .select("id, status, submitted_details, coordinator_id, review_outcome, created_at")
-    .eq("organiser_id", user.id);
+    .select("id, status, submitted_details, coordinator_id, review_outcome, created_at");
+
+  if (!isCoordinator) {
+    query = query.eq("organiser_id", user.id);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     res.status(500).json({ error: "Failed to load events" });
@@ -117,6 +124,12 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   }
 
   if (!data) {
+    if (user.role === "coordinator") {
+      // Coordinators can see all events via RLS, so !data means the event
+      // genuinely does not exist — not an access violation.
+      res.status(404).json({ error: "Event not found" });
+      return;
+    }
     await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
     res.status(403).json({ error: "Access denied" });
     return;

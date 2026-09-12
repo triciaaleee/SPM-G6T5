@@ -63,12 +63,21 @@ export async function submitEventRequest(payload: EventRequestPayload): Promise<
   return body.event as EventSummary;
 }
 
+export class NotFoundError extends Error {}
+
 export async function fetchEventById(id: string): Promise<EventSummary> {
   const res = await fetch(`${apiBase}/${id}`, { headers: await authHeader() });
-  if (res.status === 403) {
-    throw new AccessDeniedError("You don't have access to this event");
-  }
+  if (res.status === 403) throw new AccessDeniedError("You don't have access to this event");
+  if (res.status === 404) throw new NotFoundError("Event not found");
   if (!res.ok) throw new Error("Failed to load event");
   const body = await res.json();
   return body.event as EventSummary;
+}
+
+export async function getCurrentUser(): Promise<{ id: string; role: string | undefined }> {
+  const { data } = await supabase.auth.getUser();
+  return {
+    id: data.user?.id ?? "",
+    role: data.user?.app_metadata?.role as string | undefined,
+  };
 }
