@@ -1,4 +1,4 @@
-import { getToken } from "./auth";
+import { getStoredUser, getToken } from "./auth";
 
 export interface EventSummary {
   id: number;
@@ -74,9 +74,6 @@ export async function fetchEventById(id: string): Promise<EventSummary> {
 }
 
 export async function getCurrentUser(): Promise<{ id: string; role: string | undefined }> {
-  const { data } = await supabase.auth.getUser();
-  return {
-    id: data.user?.id ?? "",
-    role: data.user?.app_metadata?.role as string | undefined,
-  };
+  const user = getStoredUser();
+  return { id: user?.id ?? "", role: user?.role };
 }
