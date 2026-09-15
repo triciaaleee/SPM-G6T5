@@ -8,6 +8,10 @@ const loading = ref(true);
 const errorMessage = ref<string | null>(null);
 const isCoordinator = ref(false);
 
+function isRegistrationRequired(event: EventSummary): boolean {
+  return event.submitted_details?.registrationNeeded === true;
+}
+
 onMounted(async () => {
   try {
     const [eventsData, user] = await Promise.all([fetchMyEvents(), getCurrentUser()]);
@@ -61,7 +65,10 @@ onMounted(async () => {
           :to="{ name: 'event-detail', params: { id: event.id } }"
           class="event-card"
         >
-          <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
+          <div class="card-header">
+            <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
+            <span v-if="isRegistrationRequired(event)" class="badge badge-registration">Registration Required</span>
+          </div>
           <p class="card-title">Event #{{ event.id }}</p>
           <p class="body-small muted">Created {{ new Date(event.created_at).toLocaleDateString() }}</p>
         </RouterLink>
@@ -185,6 +192,13 @@ onMounted(async () => {
   margin: var(--spacing-12) 0 var(--spacing-4);
 }
 
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-8);
+}
+
 .badge {
   display: inline-block;
   font-size: 0.75rem;
@@ -192,6 +206,12 @@ onMounted(async () => {
   line-height: 1rem;
   padding: var(--spacing-4) var(--spacing-8);
   border-radius: var(--radius-xs);
+}
+
+.badge-registration {
+  background: var(--color-purple-100);
+  color: var(--color-purple-700);
+  white-space: nowrap;
 }
 
 .status-success {

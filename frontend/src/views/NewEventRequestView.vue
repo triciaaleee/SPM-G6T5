@@ -11,6 +11,11 @@ const form = reactive<EventRequestPayload>({
   startTime: "",
   endTime: "",
   expectedAttendance: "",
+  venue: "",
+  accessibility: "",
+  equipment: "",
+  technicalSupport: "",
+  registrationNeeded: false,
 });
 
 const fieldErrors = ref<Record<string, string>>({});
@@ -153,6 +158,123 @@ async function handleSubmit() {
             <p v-if="fieldErrors.expectedAttendance" class="mt-1 text-sm text-error-600">
               {{ fieldErrors.expectedAttendance }}
             </p>
+          </div>
+        </div>
+
+        <div class="mt-8">
+          <h2 class="text-xl font-bold text-grey-900">Requirements</h2>
+          <p class="mt-1 text-sm text-grey-500">
+            Tell your coordinator what this event needs. If a field doesn't apply to your event, type NA
+          </p>
+
+          <div class="mt-4 overflow-hidden rounded-xs border border-grey-200">
+            <table class="w-full border-collapse text-left">
+              <tbody>
+                <tr class="border-b border-grey-200">
+                  <th scope="row" class="w-40 bg-grey-50 px-3 py-3 align-top text-sm font-bold text-grey-700">
+                    <label for="venue">Venue Requirements</label>
+                  </th>
+                  <td class="px-3 py-3">
+                    <textarea
+                      id="venue"
+                      v-model="form.venue"
+                      rows="2"
+                      placeholder="e.g. indoor hall, parking availability"
+                      class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-2 text-grey-900"
+                    />
+                    <p v-if="fieldErrors.venue" class="mt-1 text-sm text-error-600">{{ fieldErrors.venue }}</p>
+                  </td>
+                </tr>
+
+                <tr class="border-b border-grey-200">
+                  <th scope="row" class="w-40 bg-grey-50 px-3 py-3 align-top text-sm font-bold text-grey-700">
+                    <label for="accessibility">Accessibility</label>
+                  </th>
+                  <td class="px-3 py-3">
+                    <textarea
+                      id="accessibility"
+                      v-model="form.accessibility"
+                      rows="2"
+                      placeholder="e.g. wheelchair access, ramps/lifts, prayer room"
+                      class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-2 text-grey-900"
+                    />
+                    <p v-if="fieldErrors.accessibility" class="mt-1 text-sm text-error-600">
+                      {{ fieldErrors.accessibility }}
+                    </p>
+                  </td>
+                </tr>
+
+                <tr class="border-b border-grey-200">
+                  <th scope="row" class="w-40 bg-grey-50 px-3 py-3 align-top text-sm font-bold text-grey-700">
+                    <label for="equipment">Equipment</label>
+                  </th>
+                  <td class="px-3 py-3">
+                    <textarea
+                      id="equipment"
+                      v-model="form.equipment"
+                      rows="2"
+                      placeholder="e.g. projector/screen, whiteboard, podium, extension cords"
+                      class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-2 text-grey-900"
+                    />
+                    <p v-if="fieldErrors.equipment" class="mt-1 text-sm text-error-600">{{ fieldErrors.equipment }}</p>
+                  </td>
+                </tr>
+
+                <tr class="border-b border-grey-200">
+                  <th scope="row" class="w-40 bg-grey-50 px-3 py-3 align-top text-sm font-bold text-grey-700">
+                    <label for="technicalSupport">Technical support</label>
+                  </th>
+                  <td class="px-3 py-3">
+                    <textarea
+                      id="technicalSupport"
+                      v-model="form.technicalSupport"
+                      rows="2"
+                      placeholder="e.g. AV/sound system, livestream setup, on-site IT support"
+                      class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-2 text-grey-900"
+                    />
+                    <p v-if="fieldErrors.technicalSupport" class="mt-1 text-sm text-error-600">
+                      {{ fieldErrors.technicalSupport }}
+                    </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <th scope="row" class="w-40 bg-grey-50 px-3 py-3 align-top text-sm font-bold text-grey-700">
+                    Registration needed
+                  </th>
+                  <td class="px-3 py-3">
+                    <div class="flex gap-2" role="group" aria-label="Registration needed">
+                      <button
+                        type="button"
+                        class="rounded-xs border px-4 py-2 text-sm font-bold"
+                        :class="
+                          form.registrationNeeded
+                            ? 'border-purple-600 bg-purple-600 text-base-white'
+                            : 'border-grey-200 bg-base-white text-grey-700 hover:bg-grey-75'
+                        "
+                        :aria-pressed="form.registrationNeeded"
+                        @click="form.registrationNeeded = true"
+                      >
+                        Yes
+                      </button>
+                      <button
+                        type="button"
+                        class="rounded-xs border px-4 py-2 text-sm font-bold"
+                        :class="
+                          !form.registrationNeeded
+                            ? 'border-purple-600 bg-purple-600 text-base-white'
+                            : 'border-grey-200 bg-base-white text-grey-700 hover:bg-grey-75'
+                        "
+                        :aria-pressed="!form.registrationNeeded"
+                        @click="form.registrationNeeded = false"
+                      >
+                        No
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
 

@@ -30,9 +30,11 @@ on conflict (id) do nothing;
 
 -- submitted_details uses the same field names NewEventRequestView.vue's
 -- form submits (name/purpose/description/proposedDate/startTime/endTime/
--- expectedAttendance) — matching EventRequestPayload in eventsApi.ts — so
+-- expectedAttendance/venue/accessibility/equipment/technicalSupport/
+-- registrationNeeded) — matching EventRequestPayload in eventsApi.ts — so
 -- the "Event details" panel in EventDetailView.vue renders these fields
--- instead of falling back to "—".
+-- instead of falling back to "—". Requirement fields are optional (E2-12),
+-- so some rows below deliberately omit them to exercise that path.
 
 insert into events (
   id, organiser_id, status, submitted_details, coordinator_id, review_outcome, decided_at, decided_by, created_at
@@ -42,7 +44,7 @@ insert into events (
     1,
     'ORG-0001',
     'Planning',
-    '{"name":"Freshman Orientation Fair","purpose":"Welcome new students to campus","description":"Booths, campus tours, and icebreaker activities for incoming freshmen.","proposedDate":"2026-09-20","startTime":"09:00","endTime":"15:00","expectedAttendance":300}',
+    '{"name":"Freshman Orientation Fair","purpose":"Welcome new students to campus","description":"Booths, campus tours, and icebreaker activities for incoming freshmen.","proposedDate":"2026-09-20","startTime":"09:00","endTime":"15:00","expectedAttendance":300,"venue":"Great Lawn (rain site: Sports Hall)","accessibility":"Wheelchair-accessible pathways and a sign-language interpreter for the welcome speech.","equipment":"20 gazebo tents, PA system, 40 folding tables","technicalSupport":"AV technician for the welcome speech","registrationNeeded":true}',
     'COORD-0001',
     'Approved with minor notes on AV setup',
     now() - interval '9 days',
@@ -53,7 +55,7 @@ insert into events (
     2,
     'ORG-0001',
     'Requested',
-    '{"name":"Career Networking Night","purpose":"Connect students with industry recruiters","description":"An evening networking session with alumni and partner companies.","proposedDate":"2026-09-25","startTime":"18:00","endTime":"21:00","expectedAttendance":150}',
+    '{"name":"Career Networking Night","purpose":"Connect students with industry recruiters","description":"An evening networking session with alumni and partner companies.","proposedDate":"2026-09-25","startTime":"18:00","endTime":"21:00","expectedAttendance":150,"venue":"Grand Ballroom, Student Centre","equipment":"Registration desk, name badge printer, 15 round tables","registrationNeeded":true}',
     null,
     null,
     null,

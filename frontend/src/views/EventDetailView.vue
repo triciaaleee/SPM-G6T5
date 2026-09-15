@@ -22,6 +22,11 @@ interface SubmittedEventDetails {
   startTime?: string;
   endTime?: string;
   expectedAttendance?: number;
+  venue?: string;
+  accessibility?: string;
+  equipment?: string;
+  technicalSupport?: string;
+  registrationNeeded?: boolean;
 }
 
 const route = useRoute();
@@ -315,6 +320,28 @@ onMounted(async () => {
           <div class="detail-row">
             <dt class="body-small muted">Expected attendance</dt>
             <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).expectedAttendance ?? "—" }}</dd>
+          </div>
+          <div class="detail-row">
+            <dt class="body-small muted">Venue Requirements</dt>
+            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).venue || "—" }}</dd>
+          </div>
+          <div class="detail-row">
+            <dt class="body-small muted">Accessibility</dt>
+            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).accessibility || "—" }}</dd>
+          </div>
+          <div class="detail-row">
+            <dt class="body-small muted">Equipment</dt>
+            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).equipment || "—" }}</dd>
+          </div>
+          <div class="detail-row">
+            <dt class="body-small muted">Technical support</dt>
+            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).technicalSupport || "—" }}</dd>
+          </div>
+          <div class="detail-row">
+            <dt class="body-small muted">Registration needed</dt>
+            <dd class="body-default">
+              {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
+            </dd>
           </div>
         </dl>
       </div>

@@ -1,5 +1,10 @@
 // E2-1: validation for POST /api/events, driven by the story's acceptance
 // criteria (mandatory fields, no past dates, positive attendance, end > start).
+//
+// E2-12: venue/accessibility/equipment/technicalSupport are mandatory
+// planning-requirement fields the Organiser describes; registrationNeeded is
+// a yes/no flag that's always present from the UI toggle, so it has no
+// "blank" state to enforce.
 
 export interface EventRequestInput {
   name?: unknown;
@@ -9,6 +14,11 @@ export interface EventRequestInput {
   startTime?: unknown;
   endTime?: unknown;
   expectedAttendance?: unknown;
+  venue?: unknown;
+  accessibility?: unknown;
+  equipment?: unknown;
+  technicalSupport?: unknown;
+  registrationNeeded?: unknown;
 }
 
 export interface ValidatedEventRequest {
@@ -19,6 +29,11 @@ export interface ValidatedEventRequest {
   startTime: string;
   endTime: string;
   expectedAttendance: number;
+  venue: string;
+  accessibility: string;
+  equipment: string;
+  technicalSupport: string;
+  registrationNeeded: boolean;
 }
 
 export interface ValidationResult {
@@ -27,7 +42,15 @@ export interface ValidationResult {
   value?: ValidatedEventRequest;
 }
 
-const REQUIRED_TEXT_FIELDS = ["name", "purpose", "description"] as const;
+const REQUIRED_TEXT_FIELDS = [
+  "name",
+  "purpose",
+  "description",
+  "venue",
+  "accessibility",
+  "equipment",
+  "technicalSupport",
+] as const;
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 function isBlank(value: unknown): boolean {
@@ -121,6 +144,11 @@ export function validateEventRequest(input: EventRequestInput): ValidationResult
       startTime: startTime!,
       endTime: endTime!,
       expectedAttendance: expectedAttendance!,
+      venue: String(input.venue).trim(),
+      accessibility: String(input.accessibility).trim(),
+      equipment: String(input.equipment).trim(),
+      technicalSupport: String(input.technicalSupport).trim(),
+      registrationNeeded: input.registrationNeeded === true || input.registrationNeeded === "true",
     },
   };
 }
