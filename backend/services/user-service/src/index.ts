@@ -1,13 +1,12 @@
 import "./lib/env.js";
 import cors from "cors";
 import express from "express";
-import { eventsRouter } from "./routes/events.js";
+import { usersRouter } from "./routes/users.js";
+import { authRouter } from "./routes/auth.js";
 
 /**
- * Fail loudly at boot instead of at the first login. A missing JWT_SECRET
- * or service-role key otherwise surfaces as an opaque 500 from deep inside
- * jsonwebtoken or supabase-js, which is a miserable first run for anyone
- * who just cloned the repo.
+ * Fail loudly at boot instead of at the first request. Mirrors the same
+ * check in events-service/src/index.ts.
  */
 const REQUIRED_ENV = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "JWT_SECRET"] as const;
 const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
@@ -24,13 +23,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use("/api/events", eventsRouter);
+app.use("/api/auth", authRouter);
+app.use("/api/users", usersRouter);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-const port = Number(process.env.EVENTS_SERVICE_PORT ?? 4001);
+const port = Number(process.env.USER_SERVICE_PORT ?? 4002);
 app.listen(port, () => {
-  console.log(`events-service listening on :${port}`);
+  console.log(`user-service listening on :${port}`);
 });

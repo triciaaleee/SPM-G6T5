@@ -8,8 +8,9 @@ export interface AuthUser {
   role: string;
 }
 
-const apiBase = import.meta.env.VITE_EVENTS_API_URL as string;
-const authBase = apiBase.replace(/\/events$/, "/auth");
+// Auth now lives in user-service, a separate process/port from
+// events-service — no longer derivable from VITE_EVENTS_API_URL.
+const authBase = import.meta.env.VITE_AUTH_API_URL as string;
 
 /**
  * Thrown when the backend reports the account is locked (HTTP 423, E1-2
