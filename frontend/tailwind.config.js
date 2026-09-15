@@ -39,6 +39,17 @@ export default {
           700: "var(--color-purple-700)",
           800: "var(--color-purple-800)",
         },
+        blue: {
+          100: "var(--color-blue-100)",
+          200: "var(--color-blue-200)",
+          300: "var(--color-blue-300)",
+          400: "var(--color-blue-400)",
+          500: "var(--color-blue-500)",
+          600: "var(--color-blue-600)",
+          700: "var(--color-blue-700)",
+          800: "var(--color-blue-800)",
+          900: "var(--color-blue-900)",
+        },
         error: {
           200: "var(--color-error-200)",
           600: "var(--color-error-600)",
@@ -49,6 +60,7 @@ export default {
         },
         success: {
           600: "var(--color-success-600)",
+          700: "var(--color-success-700)",
         },
       },
       borderRadius: {

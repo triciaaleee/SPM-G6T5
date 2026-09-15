@@ -31,10 +31,18 @@
   --color-warning-400: #F5A01A;
   --color-warning-600: #F2721B;
   --color-success-600: #008545;
+  --color-success-700: #006E3A;
 
   /* Secondary Blue (Style.md Section 2.8) */
   --color-blue-100: #F4F5FB;
+  --color-blue-200: #E6E9F5;
+  --color-blue-300: #C4CAE8;
+  --color-blue-400: #818FD0;
+  --color-blue-500: #6372B8;
   --color-blue-600: #3F52AA;
+  --color-blue-700: #253A95;
+  --color-blue-800: #1A2868;
+  --color-blue-900: #0F173A;
 
   /* Typography */
   --font-family-lato: "Lato", sans-serif;

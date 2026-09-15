@@ -48,15 +48,17 @@ const isOtherCoordinatorEvent = computed(
 const canReview = computed(() => isCoordinator.value && !isOtherCoordinatorEvent.value);
 
 const canApprove = computed(() => canReview.value && event.value?.status === "Requested");
-const canRequestClarification = computed(() => canReview.value && event.value?.status === "Requested");
 const canReject = computed(
   () =>
     canReview.value &&
     (event.value?.status === "Requested" || event.value?.status === "Clarification Requested"),
 );
-const showReviewActions = computed(
-  () => canReview.value && (canApprove.value || canRequestClarification.value || canReject.value),
+/** Ask for Clarification stays available for the assigned coordinator on any
+ * status except the terminal ones (Rejected, Planning/"completed"). */
+const canAskClarification = computed(
+  () => canReview.value && event.value?.status !== "Rejected" && event.value?.status !== "Planning",
 );
+const showReviewActions = computed(() => canReview.value && canAskClarification.value);
 
 const isReviewing = ref(false);
 const actionError = ref<string | null>(null);
@@ -123,6 +125,15 @@ function asSubmittedDetails(value: EventSummary["submitted_details"]): Submitted
   return value as SubmittedEventDetails;
 }
 
+const NOT_PROVIDED = "Not provided";
+
+function formatDate(value: string | undefined | null): string {
+  if (!value) return NOT_PROVIDED;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" });
+}
+
 onMounted(async () => {
   const id = route.params.id as string;
   try {
@@ -146,13 +157,13 @@ onMounted(async () => {
 <template>
   <!--
     Column mapping — Event Detail
-    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); content col 3-10, centred.
+    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); content col 1-12, full width.
     Tablet (6-col): content col 1-6, full width, grid-tablet-margin 32px.
     Mobile (4-col): content col 1-4, full width, grid-mobile-margin 6px.
   -->
   <div class="page">
     <div class="content">
-      <RouterLink to="/" class="back-link">Back to events</RouterLink>
+      <RouterLink to="/" class="back-link">&larr; Event requests</RouterLink>
 
       <p v-if="loading" class="body-default muted">Loading…</p>
 
@@ -170,153 +181,186 @@ onMounted(async () => {
 
       <p v-else-if="errorMessage" class="body-default error-text">{{ errorMessage }}</p>
 
-      <div v-else-if="event" class="detail-panel">
+      <div v-else-if="event">
         <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
-        <p class="card-title">Event #{{ event.id }}</p>
+        <h1 class="h2">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}` }}</h1>
+        <p class="body-default muted event-id">Event #{{ event.id }}</p>
 
-        <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
-        <div v-if="isCoordinator" class="coordinator-panel" :class="{
-          'coordinator-panel--assigned': isAssignedCoordinator,
-          'coordinator-panel--blocked': isOtherCoordinatorEvent,
-          'coordinator-panel--unassigned': !isAssignedCoordinator && !isOtherCoordinatorEvent,
-        }">
-          <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
-            You are the assigned coordinator for this event.
-          </p>
-          <p v-else-if="isOtherCoordinatorEvent" class="body-default coordinator-panel__text">
-            This event is assigned to another coordinator. Coordinator actions are not available.
-          </p>
-          <p v-else class="body-default coordinator-panel__text">
-            No coordinator has been assigned to this event yet. Acting on this request will assign it to you.
-          </p>
-        </div>
+        <div class="detail-grid">
+          <div class="detail-grid-col">
+            <div class="details-card">
+              <h2 class="section-title">Event Request Details</h2>
 
-        <dl class="detail-list">
-          <div class="detail-row">
-            <dt class="body-small muted">Coordinator</dt>
-            <dd class="body-default">{{ event.coordinator_id ?? "Not yet assigned" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Review outcome</dt>
-            <dd class="body-default">{{ event.review_outcome ?? "Pending" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Decision date</dt>
-            <dd class="body-default">
-              {{ event.decided_at ? new Date(event.decided_at).toLocaleString() : "Pending" }}
-            </dd>
-          </div>
-        </dl>
+              <div class="field-row field-row-3">
+                <div class="field">
+                  <p class="body-small muted mb-1">Event Requestor</p>
+                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Submitted date</p>
+                  <p class="body-default field-value">{{ formatDate(event.created_at) }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Status</p>
+                  <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
+                </div>
+              </div>
 
-        <!-- E1-4.2: coordinator review actions -->
-        <div v-if="isCoordinator" class="review-actions">
-          <p v-if="event.status === 'Rejected'" class="body-small muted">
-            This request has been rejected and cannot be moved forward.
-          </p>
-          <p v-else-if="event.status === 'Planning'" class="body-small muted">
-            This request has been approved and moved to Planning.
-          </p>
-          <p v-else-if="isOtherCoordinatorEvent" class="body-small muted">
-            Only the assigned coordinator can review this request.
-          </p>
-          <template v-else-if="showReviewActions">
-            <p v-if="event.status === 'Clarification Requested'" class="body-small muted review-actions__note">
-              Clarification has been requested from the Organiser. Approval is blocked until it's resolved.
-            </p>
+              <hr class="divider" />
 
-            <p v-if="actionError" class="body-default error-text">{{ actionError }}</p>
+              <div class="field-row field-row-3">
+                <div class="field">
+                  <p class="body-small muted mb-1">Title</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).name || "—" }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Purpose</p>
+                  <span class="badge badge-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
+                  }}</span>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Expected attendance</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).expectedAttendance
+                    ?? "—" }}</p>
+                </div>
+              </div>
 
-            <div v-if="pendingAction" class="review-actions__form">
-              <label for="action-text" class="body-small muted">
-                {{ pendingAction === "reject" ? "Reason for rejection" : "Clarification/amendment needed" }}
-              </label>
-              <textarea
-                id="action-text"
-                v-model="actionText"
-                rows="3"
-                class="review-actions__textarea"
-              />
-              <div class="review-actions__buttons">
-                <button
-                  type="button"
-                  class="btn btn-primary"
-                  :disabled="isReviewing"
-                  @click="submitPendingAction"
-                >
-                  {{ isReviewing ? "Submitting…" : "Confirm" }}
-                </button>
-                <button type="button" class="btn btn-secondary" :disabled="isReviewing" @click="cancelPendingAction">
-                  Cancel
-                </button>
+              <div class="field-row field-row-3">
+                <div class="field">
+                  <p class="body-small muted mb-1">Proposed date</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).proposedDate || "—"
+                  }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Time</p>
+                  <p class="body-default field-value">
+                    {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
+                    –
+                    {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
+                  </p>
+                </div>
+              </div>
+
+              <div class="field">
+                <p class="body-small muted mb-1">Description</p>
+                <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).description || "—" }}
+                </p>
               </div>
             </div>
 
-            <div v-else class="review-actions__buttons">
-              <button
-                type="button"
-                class="btn btn-approve"
-                :disabled="!canApprove || isReviewing"
-                @click="handleApprove"
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                class="btn btn-secondary"
-                :disabled="!canRequestClarification || isReviewing"
-                @click="openClarify"
-              >
-                Request Clarification/Amendment
-              </button>
-              <button
-                type="button"
-                class="btn btn-reject"
-                :disabled="!canReject || isReviewing"
-                @click="openReject"
-              >
-                Reject
-              </button>
+            <div class="details-card requirements-card">
+              <h2 class="section-title">Event Requirements</h2>
+
+              <div class="field-row">
+                <div class="field">
+                  <p class="body-small muted mb-1">Venue Requirements</p>
+                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Equipment Requirements</p>
+                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                </div>
+              </div>
+
+              <div class="field-row">
+                <div class="field">
+                  <p class="body-small muted mb-1">Accessibility Needs</p>
+                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
+                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                </div>
+              </div>
             </div>
-          </template>
-          <p v-else class="body-small muted">
-            No coordinator actions are available for this request's current status ({{ event.status }}).
-          </p>
+          </div>
+
+          <div class="detail-grid-col">
+            <div class="coordinator-card">
+              <h2 class="section-title">Coordinator Details</h2>
+              <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
+              <div class="coordinator-panel" :class="{
+                'coordinator-panel--assigned': isAssignedCoordinator,
+                'coordinator-panel--blocked': isOtherCoordinatorEvent,
+                'coordinator-panel--unassigned': !isAssignedCoordinator && !isOtherCoordinatorEvent,
+              }">
+                <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
+                  You are the assigned coordinator for this event.
+                </p>
+                <p v-else-if="isOtherCoordinatorEvent" class="body-default coordinator-panel__text">
+                  This event is assigned to another coordinator. Coordinator actions are not available.
+                </p>
+                <p v-else class="body-default coordinator-panel__text">
+                  No coordinator has been assigned to this event yet.
+                </p>
+              </div>
+              <div class="field mb-field">
+                <p class="body-small muted mb-1">Coordinator</p>
+                <p class="body-default field-value">{{ event.coordinator_id ?? "Not yet assigned" }}</p>
+              </div>
+            </div>
+
+            <!-- E1-4.2: coordinator review actions -->
+            <div v-if="isCoordinator" class="details-card coordinator-actions-card">
+              <h2 class="section-title">Coordinator actions</h2>
+              <div class="review-actions ">
+                <p v-if="event.status === 'Rejected'" class="body-small muted">
+                  This request has been rejected and cannot be moved forward.
+                </p>
+                <p v-else-if="event.status === 'Planning'" class="body-small muted">
+                  This request has been approved and moved to Planning.
+                </p>
+                <p v-else-if="isOtherCoordinatorEvent" class="body-small muted">
+                  Only the assigned coordinator can review this request.
+                </p>
+                <template v-else-if="showReviewActions">
+                  <p v-if="event.status === 'Clarification Requested'" class="body-small muted review-actions__note">
+                    Clarification has been requested from the Organiser. Approval is blocked until it's resolved.
+                  </p>
+
+                  <p v-if="actionError" class="body-default error-text">{{ actionError }}</p>
+
+                  <div v-if="pendingAction" class="review-actions__form">
+                    <label for="action-text" class="body-small muted">
+                      {{ pendingAction === "reject" ? "Reason for rejection" : "Clarification/amendment needed" }}
+                    </label>
+                    <textarea id="action-text" v-model="actionText" rows="3" class="review-actions__textarea" />
+                    <div class="review-actions__buttons">
+                      <button type="button" class="btn btn-primary" :disabled="isReviewing"
+                        @click="submitPendingAction">
+                        {{ isReviewing ? "Submitting…" : "Confirm" }}
+                      </button>
+                      <button type="button" class="btn btn-secondary" :disabled="isReviewing"
+                        @click="cancelPendingAction">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+
+                  <div v-else class="review-actions__buttons">
+                    <button type="button" class="btn btn-primary" :disabled="!canApprove || isReviewing"
+                      @click="handleApprove">
+                      Approve
+                    </button>
+
+                    <button type="button" class="btn btn-reject-outline" :disabled="!canReject || isReviewing"
+                      @click="openReject">
+                      Reject
+                    </button>
+                    <button type="button" class="btn btn-clarify" :disabled="!canAskClarification || isReviewing"
+                      @click="openClarify">
+                      Request Clarification
+                    </button>
+
+                  </div>
+                </template>
+                <p v-else class="body-small muted">
+                  No coordinator actions are available for this request's current status ({{ event.status }}).
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
-
-      <div v-if="event" class="detail-panel event-details-panel">
-        <p class="card-title">Event details</p>
-
-        <dl class="detail-list">
-          <div class="detail-row">
-            <dt class="body-small muted">Event name</dt>
-            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).name || "—" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Purpose</dt>
-            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).purpose || "—" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Description</dt>
-            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).description || "—" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Proposed date</dt>
-            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).proposedDate || "—" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Time</dt>
-            <dd class="body-default">
-              {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
-              –
-              {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
-            </dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Expected attendance</dt>
-            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).expectedAttendance ?? "—" }}</dd>
-          </div>
-        </dl>
       </div>
     </div>
   </div>
@@ -332,7 +376,7 @@ onMounted(async () => {
 }
 
 .content {
-  grid-column: 3 / 11;
+  grid-column: 1 / 13;
 }
 
 @media (max-width: 1024px) {
@@ -340,6 +384,7 @@ onMounted(async () => {
     grid-template-columns: repeat(6, 1fr);
     padding: var(--spacing-32) var(--grid-tablet-margin);
   }
+
   .content {
     grid-column: 1 / 7;
   }
@@ -350,6 +395,7 @@ onMounted(async () => {
     grid-template-columns: repeat(4, 1fr);
     padding: var(--spacing-24) var(--grid-mobile-margin);
   }
+
   .content {
     grid-column: 1 / 5;
   }
@@ -376,6 +422,10 @@ onMounted(async () => {
   color: var(--color-grey-500);
 }
 
+.mb-1 {
+  margin-bottom: var(--spacing-8);
+}
+
 .error-text {
   color: var(--color-error-600);
 }
@@ -388,6 +438,18 @@ onMounted(async () => {
   margin: var(--spacing-12) 0 var(--spacing-4);
 }
 
+.h2 {
+  font-size: 2.25rem;
+  font-weight: 700;
+  line-height: 2.625rem;
+  color: var(--color-grey-900);
+  margin: var(--spacing-12) 0 var(--spacing-4);
+}
+
+.event-id {
+  margin-bottom: var(--spacing-24);
+}
+
 .badge {
   display: inline-block;
   font-size: 0.75rem;
@@ -398,8 +460,8 @@ onMounted(async () => {
 }
 
 .status-success {
-  background: #F3F9F3;
-  color: var(--color-success-600);
+  background: #e5eee5;
+  color: var(--color-success-700);
 }
 
 .status-warning {
@@ -417,8 +479,7 @@ onMounted(async () => {
   color: var(--color-blue-600);
 }
 
-.denied-panel,
-.detail-panel {
+.denied-panel {
   background: var(--color-grey-50);
   border: 1px solid var(--color-grey-100);
   border-radius: var(--radius-lg);
@@ -429,15 +490,89 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
-.event-details-panel {
-  margin-top: var(--spacing-24);
+.detail-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--grid-desktop-gutter);
+  align-items: start;
+}
+
+@media (max-width: 1024px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.detail-grid-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--grid-desktop-gutter);
+}
+
+.details-card,
+.coordinator-card {
+  background: var(--color-grey-50);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-32);
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--color-grey-100);
+  margin: 0 0 var(--spacing-24);
+}
+
+.badge-neutral {
+  background: var(--color-purple-100);
+  color: var(--color-purple-800);
+}
+
+.section-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.75rem;
+  color: var(--color-grey-900);
+  margin: 0 0 var(--spacing-12);
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--spacing-24);
+  margin-bottom: var(--spacing-24);
+}
+
+.field-row-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+@media (max-width: 640px) {
+
+  .field-row,
+  .field-row-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.field {
+  min-width: 0;
+}
+
+.mb-field {
+  margin-bottom: var(--spacing-24);
+}
+
+.field-value {
+  color: var(--color-grey-900);
+  font-weight: 400;
 }
 
 /* Coordinator assignment panel */
 .coordinator-panel {
   border-radius: var(--radius-xs);
   padding: var(--spacing-12) var(--spacing-16);
-  margin: var(--spacing-16) 0;
+  margin-bottom: var(--spacing-16);
   border: 1px solid;
 }
 
@@ -460,7 +595,7 @@ onMounted(async () => {
 }
 
 .coordinator-panel--unassigned {
-  background: var(--color-grey-50);
+  background: var(--color-base-white);
   border-color: var(--color-grey-100);
 }
 
@@ -468,22 +603,9 @@ onMounted(async () => {
   color: var(--color-grey-500);
 }
 
-.detail-list {
-  margin: var(--spacing-24) 0 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-16);
-}
-
-.detail-row dt {
-  margin-bottom: var(--spacing-4);
-}
-
 /* E1-4.2: coordinator review actions */
 .review-actions {
-  margin-top: var(--spacing-24);
-  padding-top: var(--spacing-24);
-  border-top: 1px solid var(--color-grey-100);
+  padding-top: var(--spacing-8);
 }
 
 .review-actions__note {
@@ -492,8 +614,12 @@ onMounted(async () => {
 
 .review-actions__buttons {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: var(--spacing-12);
+}
+
+.review-actions__buttons .btn {
+  width: 100%;
 }
 
 .review-actions__form {
@@ -527,22 +653,24 @@ onMounted(async () => {
   opacity: 0.5;
 }
 
-.btn-approve {
-  background: var(--color-success-600);
-  color: var(--color-base-white);
+.btn-clarify {
+  background: transparent;
+  color: var(--color-blue-600);
+  border-color: var(--color-blue-600);
 }
 
-.btn-approve:not(:disabled):hover {
-  background: var(--color-success-700, var(--color-success-600));
+.btn-clarify:not(:disabled):hover {
+  background: var(--color-blue-200);
 }
 
-.btn-reject {
-  background: var(--color-error-600);
-  color: var(--color-base-white);
+.btn-reject-outline {
+  background: transparent;
+  color: var(--color-error-600);
+  border-color: var(--color-error-600);
 }
 
-.btn-reject:not(:disabled):hover {
-  background: var(--color-error-700, var(--color-error-600));
+.btn-reject-outline:not(:disabled):hover {
+  background: var(--color-error-200);
 }
 
 .btn-secondary {

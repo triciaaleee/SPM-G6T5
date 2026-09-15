@@ -25,7 +25,7 @@ onMounted(async () => {
 <template>
   <!--
     Column mapping — Events List
-    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); content col 3-10, centred.
+    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); content col 1-12, full width.
     Tablet (6-col): content col 1-6, full width, grid-tablet-margin 32px.
     Mobile (4-col): content col 1-4, full width, grid-mobile-margin 6px.
     Nested grid: card list uses a local grid matching the content area's column count (8 desktop / 6 tablet / 4 mobile).
@@ -62,8 +62,9 @@ onMounted(async () => {
           class="event-card"
         >
           <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
-          <p class="card-title">Event #{{ event.id }}</p>
+          <p class="card-title">{{ event.submitted_details.name }}</p>
           <p class="body-small muted">Created {{ new Date(event.created_at).toLocaleDateString() }}</p>
+          <p class="body-small muted">Assigned to: {{ event.coordinator_id ?? "Unassigned" }}</p>
         </RouterLink>
       </div>
     </div>
@@ -80,7 +81,7 @@ onMounted(async () => {
 }
 
 .content {
-  grid-column: 3 / 11;
+  grid-column: 1 / 13;
 }
 
 @media (max-width: 1024px) {
@@ -195,8 +196,8 @@ onMounted(async () => {
 }
 
 .status-success {
-  background: #F3F9F3;
-  color: var(--color-success-600);
+  background: #e5eee5;
+  color: var(--color-success-700);
 }
 
 .status-warning {
