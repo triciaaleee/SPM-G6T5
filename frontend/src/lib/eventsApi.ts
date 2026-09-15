@@ -62,6 +62,11 @@ export interface EventRequestPayload {
   startTime: string;
   endTime: string;
   expectedAttendance: number | string;
+  venue: string;
+  accessibility: string;
+  equipment: string;
+  technicalSupport: string;
+  registrationNeeded: boolean;
 }
 
 export class ValidationError extends Error {

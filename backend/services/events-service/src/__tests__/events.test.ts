@@ -22,6 +22,10 @@ const validPayload = {
   startTime: "09:00",
   endTime: "11:00",
   expectedAttendance: 50,
+  venue: "Main Hall",
+  accessibility: "Wheelchair ramp access",
+  equipment: "Projector and 100 chairs",
+  technicalSupport: "AV technician on-site",
 };
 
 function buildApp(mockSupabase: unknown, user: { id: string; role: string } = { id: "user-1", role: "organiser" }) {
@@ -211,6 +215,10 @@ describe("POST /api/events", () => {
         "startTime",
         "endTime",
         "expectedAttendance",
+        "venue",
+        "accessibility",
+        "equipment",
+        "technicalSupport",
       ]),
     );
     expect(from).not.toHaveBeenCalled();
@@ -250,6 +258,50 @@ describe("POST /api/events", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.fields.endTime).toBeDefined();
+  });
+
+  it.each(["venue", "accessibility", "equipment", "technicalSupport"])(
+    "blocks submission when %s is left blank",
+    async (field) => {
+      const from = vi.fn();
+      const app = buildApp({ from });
+
+      const res = await request(app)
+        .post("/api/events")
+        .send({ ...validPayload, [field]: "" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.fields[field]).toBeDefined();
+      expect(from).not.toHaveBeenCalled();
+    },
+  );
+
+  it("records requirement fields and the registration flag when provided", async () => {
+    const single = vi.fn().mockResolvedValue({
+      data: { id: "e4", status: "Requested", submitted_details: {}, coordinator_id: null, review_outcome: null, created_at: "2026-01-01" },
+      error: null,
+    });
+    const select = vi.fn().mockReturnValue({ single });
+    const insert = vi.fn().mockReturnValue({ select });
+    const from = vi.fn().mockReturnValue({ insert });
+
+    const app = buildApp({ from });
+    const res = await request(app)
+      .post("/api/events")
+      .send({ ...validPayload, registrationNeeded: true });
+
+    expect(res.status).toBe(201);
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        submitted_details: expect.objectContaining({
+          venue: "Main Hall",
+          accessibility: "Wheelchair ramp access",
+          equipment: "Projector and 100 chairs",
+          technicalSupport: "AV technician on-site",
+          registrationNeeded: true,
+        }),
+      }),
+    );
   });
 });
 
