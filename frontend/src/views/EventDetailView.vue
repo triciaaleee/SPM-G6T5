@@ -12,7 +12,8 @@ import {
   requestClarification,
   type EventSummary,
 } from "../lib/eventsApi";
-import { statusBadgeClass } from "../lib/eventStatus";
+import { statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
+import EventStatusTracker from "../components/EventStatusTracker.vue";
 
 interface SubmittedEventDetails {
   name?: string;
@@ -252,6 +253,12 @@ onMounted(async () => {
                 </p>
               </div>
             </div>
+
+            <EventStatusTracker
+              :status="event.status"
+              :last-changed-at="statusLastChangedAt(event)"
+              :review-outcome="event.review_outcome"
+            />
 
             <div class="details-card requirements-card">
               <h2 class="section-title">Event Requirements</h2>
