@@ -71,7 +71,7 @@ onMounted(async () => {
           </div>
           <p class="card-title">Event #{{ event.id }}</p>
           <p class="body-small muted">Created {{ new Date(event.created_at).toLocaleDateString() }}</p>
-          <p class="body-small muted">Assigned to: {{ event.coordinator_id ?? "Unassigned" }}</p>
+          <p class="body-small muted">Assigned to: {{ event.coordinator?.name ?? "Unassigned" }}</p>
         </RouterLink>
       </div>
     </div>

@@ -5,6 +5,8 @@ export interface EventSummary {
   status: string;
   submitted_details: Record<string, unknown>;
   coordinator_id: string | null;
+  /** E2-6 AC2: the assigned coordinator's display name, embedded via the FK. */
+  coordinator: { name: string } | null;
   review_outcome: string | null;
   decided_at: string | null;
   decided_by: string | null;

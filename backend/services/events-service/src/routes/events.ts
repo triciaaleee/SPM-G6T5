@@ -4,6 +4,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validateEventRequest } from "../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../lib/validation.js";
+import { assignCoordinator } from "../lib/coordinatorAssignment.js";
 
 async function recordAccessDenial(
   supabase: NonNullable<AuthedRequest["supabase"]>,
@@ -28,17 +29,29 @@ eventsRouter.use(requireAuth);
  * E1-4.2: shared column list for every route that returns an event to the
  * client, including decided_at/decided_by so the Organiser can see who
  * decided and when (AC4) — created_at is submission time, not decision
- * time.
+ * time. E2-6 AC2: `coordinator:coordinator_id(name)` embeds the assigned
+ * coordinator's display name via the FK on events.coordinator_id (added
+ * in migration 0004), so the frontend can show a name instead of a raw
+ * id — coordinator_id itself is kept too, since other logic (e.g. "is the
+ * viewer the assigned coordinator?") needs the id, not the name.
  */
 const EVENT_COLUMNS =
-  "id, status, submitted_details, coordinator_id, review_outcome, decided_at, decided_by, created_at";
+  "id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), review_outcome, decided_at, decided_by, created_at";
 
 /**
  * E2-1: submit a new event request. Validates the mandatory fields per the
- * story's acceptance criteria, then inserts with status "Requested".
- * Authorization is enforced here in application code — the service-role
- * client bypasses RLS, so organiser_id is always set from the verified
- * JWT's subject, never trusted from the request body.
+ * story's acceptance criteria, then inserts. Authorization is enforced
+ * here in application code — the service-role client bypasses RLS, so
+ * organiser_id is always set from the verified JWT's subject, never
+ * trusted from the request body.
+ *
+ * E2-6: a coordinator is auto-assigned round-robin at submission time,
+ * right as the request reaches "Requested" — not later, whenever a
+ * coordinator happens to open it (see lib/coordinatorAssignment.ts). If
+ * no coordinators exist yet, the request is flagged "Unassigned" instead
+ * and stays visible to all coordinators (they already see every event
+ * regardless of assignment, per E1-4.1) until one self-assigns by acting
+ * on it.
  */
 eventsRouter.post("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -53,11 +66,14 @@ eventsRouter.post("/", async (req: AuthedRequest, res) => {
     return;
   }
 
+  const coordinatorId = await assignCoordinator(supabase);
+
   const { data, error } = await supabase
     .from("events")
     .insert({
       organiser_id: user.id,
-      status: "Requested",
+      status: coordinatorId ? "Requested" : "Unassigned",
+      coordinator_id: coordinatorId,
       submitted_details: result.value,
     })
     .select(EVENT_COLUMNS)
@@ -145,7 +161,15 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   res.json({ event });
 });
 
-const REJECTABLE_STATUSES = new Set(["Requested", "Clarification Requested"]);
+/**
+ * "Unassigned" (E2-6: no coordinator existed at submission time) is
+ * treated everywhere below as equivalent to "Requested" — the event is
+ * still pending review, just without an owner yet; whoever acts on it
+ * self-assigns via authorizeCoordinatorReview's existing null-coordinator
+ * branch.
+ */
+const PENDING_REVIEW_STATUSES = new Set(["Requested", "Unassigned"]);
+const REJECTABLE_STATUSES = new Set(["Requested", "Unassigned", "Clarification Requested"]);
 
 interface ReviewEventRow {
   id: number;
@@ -224,7 +248,7 @@ eventsRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
-  if (event.status !== "Requested") {
+  if (!PENDING_REVIEW_STATUSES.has(event.status)) {
     const message =
       event.status === "Clarification Requested"
         ? "This request has an outstanding clarification request and cannot be approved yet"
@@ -309,7 +333,7 @@ eventsRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) 
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
-  if (event.status !== "Requested") {
+  if (!PENDING_REVIEW_STATUSES.has(event.status)) {
     res.status(409).json({ error: "Clarification can only be requested while this request is pending review" });
     return;
   }

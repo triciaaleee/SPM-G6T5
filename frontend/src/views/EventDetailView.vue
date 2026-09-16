@@ -301,7 +301,7 @@ onMounted(async () => {
               </div>
               <div class="field mb-field">
                 <p class="body-small muted mb-1">Coordinator</p>
-                <p class="body-default field-value">{{ event.coordinator_id ?? "Not yet assigned" }}</p>
+                <p class="body-default field-value">{{ event.coordinator?.name ?? "Not yet assigned" }}</p>
               </div>
             </div>
 

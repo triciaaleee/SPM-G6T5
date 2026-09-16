@@ -172,22 +172,67 @@ describe("GET /api/events/:id", () => {
   });
 });
 
+/**
+ * E2-6: mocks the two lookups assignCoordinator makes (active coordinators,
+ * most recently auto-assigned event) plus the actual events.insert(...).
+ * `coordinators` is the round-robin order; `lastAssignedCoordinatorId`
+ * simulates prior submissions having already rotated through some of them.
+ */
+function buildSubmitSupabase(options: {
+  coordinators?: string[];
+  lastAssignedCoordinatorId?: string | null;
+  insertedEvent?: Record<string, unknown> | null;
+  insertError?: { message: string } | null;
+}) {
+  const {
+    coordinators = [],
+    lastAssignedCoordinatorId = null,
+    insertedEvent = null,
+    insertError = null,
+  } = options;
+
+  const usersOrder = vi.fn().mockResolvedValue({
+    data: coordinators.map((id) => ({ id })),
+    error: null,
+  });
+  const usersEq = vi.fn().mockReturnValue({ order: usersOrder });
+  const usersSelect = vi.fn().mockReturnValue({ eq: usersEq });
+
+  const lastAssignedMaybeSingle = vi.fn().mockResolvedValue({
+    data: lastAssignedCoordinatorId ? { coordinator_id: lastAssignedCoordinatorId } : null,
+    error: null,
+  });
+  const lastAssignedLimit = vi.fn().mockReturnValue({ maybeSingle: lastAssignedMaybeSingle });
+  const lastAssignedOrder = vi.fn().mockReturnValue({ limit: lastAssignedLimit });
+  const lastAssignedNot = vi.fn().mockReturnValue({ order: lastAssignedOrder });
+  const eventsSelect = vi.fn().mockReturnValue({ not: lastAssignedNot });
+
+  const insertSingle = vi.fn().mockResolvedValue({ data: insertedEvent, error: insertError });
+  const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
+  const insert = vi.fn().mockReturnValue({ select: insertSelect });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "users") return { select: usersSelect };
+    if (table === "events") return { select: eventsSelect, insert };
+    return {};
+  });
+
+  return { from, insert };
+}
+
 describe("POST /api/events", () => {
-  it("creates the request with status Requested when all fields are valid", async () => {
-    const single = vi.fn().mockResolvedValue({
-      data: {
+  it("creates the request with status Requested when a coordinator is available", async () => {
+    const { from, insert } = buildSubmitSupabase({
+      coordinators: ["COORD-0001"],
+      insertedEvent: {
         id: "e2",
         status: "Requested",
         submitted_details: validPayload,
-        coordinator_id: null,
+        coordinator_id: "COORD-0001",
         review_outcome: null,
         created_at: "2026-01-01",
       },
-      error: null,
     });
-    const select = vi.fn().mockReturnValue({ single });
-    const insert = vi.fn().mockReturnValue({ select });
-    const from = vi.fn().mockReturnValue({ insert });
 
     const app = buildApp({ from });
     const res = await request(app).post("/api/events").send(validPayload);
@@ -195,8 +240,61 @@ describe("POST /api/events", () => {
     expect(res.status).toBe(201);
     expect(res.body.event.status).toBe("Requested");
     expect(insert).toHaveBeenCalledWith(
-      expect.objectContaining({ organiser_id: "user-1", status: "Requested" }),
+      expect.objectContaining({
+        organiser_id: "user-1",
+        status: "Requested",
+        coordinator_id: "COORD-0001",
+      }),
     );
+  });
+
+  it("flags the request Unassigned when no coordinators exist (E2-6 AC4)", async () => {
+    const { from, insert } = buildSubmitSupabase({
+      coordinators: [],
+      insertedEvent: {
+        id: "e3",
+        status: "Unassigned",
+        submitted_details: validPayload,
+        coordinator_id: null,
+        review_outcome: null,
+        created_at: "2026-01-01",
+      },
+    });
+
+    const app = buildApp({ from });
+    const res = await request(app).post("/api/events").send(validPayload);
+
+    expect(res.status).toBe(201);
+    expect(res.body.event.status).toBe("Unassigned");
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Unassigned", coordinator_id: null }),
+    );
+  });
+
+  it("round-robins to the coordinator after whoever was assigned last (E2-6)", async () => {
+    const { from, insert } = buildSubmitSupabase({
+      coordinators: ["COORD-0001", "COORD-0002", "COORD-0003"],
+      lastAssignedCoordinatorId: "COORD-0001",
+      insertedEvent: { id: "e4", status: "Requested", coordinator_id: "COORD-0002" },
+    });
+
+    const app = buildApp({ from });
+    await request(app).post("/api/events").send(validPayload);
+
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ coordinator_id: "COORD-0002" }));
+  });
+
+  it("wraps back to the first coordinator after the last one in rotation (E2-6)", async () => {
+    const { from, insert } = buildSubmitSupabase({
+      coordinators: ["COORD-0001", "COORD-0002"],
+      lastAssignedCoordinatorId: "COORD-0002",
+      insertedEvent: { id: "e5", status: "Requested", coordinator_id: "COORD-0001" },
+    });
+
+    const app = buildApp({ from });
+    await request(app).post("/api/events").send(validPayload);
+
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ coordinator_id: "COORD-0001" }));
   });
 
   it("blocks submission and identifies every missing mandatory field", async () => {
@@ -277,13 +375,17 @@ describe("POST /api/events", () => {
   );
 
   it("records requirement fields and the registration flag when provided", async () => {
-    const single = vi.fn().mockResolvedValue({
-      data: { id: "e4", status: "Requested", submitted_details: {}, coordinator_id: null, review_outcome: null, created_at: "2026-01-01" },
-      error: null,
+    const { from, insert } = buildSubmitSupabase({
+      coordinators: ["COORD-0001"],
+      insertedEvent: {
+        id: "e6",
+        status: "Requested",
+        submitted_details: {},
+        coordinator_id: "COORD-0001",
+        review_outcome: null,
+        created_at: "2026-01-01",
+      },
     });
-    const select = vi.fn().mockReturnValue({ single });
-    const insert = vi.fn().mockReturnValue({ select });
-    const from = vi.fn().mockReturnValue({ insert });
 
     const app = buildApp({ from });
     const res = await request(app)
@@ -375,6 +477,19 @@ describe("POST /api/events/:id/approve", () => {
       expect.objectContaining({ status: "Planning", coordinator_id: coordinator.id, decided_by: coordinator.id }),
     );
     expect(updateEq).toHaveBeenCalledWith("id", 1);
+  });
+
+  it("approves an Unassigned event, treating it like Requested (E2-6)", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 2, status: "Unassigned", coordinator_id: null },
+      updatedEvent: { id: 2, status: "Planning", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/2/approve");
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: "Planning" }));
   });
 });
 
