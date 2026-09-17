@@ -12,6 +12,15 @@ function isRegistrationRequired(event: EventSummary): boolean {
   return event.submitted_details?.registrationNeeded === true;
 }
 
+interface SubmittedEventDetails {
+  name?: string;
+}
+
+function eventName(event: EventSummary): string {
+  const details = event.submitted_details as SubmittedEventDetails;
+  return details?.name || `Event #${event.id}`;
+}
+
 onMounted(async () => {
   try {
     const [eventsData, user] = await Promise.all([fetchMyEvents(), getCurrentUser()]);
@@ -21,6 +30,8 @@ onMounted(async () => {
     errorMessage.value = "We couldn't load your events. Please try again.";
   } finally {
     loading.value = false;
+
+    console.log(events);
   }
 });
 
@@ -69,7 +80,7 @@ onMounted(async () => {
             <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
             <span v-if="isRegistrationRequired(event)" class="badge badge-registration">Registration Required</span>
           </div>
-          <p class="card-title">Event #{{ event.id }}</p>
+          <p class="card-title">{{ eventName(event) }}</p>
           <p class="body-small muted">Created {{ new Date(event.created_at).toLocaleDateString() }}</p>
           <p class="body-small muted">Assigned to: {{ event.coordinator?.name ?? "Unassigned" }}</p>
         </RouterLink>
