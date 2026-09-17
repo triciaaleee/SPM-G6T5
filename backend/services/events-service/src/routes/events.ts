@@ -238,10 +238,11 @@ async function authorizeCoordinatorReview(
 }
 
 /**
- * E1-4.2 AC1: approve — only from "Requested" (an outstanding clarification
- * request, or an event already decided, blocks it). Sets status to
- * "Planning", self-assigning the caller as coordinator if the event had
- * none yet.
+ * E1-4.2 AC1 / E2-3: approve — from "Requested", or from "Clarification
+ * Requested" once every top-level question raised on this event has been
+ * marked resolved (an event already decided is blocked upstream in
+ * authorizeCoordinatorReview). Sets status to "Planning", self-assigning
+ * the caller as coordinator if the event had none yet.
  */
 eventsRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
   const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
@@ -249,12 +250,27 @@ eventsRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
   if (!event) return;
 
   if (!PENDING_REVIEW_STATUSES.has(event.status)) {
-    const message =
-      event.status === "Clarification Requested"
-        ? "This request has an outstanding clarification request and cannot be approved yet"
-        : "This request cannot be approved from its current status";
-    res.status(409).json({ error: message });
-    return;
+    if (event.status !== "Clarification Requested") {
+      res.status(409).json({ error: "This request cannot be approved from its current status" });
+      return;
+    }
+
+    const { supabase: clarificationSupabase } = req as Required<Pick<AuthedRequest, "supabase">>;
+    const { data: questions, error: questionsError } = await clarificationSupabase
+      .from("event_clarifications")
+      .select("id, resolved")
+      .eq("event_id", event.id)
+      .is("parent_id", null);
+
+    if (questionsError) {
+      res.status(500).json({ error: "Failed to check the clarification thread" });
+      return;
+    }
+
+    if ((questions ?? []).some((q: { resolved: boolean }) => !q.resolved)) {
+      res.status(409).json({ error: "This request has an outstanding clarification request and cannot be approved yet" });
+      return;
+    }
   }
 
   const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
@@ -363,5 +379,253 @@ eventsRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) 
     return;
   }
 
+  // Seeds the thread the clarification popup renders (AC3) with this
+  // first question. Best-effort: the status transition above is the part
+  // that actually gates approval, so a failure here is logged, not fatal.
+  const { error: threadError } = await supabase
+    .from("event_clarifications")
+    .insert({ event_id: event.id, author_id: user.id, author_role: "coordinator", message });
+
+  if (threadError) {
+    console.error("Failed to record clarification thread entry", { eventId: event.id, error: threadError });
+  }
+
   res.json({ event: data });
+});
+
+interface ClarificationRow {
+  id: number;
+  parent_id: number | null;
+  author_id: string;
+  author_role: string;
+  message: string;
+  resolved: boolean;
+  created_at: string;
+}
+
+const CLARIFICATION_COLUMNS = "id, parent_id, author_id, author_role, message, resolved, created_at";
+
+/**
+ * Shared visibility check for the clarification thread routes: same rule
+ * as GET /:id (owning organiser, or any coordinator), but returns the
+ * fields those routes need (organiser_id/coordinator_id/status) rather
+ * than the full event payload.
+ */
+async function loadEventForClarification(
+  req: AuthedRequest,
+  res: Response,
+  eventId: string,
+): Promise<{ id: number; status: string; organiser_id: string; coordinator_id: string | null } | null> {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return null;
+  }
+
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, status, organiser_id, coordinator_id")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load event" });
+    return null;
+  }
+
+  const isOwner = data?.organiser_id === user.id;
+  const isCoordinator = user.role === "coordinator";
+
+  if (!data || (!isOwner && !isCoordinator)) {
+    await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
+    res.status(403).json({ error: "Access denied" });
+    return null;
+  }
+
+  return data;
+}
+
+/** AC3: the full exchange, chronological, for anyone with access to the event. */
+eventsRouter.get("/:id/clarifications", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await loadEventForClarification(req, res, eventId);
+  if (!event) return;
+
+  const { supabase } = req as Required<Pick<AuthedRequest, "supabase">>;
+  const { data, error } = await supabase
+    .from("event_clarifications")
+    .select(CLARIFICATION_COLUMNS)
+    .eq("event_id", event.id)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load clarifications" });
+    return;
+  }
+
+  res.json({ clarifications: (data ?? []) as ClarificationRow[] });
+});
+
+/**
+ * Coordinator asks a follow-up question. The main "Request Clarification/
+ * Amendment" action (POST /:id/request-clarification) makes the *first*
+ * ask and flips the status; once outstanding, that button disables (AC2),
+ * so this — the popup's "+" — is how the assigned coordinator keeps
+ * asking without a way to re-open a request that's already flagged.
+ */
+eventsRouter.post("/:id/clarifications", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeCoordinatorReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== "Clarification Requested") {
+    res.status(409).json({ error: "Additional questions can only be added while clarification is outstanding" });
+    return;
+  }
+
+  const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) {
+    res.status(400).json({ error: "A question is required" });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data, error } = await supabase
+    .from("event_clarifications")
+    .insert({ event_id: event.id, author_id: user.id, author_role: "coordinator", message })
+    .select(CLARIFICATION_COLUMNS)
+    .single();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to add question" });
+    return;
+  }
+
+  res.status(201).json({ clarification: data as ClarificationRow });
+});
+
+/** Either party replies within a question's thread. */
+eventsRouter.post("/:id/clarifications/:questionId/replies", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await loadEventForClarification(req, res, eventId);
+  if (!event) return;
+
+  const { user, supabase } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const isOwner = event.organiser_id === user.id;
+  const isAssignedCoordinator =
+    user.role === "coordinator" && (event.coordinator_id === null || event.coordinator_id === user.id);
+
+  if (!isOwner && !isAssignedCoordinator) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  if (event.status !== "Clarification Requested") {
+    res.status(409).json({ error: "This clarification is no longer open for replies" });
+    return;
+  }
+
+  const questionId = Array.isArray(req.params.questionId) ? req.params.questionId[0] : req.params.questionId;
+  if (!isPositiveInteger(questionId)) {
+    res.status(404).json({ error: "Question not found" });
+    return;
+  }
+
+  const { data: question, error: questionError } = await supabase
+    .from("event_clarifications")
+    .select("id, event_id, parent_id, resolved")
+    .eq("id", Number(questionId))
+    .maybeSingle();
+
+  if (questionError) {
+    res.status(500).json({ error: "Failed to load question" });
+    return;
+  }
+
+  if (!question || question.event_id !== event.id || question.parent_id !== null) {
+    res.status(404).json({ error: "Question not found" });
+    return;
+  }
+
+  if (question.resolved) {
+    res.status(409).json({ error: "This question has been resolved and is no longer open for replies" });
+    return;
+  }
+
+  const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) {
+    res.status(400).json({ error: "A reply is required" });
+    return;
+  }
+
+  const authorRole = user.role === "coordinator" ? "coordinator" : "organiser";
+  const { data, error } = await supabase
+    .from("event_clarifications")
+    .insert({ event_id: event.id, parent_id: question.id, author_id: user.id, author_role: authorRole, message })
+    .select(CLARIFICATION_COLUMNS)
+    .single();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to add reply" });
+    return;
+  }
+
+  res.status(201).json({ clarification: data as ClarificationRow });
+});
+
+/**
+ * Coordinator marks a top-level question resolved — once every question
+ * on the event is resolved, /approve unblocks (see its status check).
+ */
+eventsRouter.post("/:id/clarifications/:questionId/resolve", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeCoordinatorReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== "Clarification Requested") {
+    res.status(409).json({ error: "Questions can only be resolved while clarification is outstanding" });
+    return;
+  }
+
+  const questionId = Array.isArray(req.params.questionId) ? req.params.questionId[0] : req.params.questionId;
+  if (!isPositiveInteger(questionId)) {
+    res.status(404).json({ error: "Question not found" });
+    return;
+  }
+
+  const { supabase } = req as Required<Pick<AuthedRequest, "supabase">>;
+  const { data: question, error: questionError } = await supabase
+    .from("event_clarifications")
+    .select("id, event_id, parent_id")
+    .eq("id", Number(questionId))
+    .maybeSingle();
+
+  if (questionError) {
+    res.status(500).json({ error: "Failed to load question" });
+    return;
+  }
+
+  if (!question || question.event_id !== event.id || question.parent_id !== null) {
+    res.status(404).json({ error: "Question not found" });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("event_clarifications")
+    .update({ resolved: true })
+    .eq("id", question.id)
+    .select(CLARIFICATION_COLUMNS)
+    .single();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to resolve question" });
+    return;
+  }
+
+  res.json({ clarification: data as ClarificationRow });
 });

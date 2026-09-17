@@ -159,3 +159,67 @@ export function rejectEvent(id: number, reason: string): Promise<EventSummary> {
 export function requestClarification(id: number, message: string): Promise<EventSummary> {
   return postReviewAction(id, "request-clarification", { message });
 }
+
+export interface ClarificationMessage {
+  id: number;
+  parent_id: number | null;
+  author_id: string;
+  author_role: "coordinator" | "organiser";
+  message: string;
+  /** Only meaningful for a top-level question (parent_id null) — see resolveClarificationQuestion. */
+  resolved: boolean;
+  created_at: string;
+}
+
+export class ClarificationActionError extends Error {}
+
+/** AC3: the full clarification exchange for this event, in chronological order. */
+export async function fetchClarifications(eventId: number): Promise<ClarificationMessage[]> {
+  const res = await fetch(`${apiBase}/${eventId}/clarifications`, { headers: await authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) throw new Error("Failed to load clarifications");
+  const body = await res.json();
+  return body.clarifications as ClarificationMessage[];
+}
+
+/** The popup's "+": coordinator asks a follow-up question while clarification is outstanding. */
+export async function addClarificationQuestion(eventId: number, message: string): Promise<ClarificationMessage> {
+  const res = await fetch(`${apiBase}/${eventId}/clarifications`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ message }),
+  });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new ClarificationActionError(body.error ?? "Failed to add question");
+  return body.clarification as ClarificationMessage;
+}
+
+/** Either party replies within a question's thread. */
+export async function replyToClarification(
+  eventId: number,
+  questionId: number,
+  message: string,
+): Promise<ClarificationMessage> {
+  const res = await fetch(`${apiBase}/${eventId}/clarifications/${questionId}/replies`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ message }),
+  });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new ClarificationActionError(body.error ?? "Failed to add reply");
+  return body.clarification as ClarificationMessage;
+}
+
+/** Coordinator marks a question resolved — once every question on the event is, /approve unblocks. */
+export async function resolveClarificationQuestion(eventId: number, questionId: number): Promise<ClarificationMessage> {
+  const res = await fetch(`${apiBase}/${eventId}/clarifications/${questionId}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+  });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new ClarificationActionError(body.error ?? "Failed to resolve question");
+  return body.clarification as ClarificationMessage;
+}

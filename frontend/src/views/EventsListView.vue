@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { fetchMyEvents, getCurrentUser, type EventSummary } from "../lib/eventsApi";
-import { statusBadgeClass } from "../lib/eventStatus";
+import { statusBadgeClass, statusLabel } from "../lib/eventStatus";
 
 const events = ref<EventSummary[]>([]);
 const loading = ref(true);
@@ -10,6 +10,12 @@ const isCoordinator = ref(false);
 
 function isRegistrationRequired(event: EventSummary): boolean {
   return event.submitted_details?.registrationNeeded === true;
+}
+
+/** Organiser-only flag: a coordinator has asked a clarification question
+ * on this event and it's still awaiting the Organiser's reply. */
+function needsClarificationReply(event: EventSummary): boolean {
+  return !isCoordinator.value && event.status === "Clarification Requested";
 }
 
 interface SubmittedEventDetails {
@@ -77,8 +83,11 @@ onMounted(async () => {
           class="event-card"
         >
           <div class="card-header">
-            <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
-            <span v-if="isRegistrationRequired(event)" class="badge badge-registration">Registration Required</span>
+            <span class="badge" :class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</span>
+            <div class="card-header__flags">
+              <span v-if="isRegistrationRequired(event)" class="badge badge-registration">Registration Required</span>
+              <span v-if="needsClarificationReply(event)" class="badge badge-clarification">Reply to Clarification!</span>
+            </div>
           </div>
           <p class="card-title">{{ eventName(event) }}</p>
           <p class="body-small muted">Created {{ new Date(event.created_at).toLocaleDateString() }}</p>
@@ -176,6 +185,7 @@ onMounted(async () => {
 }
 
 .event-card {
+  position: relative;
   grid-column: span 4;
   display: block;
   background: var(--color-grey-50);
@@ -211,6 +221,19 @@ onMounted(async () => {
   gap: var(--spacing-8);
 }
 
+/* Absolutely positioned (against .event-card) so stacking a second flag
+ * here never pushes the title down — it just grows into the card's own
+ * padding instead of adding to the normal-flow height of .card-header. */
+.card-header__flags {
+  position: absolute;
+  top: var(--spacing-24);
+  right: var(--spacing-24);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--spacing-4);
+}
+
 .badge {
   display: inline-block;
   font-size: 0.75rem;
@@ -223,6 +246,12 @@ onMounted(async () => {
 .badge-registration {
   background: var(--color-purple-100);
   color: var(--color-purple-700);
+  white-space: nowrap;
+}
+
+.badge-clarification {
+  background: var(--color-blue-100);
+  color: var(--color-blue-600);
   white-space: nowrap;
 }
 

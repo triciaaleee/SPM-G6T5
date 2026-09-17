@@ -46,8 +46,22 @@ function buildReviewSupabase(options: {
   event: { id: number; status: string; coordinator_id: string | null } | null;
   updatedEvent?: Record<string, unknown>;
   updateError?: { message: string } | null;
+  /** Top-level questions /approve checks when status is "Clarification
+   * Requested" — defaults to one unresolved question, so callers that
+   * don't care about this still exercise the "still outstanding" path. */
+  openQuestions?: { id: number; resolved: boolean }[];
+  /** The question /resolve looks up before updating it. */
+  question?: { id: number; event_id: number; parent_id: number | null } | null;
+  resolvedQuestion?: Record<string, unknown>;
 }) {
-  const { event, updatedEvent, updateError = null } = options;
+  const {
+    event,
+    updatedEvent,
+    updateError = null,
+    openQuestions = [{ id: 1, resolved: false }],
+    question,
+    resolvedQuestion,
+  } = options;
 
   const maybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
   const lookupEq = vi.fn().mockReturnValue({ maybeSingle });
@@ -60,12 +74,58 @@ function buildReviewSupabase(options: {
 
   const denialInsert = vi.fn().mockResolvedValue({ error: null });
 
+  // request-clarification writes the thread's first question row via a
+  // bare `await ...insert(...)` (no `.select()`); the new-question route
+  // chains `.select().single()` off the same call. A real Promise with a
+  // `.select` property attached satisfies both shapes.
+  const clarificationInsert = vi.fn().mockImplementation(() => {
+    const result = Promise.resolve({ error: null }) as Promise<{ error: null }> & {
+      select: ReturnType<typeof vi.fn>;
+    };
+    result.select = vi.fn().mockReturnValue({
+      single: vi.fn().mockResolvedValue({ data: { id: 99 }, error: null }),
+    });
+    return result;
+  });
+
+  // /approve's "any question still unresolved?" check:
+  // .select("id, resolved").eq("event_id", id).is("parent_id", null)
+  const clarificationIs = vi.fn().mockResolvedValue({ data: openQuestions, error: null });
+  const clarificationEq = vi.fn().mockReturnValue({ is: clarificationIs });
+  const clarificationListSelect = vi.fn().mockReturnValue({ eq: clarificationEq });
+
+  // /resolve's question lookup: .select("id, event_id, parent_id").eq("id", id).maybeSingle()
+  const questionMaybeSingle = vi.fn().mockResolvedValue({ data: question ?? null, error: null });
+  const questionEq = vi.fn().mockReturnValue({ maybeSingle: questionMaybeSingle });
+  const clarificationSelect = vi.fn().mockImplementation((columns: string) => {
+    if (columns === "id, event_id, parent_id") return { eq: questionEq };
+    return clarificationListSelect(columns);
+  });
+
+  // /resolve's write: .update({resolved:true}).eq("id", id).select(...).single()
+  const resolveSingle = vi.fn().mockResolvedValue({ data: resolvedQuestion ?? null, error: null });
+  const resolveSelect = vi.fn().mockReturnValue({ single: resolveSingle });
+  const resolveEq = vi.fn().mockReturnValue({ select: resolveSelect });
+  const clarificationUpdate = vi.fn().mockReturnValue({ eq: resolveEq });
+
   const from = vi.fn().mockImplementation((table: string) => {
     if (table === "access_denials") return { insert: denialInsert };
+    if (table === "event_clarifications") {
+      return { insert: clarificationInsert, select: clarificationSelect, update: clarificationUpdate };
+    }
     return { select: lookupSelect, update };
   });
 
-  return { from, update, updateEq, updateSelect, denialInsert };
+  return {
+    from,
+    update,
+    updateEq,
+    updateSelect,
+    denialInsert,
+    clarificationInsert,
+    clarificationListSelect,
+    clarificationUpdate,
+  };
 }
 
 describe("GET /api/events", () => {
@@ -462,6 +522,23 @@ describe("POST /api/events/:id/approve", () => {
     expect(res.status).toBe(409);
   });
 
+  it("approves once every clarification question has been resolved", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Planning" },
+      openQuestions: [
+        { id: 1, resolved: true },
+        { id: 2, resolved: true },
+      ],
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/approve");
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: "Planning" }));
+  });
+
   it("approves a Requested event, self-assigning an unassigned coordinator", async () => {
     const { from, update, updateEq } = buildReviewSupabase({
       event: { id: 1, status: "Requested", coordinator_id: null },
@@ -571,7 +648,7 @@ describe("POST /api/events/:id/request-clarification", () => {
   });
 
   it("sets status to Clarification Requested with the message as the review outcome", async () => {
-    const { from, update } = buildReviewSupabase({
+    const { from, update, clarificationInsert } = buildReviewSupabase({
       event: { id: 1, status: "Requested", coordinator_id: null },
       updatedEvent: { id: 1, status: "Clarification Requested" },
     });
@@ -589,5 +666,260 @@ describe("POST /api/events/:id/request-clarification", () => {
         coordinator_id: coordinator.id,
       }),
     );
+    // AC3: this first ask seeds the thread the clarification popup renders.
+    expect(clarificationInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_id: 1,
+        author_id: coordinator.id,
+        author_role: "coordinator",
+        message: "What time will setup start?",
+      }),
+    );
+  });
+});
+
+/** Builds a mock supabase client for the clarification-thread routes: a
+ * lookup on "events" (organiser_id/coordinator_id/status), plus an
+ * "event_clarifications" table supporting select().eq().order() (list),
+ * insert().select().single() (new question/reply), and a plain select
+ * ().eq().maybeSingle() lookup (finding the parent question for a reply). */
+function buildClarificationSupabase(options: {
+  event: { id: number; status: string; organiser_id: string; coordinator_id: string | null } | null;
+  list?: unknown[];
+  listError?: { message: string } | null;
+  question?: { id: number; event_id: number; parent_id: number | null; resolved?: boolean } | null;
+  inserted?: Record<string, unknown>;
+  insertError?: { message: string } | null;
+}) {
+  const { event, list = [], listError = null, question, inserted, insertError = null } = options;
+
+  const eventMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+  const eventEq = vi.fn().mockReturnValue({ maybeSingle: eventMaybeSingle });
+  const eventSelect = vi.fn().mockReturnValue({ eq: eventEq });
+
+  const order = vi.fn().mockResolvedValue({ data: list, error: listError });
+  const listEq = vi.fn().mockReturnValue({ order });
+
+  const questionMaybeSingle = vi.fn().mockResolvedValue({ data: question ?? null, error: null });
+  const questionEq = vi.fn().mockReturnValue({ maybeSingle: questionMaybeSingle });
+
+  const clarificationSelect = vi.fn().mockImplementation((columns: string) => {
+    if (columns === "id, event_id, parent_id, resolved") return { eq: questionEq };
+    return { eq: listEq };
+  });
+
+  const insertSingle = vi.fn().mockResolvedValue({ data: inserted ?? null, error: insertError });
+  const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
+  const insert = vi.fn().mockReturnValue({ select: insertSelect });
+
+  const denialInsert = vi.fn().mockResolvedValue({ error: null });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "access_denials") return { insert: denialInsert };
+    if (table === "event_clarifications") return { select: clarificationSelect, insert };
+    return { select: eventSelect };
+  });
+
+  return { from, insert, denialInsert };
+}
+
+describe("GET /api/events/:id/clarifications", () => {
+  it("returns the thread in chronological order for the organiser who owns it", async () => {
+    const thread = [
+      { id: 1, parent_id: null, author_id: coordinator.id, author_role: "coordinator", message: "Q1", created_at: "2026-01-01" },
+      { id: 2, parent_id: 1, author_id: "user-1", author_role: "organiser", message: "A1", created_at: "2026-01-02" },
+    ];
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "user-1", coordinator_id: coordinator.id },
+      list: thread,
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).get("/api/events/1/clarifications");
+
+    expect(res.status).toBe(200);
+    expect(res.body.clarifications).toEqual(thread);
+  });
+
+  it("denies a non-owning organiser", async () => {
+    const { from, denialInsert } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "someone-else", coordinator_id: null },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).get("/api/events/1/clarifications");
+
+    expect(res.status).toBe(403);
+    expect(denialInsert).toHaveBeenCalled();
+  });
+
+  it("allows any coordinator to view, even one not assigned", async () => {
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "user-1", coordinator_id: "COORD-0002" },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).get("/api/events/1/clarifications");
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("POST /api/events/:id/clarifications", () => {
+  it("rejects non-coordinators", async () => {
+    const { from } = buildReviewSupabase({ event: null });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications").send({ message: "Any AV needs?" });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("requires clarification to already be outstanding", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications").send({ message: "Any AV needs?" });
+
+    expect(res.status).toBe(409);
+  });
+
+  it("requires a message", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications").send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("adds a follow-up question while clarification is outstanding", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications").send({ message: "Any AV needs?" });
+
+    expect(res.status).toBe(201);
+    // Adding a follow-up question doesn't itself redecide the event.
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/events/:id/clarifications/:questionId/replies", () => {
+  it("allows the owning organiser to reply", async () => {
+    const { from, insert } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "user-1", coordinator_id: coordinator.id },
+      question: { id: 5, event_id: 1, parent_id: null },
+      inserted: { id: 9, parent_id: 5, author_id: "user-1", author_role: "organiser", message: "9am", created_at: "2026-01-03" },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/replies").send({ message: "9am" });
+
+    expect(res.status).toBe(201);
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ event_id: 1, parent_id: 5, author_id: "user-1", author_role: "organiser", message: "9am" }),
+    );
+  });
+
+  it("denies an organiser who doesn't own the event", async () => {
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "someone-else", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/replies").send({ message: "9am" });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("blocks replies once the request is no longer awaiting clarification", async () => {
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Planning", organiser_id: "user-1", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/replies").send({ message: "9am" });
+
+    expect(res.status).toBe(409);
+  });
+
+  it("404s when the question doesn't belong to this event", async () => {
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "user-1", coordinator_id: coordinator.id },
+      question: { id: 5, event_id: 2, parent_id: null },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/replies").send({ message: "9am" });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("blocks replies once the question itself has been resolved", async () => {
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "user-1", coordinator_id: coordinator.id },
+      question: { id: 5, event_id: 1, parent_id: null, resolved: true },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/replies").send({ message: "9am" });
+
+    expect(res.status).toBe(409);
+  });
+});
+
+describe("POST /api/events/:id/clarifications/:questionId/resolve", () => {
+  it("rejects non-coordinators", async () => {
+    const { from } = buildReviewSupabase({ event: null });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/resolve");
+
+    expect(res.status).toBe(403);
+  });
+
+  it("requires clarification to be outstanding", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications/5/resolve");
+
+    expect(res.status).toBe(409);
+  });
+
+  it("404s when the question doesn't belong to this event", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+      question: { id: 5, event_id: 2, parent_id: null },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications/5/resolve");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("marks the question resolved", async () => {
+    const { from, clarificationUpdate } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+      question: { id: 5, event_id: 1, parent_id: null },
+      resolvedQuestion: { id: 5, parent_id: null, resolved: true },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications/5/resolve");
+
+    expect(res.status).toBe(200);
+    expect(res.body.clarification.resolved).toBe(true);
+    expect(clarificationUpdate).toHaveBeenCalledWith({ resolved: true });
   });
 });

@@ -14,6 +14,7 @@ import {
 } from "../lib/eventsApi";
 import { statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
 import EventStatusTracker from "../components/EventStatusTracker.vue";
+import ClarificationPanel from "../components/ClarificationPanel.vue";
 
 interface SubmittedEventDetails {
   name?: string;
@@ -53,18 +54,37 @@ const isOtherCoordinatorEvent = computed(
  * coordinator may act again — mirrors the backend's authorizeCoordinatorReview. */
 const canReview = computed(() => isCoordinator.value && !isOtherCoordinatorEvent.value);
 
-const canApprove = computed(() => canReview.value && event.value?.status === "Requested");
+// E2-3: clarification thread — visible to both parties as soon as one
+// exists, but only the reviewing coordinator can add a fresh top-level
+// question or resolve one, and only while one is actually outstanding (AC2).
+const clarificationPanelRef = ref<InstanceType<typeof ClarificationPanel> | null>(null);
+const canManageClarifications = computed(
+  () => canReview.value && event.value?.status === "Clarification Requested",
+);
+
+const canApprove = computed(
+  () =>
+    canReview.value &&
+    (event.value?.status === "Requested" ||
+      (event.value?.status === "Clarification Requested" && clarificationPanelRef.value?.allResolved === true)),
+);
 const canReject = computed(
   () =>
     canReview.value &&
     (event.value?.status === "Requested" || event.value?.status === "Clarification Requested"),
 );
-/** Ask for Clarification stays available for the assigned coordinator on any
- * status except the terminal ones (Rejected, Planning/"completed"). */
-const canAskClarification = computed(
+/** Ask for Clarification is only for the *first* ask — once one is
+ * outstanding, this disables alongside Approve, and the coordinator asks
+ * follow-up questions from the "+" in the clarification thread instead. */
+const canAskClarification = computed(() => canReview.value && event.value?.status === "Requested");
+/** The actions section itself stays visible (Approve/Reject/Request
+ * Clarification) for any non-terminal status — Rejected/Planning have
+ * their own message above this, so by this point only Requested or
+ * Clarification Requested remain; canAskClarification alone would hide
+ * Reject here too, which AC2 requires stay clickable. */
+const showReviewActions = computed(
   () => canReview.value && event.value?.status !== "Rejected" && event.value?.status !== "Planning",
 );
-const showReviewActions = computed(() => canReview.value && canAskClarification.value);
 
 const isReviewing = ref(false);
 const actionError = ref<string | null>(null);
@@ -95,6 +115,7 @@ async function handleApprove(): Promise<void> {
   actionError.value = null;
   try {
     event.value = await approveEvent(event.value.id);
+    await clarificationPanelRef.value?.refresh();
   } catch (err) {
     actionError.value = err instanceof ReviewActionError ? err.message : "We couldn't complete that action. Please try again.";
   } finally {
@@ -119,6 +140,7 @@ async function submitPendingAction(): Promise<void> {
       pendingAction.value === "reject"
         ? await rejectEvent(event.value.id, text)
         : await requestClarification(event.value.id, text);
+    await clarificationPanelRef.value?.refresh();
     cancelPendingAction();
   } catch (err) {
     actionError.value = err instanceof ReviewActionError ? err.message : "We couldn't complete that action. Please try again.";
@@ -189,219 +211,202 @@ onMounted(async () => {
 
       <div v-else-if="event">
         <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
-        <h1 class="h2">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}` }}</h1>
-        <p class="body-default muted event-id">Event #{{ event.id }}</p>
+          <h1 class="h2">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}` }}</h1>
+          <p class="body-default muted event-id">Event #{{ event.id }}</p>
 
-        <div class="detail-grid">
-          <div class="detail-grid-col">
-            <div class="details-card">
-              <h2 class="section-title">Event Request Details</h2>
+          <div class="detail-grid">
+            <div class="detail-grid-col">
+              <div class="details-card">
+                <h2 class="section-title">Event Request Details</h2>
 
-              <div class="field-row field-row-3">
-                <div class="field">
-                  <p class="body-small muted mb-1">Event Requestor</p>
-                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                <div class="field-row field-row-3">
+                  <div class="field">
+                    <p class="body-small muted mb-1">Event Requestor</p>
+                    <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Submitted date</p>
+                    <p class="body-default field-value">{{ formatDate(event.created_at) }}</p>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Status</p>
+                    <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
+                  </div>
                 </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Submitted date</p>
-                  <p class="body-default field-value">{{ formatDate(event.created_at) }}</p>
-                </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Status</p>
-                  <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
-                </div>
-              </div>
 
-              <hr class="divider" />
+                <hr class="divider" />
 
-              <div class="field-row field-row-3">
-                <div class="field">
-                  <p class="body-small muted mb-1">Title</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).name || "—" }}</p>
+                <div class="field-row field-row-3">
+                  <div class="field">
+                    <p class="body-small muted mb-1">Title</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).name || "—" }}</p>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Purpose</p>
+                    <span class="badge badge-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
+                    }}</span>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Expected attendance</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).expectedAttendance
+                      ?? "—" }}</p>
+                  </div>
                 </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Purpose</p>
-                  <span class="badge badge-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
-                  }}</span>
-                </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Expected attendance</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).expectedAttendance
-                    ?? "—" }}</p>
-                </div>
-              </div>
 
-              <div class="field-row field-row-3">
-                <div class="field">
-                  <p class="body-small muted mb-1">Proposed date</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).proposedDate || "—"
-                  }}</p>
+                <div class="field-row field-row-3">
+                  <div class="field">
+                    <p class="body-small muted mb-1">Proposed date</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).proposedDate || "—"
+                    }}</p>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Time</p>
+                    <p class="body-default field-value">
+                      {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
+                      –
+                      {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
+                    </p>
+                  </div>
                 </div>
+
                 <div class="field">
-                  <p class="body-small muted mb-1">Time</p>
-                  <p class="body-default field-value">
-                    {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
-                    –
-                    {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
+                  <p class="body-small muted mb-1">Description</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).description || "—" }}
                   </p>
                 </div>
               </div>
 
-              <div class="field">
-                <p class="body-small muted mb-1">Description</p>
-                <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).description || "—" }}
-                </p>
-              </div>
-            </div>
+              <EventStatusTracker
+                :status="event.status"
+                :last-changed-at="statusLastChangedAt(event)"
+                :review-outcome="event.review_outcome"
+              />
 
-            <EventStatusTracker
-              :status="event.status"
-              :last-changed-at="statusLastChangedAt(event)"
-              :review-outcome="event.review_outcome"
-            />
+              <div class="details-card requirements-card">
+                <h2 class="section-title">Event Requirements</h2>
 
-            <div class="details-card requirements-card">
-              <h2 class="section-title">Event Requirements</h2>
-
-              <div class="field-row">
-                <div class="field">
-                  <p class="body-small muted mb-1">Venue Requirements</p>
-                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                <div class="field-row">
+                  <div class="field">
+                    <p class="body-small muted mb-1">Venue Requirements</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).venue || NOT_PROVIDED }}</p>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Equipment Requirements</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).equipment || NOT_PROVIDED }}</p>
+                  </div>
                 </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Equipment Requirements</p>
-                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
-                </div>
-              </div>
 
-              <div class="field-row">
-                <div class="field">
-                  <p class="body-small muted mb-1">Accessibility Needs</p>
-                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
-                </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
-                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                <div class="field-row">
+                  <div class="field">
+                    <p class="body-small muted mb-1">Accessibility Needs</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).accessibility || NOT_PROVIDED }}</p>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
+                    <p class="body-default field-value">
+                      {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          <div class="detail-grid-col">
-            <div class="coordinator-card">
-              <h2 class="section-title">Coordinator Details</h2>
-              <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
-              <div class="coordinator-panel" :class="{
-                'coordinator-panel--assigned': isAssignedCoordinator,
-                'coordinator-panel--blocked': isOtherCoordinatorEvent,
-                'coordinator-panel--unassigned': !isAssignedCoordinator && !isOtherCoordinatorEvent,
-              }">
-                <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
-                  You are the assigned coordinator for this event.
-                </p>
-                <p v-else-if="isOtherCoordinatorEvent" class="body-default coordinator-panel__text">
-                  This event is assigned to another coordinator. Coordinator actions are not available.
-                </p>
-                <p v-else class="body-default coordinator-panel__text">
-                  No coordinator has been assigned to this event yet.
-                </p>
-              </div>
-              <div class="field mb-field">
-                <p class="body-small muted mb-1">Coordinator</p>
-                <p class="body-default field-value">{{ event.coordinator?.name ?? "Not yet assigned" }}</p>
-              </div>
-            </div>
-
-            <!-- E1-4.2: coordinator review actions -->
-            <div v-if="isCoordinator" class="details-card coordinator-actions-card">
-              <h2 class="section-title">Coordinator actions</h2>
-              <div class="review-actions ">
-                <p v-if="event.status === 'Rejected'" class="body-small muted">
-                  This request has been rejected and cannot be moved forward.
-                </p>
-                <p v-else-if="event.status === 'Planning'" class="body-small muted">
-                  This request has been approved and moved to Planning.
-                </p>
-                <p v-else-if="isOtherCoordinatorEvent" class="body-small muted">
-                  Only the assigned coordinator can review this request.
-                </p>
-                <template v-else-if="showReviewActions">
-                  <p v-if="event.status === 'Clarification Requested'" class="body-small muted review-actions__note">
-                    Clarification has been requested from the Organiser. Approval is blocked until it's resolved.
+            <div class="detail-grid-col">
+              <div class="coordinator-card">
+                <h2 class="section-title">Coordinator Details</h2>
+                <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
+                <div class="coordinator-panel" :class="{
+                  'coordinator-panel--assigned': isAssignedCoordinator,
+                  'coordinator-panel--blocked': isOtherCoordinatorEvent,
+                  'coordinator-panel--unassigned': !isAssignedCoordinator && !isOtherCoordinatorEvent,
+                }">
+                  <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
+                    You are the assigned coordinator for this event.
                   </p>
+                  <p v-else-if="isOtherCoordinatorEvent" class="body-default coordinator-panel__text">
+                    This event is assigned to another coordinator. Coordinator actions are not available.
+                  </p>
+                  <p v-else class="body-default coordinator-panel__text">
+                    No coordinator has been assigned to this event yet.
+                  </p>
+                </div>
+                <div class="field mb-field">
+                  <p class="body-small muted mb-1">Coordinator</p>
+                  <p class="body-default field-value">{{ event.coordinator?.name ?? "Not yet assigned" }}</p>
+                </div>
+              </div>
 
-                  <p v-if="actionError" class="body-default error-text">{{ actionError }}</p>
+              <ClarificationPanel
+                ref="clarificationPanelRef"
+                :event-id="event.id"
+                :can-manage="canManageClarifications"
+                :current-user-id="currentUser.id"
+              />
 
-                  <div v-if="pendingAction" class="review-actions__form">
-                    <label for="action-text" class="body-small muted">
-                      {{ pendingAction === "reject" ? "Reason for rejection" : "Clarification/amendment needed" }}
-                    </label>
-                    <textarea id="action-text" v-model="actionText" rows="3" class="review-actions__textarea" />
-                    <div class="review-actions__buttons">
-                      <button type="button" class="btn btn-primary" :disabled="isReviewing"
-                        @click="submitPendingAction">
-                        {{ isReviewing ? "Submitting…" : "Confirm" }}
-                      </button>
-                      <button type="button" class="btn btn-secondary" :disabled="isReviewing"
-                        @click="cancelPendingAction">
-                        Cancel
-                      </button>
+              <!-- E1-4.2: coordinator review actions -->
+              <div v-if="isCoordinator" class="details-card coordinator-actions-card">
+                <h2 class="section-title">Coordinator actions</h2>
+                <div class="review-actions ">
+                  <p v-if="event.status === 'Rejected'" class="body-small muted">
+                    This request has been rejected and cannot be moved forward.
+                  </p>
+                  <p v-else-if="event.status === 'Planning'" class="body-small muted">
+                    This request has been approved and moved to Planning.
+                  </p>
+                  <p v-else-if="isOtherCoordinatorEvent" class="body-small muted">
+                    Only the assigned coordinator can review this request.
+                  </p>
+                  <template v-else-if="showReviewActions">
+                    <p v-if="event.status === 'Clarification Requested'" class="body-small muted review-actions__note">
+                      Clarification has been requested from the Organiser. Approval is blocked until it's resolved.
+                    </p>
+
+                    <p v-if="actionError" class="body-default error-text">{{ actionError }}</p>
+
+                    <div v-if="pendingAction" class="review-actions__form">
+                      <label for="action-text" class="body-small muted">
+                        {{ pendingAction === "reject" ? "Reason for rejection" : "Clarification/amendment needed" }}
+                      </label>
+                      <textarea id="action-text" v-model="actionText" rows="3" class="review-actions__textarea" />
+                      <div class="review-actions__buttons">
+                        <button type="button" class="btn btn-primary" :disabled="isReviewing"
+                          @click="submitPendingAction">
+                          {{ isReviewing ? "Submitting…" : "Confirm" }}
+                        </button>
+                        <button type="button" class="btn btn-secondary" :disabled="isReviewing"
+                          @click="cancelPendingAction">
+                          Cancel
+                        </button>
+                      </div>
                     </div>
-                  </div>
 
-                  <div v-else class="review-actions__buttons">
-                    <button type="button" class="btn btn-primary" :disabled="!canApprove || isReviewing"
-                      @click="handleApprove">
-                      Approve
-                    </button>
+                    <div v-else class="review-actions__buttons">
+                      <button type="button" class="btn btn-primary" :disabled="!canApprove || isReviewing"
+                        @click="handleApprove">
+                        Approve
+                      </button>
 
-                    <button type="button" class="btn btn-reject-outline" :disabled="!canReject || isReviewing"
-                      @click="openReject">
-                      Reject
-                    </button>
-                    <button type="button" class="btn btn-clarify" :disabled="!canAskClarification || isReviewing"
-                      @click="openClarify">
-                      Request Clarification
-                    </button>
+                      <button type="button" class="btn btn-reject-outline" :disabled="!canReject || isReviewing"
+                        @click="openReject">
+                        Reject
+                      </button>
+                      <button type="button" class="btn btn-clarify" :disabled="!canAskClarification || isReviewing"
+                        @click="openClarify">
+                        Request Clarification
+                      </button>
 
-                  </div>
-                </template>
-                <p v-else class="body-small muted">
-                  No coordinator actions are available for this request's current status ({{ event.status }}).
-                </p>
+                    </div>
+                  </template>
+                  <p v-else class="body-small muted">
+                    No coordinator actions are available for this request's current status ({{ event.status }}).
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Expected attendance</dt>
-            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).expectedAttendance ?? "—" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Venue Requirements</dt>
-            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).venue || "—" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Accessibility</dt>
-            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).accessibility || "—" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Equipment</dt>
-            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).equipment || "—" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Technical support</dt>
-            <dd class="body-default">{{ asSubmittedDetails(event.submitted_details).technicalSupport || "—" }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt class="body-small muted">Registration needed</dt>
-            <dd class="body-default">
-              {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
-            </dd>
           </div>
         </div>
       </div>
     </div>
-  </div>
 </template>
 
 <style scoped>
