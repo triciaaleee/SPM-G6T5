@@ -40,7 +40,11 @@ const STAGE_TWO_VARIANT: Record<string, StepVariant> = {
   "Clarification Requested": "info",
 };
 
+const STEP_COUNT = 4;
+
 const currentIndex = computed(() => STATUS_STEP_INDEX[props.status] ?? 0);
+
+const trackFillPercent = computed(() => (currentIndex.value / (STEP_COUNT - 1)) * 100);
 
 const stage2Label = computed(() => {
   if (props.status === "Rejected") return "Rejected";
@@ -67,32 +71,26 @@ function stepState(index: number): "complete" | "current" | "pending" {
     <h2 class="section-title">Event Status</h2>
 
     <div class="status-summary">
-      <span class="badge" :class="statusBadgeClass(status)">{{ status }}</span>
       <p class="body-small muted status-summary__date">Last updated {{ formatEventDate(lastChangedAt) }}</p>
     </div>
 
     <div class="status-tracker" role="list" aria-label="Event progress">
+      <div class="status-tracker__track">
+        <div class="status-tracker__track-fill" :style="{ width: trackFillPercent + '%' }" />
+      </div>
       <template v-for="(step, index) in steps" :key="step.key">
-        <div
-          class="status-tracker__step"
-          role="listitem"
-          :data-state="stepState(index)"
-          :data-variant="stepState(index) === 'current' ? step.variant : 'neutral'"
-          :aria-current="stepState(index) === 'current' ? 'step' : undefined"
-        >
-          <span class="status-tracker__dot" />
+        <div class="status-tracker__step" role="listitem" :data-state="stepState(index)"
+          :aria-current="stepState(index) === 'current' ? 'step' : undefined">
+          <span class="status-tracker__dot-slot">
+            <span class="status-tracker__dot" />
+          </span>
           <span class="body-small status-tracker__label">{{ step.label }}</span>
           <span v-if="stepState(index) === 'current'" class="status-tracker__here">You are here</span>
         </div>
-        <div
-          v-if="index < steps.length - 1"
-          class="status-tracker__connector"
-          :data-filled="index < currentIndex"
-        />
       </template>
     </div>
 
-    <p v-if="status === 'Clarification Requested'" class="body-small status-note status-note--info">
+    <p v-if="status === 'Clarification Requested'" class="body-default pt-8">
       Clarification has been requested from you. This request is on hold until you respond.
     </p>
     <p v-else-if="status === 'Rejected'" class="body-small status-note status-note--error">
@@ -185,9 +183,38 @@ function stepState(index: number): "complete" | "current" | "pending" {
   margin: 0;
 }
 
+
+/* Flex with space-between, not equal grid columns: the first dot sits
+   flush against the left edge of the card and the last against the right
+   edge, with the middle two evenly spaced between them — a full-bleed
+   timeline rather than one centred inside inset columns. position:
+   relative so the track bar below can be positioned absolutely against
+   this row rather than any individual step. */
 .status-tracker {
+  position: relative;
   display: flex;
-  align-items: flex-start;
+  justify-content: space-between;
+  width: 100%;
+}
+
+/* One continuous line spanning from the first dot's centre to the last
+   dot's centre — avoids the seams/gaps a per-step connector produces at
+   each step boundary. 15px in from each edge = half the 30px dot-slot,
+   so the line always terminates at the dot's true centre (never poking
+   out past the visible circle) no matter which size variant is showing. */
+.status-tracker__track {
+  position: absolute;
+  top: 15px;
+  left: 30px;
+  right: 15px;
+  height: 2px;
+  background: var(--color-grey-200);
+  z-index: 0;
+}
+
+.status-tracker__track-fill {
+  height: 100%;
+  background: var(--color-purple-600);
 }
 
 .status-tracker__step {
@@ -195,9 +222,29 @@ function stepState(index: number): "complete" | "current" | "pending" {
   flex-direction: column;
   align-items: center;
   gap: var(--spacing-8);
-  min-width: 5.5rem;
+  min-height: 5.5rem;
   text-align: center;
   position: relative;
+}
+
+.status-tracker__step:first-child {
+  align-items: flex-start;
+  text-align: left;
+}
+
+.status-tracker__step:last-child {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.status-tracker__dot-slot {
+  position: relative;
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .status-tracker__dot {
@@ -213,6 +260,7 @@ function stepState(index: number): "complete" | "current" | "pending" {
   color: var(--color-grey-500);
 }
 
+
 .status-tracker__here {
   font-size: 0.6875rem;
   font-weight: 700;
@@ -221,71 +269,30 @@ function stepState(index: number): "complete" | "current" | "pending" {
   color: var(--color-purple-600);
 }
 
-/* Completed steps: always green, regardless of which branch got there. */
 .status-tracker__step[data-state="complete"] .status-tracker__dot {
-  border-color: var(--color-success-600);
-  background: var(--color-success-600);
+  width: 0.75rem;
+  height: 0.75rem;
+  border-color: var(--color-purple-600);
+  background: var(--color-purple-600);
 }
 
 .status-tracker__step[data-state="complete"] .status-tracker__label {
-  color: var(--color-grey-900);
-  font-weight: 700;
+  color: var(--color-grey-600);
+  font-weight: 500;
 }
 
-/* Current step: bold label plus a coloured ring so the active stage reads
-   clearly even for someone who can't distinguish the variant colours. */
 .status-tracker__step[data-state="current"] .status-tracker__label {
   color: var(--color-grey-900);
   font-weight: 700;
 }
 
 .status-tracker__step[data-state="current"] .status-tracker__dot {
-  box-shadow: 0 0 0 4px var(--ring-color, var(--color-purple-100));
-  border-color: var(--dot-color, var(--color-purple-600));
-  background: var(--dot-color, var(--color-purple-600));
-}
-
-.status-tracker__step[data-state="current"][data-variant="neutral"] {
-  --dot-color: var(--color-purple-600);
-  --ring-color: var(--color-purple-100);
-}
-
-.status-tracker__step[data-state="current"][data-variant="success"] {
-  --dot-color: var(--color-success-600);
-  --ring-color: #e5eee5;
-}
-
-.status-tracker__step[data-state="current"][data-variant="info"] {
-  --dot-color: var(--color-blue-600);
-  --ring-color: var(--color-blue-100);
-}
-
-.status-tracker__step[data-state="current"][data-variant="error"] {
-  --dot-color: var(--color-error-600);
-  --ring-color: var(--color-error-200);
-}
-
-.status-tracker__step[data-state="current"][data-variant="error"] .status-tracker__here {
-  color: var(--color-error-600);
-}
-
-.status-tracker__step[data-state="current"][data-variant="info"] .status-tracker__here {
-  color: var(--color-blue-600);
-}
-
-.status-tracker__step[data-state="current"][data-variant="success"] .status-tracker__here {
-  color: var(--color-success-700);
-}
-
-.status-tracker__connector {
-  flex: 1;
-  height: 2px;
-  background: var(--color-grey-200);
-  margin-top: 0.5625rem;
-}
-
-.status-tracker__connector[data-filled="true"] {
-  background: var(--color-success-600);
+  width: 30px;
+  height: 30px;
+  border-width: 3px;
+  box-shadow: 0 0 0 4px var(--color-purple-100);
+  border-color: var(--color-purple-600);
+  background: var(--color-base-white);
 }
 
 .status-note {
@@ -337,10 +344,6 @@ function stepState(index: number): "complete" | "current" | "pending" {
 }
 
 @media (max-width: 640px) {
-  .status-tracker__step {
-    min-width: 4rem;
-  }
-
   .status-tracker__label {
     font-size: 0.75rem;
   }

@@ -191,7 +191,7 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="content">
-      <RouterLink to="/" class="back-link">&larr; Event requests</RouterLink>
+      <RouterLink to="/" class="back-link">&larr; Back</RouterLink>
 
       <p v-if="loading" class="body-default muted">Loading…</p>
 
@@ -211,141 +211,133 @@ onMounted(async () => {
 
       <div v-else-if="event">
         <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
-          <h1 class="h2">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}` }}</h1>
-          <p class="body-default muted event-id">Event #{{ event.id }}</p>
+        <h1 class="h2">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}` }}</h1>
+        <p class="body-default muted event-id">Event #{{ event.id }}</p>
 
-          <div class="detail-grid">
-            <div class="detail-grid-col">
-              <div class="details-card">
-                <h2 class="section-title">Event Request Details</h2>
+        <div class="detail-grid">
+          <div class="detail-grid-col">
+            <div class="details-card">
+              <h2 class="section-title">Event Request Details</h2>
 
-                <div class="field-row field-row-3">
-                  <div class="field">
-                    <p class="body-small muted mb-1">Event Requestor</p>
-                    <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Submitted date</p>
-                    <p class="body-default field-value">{{ formatDate(event.created_at) }}</p>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Status</p>
-                    <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
-                  </div>
-                </div>
-
-                <hr class="divider" />
-
-                <div class="field-row field-row-3">
-                  <div class="field">
-                    <p class="body-small muted mb-1">Title</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).name || "—" }}</p>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Purpose</p>
-                    <span class="badge badge-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
-                    }}</span>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Expected attendance</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).expectedAttendance
-                      ?? "—" }}</p>
-                  </div>
-                </div>
-
-                <div class="field-row field-row-3">
-                  <div class="field">
-                    <p class="body-small muted mb-1">Proposed date</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).proposedDate || "—"
-                    }}</p>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Time</p>
-                    <p class="body-default field-value">
-                      {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
-                      –
-                      {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
-                    </p>
-                  </div>
-                </div>
-
+              <div class="field-row field-row-3">
                 <div class="field">
-                  <p class="body-small muted mb-1">Description</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).description || "—" }}
+                  <p class="body-small muted mb-1">Event Requestor</p>
+                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Submitted date</p>
+                  <p class="body-default field-value">{{ formatDate(event.created_at) }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Status</p>
+                  <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
+                </div>
+              </div>
+
+              <hr class="divider" />
+
+              <div class="field-row field-row-3">
+                <div class="field">
+                  <p class="body-small muted mb-1">Title</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).name || "—" }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Purpose</p>
+                  <span class="badge badge-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
+                  }}</span>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Expected attendance</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).expectedAttendance
+                    ?? "—" }}</p>
+                </div>
+              </div>
+
+              <div class="field-row field-row-3">
+                <div class="field">
+                  <p class="body-small muted mb-1">Proposed date</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).proposedDate || "—"
+                  }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Time</p>
+                  <p class="body-default field-value">
+                    {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
+                    –
+                    {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
                   </p>
                 </div>
               </div>
 
-              <EventStatusTracker
-                :status="event.status"
-                :last-changed-at="statusLastChangedAt(event)"
-                :review-outcome="event.review_outcome"
-              />
-
-              <div class="details-card requirements-card">
-                <h2 class="section-title">Event Requirements</h2>
-
-                <div class="field-row">
-                  <div class="field">
-                    <p class="body-small muted mb-1">Venue Requirements</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).venue || NOT_PROVIDED }}</p>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Equipment Requirements</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).equipment || NOT_PROVIDED }}</p>
-                  </div>
-                </div>
-
-                <div class="field-row">
-                  <div class="field">
-                    <p class="body-small muted mb-1">Accessibility Needs</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).accessibility || NOT_PROVIDED }}</p>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
-                    <p class="body-default field-value">
-                      {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
-                    </p>
-                  </div>
-                </div>
+              <div class="field">
+                <p class="body-small muted mb-1">Description</p>
+                <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).description || "—" }}
+                </p>
               </div>
             </div>
 
-            <div class="detail-grid-col">
-              <div class="coordinator-card">
-                <h2 class="section-title">Coordinator Details</h2>
-                <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
-                <div class="coordinator-panel" :class="{
-                  'coordinator-panel--assigned': isAssignedCoordinator,
-                  'coordinator-panel--blocked': isOtherCoordinatorEvent,
-                  'coordinator-panel--unassigned': !isAssignedCoordinator && !isOtherCoordinatorEvent,
-                }">
-                  <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
-                    You are the assigned coordinator for this event.
-                  </p>
-                  <p v-else-if="isOtherCoordinatorEvent" class="body-default coordinator-panel__text">
-                    This event is assigned to another coordinator. Coordinator actions are not available.
-                  </p>
-                  <p v-else class="body-default coordinator-panel__text">
-                    No coordinator has been assigned to this event yet.
-                  </p>
+
+
+            <div class="details-card requirements-card">
+              <h2 class="section-title">Event Requirements</h2>
+
+              <div class="field-row">
+                <div class="field">
+                  <p class="body-small muted mb-1">Venue Requirements</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).venue ||
+                    NOT_PROVIDED }}</p>
                 </div>
-                <div class="field mb-field">
-                  <p class="body-small muted mb-1">Coordinator</p>
-                  <p class="body-default field-value">{{ event.coordinator?.name ?? "Not yet assigned" }}</p>
+                <div class="field">
+                  <p class="body-small muted mb-1">Equipment Requirements</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).equipment ||
+                    NOT_PROVIDED }}</p>
                 </div>
               </div>
 
-              <ClarificationPanel
-                ref="clarificationPanelRef"
-                :event-id="event.id"
-                :can-manage="canManageClarifications"
-                :current-user-id="currentUser.id"
-              />
+              <div class="field-row">
+                <div class="field">
+                  <p class="body-small muted mb-1">Accessibility Needs</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).accessibility ||
+                    NOT_PROVIDED }}</p>
+                </div>
+                <div class="field">
+                  <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
+                  <p class="body-default field-value">
+                    {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <EventStatusTracker :status="event.status" :last-changed-at="statusLastChangedAt(event)"
+              :review-outcome="event.review_outcome" />
+          </div>
 
+          <div class="detail-grid-col">
+            <div class="coordinator-card">
+              <h2 class="section-title">Coordinator Details</h2>
+              <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
+              <div class="coordinator-panel" :class="{
+                'coordinator-panel--assigned': isAssignedCoordinator,
+                'coordinator-panel--blocked': isOtherCoordinatorEvent,
+                'coordinator-panel--unassigned': !isAssignedCoordinator && !isOtherCoordinatorEvent,
+              }">
+                <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
+                  You are the assigned coordinator for this event.
+                </p>
+                <p v-else-if="isOtherCoordinatorEvent" class="body-default coordinator-panel__text">
+                  This event is assigned to another coordinator. Coordinator actions are not available.
+                </p>
+                <p v-else class="body-default coordinator-panel__text">
+                  No coordinator has been assigned to this event yet.
+                </p>
+              </div>
+              <div class="field mb-field">
+                <p class="body-small muted mb-1">Coordinator</p>
+                <p class="font-semibold !text-lg field-value">{{ event.coordinator?.name ?? "Not yet assigned" }}</p>
+              </div>
               <!-- E1-4.2: coordinator review actions -->
-              <div v-if="isCoordinator" class="details-card coordinator-actions-card">
-                <h2 class="section-title">Coordinator actions</h2>
+              <div v-if="isCoordinator">
+                <h3 class="text-lg font-semibold text-[--color-grey-900]">Coordinator actions</h3>
                 <div class="review-actions ">
                   <p v-if="event.status === 'Rejected'" class="body-small muted">
                     This request has been rejected and cannot be moved forward.
@@ -357,7 +349,7 @@ onMounted(async () => {
                     Only the assigned coordinator can review this request.
                   </p>
                   <template v-else-if="showReviewActions">
-                    <p v-if="event.status === 'Clarification Requested'" class="body-small muted review-actions__note">
+                    <p v-if="event.status === 'Clarification Requested'" class="body-small muted review-actions__note ">
                       Clarification has been requested from the Organiser. Approval is blocked until it's resolved.
                     </p>
 
@@ -386,14 +378,19 @@ onMounted(async () => {
                         Approve
                       </button>
 
+
+                      <button type="button" class="btn"
+                        :class="event.status === 'Clarification Requested' ? 'btn-clarify--requested' : 'btn-clarify'"
+                        :disabled="!canAskClarification || isReviewing" @click="openClarify">
+                        {{ event.status === "Clarification Requested" ? "Clarification Requested" : "Request Clarification" }}
+                      </button>
+
                       <button type="button" class="btn btn-reject-outline" :disabled="!canReject || isReviewing"
                         @click="openReject">
                         Reject
                       </button>
-                      <button type="button" class="btn btn-clarify" :disabled="!canAskClarification || isReviewing"
-                        @click="openClarify">
-                        Request Clarification
-                      </button>
+
+
 
                     </div>
                   </template>
@@ -403,10 +400,16 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
+
+            <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
+              :current-user-id="currentUser.id" />
+
+
           </div>
         </div>
       </div>
     </div>
+  </div>
 </template>
 
 <style scoped>
@@ -653,6 +656,11 @@ onMounted(async () => {
 
 .review-actions__note {
   margin-bottom: var(--spacing-12);
+  background: var(--color-blue-100);
+  border: 1px solid var(--color-blue-300);
+  padding: var(--spacing-12) var(--spacing-16);
+  border-radius: var(--radius-xs);
+  color: var(--color-blue-700)
 }
 
 .review-actions__buttons {
@@ -706,6 +714,12 @@ onMounted(async () => {
   background: var(--color-blue-200);
 }
 
+.btn-clarify--requested {
+  background: transparent;
+  color: var(--color-grey-600);
+  border-color: var(--color-grey-300);
+}
+
 .btn-reject-outline {
   background: transparent;
   color: var(--color-error-600);
@@ -727,8 +741,8 @@ onMounted(async () => {
 }
 
 .btn-primary {
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
+  background: var(--color-grey-300);
+  color: var(--color-grey-600);
 }
 
 .btn-primary:not(:disabled):hover {
