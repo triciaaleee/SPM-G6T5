@@ -144,6 +144,24 @@ describe("GET /api/events", () => {
     expect(res.body.events).toHaveLength(1);
     expect(eq).toHaveBeenCalledWith("organiser_id", "user-1");
   });
+
+  it("returns all events for a coordinator without filtering by organiser (E1-4.1)", async () => {
+    const allEvents = [
+      { id: 1, status: "Requested", organiser_id: "user-1" },
+      { id: 2, status: "Planning", organiser_id: "user-2" },
+    ];
+    const eq = vi.fn();
+    const selectResult = Object.assign(Promise.resolve({ data: allEvents, error: null }), { eq });
+    const select = vi.fn().mockReturnValue(selectResult);
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(2);
+    expect(eq).not.toHaveBeenCalledWith("organiser_id", expect.anything());
+  });
 });
 
 describe("GET /api/events/:id", () => {
@@ -203,6 +221,32 @@ describe("GET /api/events/:id", () => {
     expect(res.status).toBe(403);
     expect(consoleSpy).toHaveBeenCalled();
     consoleSpy.mockRestore();
+  });
+
+  it("allows a coordinator to access an event they did not organise (E1-4.1)", async () => {
+    const eventId = "5";
+    const maybeSingle = vi.fn().mockResolvedValue({
+      data: {
+        id: Number(eventId),
+        status: "Requested",
+        submitted_details: {},
+        coordinator_id: null,
+        review_outcome: null,
+        created_at: "2026-01-01",
+        organiser_id: "someone-else",
+      },
+      error: null,
+    });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const select = vi.fn().mockReturnValue({ eq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get(`/api/events/${eventId}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.id).toBe(Number(eventId));
+    expect(res.body.event.organiser_id).toBeUndefined();
   });
 
   it("returns the event when the caller owns it", async () => {
