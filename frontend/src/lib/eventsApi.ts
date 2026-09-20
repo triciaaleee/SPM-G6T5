@@ -7,6 +7,8 @@ export interface EventSummary {
   coordinator_id: string | null;
   /** E2-6 AC2: the assigned coordinator's display name, embedded via the FK. */
   coordinator: { name: string } | null;
+  /** The event requester's display name, embedded via the FK on organiser_id. */
+  organiser: { name: string } | null;
   review_outcome: string | null;
   decided_at: string | null;
   decided_by: string | null;
@@ -97,6 +99,32 @@ export async function submitEventRequest(payload: EventRequestPayload): Promise<
   }
   if (!res.ok) {
     throw new Error(body.error ?? "Failed to submit event request");
+  }
+
+  return body.event as EventSummary;
+}
+
+/**
+ * E2-10: the owning organiser edits event details while clarification is
+ * outstanding. The edit itself is posted as a reply in the clarification
+ * thread server-side — no separate message to send here.
+ */
+export async function updateEventDetails(id: number, payload: EventRequestPayload): Promise<EventSummary> {
+  const res = await fetch(`${apiBase}/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify(payload),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json();
+
+  if (res.status === 400) {
+    throw new ValidationError(body.fields ?? {});
+  }
+  if (!res.ok) {
+    throw new Error(body.error ?? "Failed to save your response");
   }
 
   return body.event as EventSummary;

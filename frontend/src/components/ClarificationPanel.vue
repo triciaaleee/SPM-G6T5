@@ -177,7 +177,7 @@ onMounted(refresh);
 </script>
 
 <template>
-  <aside v-if="loading || messages.length > 0" class="clarification-panel" aria-label="Clarification thread">
+  <aside v-if="loading || messages.length > 0 || canManage" class="clarification-panel" aria-label="Clarification thread">
     <div class="clarification-panel__header">
       <p class="clarification-panel__title">Clarifications</p>
       <button

@@ -720,6 +720,26 @@ describe("POST /api/events/:id/request-clarification", () => {
       }),
     );
   });
+
+  it("allows a post-approval follow-up question from Planning, remembering the prior status", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 1, status: "Planning", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Clarification Requested" },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app)
+      .post("/api/events/1/request-clarification")
+      .send({ message: "Actually, can you confirm the headcount?" });
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "Clarification Requested",
+        status_before_clarification: "Planning",
+      }),
+    );
+  });
 });
 
 /** Builds a mock supabase client for the clarification-thread routes: a
@@ -965,5 +985,178 @@ describe("POST /api/events/:id/clarifications/:questionId/resolve", () => {
     expect(res.status).toBe(200);
     expect(res.body.clarification.resolved).toBe(true);
     expect(clarificationUpdate).toHaveBeenCalledWith({ resolved: true });
+  });
+});
+
+/**
+ * E2-10: mocks the lookup on "events" (status/organiser_id/submitted_details),
+ * the update().select().single() that saves the response, the "find the open
+ * question to reply to" lookup, and the event_clarifications insert.
+ */
+function buildPatchSupabase(options: {
+  event:
+    | {
+        id: number;
+        status: string;
+        organiser_id: string;
+        submitted_details: Record<string, unknown>;
+        status_before_clarification?: string | null;
+      }
+    | null;
+  updatedEvent?: Record<string, unknown>;
+  openQuestion?: { id: number } | null;
+}) {
+  const { event, updatedEvent, openQuestion = null } = options;
+
+  const lookupMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+  const lookupEq = vi.fn().mockReturnValue({ maybeSingle: lookupMaybeSingle });
+  const lookupSelect = vi.fn().mockReturnValue({ eq: lookupEq });
+
+  const updateSingle = vi.fn().mockResolvedValue({ data: updatedEvent ?? null, error: null });
+  const updateSelect = vi.fn().mockReturnValue({ single: updateSingle });
+  const updateEq = vi.fn().mockReturnValue({ select: updateSelect });
+  const update = vi.fn().mockReturnValue({ eq: updateEq });
+
+  const openQuestionMaybeSingle = vi.fn().mockResolvedValue({ data: openQuestion, error: null });
+  const openQuestionLimit = vi.fn().mockReturnValue({ maybeSingle: openQuestionMaybeSingle });
+  const openQuestionOrder = vi.fn().mockReturnValue({ limit: openQuestionLimit });
+  const openQuestionEqResolved = vi.fn().mockReturnValue({ order: openQuestionOrder });
+  const openQuestionIs = vi.fn().mockReturnValue({ eq: openQuestionEqResolved });
+  const openQuestionEqEventId = vi.fn().mockReturnValue({ is: openQuestionIs });
+  const openQuestionSelect = vi.fn().mockReturnValue({ eq: openQuestionEqEventId });
+
+  const clarificationInsert = vi.fn().mockResolvedValue({ error: null });
+  const denialInsert = vi.fn().mockResolvedValue({ error: null });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "event_clarifications") return { select: openQuestionSelect, insert: clarificationInsert };
+    if (table === "access_denials") return { insert: denialInsert };
+    return { select: lookupSelect, update };
+  });
+
+  return { from, update, clarificationInsert };
+}
+
+describe("PATCH /api/events/:id", () => {
+  const owner = { id: "ORG-0001", role: "organiser" };
+
+  it("requires the caller to be the owning organiser", async () => {
+    const { from } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Clarification Requested",
+        organiser_id: "ORG-0002",
+        submitted_details: {},
+      },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("only allows editing while clarification is outstanding", async () => {
+    const { from } = buildPatchSupabase({
+      event: { id: 1, status: "Requested", organiser_id: owner.id, submitted_details: {} },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(409);
+  });
+
+  it("validates the payload like a fresh submission", async () => {
+    const { from } = buildPatchSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: owner.id, submitted_details: {} },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("saves the response, clears the flag, and posts the diff as a reply to the open question", async () => {
+    const oldDetails = { ...validPayload, venue: "Old Hall" };
+    const { from, update, clarificationInsert } = buildPatchSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: owner.id, submitted_details: oldDetails },
+      updatedEvent: { id: 1, status: "Requested" },
+      openQuestion: { id: 9 },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.status).toBe("Requested");
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Requested", submitted_details: expect.objectContaining({ venue: "Main Hall" }) }),
+    );
+    expect(clarificationInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_id: 1,
+        parent_id: 9,
+        author_id: owner.id,
+        author_role: "organiser",
+        message: expect.stringContaining("Venue changed from 'Old Hall' to 'Main Hall'"),
+      }),
+    );
+  });
+
+  it("skips posting a reply when nothing actually changed", async () => {
+    const { from, clarificationInsert } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Clarification Requested",
+        organiser_id: owner.id,
+        submitted_details: { ...validPayload, registrationNeeded: false },
+      },
+      updatedEvent: { id: 1, status: "Requested" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(clarificationInsert).not.toHaveBeenCalled();
+  });
+
+  it("posts a new top-level entry when there's no open question to reply to", async () => {
+    const oldDetails = { ...validPayload, venue: "Old Hall" };
+    const { from, clarificationInsert } = buildPatchSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: owner.id, submitted_details: oldDetails },
+      updatedEvent: { id: 1, status: "Requested" },
+      openQuestion: null,
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(clarificationInsert).toHaveBeenCalledWith(expect.objectContaining({ parent_id: null }));
+  });
+
+  it("restores status to Planning when the clarification was a post-approval follow-up", async () => {
+    const { from, update } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Clarification Requested",
+        organiser_id: owner.id,
+        submitted_details: validPayload,
+        status_before_clarification: "Planning",
+      },
+      updatedEvent: { id: 1, status: "Planning" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.status).toBe("Planning");
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Planning", status_before_clarification: null }),
+    );
   });
 });

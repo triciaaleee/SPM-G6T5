@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import {
   AccessDeniedError,
   NotFoundError,
   ReviewActionError,
+  ValidationError,
   approveEvent,
   fetchEventById,
   getCurrentUser,
   rejectEvent,
   requestClarification,
+  updateEventDetails,
+  type EventRequestPayload,
   type EventSummary,
 } from "../lib/eventsApi";
 import { statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
@@ -73,18 +76,20 @@ const canReject = computed(
     canReview.value &&
     (event.value?.status === "Requested" || event.value?.status === "Clarification Requested"),
 );
-/** Ask for Clarification is only for the *first* ask — once one is
- * outstanding, this disables alongside Approve, and the coordinator asks
- * follow-up questions from the "+" in the clarification thread instead. */
-const canAskClarification = computed(() => canReview.value && event.value?.status === "Requested");
-/** The actions section itself stays visible (Approve/Reject/Request
- * Clarification) for any non-terminal status — Rejected/Planning have
- * their own message above this, so by this point only Requested or
- * Clarification Requested remain; canAskClarification alone would hide
- * Reject here too, which AC2 requires stay clickable. */
-const showReviewActions = computed(
-  () => canReview.value && event.value?.status !== "Rejected" && event.value?.status !== "Planning",
+/** Ask for Clarification is for the *first* ask on a Requested event, or a
+ * post-approval follow-up on a Planning event — once one is outstanding,
+ * this disables alongside Approve, and the coordinator asks follow-up
+ * questions from the "+" in the clarification thread instead. */
+const canAskClarification = computed(
+  () => canReview.value && (event.value?.status === "Requested" || event.value?.status === "Planning"),
 );
+/** The actions section itself stays visible (Approve/Reject/Request
+ * Clarification) for any non-terminal status — Rejected has its own
+ * message above this. Planning now falls through here too (rather than a
+ * dedicated message) since a coordinator can still ask a follow-up
+ * question after approving; the template hides Approve/Reject for
+ * Planning and shows only Request Clarification. */
+const showReviewActions = computed(() => canReview.value && event.value?.status !== "Rejected");
 
 const isReviewing = ref(false);
 const actionError = ref<string | null>(null);
@@ -153,6 +158,81 @@ function asSubmittedDetails(value: EventSummary["submitted_details"]): Submitted
   return value as SubmittedEventDetails;
 }
 
+/**
+ * E2-10: if a non-coordinator successfully loaded this event at all, the
+ * backend's own access check (GET /:id) guarantees they're the owning
+ * organiser — non-owners get 403 before this component ever mounts. So
+ * there's no separate "is owner" id comparison to make here.
+ */
+const canRespondToClarification = computed(
+  () => !isCoordinator.value && event.value?.status === "Clarification Requested",
+);
+const isEditingDetails = ref(false);
+const editForm = reactive<EventRequestPayload>({
+  name: "",
+  purpose: "",
+  description: "",
+  proposedDate: "",
+  startTime: "",
+  endTime: "",
+  expectedAttendance: "",
+  venue: "",
+  accessibility: "",
+  equipment: "",
+  technicalSupport: "",
+  registrationNeeded: false,
+});
+const editFieldErrors = ref<Record<string, string>>({});
+const editGeneralError = ref<string | null>(null);
+const submittingEdit = ref(false);
+
+function startEditingDetails(): void {
+  if (!event.value) return;
+  const details = asSubmittedDetails(event.value.submitted_details);
+  editForm.name = details.name ?? "";
+  editForm.purpose = details.purpose ?? "";
+  editForm.description = details.description ?? "";
+  editForm.proposedDate = details.proposedDate ?? "";
+  editForm.startTime = details.startTime ?? "";
+  editForm.endTime = details.endTime ?? "";
+  editForm.expectedAttendance = details.expectedAttendance ?? "";
+  editForm.venue = details.venue ?? "";
+  editForm.accessibility = details.accessibility ?? "";
+  editForm.equipment = details.equipment ?? "";
+  editForm.technicalSupport = details.technicalSupport ?? "";
+  editForm.registrationNeeded = details.registrationNeeded ?? false;
+  editFieldErrors.value = {};
+  editGeneralError.value = null;
+  isEditingDetails.value = true;
+}
+
+function cancelEditingDetails(): void {
+  isEditingDetails.value = false;
+}
+
+/** E2-10 AC1/AC2: saving posts the edit as a reply in the clarification
+ * thread server-side and clears the flag back to "Requested" — refresh
+ * both the event and the thread so the change is visible immediately. */
+async function submitEditedDetails(): Promise<void> {
+  if (!event.value) return;
+  submittingEdit.value = true;
+  editGeneralError.value = null;
+  editFieldErrors.value = {};
+  try {
+    event.value = await updateEventDetails(event.value.id, editForm);
+    isEditingDetails.value = false;
+    await clarificationPanelRef.value?.refresh();
+  } catch (err) {
+    if (err instanceof ValidationError) {
+      editFieldErrors.value = err.fields;
+    } else {
+      editGeneralError.value = "We couldn't save your response. Please try again.";
+    }
+  } finally {
+    submittingEdit.value = false;
+  }
+}
+
 const NOT_PROVIDED = "Not provided";
 
 function formatDate(value: string | undefined | null): string {
@@ -217,12 +297,22 @@ onMounted(async () => {
         <div class="detail-grid">
           <div class="detail-grid-col">
             <div class="details-card">
-              <h2 class="section-title">Event Request Details</h2>
+              <div class="section-header">
+                <h2 class="section-title">Event Request Details</h2>
+                <button
+                  v-if="canRespondToClarification && !isEditingDetails"
+                  type="button"
+                  class="btn btn-primary"
+                  @click="startEditingDetails"
+                >
+                  Edit &amp; respond
+                </button>
+              </div>
 
               <div class="field-row field-row-3">
                 <div class="field">
                   <p class="body-small muted mb-1">Event Requestor</p>
-                  <p class="body-default field-value">{{ NOT_PROVIDED }}</p>
+                  <p class="body-default field-value">{{ event.organiser?.name ?? NOT_PROVIDED }}</p>
                 </div>
                 <div class="field">
                   <p class="body-small muted mb-1">Submitted date</p>
@@ -236,44 +326,100 @@ onMounted(async () => {
 
               <hr class="divider" />
 
-              <div class="field-row field-row-3">
-                <div class="field">
-                  <p class="body-small muted mb-1">Title</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).name || "—" }}</p>
-                </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Purpose</p>
-                  <span class="badge badge-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
-                  }}</span>
-                </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Expected attendance</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).expectedAttendance
-                    ?? "—" }}</p>
-                </div>
-              </div>
+              <p v-if="isEditingDetails && editGeneralError" class="body-default error-text">{{ editGeneralError }}</p>
 
-              <div class="field-row field-row-3">
-                <div class="field">
-                  <p class="body-small muted mb-1">Proposed date</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).proposedDate || "—"
-                  }}</p>
+              <template v-if="isEditingDetails">
+                <div class="field-row field-row-3">
+                  <div class="field">
+                    <label for="edit-name" class="body-small muted mb-1">Title</label>
+                    <input id="edit-name" v-model="editForm.name" type="text" class="edit-input" />
+                    <p v-if="editFieldErrors.name" class="body-small error-text">{{ editFieldErrors.name }}</p>
+                  </div>
+                  <div class="field">
+                    <label for="edit-purpose" class="body-small muted mb-1">Purpose</label>
+                    <input id="edit-purpose" v-model="editForm.purpose" type="text" class="edit-input" />
+                    <p v-if="editFieldErrors.purpose" class="body-small error-text">{{ editFieldErrors.purpose }}</p>
+                  </div>
+                  <div class="field">
+                    <label for="edit-expectedAttendance" class="body-small muted mb-1">Expected attendance</label>
+                    <input
+                      id="edit-expectedAttendance"
+                      v-model="editForm.expectedAttendance"
+                      type="number"
+                      min="1"
+                      class="edit-input"
+                    />
+                    <p v-if="editFieldErrors.expectedAttendance" class="body-small error-text">
+                      {{ editFieldErrors.expectedAttendance }}
+                    </p>
+                  </div>
                 </div>
+
+                <div class="field-row field-row-3">
+                  <div class="field">
+                    <label for="edit-proposedDate" class="body-small muted mb-1">Proposed date</label>
+                    <input id="edit-proposedDate" v-model="editForm.proposedDate" type="date" class="edit-input" />
+                    <p v-if="editFieldErrors.proposedDate" class="body-small error-text">{{ editFieldErrors.proposedDate }}</p>
+                  </div>
+                  <div class="field">
+                    <label for="edit-startTime" class="body-small muted mb-1">Start time</label>
+                    <input id="edit-startTime" v-model="editForm.startTime" type="time" class="edit-input" />
+                    <p v-if="editFieldErrors.startTime" class="body-small error-text">{{ editFieldErrors.startTime }}</p>
+                  </div>
+                  <div class="field">
+                    <label for="edit-endTime" class="body-small muted mb-1">End time</label>
+                    <input id="edit-endTime" v-model="editForm.endTime" type="time" class="edit-input" />
+                    <p v-if="editFieldErrors.endTime" class="body-small error-text">{{ editFieldErrors.endTime }}</p>
+                  </div>
+                </div>
+
                 <div class="field">
-                  <p class="body-small muted mb-1">Time</p>
-                  <p class="body-default field-value">
-                    {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
-                    –
-                    {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
+                  <label for="edit-description" class="body-small muted mb-1">Description</label>
+                  <textarea id="edit-description" v-model="editForm.description" rows="3" class="edit-input" />
+                  <p v-if="editFieldErrors.description" class="body-small error-text">{{ editFieldErrors.description }}</p>
+                </div>
+              </template>
+
+              <template v-else>
+                <div class="field-row field-row-3">
+                  <div class="field">
+                    <p class="body-small muted mb-1">Title</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).name || "—" }}</p>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Purpose</p>
+                    <span class="badge badge-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
+                    }}</span>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Expected attendance</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).expectedAttendance
+                      ?? "—" }}</p>
+                  </div>
+                </div>
+
+                <div class="field-row field-row-3">
+                  <div class="field">
+                    <p class="body-small muted mb-1">Proposed date</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).proposedDate || "—"
+                    }}</p>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Time</p>
+                    <p class="body-default field-value">
+                      {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
+                      –
+                      {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
+                    </p>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <p class="body-small muted mb-1">Description</p>
+                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).description || "—" }}
                   </p>
                 </div>
-              </div>
-
-              <div class="field">
-                <p class="body-small muted mb-1">Description</p>
-                <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).description || "—" }}
-                </p>
-              </div>
+              </template>
             </div>
 
 
@@ -281,32 +427,95 @@ onMounted(async () => {
             <div class="details-card requirements-card">
               <h2 class="section-title">Event Requirements</h2>
 
-              <div class="field-row">
-                <div class="field">
-                  <p class="body-small muted mb-1">Venue Requirements</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).venue ||
-                    NOT_PROVIDED }}</p>
+              <template v-if="isEditingDetails">
+                <div class="field-row">
+                  <div class="field">
+                    <label for="edit-venue" class="body-small muted mb-1">Venue Requirements</label>
+                    <textarea id="edit-venue" v-model="editForm.venue" rows="2" class="edit-input" />
+                    <p v-if="editFieldErrors.venue" class="body-small error-text">{{ editFieldErrors.venue }}</p>
+                  </div>
+                  <div class="field">
+                    <label for="edit-equipment" class="body-small muted mb-1">Equipment Requirements</label>
+                    <textarea id="edit-equipment" v-model="editForm.equipment" rows="2" class="edit-input" />
+                    <p v-if="editFieldErrors.equipment" class="body-small error-text">{{ editFieldErrors.equipment }}</p>
+                  </div>
                 </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Equipment Requirements</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).equipment ||
-                    NOT_PROVIDED }}</p>
-                </div>
-              </div>
 
-              <div class="field-row">
-                <div class="field">
-                  <p class="body-small muted mb-1">Accessibility Needs</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).accessibility ||
-                    NOT_PROVIDED }}</p>
+                <div class="field-row">
+                  <div class="field">
+                    <label for="edit-accessibility" class="body-small muted mb-1">Accessibility Needs</label>
+                    <textarea id="edit-accessibility" v-model="editForm.accessibility" rows="2" class="edit-input" />
+                    <p v-if="editFieldErrors.accessibility" class="body-small error-text">{{ editFieldErrors.accessibility }}</p>
+                  </div>
+                  <div class="field">
+                    <label for="edit-technicalSupport" class="body-small muted mb-1">Technical Support</label>
+                    <textarea id="edit-technicalSupport" v-model="editForm.technicalSupport" rows="2" class="edit-input" />
+                    <p v-if="editFieldErrors.technicalSupport" class="body-small error-text">{{ editFieldErrors.technicalSupport }}</p>
+                  </div>
                 </div>
+
                 <div class="field">
-                  <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
-                  <p class="body-default field-value">
-                    {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
-                  </p>
+                  <label class="body-small muted mb-1">Registration Needs (Where relevant)</label>
+                  <div class="flex gap-2" role="group" aria-label="Registration needed">
+                    <button
+                      type="button"
+                      class="btn"
+                      :class="editForm.registrationNeeded ? 'btn-primary' : 'btn-secondary'"
+                      :aria-pressed="editForm.registrationNeeded"
+                      @click="editForm.registrationNeeded = true"
+                    >
+                      Yes
+                    </button>
+                    <button
+                      type="button"
+                      class="btn"
+                      :class="!editForm.registrationNeeded ? 'btn-primary' : 'btn-secondary'"
+                      :aria-pressed="!editForm.registrationNeeded"
+                      @click="editForm.registrationNeeded = false"
+                    >
+                      No
+                    </button>
+                  </div>
                 </div>
-              </div>
+
+                <div class="edit-actions">
+                  <button type="button" class="btn btn-primary" :disabled="submittingEdit" @click="submitEditedDetails">
+                    {{ submittingEdit ? "Submitting…" : "Submit response" }}
+                  </button>
+                  <button type="button" class="btn btn-secondary" :disabled="submittingEdit" @click="cancelEditingDetails">
+                    Cancel
+                  </button>
+                </div>
+              </template>
+
+              <template v-else>
+                <div class="field-row">
+                  <div class="field">
+                    <p class="body-small muted mb-1">Venue Requirements</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).venue ||
+                      NOT_PROVIDED }}</p>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Equipment Requirements</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).equipment ||
+                      NOT_PROVIDED }}</p>
+                  </div>
+                </div>
+
+                <div class="field-row">
+                  <div class="field">
+                    <p class="body-small muted mb-1">Accessibility Needs</p>
+                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).accessibility ||
+                      NOT_PROVIDED }}</p>
+                  </div>
+                  <div class="field">
+                    <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
+                    <p class="body-default field-value">
+                      {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
+                    </p>
+                  </div>
+                </div>
+              </template>
             </div>
             <EventStatusTracker :status="event.status" :last-changed-at="statusLastChangedAt(event)"
               :review-outcome="event.review_outcome" />
@@ -316,7 +525,7 @@ onMounted(async () => {
             <div class="coordinator-card">
               <h2 class="section-title">Coordinator Details</h2>
               <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
-              <div class="coordinator-panel" :class="{
+              <div v-if="isCoordinator" class="coordinator-panel" :class="{
                 'coordinator-panel--assigned': isAssignedCoordinator,
                 'coordinator-panel--blocked': isOtherCoordinatorEvent,
                 'coordinator-panel--unassigned': !isAssignedCoordinator && !isOtherCoordinatorEvent,
@@ -342,13 +551,14 @@ onMounted(async () => {
                   <p v-if="event.status === 'Rejected'" class="body-small muted">
                     This request has been rejected and cannot be moved forward.
                   </p>
-                  <p v-else-if="event.status === 'Planning'" class="body-small muted">
-                    This request has been approved and moved to Planning.
-                  </p>
                   <p v-else-if="isOtherCoordinatorEvent" class="body-small muted">
                     Only the assigned coordinator can review this request.
                   </p>
                   <template v-else-if="showReviewActions">
+                    <p v-if="event.status === 'Planning'" class="body-small muted review-actions__note ">
+                      This request has been approved and moved to Planning. You can still ask the organiser a
+                      follow-up question if you need more information.
+                    </p>
                     <p v-if="event.status === 'Clarification Requested'" class="body-small muted review-actions__note ">
                       Clarification has been requested from the Organiser. Approval is blocked until it's resolved.
                     </p>
@@ -373,11 +583,12 @@ onMounted(async () => {
                     </div>
 
                     <div v-else class="review-actions__buttons">
-                      <button type="button" class="btn btn-primary" :disabled="!canApprove || isReviewing"
-                        @click="handleApprove">
-                        Approve
-                      </button>
-
+                      <template v-if="event.status !== 'Planning'">
+                        <button type="button" class="btn btn-primary" :disabled="!canApprove || isReviewing"
+                          @click="handleApprove">
+                          Approve
+                        </button>
+                      </template>
 
                       <button type="button" class="btn"
                         :class="event.status === 'Clarification Requested' ? 'btn-clarify--requested' : 'btn-clarify'"
@@ -385,13 +596,12 @@ onMounted(async () => {
                         {{ event.status === "Clarification Requested" ? "Clarification Requested" : "Request Clarification" }}
                       </button>
 
-                      <button type="button" class="btn btn-reject-outline" :disabled="!canReject || isReviewing"
-                        @click="openReject">
-                        Reject
-                      </button>
-
-
-
+                      <template v-if="event.status !== 'Planning'">
+                        <button type="button" class="btn btn-reject-outline" :disabled="!canReject || isReviewing"
+                          @click="openReject">
+                          Reject
+                        </button>
+                      </template>
                     </div>
                   </template>
                   <p v-else class="body-small muted">
@@ -580,6 +790,34 @@ onMounted(async () => {
   line-height: 1.75rem;
   color: var(--color-grey-900);
   margin: 0 0 var(--spacing-12);
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-12);
+}
+
+.section-header .section-title {
+  margin: 0;
+}
+
+.edit-input {
+  width: 100%;
+  font-family: var(--font-family-lato);
+  font-size: 0.9375rem;
+  color: var(--color-grey-900);
+  background: var(--color-base-white);
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-8) var(--spacing-12);
+}
+
+.edit-actions {
+  display: flex;
+  gap: var(--spacing-8);
+  margin-top: var(--spacing-8);
 }
 
 .field-row {

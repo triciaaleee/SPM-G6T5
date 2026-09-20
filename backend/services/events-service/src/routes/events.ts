@@ -5,6 +5,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { validateEventRequest } from "../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../lib/validation.js";
 import { assignCoordinator } from "../lib/coordinatorAssignment.js";
+import { diffSubmittedDetails } from "../lib/diffSubmittedDetails.js";
 
 async function recordAccessDenial(
   supabase: NonNullable<AuthedRequest["supabase"]>,
@@ -34,9 +35,11 @@ eventsRouter.use(requireAuth);
  * in migration 0004), so the frontend can show a name instead of a raw
  * id — coordinator_id itself is kept too, since other logic (e.g. "is the
  * viewer the assigned coordinator?") needs the id, not the name.
+ * `organiser:organiser_id(name)` embeds the requester's name the same way,
+ * for the "Event Requestor" field on the detail view.
  */
 const EVENT_COLUMNS =
-  "id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), review_outcome, decided_at, decided_by, created_at";
+  "id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at";
 
 /**
  * E2-1: submit a new event request. Validates the mandatory fields per the
@@ -159,6 +162,113 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
 
   const { organiser_id, ...event } = data;
   res.json({ event });
+});
+
+/**
+ * E2-10: the owning organiser edits event details while clarification is
+ * outstanding. The edit itself becomes the reply posted into the
+ * clarification thread (AC1) — no separate typed message required — and
+ * saving clears the flag back to "Requested" (AC2), putting the request
+ * back in the coordinator's normal review queue.
+ */
+eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const { data: existing, error: fetchError } = await supabase
+    .from("events")
+    .select("id, status, organiser_id, submitted_details, status_before_clarification")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (fetchError) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+
+  if (!existing) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  if (existing.organiser_id !== user.id) {
+    await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  if (existing.status !== "Clarification Requested") {
+    res.status(409).json({ error: "This request isn't awaiting clarification" });
+    return;
+  }
+
+  const result = validateEventRequest(req.body ?? {});
+  if (!result.valid) {
+    res.status(400).json({ error: "Validation failed", fields: result.fields });
+    return;
+  }
+
+  // Restores whatever status the event was in before this clarification
+  // was requested — "Requested" for the normal pre-approval case, but
+  // "Planning" if a coordinator asked a follow-up after already approving.
+  const restoredStatus = existing.status_before_clarification || "Requested";
+
+  const { data, error } = await supabase
+    .from("events")
+    .update({
+      submitted_details: result.value,
+      status: restoredStatus,
+      status_before_clarification: null,
+    })
+    .eq("id", existing.id)
+    .select(EVENT_COLUMNS)
+    .single();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to save your response" });
+    return;
+  }
+
+  const diff = diffSubmittedDetails(
+    (existing.submitted_details ?? {}) as Record<string, unknown>,
+    result.value!,
+  );
+
+  if (diff) {
+    const { data: openQuestion } = await supabase
+      .from("event_clarifications")
+      .select("id")
+      .eq("event_id", existing.id)
+      .is("parent_id", null)
+      .eq("resolved", false)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const { error: replyError } = await supabase.from("event_clarifications").insert({
+      event_id: existing.id,
+      parent_id: openQuestion?.id ?? null,
+      author_id: user.id,
+      author_role: "organiser",
+      message: diff,
+    });
+
+    if (replyError) {
+      console.error("Failed to record clarification response reply", { eventId: existing.id, error: replyError });
+    }
+  }
+
+  res.json({ event: data });
 });
 
 /**
@@ -339,8 +449,19 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
 });
 
 /**
- * Request clarification/amendment from the Organiser — only from
- * "Requested". Resolving an outstanding request (Organiser amends and
+ * Statuses a coordinator can request clarification from: the normal
+ * pending-review states, plus "Planning" — a coordinator may realise they
+ * need more information after already approving an event. Either way the
+ * event's current status is captured into status_before_clarification so
+ * the organiser's response (PATCH /:id) knows whether to restore it to
+ * "Requested" or back to "Planning".
+ */
+const CLARIFICATION_REQUESTABLE_STATUSES = new Set([...PENDING_REVIEW_STATUSES, "Planning"]);
+
+/**
+ * Request clarification/amendment from the Organiser — from a
+ * pending-review status, or from "Planning" for a post-approval follow-up
+ * question. Resolving an outstanding request (Organiser amends and
  * resubmits) is not built yet; until it is, this is a one-way transition
  * that leaves approval blocked (AC1's "no outstanding clarification").
  */
@@ -349,7 +470,7 @@ eventsRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) 
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
-  if (!PENDING_REVIEW_STATUSES.has(event.status)) {
+  if (!CLARIFICATION_REQUESTABLE_STATUSES.has(event.status)) {
     res.status(409).json({ error: "Clarification can only be requested while this request is pending review" });
     return;
   }
@@ -365,6 +486,7 @@ eventsRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) 
     .from("events")
     .update({
       status: "Clarification Requested",
+      status_before_clarification: event.status,
       coordinator_id: user.id,
       review_outcome: message,
       decided_at: new Date().toISOString(),
