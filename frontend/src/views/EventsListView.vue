@@ -12,6 +12,17 @@ function isRegistrationRequired(event: EventSummary): boolean {
   return event.submitted_details?.registrationNeeded === true;
 }
 
+function formatCreatedDate(value: string): string {
+  const date = new Date(value);
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${day}/${month}/${date.getFullYear()}`;
+}
+
+function coordinatorInitial(event: EventSummary): string {
+  return event.coordinator?.name?.charAt(0).toUpperCase() ?? "";
+}
+
 /** Organiser-only flag: a coordinator has asked a clarification question
  * on this event and it's still awaiting the Organiser's reply. */
 function needsClarificationReply(event: EventSummary): boolean {
@@ -60,11 +71,8 @@ onMounted(async () => {
             {{ isCoordinator ? "All events in the pipeline." : "Only events you created appear here." }}
           </p>
         </div>
-        <RouterLink
-          v-if="!isCoordinator"
-          :to="{ name: 'new-event-request' }"
-          class="shrink-0 rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700"
-        >
+        <RouterLink v-if="!isCoordinator" :to="{ name: 'new-event-request' }"
+          class="shrink-0 rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700">
           New event request
         </RouterLink>
       </div>
@@ -76,22 +84,37 @@ onMounted(async () => {
       </p>
 
       <div v-else class="card-grid">
-        <RouterLink
-          v-for="event in events"
-          :key="event.id"
-          :to="{ name: 'event-detail', params: { id: event.id } }"
-          class="event-card"
-        >
+        <RouterLink v-for="event in events" :key="event.id" :to="{ name: 'event-detail', params: { id: event.id } }"
+          class="event-card">
           <div class="card-header">
-            <span class="badge" :class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</span>
-            <div class="card-header__flags">
-              <span v-if="isRegistrationRequired(event)" class="badge badge-registration">Registration Required</span>
-              <span v-if="needsClarificationReply(event)" class="badge badge-clarification">Reply to Clarification!</span>
-            </div>
+            <span class="badge badge-dot" :class="statusBadgeClass(event.status)">
+              <span class="badge__dot" />
+              {{ statusLabel(event.status) }}
+            </span>
+            <span v-if="isRegistrationRequired(event)" class="badge badge-registration">Registration Required</span>
           </div>
           <p class="card-title">{{ eventName(event) }}</p>
-          <p class="body-small muted">Created {{ new Date(event.created_at).toLocaleDateString() }}</p>
-          <p class="body-small muted">Assigned to: {{ event.coordinator?.name ?? "Unassigned" }}</p>
+          <p class="body-small muted">Created {{ formatCreatedDate(event.created_at) }}</p>
+
+          <hr class="card-divider" />
+
+          <div class="card-footer">
+            <div class="card-footer__coordinator">
+              <span v-if="event.coordinator?.name" class="coordinator-avatar">{{ coordinatorInitial(event) }}</span>
+              <span class="body-small  muted">Coordinator: {{ event.coordinator?.name ?? "Unassigned" }}</span>
+            </div>
+            <div class="card-footer__action">
+
+              <span v-if="needsClarificationReply(event)" class="reply-action">Reply Needed</span>
+              <svg class="card-chevron" :class="{ 'card-chevron--reply': needsClarificationReply(event) }"
+                viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path fill-rule="evenodd"
+                  d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z"
+                  clip-rule="evenodd" />
+              </svg>
+
+            </div>
+          </div>
         </RouterLink>
       </div>
     </div>
@@ -116,6 +139,7 @@ onMounted(async () => {
     grid-template-columns: repeat(6, 1fr);
     padding: var(--spacing-32) var(--grid-tablet-margin);
   }
+
   .content {
     grid-column: 1 / 7;
   }
@@ -126,6 +150,7 @@ onMounted(async () => {
     grid-template-columns: repeat(4, 1fr);
     padding: var(--spacing-24) var(--grid-mobile-margin);
   }
+
   .content {
     grid-column: 1 / 5;
   }
@@ -216,22 +241,9 @@ onMounted(async () => {
 
 .card-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
   gap: var(--spacing-8);
-}
-
-/* Absolutely positioned (against .event-card) so stacking a second flag
- * here never pushes the title down — it just grows into the card's own
- * padding instead of adding to the normal-flow height of .card-header. */
-.card-header__flags {
-  position: absolute;
-  top: var(--spacing-24);
-  right: var(--spacing-24);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--spacing-4);
 }
 
 .badge {
@@ -240,18 +252,27 @@ onMounted(async () => {
   font-weight: 700;
   line-height: 1rem;
   padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
+}
+
+.badge-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+}
+
+
+.badge__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex-shrink: 0;
 }
 
 .badge-registration {
   background: var(--color-purple-100);
   color: var(--color-purple-700);
-  white-space: nowrap;
-}
-
-.badge-clarification {
-  background: var(--color-blue-100);
-  color: var(--color-blue-600);
   white-space: nowrap;
 }
 
@@ -271,7 +292,68 @@ onMounted(async () => {
 }
 
 .status-info {
-  background: var(--color-blue-100);
-  color: var(--color-blue-600);
+  background: var(--color-warning-200);
+  color: var(--color-warning-700);
+}
+
+.card-divider {
+  border: none;
+  border-top: 1px solid var(--color-grey-100);
+  margin: 40px 0 16px 0;
+}
+
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-8);
+}
+
+.card-footer__coordinator {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  min-width: 0;
+}
+
+.coordinator-avatar {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--color-purple-200);
+  color: var(--color-purple-600);
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.reply-action {
+  flex-shrink: 0;
+  color: var(--color-warning-600);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding-bottom: 2px;
+}
+
+.card-footer__action {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+}
+
+.card-chevron {
+  width: 20px;
+  height: 20px;
+  color: var(--color-grey-400);
+  flex-shrink: 0;
+}
+
+.card-chevron--reply {
+  color: var(--color-warning-600);
 }
 </style>

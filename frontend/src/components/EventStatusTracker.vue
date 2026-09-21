@@ -40,11 +40,7 @@ const STAGE_TWO_VARIANT: Record<string, StepVariant> = {
   "Clarification Requested": "info",
 };
 
-const STEP_COUNT = 4;
-
 const currentIndex = computed(() => STATUS_STEP_INDEX[props.status] ?? 0);
-
-const trackFillPercent = computed(() => (currentIndex.value / (STEP_COUNT - 1)) * 100);
 
 const stage2Label = computed(() => {
   if (props.status === "Rejected") return "Rejected";
@@ -52,12 +48,23 @@ const stage2Label = computed(() => {
   return "Planning";
 });
 
-const steps = computed(() => [
-  { key: "requested", label: "Requested", variant: "neutral" as StepVariant },
-  { key: "stage2", label: stage2Label.value, variant: STAGE_TWO_VARIANT[props.status] ?? "neutral" },
-  { key: "confirmed", label: "Confirmed", variant: "neutral" as StepVariant },
-  { key: "completed", label: "Completed", variant: "neutral" as StepVariant },
-]);
+/** Rejected is terminal — Confirmed/Completed can never happen after it,
+ * so the tracker only shows the two stages that actually occurred. */
+const steps = computed(() => {
+  const requested = { key: "requested", label: "Requested", variant: "neutral" as StepVariant };
+  const stage2 = { key: "stage2", label: stage2Label.value, variant: STAGE_TWO_VARIANT[props.status] ?? "neutral" };
+
+  if (props.status === "Rejected") return [requested, stage2];
+
+  return [
+    requested,
+    stage2,
+    { key: "confirmed", label: "Confirmed", variant: "neutral" as StepVariant },
+    { key: "completed", label: "Completed", variant: "neutral" as StepVariant },
+  ];
+});
+
+const trackFillPercent = computed(() => (currentIndex.value / (steps.value.length - 1)) * 100);
 
 function stepState(index: number): "complete" | "current" | "pending" {
   if (index < currentIndex.value) return "complete";
@@ -74,7 +81,7 @@ function stepState(index: number): "complete" | "current" | "pending" {
       <p class="body-small muted status-summary__date">Last updated {{ formatEventDate(lastChangedAt) }}</p>
     </div>
 
-    <div class="status-tracker" role="list" aria-label="Event progress">
+    <div class="status-tracker" role="list" aria-label="Event progress" :data-status="status">
       <div class="status-tracker__track">
         <div class="status-tracker__track-fill" :style="{ width: trackFillPercent + '%' }" />
       </div>
@@ -167,8 +174,8 @@ function stepState(index: number): "complete" | "current" | "pending" {
 }
 
 .status-info {
-  background: var(--color-blue-100);
-  color: var(--color-blue-600);
+  background: var(--color-warning-200);
+  color: var(--color-warning-700);
 }
 
 .status-summary {
@@ -295,6 +302,30 @@ function stepState(index: number): "complete" | "current" | "pending" {
   background: var(--color-base-white);
 }
 
+/* Rejected is a terminal, negative outcome — the whole timeline (fill,
+   dots, labels) switches from the brand purple to red instead. */
+.status-tracker[data-status="Rejected"] .status-tracker__track-fill {
+  background: var(--color-error-600);
+}
+
+.status-tracker[data-status="Rejected"] .status-tracker__step[data-state="complete"] .status-tracker__dot {
+  border-color: var(--color-error-600);
+  background: var(--color-error-600);
+}
+
+.status-tracker[data-status="Rejected"] .status-tracker__step[data-state="current"] .status-tracker__dot {
+  border-color: var(--color-error-600);
+  box-shadow: 0 0 0 4px var(--color-error-200);
+}
+
+.status-tracker[data-status="Rejected"] .status-tracker__step[data-state="current"] .status-tracker__label {
+  color: var(--color-error-600);
+}
+
+.status-tracker[data-status="Rejected"] .status-tracker__here {
+  color: var(--color-error-600);
+}
+
 .status-note {
   margin: var(--spacing-16) 0 0;
   padding: var(--spacing-12) var(--spacing-16);
@@ -303,9 +334,9 @@ function stepState(index: number): "complete" | "current" | "pending" {
 }
 
 .status-note--info {
-  background: var(--color-blue-100);
-  border-color: var(--color-blue-300);
-  color: var(--color-blue-700);
+  background: var(--color-warning-200);
+  border-color: var(--color-warning-400);
+  color: var(--color-warning-800);
 }
 
 .status-note--error {

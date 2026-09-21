@@ -21,6 +21,8 @@
   --color-purple-100: #F3EAFC;
   --color-purple-200: #E5D3F7;
   --color-purple-300: #CEABF1;
+  --color-purple-400: #A25FE5;
+  --color-purple-500: #8841CF;
   --color-purple-600: #701EC2;
   --color-purple-700: #5A04AF;
   --color-purple-800: #3F037A;
@@ -28,8 +30,15 @@
   /* Semantic */
   --color-error-200: #FFE3E0;
   --color-error-600: #CC1000;
+  --color-warning-100: #FEF5E7;
+  --color-warning-200: #FCE1B6;
+  --color-warning-300: #F9C26C;
   --color-warning-400: #F5A01A;
+  --color-warning-500: #F5831E;
   --color-warning-600: #F2721B;
+  --color-warning-700: #E06A27;
+  --color-warning-800: #C65D00;
+  --color-warning-900: #994400;
   --color-success-600: #008545;
   --color-success-700: #006E3A;
 

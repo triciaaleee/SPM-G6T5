@@ -55,8 +55,15 @@ export default {
           600: "var(--color-error-600)",
         },
         warning: {
+          100: "var(--color-warning-100)",
+          200: "var(--color-warning-200)",
+          300: "var(--color-warning-300)",
           400: "var(--color-warning-400)",
+          500: "var(--color-warning-500)",
           600: "var(--color-warning-600)",
+          700: "var(--color-warning-700)",
+          800: "var(--color-warning-800)",
+          900: "var(--color-warning-900)",
         },
         success: {
           600: "var(--color-success-600)",

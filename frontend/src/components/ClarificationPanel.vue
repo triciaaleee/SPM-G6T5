@@ -52,8 +52,8 @@ function repliesFor(questionId: number): ClarificationMessage[] {
 }
 
 function authorLabel(m: ClarificationMessage): string {
-  if (m.author_role === "coordinator") return m.author_id === props.currentUserId ? "You (Coordinator)" : "Coordinator";
-  return m.author_id === props.currentUserId ? "You (Organiser)" : "Organiser";
+  if (m.author_role === "coordinator") return m.author_id === props.currentUserId ? "You" : "Coordinator";
+  return m.author_id === props.currentUserId ? "You" : "Organiser";
 }
 
 function formatTime(iso: string): string {
@@ -233,7 +233,13 @@ onMounted(refresh);
               </span>
             </button>
 
-            <span v-if="q.resolved" class="clarification-thread__resolved-tick" title="Resolved">&#10003;</span>
+            <span v-if="q.resolved" class="clarification-thread__resolved-tick" title="Resolved">
+              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" stroke-width="12">
+                <path fill-rule="evenodd"
+                  d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
+                  clip-rule="evenodd" />
+              </svg>
+            </span>
             <button
               v-else-if="canManage"
               type="button"
@@ -244,7 +250,9 @@ onMounted(refresh);
               {{ resolvingFor === q.id ? "…" : "Resolve" }}
             </button>
           </div>
-          <p class="clarification-thread__meta">{{ authorLabel(q) }} · {{ formatTime(q.created_at) }}</p>
+          <p class="clarification-thread__meta">
+            <span :class="{ 'author-you': isOwnMessage(q) }">{{ authorLabel(q) }}</span> · {{ formatTime(q.created_at) }}
+          </p>
 
           <!-- Collapsed: Reply sits right here, no need to expand first.
                Resolved questions are read-only — no more replies.
@@ -258,21 +266,24 @@ onMounted(refresh);
           </div>
 
           <!-- Expanded (resolved or not): replies to the question, as a
-               chat thread — the question itself isn't repeated here, it's
+               thread — the question itself isn't repeated here, it's
                already shown above. -->
-          <div v-if="expanded.has(q.id)" class="chat-thread">
+          <div v-if="expanded.has(q.id)" class="thread-thread">
             <div
               v-for="reply in repliesFor(q.id)"
               :key="reply.id"
-              class="chat-row"
-              :class="isOwnMessage(reply) ? 'chat-row--own' : 'chat-row--other'"
+              class="thread-row"
             >
-              <div class="chat-bubble" :class="isOwnMessage(reply) ? 'chat-bubble--own' : 'chat-bubble--other'">
-                <p class="chat-bubble__text">{{ reply.message }}</p>
+              <div class="thread-reply">
+                <p class="thread-reply__meta">
+                  <span :class="{ 'author-you': isOwnMessage(reply) }">{{ authorLabel(reply) }}</span>
+                  <span>{{ formatTime(reply.created_at) }}</span>
+                </p>
+                <p class="thread-reply__text">{{ reply.message }}</p>
               </div>
             </div>
 
-            <!-- Reply drops to the bottom of the thread, like a chat input.
+            <!-- Reply drops to the bottom of the thread, like a thread input.
                  Resolved questions are read-only — the thread stays viewable, but no more replies. -->
             <template v-if="!q.resolved">
               <div v-if="replyOpenFor === q.id" class="clarification-thread__reply-box">
@@ -304,10 +315,8 @@ onMounted(refresh);
  * a stretched or floating side panel. */
 .clarification-panel {
   width: 100%;
-  background: var(--color-base-white);
   border: 1px solid var(--color-grey-100);
   border-radius: var(--radius-lg);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -392,7 +401,7 @@ onMounted(refresh);
 }
 
 .clarification-thread__item {
-  border: 1px solid var(--color-grey-100);
+  border: 1px solid var(--color-grey-200);
   border-radius: var(--radius-xs);
   padding: var(--spacing-12);
 }
@@ -427,11 +436,15 @@ onMounted(refresh);
   border-radius: 50%;
   background: var(--color-success-600);
   color: var(--color-base-white);
-  font-size: 0.75rem;
-  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.clarification-thread__resolved-tick svg {
+  width: 14px;
+  height: 14px;
+
 }
 
 .clarification-thread__resolve-btn {
@@ -497,52 +510,51 @@ onMounted(refresh);
   gap: var(--spacing-8);
 }
 
-/* Telegram-style chat thread: own messages on the right in the accent
- * colour, the other party's on the left in white with a border. */
-.chat-thread {
-  margin-top: var(--spacing-12);
-  margin-left: var(--spacing-24);
+.thread-thread {
+  margin: var(--spacing-12);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-8);
 }
 
-.chat-row {
+/* Flat thread, not a two-sided chat: every reply sits on the same side and
+   reads the same way — the small extra left margin on your own replies is
+   just enough of a left/right cue to tell them apart at a glance, without
+   the full alternating-side chat-bubble layout. */
+.thread-row {
   display: flex;
 }
 
-.chat-row--own {
-  justify-content: flex-end;
+.thread-row--own {
+  margin-left: var(--spacing-24);
 }
 
-.chat-row--other {
-  justify-content: flex-start;
-}
-
-.chat-bubble {
-  max-width: 80%;
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-8) var(--spacing-12);
-}
-
-.chat-bubble--own {
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-  border-bottom-right-radius: var(--radius-xs);
-}
-
-.chat-bubble--other {
-  background: var(--color-base-white);
+.thread-reply {
+  width: 100%;
+  /* background: var(--color-base-white); */
   color: var(--color-grey-900);
-  border: 1px solid var(--color-grey-200);
-  border-bottom-left-radius: var(--radius-xs);
+  border-top: 1px solid var(--color-grey-200);
+  padding: var(--spacing-12);
 }
 
-.chat-bubble__text {
+.thread-reply__text {
+  margin: var(--spacing-4) 0 0;
+  font-size: 16px;
+  line-height: 1.32rem;
+}
+
+.thread-reply__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-8);
   margin: 0;
-  font-size: 0.9375rem;
-  line-height: 1.3rem;
-  white-space: pre-wrap;
+  font-size: 0.75rem;
+  color: var(--color-grey-500);
+}
+
+.author-you {
+  color: var(--color-purple-700);
+  font-weight: 700;
 }
 
 .body-default {

@@ -290,7 +290,6 @@ onMounted(async () => {
       <p v-else-if="errorMessage" class="body-default error-text">{{ errorMessage }}</p>
 
       <div v-else-if="event">
-        <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
         <h1 class="h2">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}` }}</h1>
         <p class="body-default muted event-id">Event #{{ event.id }}</p>
 
@@ -731,8 +730,8 @@ onMounted(async () => {
 }
 
 .status-info {
-  background: var(--color-blue-100);
-  color: var(--color-blue-600);
+  background: var(--color-warning-200);
+  color: var(--color-warning-700);
 }
 
 .denied-panel {
@@ -772,6 +771,7 @@ onMounted(async () => {
   border-radius: var(--radius-lg);
   padding: var(--spacing-32);
 }
+
 
 .divider {
   border: none;
@@ -894,11 +894,11 @@ onMounted(async () => {
 
 .review-actions__note {
   margin-bottom: var(--spacing-12);
-  background: var(--color-blue-100);
-  border: 1px solid var(--color-blue-300);
+  background: var(--color-warning-100);
+  border: 1px solid var(--color-warning-400);
   padding: var(--spacing-12) var(--spacing-16);
   border-radius: var(--radius-xs);
-  color: var(--color-blue-700)
+  color: var(--color-warning-800)
 }
 
 .review-actions__buttons {
@@ -944,12 +944,12 @@ onMounted(async () => {
 
 .btn-clarify {
   background: transparent;
-  color: var(--color-blue-600);
-  border-color: var(--color-blue-600);
+  color: var(--color-warning-700);
+  border-color: var(--color-warning-700);
 }
 
 .btn-clarify:not(:disabled):hover {
-  background: var(--color-blue-200);
+  background: var(--color-warning-300);
 }
 
 .btn-clarify--requested {
