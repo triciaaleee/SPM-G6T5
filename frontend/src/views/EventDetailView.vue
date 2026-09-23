@@ -650,7 +650,7 @@ onMounted(async () => {
                       <template v-if="event.status !== 'Planning'">
                         <button type="button" class="btn btn-primary" :disabled="!canApprove || isReviewing"
                           @click="handleApprove">
-                          Accepted
+                          Accept
                         </button>
                       </template>
 
