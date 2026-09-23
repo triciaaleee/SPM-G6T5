@@ -29,6 +29,7 @@ Follow a microservices architecture as much as possible.
 - **All services share one `.env`.** Every service loads the single `backend/.env` (via `lib/env.ts` → `dotenv.config({ path: "../../.env" })`). Never create a per-service `.env`; add new variables to `backend/.env` and `backend/.env.example`.
 - **Extending an existing entity** (new field, new endpoint on events, etc.) stays in the service that owns that entity.
 - If you're unsure whether something is a "new entity" or part of an existing one, ask.
+- Follow the c4_diagrams in the repo to determine if need new microservice. 
 
 ### New service checklist
 
