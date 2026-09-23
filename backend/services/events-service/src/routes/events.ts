@@ -236,12 +236,14 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   }
 
   // E2-7 AC1/AC2: direct edits are allowed while still pending review
-  // (Requested/Unassigned) or, per E2-10, while responding to an
-  // outstanding clarification. Anything past that (Planning, Rejected,
-  // etc.) is blocked — there's no "raise a change request" flow built
-  // yet, so this is a block + message, not a real alternate workflow.
+  // (Requested/Unassigned), while still in Planning (per AGENTS.md §3 the
+  // lifecycle only truly locks down once Confirmed), or, per E2-10, while
+  // responding to an outstanding clarification. Anything past that
+  // (Confirmed, Completed, Rejected) is blocked — there's no "raise a
+  // change request" flow built yet, so this is a block + message, not a
+  // real alternate workflow.
   const isClarificationResponse = existing.status === "Clarification Requested";
-  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status);
+  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status) || existing.status === "Planning";
 
   if (!isClarificationResponse && !isDirectEdit) {
     res.status(409).json({

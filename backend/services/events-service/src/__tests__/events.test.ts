@@ -1058,15 +1058,32 @@ describe("PATCH /api/events/:id", () => {
     expect(res.status).toBe(403);
   });
 
-  it("blocks direct edits once the request has been approved (AC2)", async () => {
+  it("blocks direct edits once the request has been rejected (AC2)", async () => {
     const { from } = buildPatchSupabase({
-      event: { id: 1, status: "Planning", organiser_id: owner.id, submitted_details: {} },
+      event: { id: 1, status: "Rejected", organiser_id: owner.id, submitted_details: {} },
     });
     const app = buildApp({ from }, owner);
 
     const res = await request(app).patch("/api/events/1").send(validPayload);
 
     expect(res.status).toBe(409);
+  });
+
+  it("allows a direct edit while still in Planning (AGENTS.md: only Confirmed locks it down)", async () => {
+    const oldDetails = { ...validPayload, venue: "Old Hall" };
+    const { from, update, historyInsert } = buildPatchSupabase({
+      event: { id: 1, status: "Planning", organiser_id: owner.id, submitted_details: oldDetails },
+      updatedEvent: { id: 1, status: "Planning" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith({
+      submitted_details: expect.objectContaining({ venue: validPayload.venue }),
+    });
+    expect(historyInsert).toHaveBeenCalled();
   });
 
   it("validates the payload like a fresh submission", async () => {
