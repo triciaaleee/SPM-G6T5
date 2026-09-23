@@ -8,10 +8,12 @@ import {
   ValidationError,
   approveEvent,
   fetchEventById,
+  fetchEventHistory,
   getCurrentUser,
   rejectEvent,
   requestClarification,
   updateEventDetails,
+  type EventHistoryEntry,
   type EventRequestPayload,
   type EventSummary,
 } from "../lib/eventsApi";
@@ -167,6 +169,24 @@ function asSubmittedDetails(value: EventSummary["submitted_details"]): Submitted
 const canRespondToClarification = computed(
   () => !isCoordinator.value && event.value?.status === "Clarification Requested",
 );
+/** E2-7 AC1: the owning organiser can edit directly while still pending
+ * review, before any coordinator has acted — no clarification thread
+ * involved. Same "if they can see it, they're the owner" reasoning as
+ * canRespondToClarification above. */
+const canEditDirectly = computed(
+  () =>
+    !isCoordinator.value &&
+    (event.value?.status === "Requested" || event.value?.status === "Unassigned"),
+);
+/** AC2: once approved (or otherwise past pending-review/clarification),
+ * editing is blocked — shown as a message rather than a real "change
+ * request" flow, which doesn't exist yet. */
+const editBlockedMessage = computed(() => {
+  if (isCoordinator.value || !event.value) return null;
+  const status = event.value.status;
+  if (status === "Requested" || status === "Unassigned" || status === "Clarification Requested") return null;
+  return "This request has already been approved and can no longer be edited directly. Contact your coordinator to request a change.";
+});
 const isEditingDetails = ref(false);
 const editForm = reactive<EventRequestPayload>({
   name: "",
@@ -210,9 +230,11 @@ function cancelEditingDetails(): void {
   isEditingDetails.value = false;
 }
 
-/** E2-10 AC1/AC2: saving posts the edit as a reply in the clarification
- * thread server-side and clears the flag back to "Requested" — refresh
- * both the event and the thread so the change is visible immediately. */
+/** Saving either posts the edit as a clarification reply and clears the
+ * flag (E2-10), or just saves directly with no status change (E2-7 AC1) —
+ * the backend decides which based on the event's current status. Refresh
+ * the event, the clarification thread, and the edit history so the
+ * change is visible immediately regardless of which path applied. */
 async function submitEditedDetails(): Promise<void> {
   if (!event.value) return;
   submittingEdit.value = true;
@@ -221,7 +243,7 @@ async function submitEditedDetails(): Promise<void> {
   try {
     event.value = await updateEventDetails(event.value.id, editForm);
     isEditingDetails.value = false;
-    await clarificationPanelRef.value?.refresh();
+    await Promise.all([clarificationPanelRef.value?.refresh(), loadHistory()]);
   } catch (err) {
     if (err instanceof ValidationError) {
       editFieldErrors.value = err.fields;
@@ -231,6 +253,30 @@ async function submitEditedDetails(): Promise<void> {
   } finally {
     submittingEdit.value = false;
   }
+}
+
+/** E2-7 AC3: structured edit history, visible to the owning organiser and
+ * any coordinator (same audience as the clarification thread). */
+const historyEntries = ref<EventHistoryEntry[]>([]);
+const historyLoading = ref(false);
+
+async function loadHistory(): Promise<void> {
+  if (!event.value) return;
+  historyLoading.value = true;
+  try {
+    historyEntries.value = await fetchEventHistory(event.value.id);
+  } catch {
+    // Non-critical — the rest of the page still works without history.
+    historyEntries.value = [];
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
+function formatHistoryTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
 const NOT_PROVIDED = "Not provided";
@@ -248,6 +294,7 @@ onMounted(async () => {
     const [eventData, user] = await Promise.all([fetchEventById(id), getCurrentUser()]);
     event.value = eventData;
     currentUser.value = user;
+    await loadHistory();
   } catch (err) {
     if (err instanceof AccessDeniedError) {
       accessDenied.value = true;
@@ -299,14 +346,24 @@ onMounted(async () => {
               <div class="section-header">
                 <h2 class="section-title">Event Request Details</h2>
                 <button
-                  v-if="canRespondToClarification && !isEditingDetails"
+                  v-if="(canRespondToClarification || canEditDirectly) && !isEditingDetails"
                   type="button"
-                  class="btn btn-primary"
+                  class="btn-icon"
+                  :title="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
+                  :aria-label="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
                   @click="startEditingDetails"
                 >
-                  Edit &amp; respond
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                    stroke="currentColor" class="btn-icon__svg">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                      d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                  </svg>
                 </button>
               </div>
+
+              <p v-if="editBlockedMessage && !isEditingDetails" class="body-small muted edit-blocked-note">
+                {{ editBlockedMessage }}
+              </p>
 
               <div class="field-row field-row-3">
                 <div class="field">
@@ -585,7 +642,7 @@ onMounted(async () => {
                       <template v-if="event.status !== 'Planning'">
                         <button type="button" class="btn btn-primary" :disabled="!canApprove || isReviewing"
                           @click="handleApprove">
-                          Approve
+                          Accepted
                         </button>
                       </template>
 
@@ -624,6 +681,22 @@ onMounted(async () => {
             <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
               :current-user-id="currentUser.id" />
 
+            <!-- E2-7 AC3: structured edit history, same visibility as the
+                 clarification thread (owning organiser or any coordinator). -->
+            <div v-if="!historyLoading && historyEntries.length > 0" class="details-card history-card">
+              <h2 class="section-title">Edit history</h2>
+              <ul class="history-list">
+                <li v-for="entry in historyEntries" :key="entry.id" class="history-list__item">
+                  <p class="body-default field-value">
+                    <strong>{{ entry.field }}</strong> changed from
+                    <em>'{{ entry.old_value ?? "—" }}'</em> to <em>'{{ entry.new_value }}'</em>
+                  </p>
+                  <p class="body-small muted">
+                    {{ formatHistoryTimestamp(entry.changed_at) }} by {{ entry.changed_by_user?.name ?? entry.changed_by }}
+                  </p>
+                </li>
+              </ul>
+            </div>
 
           </div>
         </div>
@@ -814,6 +887,34 @@ onMounted(async () => {
   margin: 0;
 }
 
+.edit-blocked-note {
+  margin: 0 0 var(--spacing-16);
+}
+
+.history-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-12);
+}
+
+.history-list__item {
+  border-top: 1px solid var(--color-grey-100);
+  padding-top: var(--spacing-12);
+}
+
+.history-list__item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
 .edit-input {
   width: 100%;
   font-family: var(--font-family-lato);
@@ -951,6 +1052,31 @@ onMounted(async () => {
 .btn:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--color-grey-200);
+  background: var(--color-base-white);
+  color: var(--color-purple-600);
+  cursor: pointer;
+}
+
+.btn-icon:hover {
+  background: var(--color-purple-100);
+  color: var(--color-purple-700);
+  border-color: var(--color-purple-300);
+}
+
+.btn-icon__svg {
+  width: 18px;
+  height: 18px;
 }
 
 .btn-clarify {

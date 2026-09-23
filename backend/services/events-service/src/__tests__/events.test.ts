@@ -1027,14 +1027,16 @@ function buildPatchSupabase(options: {
 
   const clarificationInsert = vi.fn().mockResolvedValue({ error: null });
   const denialInsert = vi.fn().mockResolvedValue({ error: null });
+  const historyInsert = vi.fn().mockResolvedValue({ error: null });
 
   const from = vi.fn().mockImplementation((table: string) => {
     if (table === "event_clarifications") return { select: openQuestionSelect, insert: clarificationInsert };
     if (table === "access_denials") return { insert: denialInsert };
+    if (table === "event_history") return { insert: historyInsert };
     return { select: lookupSelect, update };
   });
 
-  return { from, update, clarificationInsert };
+  return { from, update, clarificationInsert, historyInsert };
 }
 
 describe("PATCH /api/events/:id", () => {
@@ -1056,9 +1058,9 @@ describe("PATCH /api/events/:id", () => {
     expect(res.status).toBe(403);
   });
 
-  it("only allows editing while clarification is outstanding", async () => {
+  it("blocks direct edits once the request has been approved (AC2)", async () => {
     const { from } = buildPatchSupabase({
-      event: { id: 1, status: "Requested", organiser_id: owner.id, submitted_details: {} },
+      event: { id: 1, status: "Planning", organiser_id: owner.id, submitted_details: {} },
     });
     const app = buildApp({ from }, owner);
 
@@ -1158,5 +1160,126 @@ describe("PATCH /api/events/:id", () => {
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ status: "Planning", status_before_clarification: null }),
     );
+  });
+
+  it("saves a direct edit from Requested immediately, with no status change or clarification post (E2-7 AC1)", async () => {
+    const oldDetails = { ...validPayload, venue: "Old Hall" };
+    const { from, update, clarificationInsert, historyInsert } = buildPatchSupabase({
+      event: { id: 1, status: "Requested", organiser_id: owner.id, submitted_details: oldDetails },
+      updatedEvent: { id: 1, status: "Requested", submitted_details: validPayload },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith({ submitted_details: expect.objectContaining({ venue: "Main Hall" }) });
+    expect(clarificationInsert).not.toHaveBeenCalled();
+    expect(historyInsert).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_id: 1,
+          field: "Venue",
+          old_value: "Old Hall",
+          new_value: "Main Hall",
+          changed_by: owner.id,
+        }),
+      ]),
+    );
+  });
+
+  it("allows a direct edit from Unassigned too (E2-7 AC1)", async () => {
+    const { from } = buildPatchSupabase({
+      event: { id: 1, status: "Unassigned", organiser_id: owner.id, submitted_details: validPayload },
+      updatedEvent: { id: 1, status: "Unassigned" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+  });
+
+  it("doesn't write history when a direct edit changes nothing", async () => {
+    const { from, historyInsert } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Requested",
+        organiser_id: owner.id,
+        submitted_details: { ...validPayload, registrationNeeded: false },
+      },
+      updatedEvent: { id: 1, status: "Requested" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(historyInsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/events/:id/history", () => {
+  const owner = { id: "ORG-0001", role: "organiser" };
+
+  function buildHistorySupabase(options: {
+    event: { id: number; status: string; organiser_id: string; coordinator_id: string | null } | null;
+    history?: unknown[];
+  }) {
+    const { event, history = [] } = options;
+
+    const eventMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+    const eventEq = vi.fn().mockReturnValue({ maybeSingle: eventMaybeSingle });
+    const eventSelect = vi.fn().mockReturnValue({ eq: eventEq });
+
+    const historyOrder = vi.fn().mockResolvedValue({ data: history, error: null });
+    const historyEq = vi.fn().mockReturnValue({ order: historyOrder });
+    const historySelect = vi.fn().mockReturnValue({ eq: historyEq });
+
+    const denialInsert = vi.fn().mockResolvedValue({ error: null });
+
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "event_history") return { select: historySelect };
+      if (table === "access_denials") return { insert: denialInsert };
+      return { select: eventSelect };
+    });
+
+    return { from };
+  }
+
+  it("returns the history for the owning organiser", async () => {
+    const { from } = buildHistorySupabase({
+      event: { id: 1, status: "Requested", organiser_id: owner.id, coordinator_id: null },
+      history: [{ id: 1, field: "Venue", old_value: "Old Hall", new_value: "Main Hall" }],
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).get("/api/events/1/history");
+
+    expect(res.status).toBe(200);
+    expect(res.body.history).toHaveLength(1);
+  });
+
+  it("denies access to a non-owner, non-coordinator", async () => {
+    const { from } = buildHistorySupabase({
+      event: { id: 1, status: "Requested", organiser_id: "ORG-0002", coordinator_id: null },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).get("/api/events/1/history");
+
+    expect(res.status).toBe(403);
+  });
+
+  it("is visible to any coordinator", async () => {
+    const { from } = buildHistorySupabase({
+      event: { id: 1, status: "Requested", organiser_id: owner.id, coordinator_id: null },
+      history: [],
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).get("/api/events/1/history");
+
+    expect(res.status).toBe(200);
   });
 });

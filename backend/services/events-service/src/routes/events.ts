@@ -5,7 +5,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { validateEventRequest } from "../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../lib/validation.js";
 import { assignCoordinator } from "../lib/coordinatorAssignment.js";
-import { diffSubmittedDetails } from "../lib/diffSubmittedDetails.js";
+import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
 
 async function recordAccessDenial(
   supabase: NonNullable<AuthedRequest["supabase"]>,
@@ -19,6 +19,34 @@ async function recordAccessDenial(
 
   if (error) {
     console.error("Failed to record access_denials row", { userId, eventId, reason, error });
+  }
+}
+
+/**
+ * E2-7 AC3: writes one event_history row per changed field. Best-effort —
+ * the submitted_details update above is what actually matters, so a
+ * failure here is logged, not fatal to the request.
+ */
+async function recordEventHistory(
+  supabase: NonNullable<AuthedRequest["supabase"]>,
+  eventId: number,
+  changes: { field: string; oldValue: string | null; newValue: string }[],
+  changedBy: string,
+): Promise<void> {
+  if (changes.length === 0) return;
+
+  const { error } = await supabase.from("event_history").insert(
+    changes.map((change) => ({
+      event_id: eventId,
+      field: change.field,
+      old_value: change.oldValue,
+      new_value: change.newValue,
+      changed_by: changedBy,
+    })),
+  );
+
+  if (error) {
+    console.error("Failed to record event_history rows", { eventId, changedBy, error });
   }
 }
 
@@ -207,8 +235,19 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  if (existing.status !== "Clarification Requested") {
-    res.status(409).json({ error: "This request isn't awaiting clarification" });
+  // E2-7 AC1/AC2: direct edits are allowed while still pending review
+  // (Requested/Unassigned) or, per E2-10, while responding to an
+  // outstanding clarification. Anything past that (Planning, Rejected,
+  // etc.) is blocked — there's no "raise a change request" flow built
+  // yet, so this is a block + message, not a real alternate workflow.
+  const isClarificationResponse = existing.status === "Clarification Requested";
+  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status);
+
+  if (!isClarificationResponse && !isDirectEdit) {
+    res.status(409).json({
+      error:
+        "This request has already been approved and can no longer be edited directly. Contact your coordinator to request a change.",
+    });
     return;
   }
 
@@ -218,18 +257,19 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  // Restores whatever status the event was in before this clarification
-  // was requested — "Requested" for the normal pre-approval case, but
-  // "Planning" if a coordinator asked a follow-up after already approving.
-  const restoredStatus = existing.status_before_clarification || "Requested";
+  // Clarification responses restore whatever status the event was in
+  // before the clarification was requested — "Requested" for the normal
+  // pre-approval case, but "Planning" if a coordinator asked a follow-up
+  // after already approving. Direct edits (AC1) don't change status at all.
+  const updatePayload: Record<string, unknown> = { submitted_details: result.value };
+  if (isClarificationResponse) {
+    updatePayload.status = existing.status_before_clarification || "Requested";
+    updatePayload.status_before_clarification = null;
+  }
 
   const { data, error } = await supabase
     .from("events")
-    .update({
-      submitted_details: result.value,
-      status: restoredStatus,
-      status_before_clarification: null,
-    })
+    .update(updatePayload)
     .eq("id", existing.id)
     .select(EVENT_COLUMNS)
     .single();
@@ -239,36 +279,69 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const diff = diffSubmittedDetails(
-    (existing.submitted_details ?? {}) as Record<string, unknown>,
-    result.value!,
+  const oldDetails = (existing.submitted_details ?? {}) as Record<string, unknown>;
+
+  await recordEventHistory(
+    supabase,
+    existing.id,
+    diffSubmittedDetailsStructured(oldDetails, result.value!),
+    user.id,
   );
 
-  if (diff) {
-    const { data: openQuestion } = await supabase
-      .from("event_clarifications")
-      .select("id")
-      .eq("event_id", existing.id)
-      .is("parent_id", null)
-      .eq("resolved", false)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  if (isClarificationResponse) {
+    const diff = diffSubmittedDetails(oldDetails, result.value!);
 
-    const { error: replyError } = await supabase.from("event_clarifications").insert({
-      event_id: existing.id,
-      parent_id: openQuestion?.id ?? null,
-      author_id: user.id,
-      author_role: "organiser",
-      message: diff,
-    });
+    if (diff) {
+      const { data: openQuestion } = await supabase
+        .from("event_clarifications")
+        .select("id")
+        .eq("event_id", existing.id)
+        .is("parent_id", null)
+        .eq("resolved", false)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    if (replyError) {
-      console.error("Failed to record clarification response reply", { eventId: existing.id, error: replyError });
+      const { error: replyError } = await supabase.from("event_clarifications").insert({
+        event_id: existing.id,
+        parent_id: openQuestion?.id ?? null,
+        author_id: user.id,
+        author_role: "organiser",
+        message: diff,
+      });
+
+      if (replyError) {
+        console.error("Failed to record clarification response reply", { eventId: existing.id, error: replyError });
+      }
     }
   }
 
   res.json({ event: data });
+});
+
+/**
+ * E2-7 AC3: the structured edit history for this event, chronological.
+ * Same visibility rule as the clarification thread: owning organiser or
+ * any coordinator.
+ */
+eventsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await loadEventForClarification(req, res, eventId);
+  if (!event) return;
+
+  const { supabase } = req as Required<Pick<AuthedRequest, "supabase">>;
+  const { data, error } = await supabase
+    .from("event_history")
+    .select("id, field, old_value, new_value, changed_by, changed_by_user:changed_by(name), changed_at")
+    .eq("event_id", event.id)
+    .order("changed_at", { ascending: true });
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load event history" });
+    return;
+  }
+
+  res.json({ history: data ?? [] });
 });
 
 /**

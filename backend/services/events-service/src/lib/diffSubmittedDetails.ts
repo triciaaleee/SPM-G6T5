@@ -46,3 +46,37 @@ export function diffSubmittedDetails(
 
   return lines.length > 0 ? lines.join("\n") : null;
 }
+
+export interface FieldChange {
+  field: string;
+  oldValue: string | null;
+  newValue: string;
+}
+
+/**
+ * E2-7 AC3: the same field-by-field comparison as diffSubmittedDetails,
+ * but returning structured { field, oldValue, newValue } rows instead of
+ * a human-readable string — feeds the event_history audit table, which
+ * needs the field name as its own column, not embedded in prose.
+ */
+export function diffSubmittedDetailsStructured(
+  oldDetails: Partial<ValidatedEventRequest>,
+  newDetails: ValidatedEventRequest,
+): FieldChange[] {
+  const changes: FieldChange[] = [];
+
+  for (const key of Object.keys(FIELD_LABELS) as (keyof ValidatedEventRequest)[]) {
+    const oldValue = oldDetails[key];
+    const newValue = newDetails[key];
+
+    if (oldValue === newValue) continue;
+
+    changes.push({
+      field: FIELD_LABELS[key],
+      oldValue: oldValue === undefined || oldValue === null ? null : formatValue(oldValue),
+      newValue: formatValue(newValue),
+    });
+  }
+
+  return changes;
+}

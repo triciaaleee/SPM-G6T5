@@ -105,9 +105,13 @@ export async function submitEventRequest(payload: EventRequestPayload): Promise<
 }
 
 /**
- * E2-10: the owning organiser edits event details while clarification is
- * outstanding. The edit itself is posted as a reply in the clarification
- * thread server-side — no separate message to send here.
+ * The owning organiser edits event details — either responding to an
+ * outstanding clarification (E2-10: the edit is posted as a reply in the
+ * clarification thread server-side, no separate message needed here), or
+ * a direct edit while still pending review (E2-7: saves immediately, no
+ * status change). The backend decides which behavior applies based on the
+ * event's current status; this call is identical either way. Both cases
+ * record structured field-level changes in the event's edit history.
  */
 export async function updateEventDetails(id: number, payload: EventRequestPayload): Promise<EventSummary> {
   const res = await fetch(`${apiBase}/${id}`, {
@@ -128,6 +132,26 @@ export async function updateEventDetails(id: number, payload: EventRequestPayloa
   }
 
   return body.event as EventSummary;
+}
+
+export interface EventHistoryEntry {
+  id: number;
+  field: string;
+  old_value: string | null;
+  new_value: string;
+  changed_by: string;
+  /** The editor's display name, embedded via the FK on changed_by. */
+  changed_by_user: { name: string } | null;
+  changed_at: string;
+}
+
+/** E2-7 AC3: the structured edit history for an event, chronological. */
+export async function fetchEventHistory(id: number): Promise<EventHistoryEntry[]> {
+  const res = await fetch(`${apiBase}/${id}/history`, { headers: await authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) throw new Error("Failed to load event history");
+  const body = await res.json();
+  return body.history as EventHistoryEntry[];
 }
 
 export class NotFoundError extends Error {}
