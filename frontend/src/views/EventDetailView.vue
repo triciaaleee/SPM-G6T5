@@ -170,22 +170,30 @@ const canRespondToClarification = computed(
   () => !isCoordinator.value && event.value?.status === "Clarification Requested",
 );
 /** E2-7 AC1: the owning organiser can edit directly while still pending
- * review, before any coordinator has acted — no clarification thread
- * involved. Same "if they can see it, they're the owner" reasoning as
- * canRespondToClarification above. */
+ * review or still in Planning — per AGENTS.md §3 the lifecycle only truly
+ * locks down once Confirmed, so Planning stays editable. Same "if they can
+ * see it, they're the owner" reasoning as canRespondToClarification above. */
 const canEditDirectly = computed(
   () =>
     !isCoordinator.value &&
-    (event.value?.status === "Requested" || event.value?.status === "Unassigned"),
+    (event.value?.status === "Requested" ||
+      event.value?.status === "Unassigned" ||
+      event.value?.status === "Planning"),
 );
-/** AC2: once approved (or otherwise past pending-review/clarification),
- * editing is blocked — shown as a message rather than a real "change
- * request" flow, which doesn't exist yet. */
+/** AC2: once Confirmed (or otherwise past pending-review/Planning/
+ * clarification), editing is blocked — shown as a message rather than a
+ * real "change request" flow, which doesn't exist yet. */
 const editBlockedMessage = computed(() => {
   if (isCoordinator.value || !event.value) return null;
   const status = event.value.status;
-  if (status === "Requested" || status === "Unassigned" || status === "Clarification Requested") return null;
-  return "This request has already been approved and can no longer be edited directly. Contact your coordinator to request a change.";
+  if (
+    status === "Requested" ||
+    status === "Unassigned" ||
+    status === "Planning" ||
+    status === "Clarification Requested"
+  )
+    return null;
+  return "This request has already been confirmed and can no longer be edited directly. Contact your coordinator to request a change.";
 });
 const isEditingDetails = ref(false);
 const editForm = reactive<EventRequestPayload>({
