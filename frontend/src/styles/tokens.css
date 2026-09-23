@@ -57,6 +57,7 @@
   --font-family-lato: "Lato", sans-serif;
 
   /* Spacing (4px base unit) */
+  --spacing-2: 2px;
   --spacing-4: 4px;
   --spacing-8: 8px;
   --spacing-12: 12px;
@@ -84,4 +85,7 @@
   --ring-brand: #701EC2;
   --ring-light: rgba(112, 30, 194, 0.24);
   --ring-error: #FFE3E0;
+
+  /* Elevation (Style.md Section 8.1) */
+  --shadow-popover: 0 8px 24px rgba(34, 34, 34, 0.12);
 }

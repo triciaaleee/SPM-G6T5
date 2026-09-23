@@ -2,6 +2,7 @@ import "./lib/env.js";
 import cors from "cors";
 import express from "express";
 import { eventsRouter } from "./routes/events.js";
+import { venuesRouter } from "./routes/venues.js";
 
 /**
  * Fail loudly at boot instead of at the first login. A missing JWT_SECRET
@@ -25,6 +26,7 @@ app.use(cors());
 app.use(express.json());
 
 app.use("/api/events", eventsRouter);
+app.use("/api/venues", venuesRouter);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });

@@ -75,6 +75,10 @@ onMounted(async () => {
           class="shrink-0 rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700">
           New event request
         </RouterLink>
+        <RouterLink v-else :to="{ name: 'venue-search' }"
+          class="shrink-0 rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700">
+          Find venues
+        </RouterLink>
       </div>
 
       <p v-if="loading" class="body-default muted">Loading events…</p>

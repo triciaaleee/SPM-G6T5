@@ -534,6 +534,16 @@ Grid systems define column structure, gutters, and margins across breakpoints. A
 
 > **Note:** Section 8.1 (likely Shadows/Elevation, referenced as an "Effects" token collection in Section 1) appears to be missing from this adaptation — only 9.2 survived. Flagging so it can be re-added rather than guessed at.
 
+### 8.1 Elevation (partial)
+
+Only the token below has been defined so far; add others here as they're needed rather than inlining shadows.
+
+| Token | Value | Use |
+|-------|-------|-----|
+| `shadow-popover` | `0 8px 24px` `Grey/900` (`#222222`) at 12% opacity | Floating surfaces anchored to a trigger — dropdowns, filter popovers, menus |
+
+**AVOID:** Using `shadow-popover` on in-flow cards — cards separate with `Grey/100` borders and `Grey/50` fills instead.
+
 ### 8.2 Focus Ring
 
 Use focus ring styles to provide a visible keyboard-focus indicator on all interactive elements. Form inputs and selects use a two-layer focus treatment: an inner border plus an outer glow. Other interactive elements (buttons, links) use a single ring only.

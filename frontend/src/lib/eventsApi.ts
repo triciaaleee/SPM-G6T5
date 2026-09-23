@@ -17,7 +17,7 @@ export interface EventSummary {
 
 const apiBase = import.meta.env.VITE_EVENTS_API_URL as string;
 
-function authHeader(): HeadersInit {
+export function authHeader(): HeadersInit {
   const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
@@ -33,7 +33,7 @@ export class SessionExpiredError extends Error {}
  *
  * Callers should invoke this before interpreting any non-OK response.
  */
-async function redirectIfUnauthenticated(res: Response): Promise<void> {
+export async function redirectIfUnauthenticated(res: Response): Promise<void> {
   if (res.status !== 401) return;
 
   clearSession();

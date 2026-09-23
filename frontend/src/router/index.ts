@@ -4,6 +4,7 @@ import EventDetailView from "../views/EventDetailView.vue";
 import NewEventRequestView from "../views/NewEventRequestView.vue";
 import LoginView from "../views/LoginView.vue";
 import SignupView from "../views/SignupView.vue";
+import VenueSearchView from "../views/VenueSearchView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
 
 export const router = createRouter({
@@ -23,6 +24,12 @@ export const router = createRouter({
       name: "event-detail",
       component: EventDetailView,
       meta: { requiresAuth: true },
+    },
+    {
+      path: "/venues",
+      name: "venue-search",
+      component: VenueSearchView,
+      meta: { requiresAuth: true, roles: ["coordinator"] },
     },
   ],
 });
@@ -45,6 +52,14 @@ router.beforeEach((to) => {
   // send them to their role's landing view instead of showing a form that
   // would only re-authenticate them as the same person.
   if (authed && (to.name === "login" || to.name === "signup")) {
+    return { name: landingRouteForRole(getStoredUser()?.role) };
+  }
+
+  // Role-restricted screens (e.g. coordinator-only venue search). The
+  // backend enforces the same rule; this just keeps other roles from
+  // landing on a page whose every request would 403.
+  const roles = to.meta.roles as string[] | undefined;
+  if (authed && roles && !roles.includes(getStoredUser()?.role ?? "")) {
     return { name: landingRouteForRole(getStoredUser()?.role) };
   }
 

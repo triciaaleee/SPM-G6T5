@@ -608,6 +608,17 @@ onMounted(async () => {
                   </p>
                 </div>
               </div>
+
+              <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
+              <div v-if="isCoordinator && event.status !== 'Rejected'" class="venue-search-entry">
+                <h3 class="text-lg font-semibold text-[--color-grey-900]">Venue</h3>
+                <p class="body-small muted">
+                  Shortlist venues that are free at this event's date and time and can fit its expected attendance.
+                </p>
+                <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
+                  Find venues
+                </RouterLink>
+              </div>
             </div>
 
             <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
@@ -966,6 +977,29 @@ onMounted(async () => {
 
 .btn-reject-outline:not(:disabled):hover {
   background: var(--color-error-200);
+}
+
+.venue-search-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+  margin-top: var(--spacing-24);
+  padding-top: var(--spacing-24);
+  border-top: 1px solid var(--color-grey-100);
+}
+
+/* Style.md 3.4 outline button — the solid slot in this card belongs to Approve. */
+.btn-venue-search {
+  display: block;
+  text-align: center;
+  background: transparent;
+  color: var(--color-purple-600);
+  border-color: var(--color-purple-300);
+}
+
+.btn-venue-search:hover {
+  background: var(--color-purple-100);
+  color: var(--color-purple-700);
 }
 
 .btn-secondary {
