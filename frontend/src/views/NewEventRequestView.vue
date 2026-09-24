@@ -1,7 +1,18 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
-import { RouterLink } from "vue-router";
-import { submitEventRequest, ValidationError, type EventRequestPayload } from "../lib/eventsApi";
+import { onMounted, reactive, ref } from "vue";
+import { RouterLink, useRoute, useRouter } from "vue-router";
+import {
+  fetchEventById,
+  saveDraft,
+  submitEventRequest,
+  updateDraft,
+  updateEventDetails,
+  ValidationError,
+  type EventRequestPayload,
+} from "../lib/eventsApi";
+
+const route = useRoute();
+const router = useRouter();
 
 const form = reactive<EventRequestPayload>({
   name: "",
@@ -23,13 +34,24 @@ const generalError = ref<string | null>(null);
 const submitting = ref(false);
 const submittedEventId = ref<number | null>(null);
 
+// E2-4 AC2: when reached via /events/:id/edit, this holds the draft's id so
+// Save/Submit act on it instead of creating a new event.
+const draftId = ref<number | null>(null);
+const loadingDraft = ref(false);
+const loadError = ref<string | null>(null);
+const savingDraft = ref(false);
+
 async function handleSubmit() {
   generalError.value = null;
   fieldErrors.value = {};
   submitting.value = true;
 
   try {
-    const event = await submitEventRequest(form);
+    // E2-4 AC3: submitting a draft validates it against the E2-1 rules and
+    // moves it to Requested, via the same PATCH used for editing a live request.
+    const event = draftId.value
+      ? await updateEventDetails(draftId.value, form)
+      : await submitEventRequest(form);
     submittedEventId.value = event.id;
   } catch (err) {
     if (err instanceof ValidationError) {
@@ -41,6 +63,64 @@ async function handleSubmit() {
     submitting.value = false;
   }
 }
+
+/** E2-4 AC1: save progress as a draft, skipping mandatory-field validation. */
+async function handleSaveDraft() {
+  generalError.value = null;
+  fieldErrors.value = {};
+  savingDraft.value = true;
+
+  try {
+    if (draftId.value) {
+      await updateDraft(draftId.value, form);
+    } else {
+      const event = await saveDraft(form);
+      draftId.value = event.id;
+    }
+    router.push({ name: "events-list" });
+  } catch {
+    generalError.value = "We couldn't save your draft. Please try again.";
+  } finally {
+    savingDraft.value = false;
+  }
+}
+
+onMounted(async () => {
+  const id = route.params.id as string | undefined;
+  if (!id) return;
+
+  loadingDraft.value = true;
+  try {
+    const event = await fetchEventById(id);
+    if (event.status !== "Draft") {
+      // Already submitted (or otherwise no longer a draft) — the read-mostly
+      // detail page is the right place for it, not this form.
+      await router.replace({ name: "event-detail", params: { id: event.id } });
+      return;
+    }
+
+    draftId.value = event.id;
+    const details = event.submitted_details as Partial<EventRequestPayload>;
+    Object.assign(form, {
+      name: details.name ?? "",
+      purpose: details.purpose ?? "",
+      description: details.description ?? "",
+      proposedDate: details.proposedDate ?? "",
+      startTime: details.startTime ?? "",
+      endTime: details.endTime ?? "",
+      expectedAttendance: details.expectedAttendance ?? "",
+      venue: details.venue ?? "",
+      accessibility: details.accessibility ?? "",
+      equipment: details.equipment ?? "",
+      technicalSupport: details.technicalSupport ?? "",
+      registrationNeeded: details.registrationNeeded ?? false,
+    });
+  } catch {
+    loadError.value = "We couldn't load this draft. Please try again.";
+  } finally {
+    loadingDraft.value = false;
+  }
+});
 </script>
 
 <template>
@@ -50,7 +130,11 @@ async function handleSubmit() {
         Back to my events
       </RouterLink>
 
-      <div v-if="submittedEventId" class="rounded-lg border border-grey-100 bg-grey-50 p-8">
+      <p v-if="loadingDraft" class="text-lg text-grey-500">Loading draft…</p>
+
+      <p v-else-if="loadError" class="mt-4 text-sm text-error-600">{{ loadError }}</p>
+
+      <div v-else-if="submittedEventId" class="rounded-lg border border-grey-100 bg-grey-50 p-8">
         <p class="text-2xl font-bold text-grey-900">Request submitted</p>
         <p class="mt-2 text-grey-500">
           Your event request has been created with status <span class="font-bold text-grey-700">Requested</span>.
@@ -68,7 +152,9 @@ async function handleSubmit() {
       </div>
 
       <form v-else class="rounded-lg border border-grey-100 bg-grey-50 p-8" @submit.prevent="handleSubmit">
-        <h1 class="text-3xl font-bold leading-tight text-grey-900">Submit an event request</h1>
+        <h1 class="text-3xl font-bold leading-tight text-grey-900">
+          {{ draftId ? "Edit draft" : "Submit an event request" }}
+        </h1>
         <p class="mt-2 text-lg text-grey-500">
           Tell us about your event so ConnectSphere can plan it.
         </p>
@@ -278,13 +364,24 @@ async function handleSubmit() {
           </div>
         </div>
 
-        <button
-          type="submit"
-          :disabled="submitting"
-          class="mt-8 rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-grey-200 disabled:text-grey-400"
-        >
-          {{ submitting ? "Submitting…" : "Submit request" }}
-        </button>
+        <div class="mt-8 flex gap-4">
+          <button
+            type="button"
+            :disabled="submitting || savingDraft"
+            class="rounded-xs border border-purple-600 px-6 py-3 text-sm font-bold text-purple-600 hover:bg-purple-100 disabled:cursor-not-allowed disabled:border-grey-200 disabled:text-grey-400"
+            @click="handleSaveDraft"
+          >
+            {{ savingDraft ? "Saving…" : "Save as Draft" }}
+          </button>
+
+          <button
+            type="submit"
+            :disabled="submitting || savingDraft"
+            class="rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-grey-200 disabled:text-grey-400"
+          >
+            {{ submitting ? "Submitting…" : "Submit request" }}
+          </button>
+        </div>
       </form>
     </div>
   </div>

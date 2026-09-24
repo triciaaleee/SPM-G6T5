@@ -20,6 +20,13 @@ export const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      // E2-4 AC2: resume editing a saved draft, reusing the same form.
+      path: "/events/:id/edit",
+      name: "edit-draft",
+      component: NewEventRequestView,
+      meta: { requiresAuth: true },
+    },
+    {
       path: "/events/:id",
       name: "event-detail",
       component: EventDetailView,

@@ -105,6 +105,56 @@ export async function submitEventRequest(payload: EventRequestPayload): Promise<
 }
 
 /**
+ * E2-4 AC1: save a new draft. No client-side validation — the backend
+ * accepts a partial payload and stores it with status `Draft`.
+ */
+export async function saveDraft(payload: EventRequestPayload): Promise<EventSummary> {
+  const res = await fetch(`${apiBase}/draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify(payload),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? "Failed to save draft");
+  return body.event as EventSummary;
+}
+
+/** E2-4 AC1/AC2: save progress on a draft already created via saveDraft. */
+export async function updateDraft(id: number, payload: EventRequestPayload): Promise<EventSummary> {
+  const res = await fetch(`${apiBase}/${id}/draft`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify(payload),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? "Failed to save draft");
+  return body.event as EventSummary;
+}
+
+/** E2-5.2 AC1: permanently delete a draft. The backend responds 204 with
+ * no body on success, so unlike the other draft calls there's nothing to
+ * parse unless the request failed. */
+export async function deleteDraft(id: number): Promise<void> {
+  const res = await fetch(`${apiBase}/${id}/draft`, {
+    method: "DELETE",
+    headers: await authHeader(),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  if (!res.ok) {
+    const body = await res.json();
+    throw new Error(body.error ?? "Failed to delete draft");
+  }
+}
+
+/**
  * The owning organiser edits event details — either responding to an
  * outstanding clarification (E2-10: the edit is posted as a reply in the
  * clarification thread server-side, no separate message needed here), or

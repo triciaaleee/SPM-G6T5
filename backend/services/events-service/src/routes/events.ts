@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
-import { validateEventRequest } from "../lib/validateEventRequest.js";
+import { normaliseDraftEventRequest, validateEventRequest } from "../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../lib/validation.js";
 import { assignCoordinator } from "../lib/coordinatorAssignment.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
@@ -119,10 +119,150 @@ eventsRouter.post("/", async (req: AuthedRequest, res) => {
 });
 
 /**
- * List events. Coordinators get full pipeline visibility (all events);
- * everyone else sees only events they organised. Since the service-role
- * client bypasses RLS, this filter is the actual enforcement, not just
- * defense-in-depth.
+ * E2-4 AC1: save a new draft. Skips E2-1's validation entirely — a draft
+ * may be missing any or all of its mandatory fields — and never assigns a
+ * coordinator, since a draft hasn't reached the review pipeline yet.
+ */
+eventsRouter.post("/draft", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .insert({
+      organiser_id: user.id,
+      status: "Draft",
+      submitted_details: normaliseDraftEventRequest(req.body ?? {}),
+    })
+    .select(EVENT_COLUMNS)
+    .single();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to save draft" });
+    return;
+  }
+
+  res.status(201).json({ event: data });
+});
+
+/**
+ * E2-4 AC1/AC2: save progress on an existing draft without submitting it —
+ * same relaxed validation as creating one. Only the owning organiser may
+ * update it, and only while it's still a draft (once submitted, further
+ * changes go through the normal PATCH /:id edit rules instead).
+ */
+eventsRouter.patch("/:id/draft", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const { data: existing, error: fetchError } = await supabase
+    .from("events")
+    .select("id, status, organiser_id")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (fetchError) {
+    res.status(500).json({ error: "Failed to load draft" });
+    return;
+  }
+
+  if (!existing || existing.organiser_id !== user.id) {
+    await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  if (existing.status !== "Draft") {
+    res.status(409).json({ error: "This request is no longer a draft" });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .update({ submitted_details: normaliseDraftEventRequest(req.body ?? {}) })
+    .eq("id", existing.id)
+    .select(EVENT_COLUMNS)
+    .single();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to save draft" });
+    return;
+  }
+
+  res.json({ event: data });
+});
+
+/**
+ * E2-5.2 AC1: delete a draft. Same ownership/status guard as the draft
+ * PATCH above — only the owning organiser, and only while it's still a
+ * draft (a submitted request isn't deletable through this route).
+ */
+eventsRouter.delete("/:id/draft", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const { data: existing, error: fetchError } = await supabase
+    .from("events")
+    .select("id, status, organiser_id")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (fetchError) {
+    res.status(500).json({ error: "Failed to load draft" });
+    return;
+  }
+
+  if (!existing || existing.organiser_id !== user.id) {
+    await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  if (existing.status !== "Draft") {
+    res.status(409).json({ error: "This request is no longer a draft" });
+    return;
+  }
+
+  const { error } = await supabase.from("events").delete().eq("id", existing.id);
+
+  if (error) {
+    res.status(500).json({ error: "Failed to delete draft" });
+    return;
+  }
+
+  res.status(204).send();
+});
+
+/**
+ * List events. Coordinators get full pipeline visibility (all events) but
+ * never see drafts — a draft hasn't been submitted, so it's not yet part
+ * of the review pipeline (E2-5.1 AC2). Everyone else sees only events they
+ * organised, drafts included (E2-5.1 AC1 relies on the Organiser's own
+ * list containing both). Since the service-role client bypasses RLS, this
+ * filter is the actual enforcement, not just defense-in-depth.
  */
 eventsRouter.get("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -135,6 +275,8 @@ eventsRouter.get("/", async (req: AuthedRequest, res) => {
 
   if (user.role !== "coordinator") {
     query = query.eq("organiser_id", user.id);
+  } else {
+    query = query.neq("status", "Draft");
   }
 
   const { data, error } = await query;
@@ -242,8 +384,11 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // yet, so this is a block + message, not a real alternate workflow.
   const isClarificationResponse = existing.status === "Clarification Requested";
   const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status);
+  // E2-4 AC3: editing a draft here means submitting it — same E2-1
+  // validation as a fresh request, and the same auto-assignment as POST /.
+  const isDraftSubmit = existing.status === "Draft";
 
-  if (!isClarificationResponse && !isDirectEdit) {
+  if (!isClarificationResponse && !isDirectEdit && !isDraftSubmit) {
     res.status(409).json({
       error:
         "This request has already been approved and can no longer be edited directly. Contact your coordinator to request a change.",
@@ -265,6 +410,10 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   if (isClarificationResponse) {
     updatePayload.status = existing.status_before_clarification || "Requested";
     updatePayload.status_before_clarification = null;
+  } else if (isDraftSubmit) {
+    const coordinatorId = await assignCoordinator(supabase);
+    updatePayload.status = coordinatorId ? "Requested" : "Unassigned";
+    updatePayload.coordinator_id = coordinatorId;
   }
 
   const { data, error } = await supabase

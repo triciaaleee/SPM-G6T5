@@ -152,3 +152,48 @@ export function validateEventRequest(input: EventRequestInput): ValidationResult
     },
   };
 }
+
+export interface DraftEventRequest {
+  name: string;
+  purpose: string;
+  description: string;
+  proposedDate: string;
+  startTime: string;
+  endTime: string;
+  expectedAttendance: number | null;
+  venue: string;
+  accessibility: string;
+  equipment: string;
+  technicalSupport: string;
+  registrationNeeded: boolean;
+}
+
+function toTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * E2-4 AC1: normalises a draft payload without enforcing any of
+ * validateEventRequest's mandatory-field/format rules — a draft is
+ * explicitly allowed to be incomplete. Values are coerced the same way a
+ * real submission's are, so the eventual E2-1 validation on submit (AC3)
+ * sees consistent data either way.
+ */
+export function normaliseDraftEventRequest(input: EventRequestInput): DraftEventRequest {
+  const attendance = Number(input.expectedAttendance);
+
+  return {
+    name: toTrimmedString(input.name),
+    purpose: toTrimmedString(input.purpose),
+    description: toTrimmedString(input.description),
+    proposedDate: toTrimmedString(input.proposedDate),
+    startTime: toTrimmedString(input.startTime),
+    endTime: toTrimmedString(input.endTime),
+    expectedAttendance: isBlank(input.expectedAttendance) || !Number.isFinite(attendance) ? null : attendance,
+    venue: toTrimmedString(input.venue),
+    accessibility: toTrimmedString(input.accessibility),
+    equipment: toTrimmedString(input.equipment),
+    technicalSupport: toTrimmedString(input.technicalSupport),
+    registrationNeeded: input.registrationNeeded === true || input.registrationNeeded === "true",
+  };
+}
