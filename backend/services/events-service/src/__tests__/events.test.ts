@@ -146,13 +146,13 @@ describe("GET /api/events", () => {
   });
 
   it("returns all events for a coordinator without filtering by organiser (E1-4.1)", async () => {
-    const allEvents = [
+    const nonDraftEvents = [
       { id: 1, status: "Requested", organiser_id: "user-1" },
       { id: 2, status: "Planning", organiser_id: "user-2" },
     ];
     const eq = vi.fn();
-    const selectResult = Object.assign(Promise.resolve({ data: allEvents, error: null }), { eq });
-    const select = vi.fn().mockReturnValue(selectResult);
+    const neq = vi.fn().mockResolvedValue({ data: nonDraftEvents, error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
     const from = vi.fn().mockReturnValue({ select });
 
     const app = buildApp({ from }, coordinator);
@@ -161,6 +161,35 @@ describe("GET /api/events", () => {
     expect(res.status).toBe(200);
     expect(res.body.events).toHaveLength(2);
     expect(eq).not.toHaveBeenCalledWith("organiser_id", expect.anything());
+  });
+
+  it("excludes drafts from a coordinator's list (E2-5.1 AC2)", async () => {
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: [], error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(neq).toHaveBeenCalledWith("status", "Draft");
+  });
+
+  it("does not exclude drafts from an organiser's own list (E2-5.1 AC1)", async () => {
+    const eq = vi.fn().mockResolvedValue({
+      data: [{ id: "d1", status: "Draft" }],
+      error: null,
+    });
+    const select = vi.fn().mockReturnValue({ eq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from });
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(1);
+    expect(res.body.events[0].status).toBe("Draft");
   });
 });
 
@@ -1038,6 +1067,285 @@ function buildPatchSupabase(options: {
 
   return { from, update, clarificationInsert, historyInsert };
 }
+
+describe("POST /api/events/draft", () => {
+  it("saves an incomplete draft without validating mandatory fields (E2-4 AC1)", async () => {
+    const insertSingle = vi.fn().mockResolvedValue({
+      data: { id: "d1", status: "Draft", submitted_details: { name: "Half-planned mixer" } },
+      error: null,
+    });
+    const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
+    const insert = vi.fn().mockReturnValue({ select: insertSelect });
+    const from = vi.fn().mockReturnValue({ insert });
+
+    const app = buildApp({ from });
+    const res = await request(app).post("/api/events/draft").send({ name: "Half-planned mixer" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.event.status).toBe("Draft");
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organiser_id: "user-1",
+        status: "Draft",
+        submitted_details: expect.objectContaining({ name: "Half-planned mixer", venue: "" }),
+      }),
+    );
+    // A draft hasn't reached the review pipeline yet — no coordinator lookup.
+    expect(from).not.toHaveBeenCalledWith("users");
+  });
+
+  it("saves a completely empty draft", async () => {
+    const insertSingle = vi.fn().mockResolvedValue({ data: { id: "d2", status: "Draft" }, error: null });
+    const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
+    const insert = vi.fn().mockReturnValue({ select: insertSelect });
+    const from = vi.fn().mockReturnValue({ insert });
+
+    const app = buildApp({ from });
+    const res = await request(app).post("/api/events/draft").send({});
+
+    expect(res.status).toBe(201);
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "Draft",
+        submitted_details: expect.objectContaining({ name: "", expectedAttendance: null }),
+      }),
+    );
+  });
+});
+
+/** Builds a mock supabase client for PATCH /api/events/:id/draft: a lookup
+ * on "events" (id/status/organiser_id) plus the update().eq().select().single(). */
+function buildDraftPatchSupabase(options: {
+  event: { id: number; status: string; organiser_id: string } | null;
+  updatedEvent?: Record<string, unknown>;
+}) {
+  const { event, updatedEvent } = options;
+
+  const lookupMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+  const lookupEq = vi.fn().mockReturnValue({ maybeSingle: lookupMaybeSingle });
+  const lookupSelect = vi.fn().mockReturnValue({ eq: lookupEq });
+
+  const updateSingle = vi.fn().mockResolvedValue({ data: updatedEvent ?? null, error: null });
+  const updateSelect = vi.fn().mockReturnValue({ single: updateSingle });
+  const updateEq = vi.fn().mockReturnValue({ select: updateSelect });
+  const update = vi.fn().mockReturnValue({ eq: updateEq });
+
+  const denialInsert = vi.fn().mockResolvedValue({ error: null });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "access_denials") return { insert: denialInsert };
+    return { select: lookupSelect, update };
+  });
+
+  return { from, update, denialInsert };
+}
+
+describe("PATCH /api/events/:id/draft", () => {
+  const owner = { id: "ORG-0001", role: "organiser" };
+
+  it("saves progress on an owned draft without validating it (E2-4 AC1/AC2)", async () => {
+    const { from, update } = buildDraftPatchSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id },
+      updatedEvent: { id: 1, status: "Draft" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1/draft").send({ name: "Still deciding" });
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith({
+      submitted_details: expect.objectContaining({ name: "Still deciding", venue: "" }),
+    });
+  });
+
+  it("denies a non-owner", async () => {
+    const { from, denialInsert } = buildDraftPatchSupabase({
+      event: { id: 1, status: "Draft", organiser_id: "someone-else" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1/draft").send({ name: "Snooping" });
+
+    expect(res.status).toBe(403);
+    expect(denialInsert).toHaveBeenCalled();
+  });
+
+  it("refuses to touch a request that's already been submitted", async () => {
+    const { from } = buildDraftPatchSupabase({
+      event: { id: 1, status: "Requested", organiser_id: owner.id },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1/draft").send({ name: "Too late" });
+
+    expect(res.status).toBe(409);
+  });
+});
+
+/** Builds a mock supabase client for DELETE /api/events/:id/draft: a lookup
+ * on "events" (id/status/organiser_id) plus delete().eq(). */
+function buildDraftDeleteSupabase(options: {
+  event: { id: number; status: string; organiser_id: string } | null;
+  deleteError?: { message: string } | null;
+}) {
+  const { event, deleteError = null } = options;
+
+  const lookupMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+  const lookupEq = vi.fn().mockReturnValue({ maybeSingle: lookupMaybeSingle });
+  const lookupSelect = vi.fn().mockReturnValue({ eq: lookupEq });
+
+  const deleteEq = vi.fn().mockResolvedValue({ error: deleteError });
+  const del = vi.fn().mockReturnValue({ eq: deleteEq });
+
+  const denialInsert = vi.fn().mockResolvedValue({ error: null });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "access_denials") return { insert: denialInsert };
+    return { select: lookupSelect, delete: del };
+  });
+
+  return { from, delete: del, deleteEq, denialInsert };
+}
+
+describe("DELETE /api/events/:id/draft", () => {
+  const owner = { id: "ORG-0001", role: "organiser" };
+
+  it("deletes an owned draft (E2-5.2 AC1)", async () => {
+    const { from, delete: del, deleteEq } = buildDraftDeleteSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).delete("/api/events/1/draft");
+
+    expect(res.status).toBe(204);
+    expect(del).toHaveBeenCalled();
+    expect(deleteEq).toHaveBeenCalledWith("id", 1);
+  });
+
+  it("denies a non-owner", async () => {
+    const { from, denialInsert } = buildDraftDeleteSupabase({
+      event: { id: 1, status: "Draft", organiser_id: "someone-else" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).delete("/api/events/1/draft");
+
+    expect(res.status).toBe(403);
+    expect(denialInsert).toHaveBeenCalled();
+  });
+
+  it("refuses to delete a request that's already been submitted", async () => {
+    const { from } = buildDraftDeleteSupabase({
+      event: { id: 1, status: "Requested", organiser_id: owner.id },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).delete("/api/events/1/draft");
+
+    expect(res.status).toBe(409);
+  });
+
+  it("denies access to a non-existent draft", async () => {
+    const { from } = buildDraftDeleteSupabase({ event: null });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).delete("/api/events/999/draft");
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("PATCH /api/events/:id (submitting a draft)", () => {
+  const owner = { id: "ORG-0001", role: "organiser" };
+
+  /** Extends buildPatchSupabase's "events" mock with the two lookups
+   * assignCoordinator makes, so a Draft's submit-and-assign path can be
+   * exercised the same way POST /'s buildSubmitSupabase does. */
+  function buildDraftSubmitSupabase(options: {
+    event: { id: number; status: string; organiser_id: string; submitted_details: Record<string, unknown> };
+    coordinators?: string[];
+    updatedEvent?: Record<string, unknown>;
+  }) {
+    const { event, coordinators = [], updatedEvent } = options;
+
+    const lookupMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+    const lookupEq = vi.fn().mockReturnValue({ maybeSingle: lookupMaybeSingle });
+
+    const lastAssignedMaybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+    const lastAssignedLimit = vi.fn().mockReturnValue({ maybeSingle: lastAssignedMaybeSingle });
+    const lastAssignedOrder = vi.fn().mockReturnValue({ limit: lastAssignedLimit });
+    const lastAssignedNot = vi.fn().mockReturnValue({ order: lastAssignedOrder });
+
+    const eventsSelect = vi.fn().mockImplementation((columns: string) => {
+      if (columns.startsWith("coordinator_id")) return { not: lastAssignedNot };
+      return { eq: lookupEq };
+    });
+
+    const usersOrder = vi.fn().mockResolvedValue({ data: coordinators.map((id) => ({ id })), error: null });
+    const usersEq = vi.fn().mockReturnValue({ order: usersOrder });
+    const usersSelect = vi.fn().mockReturnValue({ eq: usersEq });
+
+    const updateSingle = vi.fn().mockResolvedValue({ data: updatedEvent ?? null, error: null });
+    const updateSelect = vi.fn().mockReturnValue({ single: updateSingle });
+    const updateEq = vi.fn().mockReturnValue({ select: updateSelect });
+    const update = vi.fn().mockReturnValue({ eq: updateEq });
+
+    const historyInsert = vi.fn().mockResolvedValue({ error: null });
+
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "users") return { select: usersSelect };
+      if (table === "event_history") return { insert: historyInsert };
+      return { select: eventsSelect, update };
+    });
+
+    return { from, update };
+  }
+
+  it("still enforces E2-1 validation when submitting a draft (AC3)", async () => {
+    const { from } = buildDraftSubmitSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id, submitted_details: {} },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("assigns a coordinator and moves a valid draft to Requested (AC3)", async () => {
+    const { from, update } = buildDraftSubmitSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id, submitted_details: {} },
+      coordinators: ["COORD-0001"],
+      updatedEvent: { id: 1, status: "Requested", coordinator_id: "COORD-0001" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.status).toBe("Requested");
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Requested", coordinator_id: "COORD-0001" }),
+    );
+  });
+
+  it("flags it Unassigned instead when no coordinators exist", async () => {
+    const { from, update } = buildDraftSubmitSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id, submitted_details: {} },
+      coordinators: [],
+      updatedEvent: { id: 1, status: "Unassigned", coordinator_id: null },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Unassigned", coordinator_id: null }),
+    );
+  });
+});
 
 describe("PATCH /api/events/:id", () => {
   const owner = { id: "ORG-0001", role: "organiser" };
