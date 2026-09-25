@@ -21,6 +21,7 @@ import { statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
 import EventStatusTracker from "../components/EventStatusTracker.vue";
 import ClarificationPanel from "../components/ClarificationPanel.vue";
 import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
+import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
 
 interface SubmittedEventDetails {
   name?: string;
@@ -713,14 +714,15 @@ onMounted(async () => {
   </div>
 </div>
 
-<!-- Venue search: opens pre-filled with this event's date, time and attendance -->
-<div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
-  <h2 class="section-title">Venue Recommendations</h2>
-  <VenueRecommendations :event-id="event.id" :details="event.submitted_details" />
-  <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
-    Find venues
-  </RouterLink>
-</div>
+              <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
+              <div v-if="isCoordinator && event.status !== 'Rejected'" class="venue-search-entry">
+                <h3 class="text-lg font-semibold text-[--color-grey-900]">Venue</h3>
+                <VenueRecommendations :event-id="event.id" :details="event.submitted_details" />
+                <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
+                  Find venues
+                </RouterLink>
+              </div>
+            </div>
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
   :current-user-id="currentUser.id" />
