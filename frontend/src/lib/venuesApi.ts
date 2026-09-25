@@ -132,6 +132,31 @@ export async function fetchVenueFilterOptions(): Promise<VenueFilterOptions> {
   return (await res.json()) as VenueFilterOptions;
 }
 
+/** What venue-service checked each recommended venue against. */
+export interface EventVenueRequirements {
+  attendance: number | null;
+  date: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  accessibility: string[];
+  layouts: string[];
+  facilities: string[];
+}
+
+export interface VenueRecommendations {
+  requirements: EventVenueRequirements;
+  /** Every venue meeting all requirements, tightest capacity fit first. */
+  venues: Venue[];
+}
+
+export async function fetchVenueRecommendations(eventId: number): Promise<VenueRecommendations> {
+  const res = await fetch(`${apiBase}/recommendations/${eventId}`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? "Failed to load venue recommendations");
+  return body as VenueRecommendations;
+}
+
 /**
  * Client-side mirror of the server's time-window rules, so the date
  * popover can flag a bad window inline and the view can skip a request
