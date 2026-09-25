@@ -2,7 +2,7 @@
   "name": "backend",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n events,users -c blue,magenta \"npm run dev --prefix services/events-service\" \"npm run dev --prefix services/user-service\""
+    "dev": "concurrently -n events,users,venues -c blue,magenta,green \"npm run dev --prefix services/events-service\" \"npm run dev --prefix services/user-service\" \"npm run dev --prefix services/venue-service\""
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

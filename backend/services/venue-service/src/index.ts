@@ -1,7 +1,7 @@
 import "./lib/env.js";
 import cors from "cors";
 import express from "express";
-import { eventsRouter } from "./routes/events.js";
+import { venuesRouter } from "./routes/venues.js";
 
 /**
  * Fail loudly at boot instead of at the first login. A missing JWT_SECRET
@@ -24,13 +24,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use("/api/events", eventsRouter);
+app.use("/api/venues", venuesRouter);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-const port = Number(process.env.EVENTS_SERVICE_PORT ?? 4001);
+const port = Number(process.env.VENUE_SERVICE_PORT ?? 4003);
 app.listen(port, () => {
-  console.log(`events-service listening on :${port}`);
+  console.log(`venue-service listening on :${port}`);
 });

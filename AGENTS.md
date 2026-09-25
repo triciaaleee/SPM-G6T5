@@ -11,6 +11,7 @@ backend/
   services/
     events-service/       # port 4001
     user-service/         # port 4002
+    venue-service/        # port 4003
 frontend/                 # Vue 3 + Vite + Tailwind
 supabase/migrations/      # numbered SQL migrations (NNNN_description.sql)
 Style.md                  # frontend design system — source of truth
