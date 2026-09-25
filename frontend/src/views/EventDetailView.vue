@@ -20,6 +20,7 @@ import {
 import { statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
 import EventStatusTracker from "../components/EventStatusTracker.vue";
 import ClarificationPanel from "../components/ClarificationPanel.vue";
+import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
 
 interface SubmittedEventDetails {
   name?: string;
@@ -677,9 +678,7 @@ onMounted(async () => {
               <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
               <div v-if="isCoordinator && event.status !== 'Rejected'" class="venue-search-entry">
                 <h3 class="text-lg font-semibold text-[--color-grey-900]">Venue</h3>
-                <p class="body-small muted">
-                  Shortlist venues that are free at this event's date and time and can fit its expected attendance.
-                </p>
+                <VenueRecommendations :event-id="event.id" :details="event.submitted_details" />
                 <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
                   Find venues
                 </RouterLink>

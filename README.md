@@ -3,12 +3,13 @@
 
 # Backend
 
-Two Express/TypeScript microservices:
+Three Express/TypeScript microservices:
 
 - **`services/events-service`** (port 4001) — event CRUD, scoped by role
 - **`services/user-service`** (port 4002) — signup/login, JWT issuance, user records
+- **`services/venue-service`** (port 4003) — venue search/filters and venue recommendations for an event (reads events via events-service's API)
 
-Both share one config file and Supabase project.
+All share one config file and Supabase project.
 
 ## First-time setup
 
@@ -18,6 +19,7 @@ npm install                              # installs concurrently
 cp .env.example .env                     # fill in real values below
 cd services/events-service && npm install
 cd ../user-service && npm install
+cd ../venue-service && npm install
 ```
 
 Edit `backend/.env`:
@@ -29,25 +31,29 @@ JWT_SECRET=replace-with-a-long-random-string
 
 EVENTS_SERVICE_PORT=4001
 USER_SERVICE_PORT=4002
+VENUE_SERVICE_PORT=4003
+
+# Where venue-service reaches events-service (defaults to localhost:EVENTS_SERVICE_PORT)
+EVENTS_SERVICE_URL=http://localhost:4001
 ```
 
 Apply the SQL migrations in `supabase/migrations/` (in numeric order) against your Supabase project, then `supabase/seed.sql` for test data.
 
 ## Running
 
-Start both services together:
+Start every service together:
 
 ```bash
 cd backend
 npm run dev
 ```
 
-Output is prefixed per service (`[events]`, `[users]`) so you can tell which one logged what. Ctrl+C stops both.
+Output is prefixed per service (`[events]`, `[users]`, `[venues]`) so you can tell which one logged what. Ctrl+C stops them all.
 
 To run just one service on its own:
 
 ```bash
-cd backend/services/events-service && npm run dev   # or services/user-service
+cd backend/services/events-service && npm run dev   # or services/user-service, services/venue-service
 ```
 
 ## Verify it's up
@@ -55,15 +61,17 @@ cd backend/services/events-service && npm run dev   # or services/user-service
 ```bash
 curl http://localhost:4001/health   # events-service
 curl http://localhost:4002/health   # user-service
+curl http://localhost:4003/health   # venue-service
 ```
 
-Both should return `{"ok":true}`.
+Each should return `{"ok":true}`.
 
 ## Tests
 
 ```bash
 cd backend/services/events-service && npm test
 cd backend/services/user-service && npm test
+cd backend/services/venue-service && npm test
 ```
 
 ## Notes
