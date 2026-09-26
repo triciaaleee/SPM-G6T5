@@ -185,12 +185,8 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
-<<<<<<< HEAD
 /** Venue features named across all of an event's requirement text fields. */
 function extractEventFeatures(details: EventRequirementDetails, venues: VenueRow[]): Record<FeatureGroup, Set<string>> {
-=======
-export function extractRequirements(details: EventRequirementDetails, venues: VenueRow[] = []): ExtractedRequirements {
->>>>>>> daf9a53 (Draft of Feature E4-7)
   const features: Record<FeatureGroup, Set<string>> = {
     accessibility: new Set(),
     layouts: new Set(),
@@ -204,7 +200,6 @@ export function extractRequirements(details: EventRequirementDetails, venues: Ve
       for (const value of found[group]) features[group].add(value);
     }
   }
-<<<<<<< HEAD
   return features;
 }
 
@@ -223,8 +218,6 @@ export function extractLayoutAndFacilities(
 
 export function extractRequirements(details: EventRequirementDetails, venues: VenueRow[] = []): ExtractedRequirements {
   const features = extractEventFeatures(details, venues);
-=======
->>>>>>> daf9a53 (Draft of Feature E4-7)
 
   const attendance = Number(details.expectedAttendance);
 
