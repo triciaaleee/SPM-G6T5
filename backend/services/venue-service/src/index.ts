@@ -1,6 +1,7 @@
 import "./lib/env.js";
 import cors from "cors";
 import express from "express";
+import { staffRouter } from "./routes/staff.js";
 import { venuesRouter } from "./routes/venues.js";
 
 /**
@@ -24,6 +25,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Mounted before venuesRouter: that router is coordinator-only for every
+// path under it, so venue staff requests must be answered first.
+app.use("/api/venues/staff", staffRouter);
 app.use("/api/venues", venuesRouter);
 
 app.get("/health", (_req, res) => {

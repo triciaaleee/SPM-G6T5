@@ -5,6 +5,7 @@ import NewEventRequestView from "../views/NewEventRequestView.vue";
 import LoginView from "../views/LoginView.vue";
 import SignupView from "../views/SignupView.vue";
 import VenueSearchView from "../views/VenueSearchView.vue";
+import VenueStaff from "../views/VenueStaff.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
 
 export const router = createRouter({
@@ -38,6 +39,14 @@ export const router = createRouter({
       component: VenueSearchView,
       meta: { requiresAuth: true, roles: ["coordinator"] },
     },
+    {
+      // E1-5: venue staff's schedule — bookings per venue and day, limited
+      // to the fields they need to set the venue up.
+      path: "/venue-schedule",
+      name: "venue-schedule",
+      component: VenueStaff,
+      meta: { requiresAuth: true, roles: ["venue_staff"] },
+    },
   ],
 });
 
@@ -68,6 +77,12 @@ router.beforeEach((to) => {
   const roles = to.meta.roles as string[] | undefined;
   if (authed && roles && !roles.includes(getStoredUser()?.role ?? "")) {
     return { name: landingRouteForRole(getStoredUser()?.role) };
+  }
+
+  // E1-5: venue staff have no events of their own, so the events list
+  // would only ever be empty for them — send them to their schedule.
+  if (authed && to.name === "events-list" && getStoredUser()?.role === "venue_staff") {
+    return { name: "venue-schedule" };
   }
 
   return true;

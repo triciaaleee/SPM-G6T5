@@ -85,7 +85,7 @@ function readList(query: RawQuery, key: string): string[] | undefined {
   return values.length > 0 ? [...new Set(values)] : undefined;
 }
 
-function isRealDate(value: string): boolean {
+export function isRealDate(value: string): boolean {
   if (!DATE_PATTERN.test(value)) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;

@@ -95,9 +95,10 @@ export function isAuthenticated(): boolean {
 }
 
 /**
- * AC1: where a user lands after signing in. Every role currently resolves
- * to the events list — coordinators and organisers already see different
- * data there, since the backend scopes the query by role — but routing
+ * AC1: where a user lands after signing in. Most roles resolve to the
+ * events list — coordinators and organisers already see different data
+ * there, since the backend scopes the query by role — while venue staff
+ * land on their venue schedule (E1-5). Routing
  * through this map means adding a dedicated screen for, say, attendees is
  * a one-line change here rather than an edit to every call site.
  */
@@ -105,7 +106,7 @@ const LANDING_ROUTE_BY_ROLE: Record<string, string> = {
   organiser: "events-list",
   coordinator: "events-list",
   attendee: "events-list",
-  venue_staff: "events-list",
+  venue_staff: "venue-schedule",
   technical_support: "events-list",
 };
 

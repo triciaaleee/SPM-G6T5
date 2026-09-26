@@ -6,10 +6,18 @@ import VenueIcon from "./VenueIcon.vue";
  * Month-grid date picker. Values are local-calendar "YYYY-MM-DD" strings —
  * the same shape events store proposedDate in — built from date parts
  * rather than toISOString(), which would shift a day in UTC+ timezones.
- * Past days are disabled: availability for a date that's gone is moot.
+ * Past days are disabled by default: availability for a date that's gone
+ * is moot. `allowPast` lifts that for views that look back (the venue
+ * schedule). `markedDates` puts a dot under days that have something on.
  */
-const props = defineProps<{ modelValue: string | null }>();
-const emit = defineEmits<{ "update:modelValue": [value: string] }>();
+const props = defineProps<{ modelValue: string | null; allowPast?: boolean; markedDates?: string[] }>();
+const emit = defineEmits<{
+  "update:modelValue": [value: string];
+  /** The visible month changed; `month` is 0-based, like Date#getMonth. */
+  "month-change": [value: { year: number; month: number }];
+}>();
+
+const marked = computed(() => new Set(props.markedDates ?? []));
 
 function toKey(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -56,7 +64,10 @@ const cells = computed(() => {
   return out;
 });
 
+watch([viewYear, viewMonth], ([year, month]) => emit("month-change", { year, month }));
+
 const canGoBack = computed(() => {
+  if (props.allowPast) return true;
   const now = new Date();
   return viewYear.value > now.getFullYear() || (viewYear.value === now.getFullYear() && viewMonth.value > now.getMonth());
 });
@@ -88,10 +99,12 @@ function shiftMonth(delta: number): void {
         <button v-else type="button" class="calendar__day" :class="{
           'calendar__day--today': cell.key === todayKey,
           'calendar__day--selected': cell.key === modelValue,
-        }" :disabled="cell.key < todayKey && cell.key !== modelValue" :aria-pressed="cell.key === modelValue"
-          :aria-label="fromKey(cell.key).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })"
+        }" :disabled="!allowPast && cell.key < todayKey && cell.key !== modelValue"
+          :aria-pressed="cell.key === modelValue"
+          :aria-label="fromKey(cell.key).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + (marked.has(cell.key) ? ', has bookings' : '')"
           @click="emit('update:modelValue', cell.key)">
           {{ cell.day }}
+          <span v-if="marked.has(cell.key)" class="calendar__dot" aria-hidden="true" />
         </button>
       </template>
     </div>
@@ -154,6 +167,7 @@ function shiftMonth(delta: number): void {
 }
 
 .calendar__day {
+  position: relative;
   border: none;
   border-radius: var(--radius-full);
   background: transparent;
@@ -186,5 +200,21 @@ function shiftMonth(delta: number): void {
 .calendar__day:disabled {
   color: var(--color-grey-300);
   cursor: default;
+}
+
+/* Marks a day with bookings: spacing-4 dot, purple on light, white on the selected fill. */
+.calendar__dot {
+  position: absolute;
+  left: 50%;
+  bottom: var(--spacing-2);
+  width: var(--spacing-4);
+  height: var(--spacing-4);
+  border-radius: var(--radius-full);
+  background: var(--color-purple-600);
+  transform: translateX(-50%);
+}
+
+.calendar__day--selected .calendar__dot {
+  background: var(--color-base-white);
 }
 </style>
