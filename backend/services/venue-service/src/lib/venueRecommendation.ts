@@ -185,7 +185,8 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
-export function extractRequirements(details: EventRequirementDetails, venues: VenueRow[] = []): ExtractedRequirements {
+/** Venue features named across all of an event's requirement text fields. */
+function extractEventFeatures(details: EventRequirementDetails, venues: VenueRow[]): Record<FeatureGroup, Set<string>> {
   const features: Record<FeatureGroup, Set<string>> = {
     accessibility: new Set(),
     layouts: new Set(),
@@ -199,6 +200,24 @@ export function extractRequirements(details: EventRequirementDetails, venues: Ve
       for (const value of found[group]) features[group].add(value);
     }
   }
+  return features;
+}
+
+/**
+ * E1-5: the layout and facility requirements venue staff are shown for a
+ * booked event — the same reading of the organiser's text that venue
+ * recommendations use.
+ */
+export function extractLayoutAndFacilities(
+  details: EventRequirementDetails,
+  venues: VenueRow[] = [],
+): { layouts: string[]; facilities: string[] } {
+  const features = extractEventFeatures(details, venues);
+  return { layouts: [...features.layouts], facilities: [...features.facilities] };
+}
+
+export function extractRequirements(details: EventRequirementDetails, venues: VenueRow[] = []): ExtractedRequirements {
+  const features = extractEventFeatures(details, venues);
 
   const attendance = Number(details.expectedAttendance);
 

@@ -354,10 +354,10 @@ function setNumber(key: "capacityMin" | "capacityMax", raw: string): void {
 .btn--ghost {
   border: none;
   background: transparent;
-  color: var(--color-purple-600);
+  color: var(--color-error-600);
 }
 
 .btn--ghost:hover {
-  background: var(--color-purple-100);
+  background: var(--color-error-200);
 }
 </style>
