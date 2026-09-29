@@ -19,12 +19,24 @@
 create extension if not exists pgcrypto;
 
 -- Test accounts ---------------------------------------------------------
+--
+-- E1-1 (issue #8): attendees and organisers can self-register through
+-- /signup. Coordinator, venue staff and technical support are internal
+-- staff roles with no signup path — they only ever exist as rows seeded
+-- here (or inserted directly in production).
 
 insert into users (id, name, email, password_hash, role) values
   ('ORG-0001', 'Organiser One', 'organiser-one@example.com', crypt('password123', gen_salt('bf')), 'organiser'),
   ('ORG-0002', 'Organiser Two', 'organiser-two@example.com', crypt('password123', gen_salt('bf')), 'organiser'),
-  ('COORD-0001', 'Coordinator One', 'coordinator-one@example.com', crypt('password123', gen_salt('bf')), 'coordinator')
+  ('COORD-0001', 'Coordinator One', 'coordinator-one@example.com', crypt('password123', gen_salt('bf')), 'coordinator'),
+  ('VEN-0001', 'Venue Staff One', 'venue-staff-one@example.com', crypt('password123', gen_salt('bf')), 'venue_staff'),
+  ('TS-0001', 'Technical Support One', 'tech-support-one@example.com', crypt('password123', gen_salt('bf')), 'technical_support')
 on conflict (id) do nothing;
+
+-- The IDs above are hand-picked, so move each role's ID sequence past
+-- them — otherwise the first organiser to sign up would be handed
+-- ORG-0001 and collide with the row above (migration 0013).
+select sync_user_id_sequences();
 
 -- Events ----------------------------------------------------------------
 

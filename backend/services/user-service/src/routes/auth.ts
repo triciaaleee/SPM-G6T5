@@ -2,6 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { supabaseAdmin } from "../lib/supabaseAdmin.js";
 import { signToken } from "../lib/jwt.js";
+import { passwordProblem } from "../lib/passwordPolicy.js";
 
 export const authRouter = Router();
 
@@ -42,35 +43,95 @@ function lockoutMessage(until: Date): string {
   return `Too many failed sign-in attempts. This account is locked — try again in ${mins} minute${mins === 1 ? "" : "s"}.`;
 }
 
-authRouter.post("/signup", async (req, res) => {
-  const { name, email, password } = req.body ?? {};
+/**
+ * E1-1 (issue #8): the only roles anyone can give themselves. Coordinator,
+ * venue staff and technical support are internal staff accounts seeded
+ * directly into the database (no admin role, no onboarding flow), so
+ * they're deliberately absent. This list is enforced here, not just in
+ * the signup form: without it, anyone could POST `role: "coordinator"`
+ * and approve their own events.
+ */
+const SELF_SIGNUP_ROLES = ["attendee", "organiser"] as const;
+type SelfSignupRole = (typeof SELF_SIGNUP_ROLES)[number];
 
+/** AC4: a signup that doesn't pick a role is an attendee. */
+const DEFAULT_SIGNUP_ROLE: SelfSignupRole = "attendee";
+
+/**
+ * Deliberately loose — the only real test of an address is mailing it,
+ * which is out of scope. This just rejects things that plainly aren't
+ * one (no @, no domain, embedded spaces). 254 is the SMTP path limit.
+ */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_MAX_LENGTH = 254;
+
+const EMAIL_IN_USE_ERROR = "An account with this email already exists";
+
+/** Postgres unique_violation — here, a second signup racing past the pre-check. */
+const PG_UNIQUE_VIOLATION = "23505";
+
+function isSelfSignupRole(value: unknown): value is SelfSignupRole {
+  return SELF_SIGNUP_ROLES.includes(value as SelfSignupRole);
+}
+
+authRouter.post("/signup", async (req, res) => {
+  const { name, email, password, role } = req.body ?? {};
+
+  // `field` tells the form which input to put the message under.
   if (typeof name !== "string" || !name.trim()) {
-    res.status(400).json({ error: "Name is required" });
+    res.status(400).json({ error: "Name is required", field: "name" });
     return;
   }
   if (typeof email !== "string" || !email.trim()) {
-    res.status(400).json({ error: "Email is required" });
+    res.status(400).json({ error: "Email is required", field: "email" });
     return;
   }
-  if (typeof password !== "string" || password.length < 8) {
-    res.status(400).json({ error: "Password must be at least 8 characters" });
+  const normalisedEmail = email.trim().toLowerCase();
+  if (normalisedEmail.length > EMAIL_MAX_LENGTH || !EMAIL_PATTERN.test(normalisedEmail)) {
+    res.status(400).json({ error: "Enter a valid email address", field: "email" });
     return;
   }
+  if (typeof password !== "string") {
+    res.status(400).json({ error: "Password is required", field: "password" });
+    return;
+  }
+  // AC3: every rejection states the rule, not just "too weak".
+  const problem = passwordProblem(password);
+  if (problem) {
+    res.status(400).json({ error: problem, field: "password", code: "weak_password" });
+    return;
+  }
+  if (role !== undefined && role !== null && !isSelfSignupRole(role)) {
+    res.status(400).json({
+      error: "You can only sign up as an Attendee or an Event Organiser",
+      field: "role",
+    });
+    return;
+  }
+  const accountRole: SelfSignupRole = role ?? DEFAULT_SIGNUP_ROLE;
 
-  const { data: existing } = await supabaseAdmin
+  const { data: existing, error: lookupError } = await supabaseAdmin
     .from("users")
     .select("id")
-    .eq("email", email.trim().toLowerCase())
+    .eq("email", normalisedEmail)
     .maybeSingle();
 
+  // Same reasoning as login: a failed lookup must not read as "email is
+  // free" and carry on to an insert that fails for a different reason.
+  if (lookupError) {
+    console.error("Signup lookup failed:", lookupError.message);
+    res.status(500).json({ error: "Failed to create account" });
+    return;
+  }
+
+  // AC2
   if (existing) {
-    res.status(409).json({ error: "An account with this email already exists" });
+    res.status(409).json({ error: EMAIL_IN_USE_ERROR, field: "email", code: "email_in_use" });
     return;
   }
 
   const { data: generatedId, error: idError } = await supabaseAdmin.rpc("generate_user_id", {
-    p_role: "attendee",
+    p_role: accountRole,
   });
 
   if (idError || !generatedId) {
@@ -85,12 +146,28 @@ authRouter.post("/signup", async (req, res) => {
     .insert({
       id: generatedId,
       name: name.trim(),
-      email: email.trim().toLowerCase(),
+      email: normalisedEmail,
       password_hash: passwordHash,
-      role: "attendee",
+      role: accountRole,
     })
     .select("id, name, email, role")
     .single();
+
+  if (error?.code === PG_UNIQUE_VIOLATION) {
+    // Two signups with the same email can both pass the pre-check above;
+    // the unique constraint on users.email catches the second. That's
+    // still AC2's "address is in use", not a server fault.
+    if (/email/i.test(`${error.message} ${error.details ?? ""}`)) {
+      res.status(409).json({ error: EMAIL_IN_USE_ERROR, field: "email", code: "email_in_use" });
+      return;
+    }
+    // Anything else is the primary key: the role's ID sequence is behind
+    // rows inserted with hand-picked IDs (seed data). The user did nothing
+    // wrong, so don't blame their email — log it for whoever runs the DB.
+    console.error(
+      `Signup ID collision on ${generatedId}; run \`select sync_user_id_sequences();\` (migration 0013).`,
+    );
+  }
 
   if (error || !user) {
     res.status(500).json({ error: "Failed to create account" });

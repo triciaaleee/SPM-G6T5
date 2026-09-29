@@ -39,6 +39,12 @@ EVENTS_SERVICE_URL=http://localhost:4001
 
 Apply the SQL migrations in `supabase/migrations/` (in numeric order) against your Supabase project, then `supabase/seed.sql` for test data.
 
+### Accounts
+
+- **Attendees and Event Organisers** sign up themselves at `/signup` (role defaults to Attendee). Passwords need at least 8 characters with at least one letter and one number.
+- **Coordinator, Venue Staff and Technical Support** are internal staff roles with no signup path — insert them directly into `users`. `seed.sql` creates one of each (`coordinator-one@`, `venue-staff-one@`, `tech-support-one@example.com`, password `password123`) alongside two organisers.
+- After inserting users with hand-picked IDs, run `select sync_user_id_sequences();` so signups don't reuse those IDs (migration `0013`).
+
 ## Running
 
 Start every service together:
