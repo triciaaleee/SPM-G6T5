@@ -80,10 +80,13 @@ The event status machine is **fixed**. Use exactly these status values (exact ca
 
 ### Statuses
 
+`events.status` is a Postgres enum (`event_status`, migration `0013`) — the database itself now rejects any value outside this list, not just application code.
+
 | Status | Type |
 |---|---|
 | `Draft` | Pre-process (optional, not part of the lifecycle) |
 | `Requested` | **Start** of the lifecycle |
+| `Unassigned` | Same as `Requested`, but no coordinator was available to auto-assign at submission time (E2-6 AC4) |
 | `Clarification Requested` | Intermediate |
 | `Planning` | Intermediate |
 | `Rejected` | **End** (terminal) |
@@ -164,5 +167,9 @@ All frontend work **must** follow [`Style.md`](Style.md). Read it before creatin
 - **Config:** all env lives in the single `backend/.env`. Don't create per-service `.env` files.
 - **Auth:** `user-service` issues JWTs. Every other service only **verifies** them with the shared `JWT_SECRET`.
 - **Database:** Supabase Postgres. Schema changes go in a new migration `supabase/migrations/NNNN_description.sql` (next number, re-runnable/guarded where possible). Never edit an already-applied migration.
+- **Enum types:** three columns are backed by Postgres enums, not free text — the database rejects any value outside the list, so a new status/role must be added to the enum (a migration, e.g. `alter type ... add value ...`) before any code can write it:
+  - `users.role` → `app_role` (migration `0004`): `attendee`, `organiser`, `coordinator`, `venue_staff`, `technical_support`.
+  - `events.status` → `event_status` (migration `0013`): the 8 values in §3's table above.
+  - `venue_bookings.status` → `venue_status` (migration `0013`): `Requested`, `Approved`, `Rejected` — backs a **booking-approval** workflow (a specific booking request gets approved/rejected, not the venue itself). This column exists in the schema but no application code reads or writes it yet — the venue-service's search/booking routes (`backend/services/venue-service/src/routes/venues.ts`, `lib/venueSearch.ts`) and the frontend (`frontend/src/lib/venuesApi.ts`, `VenueSearchView.vue`) all need to be extended to actually use it before it does anything. Until then, every booking row defaults to `Requested` and is otherwise inert.
 - **Tests:** add or update tests for any backend route or lifecycle change. Run `npm test` in each service you touched before finishing.
 - **Docs:** when you add a service, port, env var or script, update `backend/README.md` in the same change.
