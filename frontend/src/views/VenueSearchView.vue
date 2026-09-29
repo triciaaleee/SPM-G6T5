@@ -166,12 +166,8 @@ onMounted(async () => {
       <div class="page-header">
         <div>
           <h1 class="h2">Find a venue</h1>
-          <p class="subheading">Filter venues by availability and requirements to shortlist realistic options.</p>
+          <p class="subheading">Filter venues by availability and requirements.</p>
         </div>
-        <RouterLink :to="{ name: 'events-list' }" class="close-button" aria-label="Close venue search"
-          title="Close">
-          <VenueIcon name="close" :size="20" />
-        </RouterLink>
       </div>
 
       <div v-if="sourceEvent" class="context-banner body-small">
@@ -192,16 +188,6 @@ onMounted(async () => {
             <p class="empty-state__title">No results found</p>
             <p class="body-default muted">No venue matches all of your filters.</p>
 
-            <template v-if="relax.length > 0">
-              <p class="body-small empty-state__prompt">Try relaxing one filter:</p>
-              <div class="empty-state__actions">
-                <button v-for="option in relax" :key="option.key" type="button" class="btn btn--outline"
-                  @click="relaxFilter(option.key)">
-                  Remove {{ option.label }}
-                  <span class="btn__count">{{ option.count }} venue{{ option.count === 1 ? "" : "s" }}</span>
-                </button>
-              </div>
-            </template>
             <button type="button" class="btn btn--ghost empty-state__clear" @click="clearAllFilters">
               Clear all filters
             </button>
@@ -554,7 +540,12 @@ onMounted(async () => {
 }
 
 .empty-state__clear {
-  margin-top: var(--spacing-16);
+  margin-top: var(--spacing-12);
+  color: var(--color-blue-600)!important;
+}
+
+.empty-state__clear:hover {
+  background-color: var(--color-blue-200)!important;
 }
 
 .btn {

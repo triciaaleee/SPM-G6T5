@@ -290,6 +290,82 @@ eventsRouter.get("/", async (req: AuthedRequest, res) => {
 });
 
 /**
+ * E1-5: the only fields venue staff may see about an event — what they need
+ * to set the venue up. Everything else in submitted_details (purpose,
+ * description) and on the row (organiser, coordinator, review outcome) is
+ * left out, and clarifications/history are never joined in. The free-text
+ * requirement fields are included because venue-service reads layout and
+ * facility needs out of them; it drops the text before replying to the
+ * browser.
+ */
+
+/* Zo note: built a new endpoint instead of just using the existing one but only extracting the needed info for venue because of security purposes. This is more secure compared to using the existing one to fetch and filter.
+ */
+const VENUE_BOOKING_INFO_FIELDS = [
+  "name",
+  "proposedDate",
+  "startTime",
+  "endTime",
+  "expectedAttendance",
+  "venue",
+  "accessibility",
+  "equipment",
+  "technicalSupport",
+] as const;
+
+const MAX_VENUE_BOOKING_INFO_IDS = 100;
+
+/**
+ * E1-5: booking-relevant info for the events booked at a venue, called by
+ * venue-service (with the venue staff member's own token) to fill in the
+ * venue schedule. Declared before GET /:id so "venue-booking-info" isn't
+ * read as an event id. Drafts are never returned: a draft can't have been
+ * booked, and it isn't anyone's business but the organiser's.
+ */
+eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const rawIds = typeof req.query.ids === "string" ? req.query.ids : "";
+
+  if (user.role !== "venue_staff") {
+    await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_not_venue_staff");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const idStrings = rawIds.split(",").map((id) => id.trim());
+  if (rawIds === "" || !idStrings.every(isPositiveInteger) || idStrings.length > MAX_VENUE_BOOKING_INFO_IDS) {
+    res.status(400).json({ error: `ids must be 1–${MAX_VENUE_BOOKING_INFO_IDS} comma-separated event ids` });
+    return;
+  }
+  const ids = [...new Set(idStrings.map(Number))];
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, submitted_details")
+    .in("id", ids)
+    .neq("status", "Draft");
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load events" });
+    return;
+  }
+
+  const events = (data ?? []).map((row) => {
+    const details = (row.submitted_details ?? {}) as Record<string, unknown>;
+    const info: Record<string, unknown> = { id: row.id };
+    for (const field of VENUE_BOOKING_INFO_FIELDS) info[field] = details[field] ?? null;
+    return info;
+  });
+
+  res.json({ events });
+});
+
+/**
  * Fetch a single event by id. The service-role client returns any row
  * regardless of ownership, so ownership/role is checked explicitly here;
  * a non-owner (and non-coordinator) request is treated the same as

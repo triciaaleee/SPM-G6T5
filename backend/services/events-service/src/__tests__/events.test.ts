@@ -1608,3 +1608,92 @@ describe("GET /api/events/:id/history", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("GET /api/events/venue-booking-info (E1-5)", () => {
+  const venueStaff = { id: "VEN-0001", role: "venue_staff" };
+
+  /** .from("events").select(...).in("id", ids).neq("status", "Draft") */
+  function buildVenueInfoSupabase(rows: Record<string, unknown>[]) {
+    const neq = vi.fn().mockResolvedValue({ data: rows, error: null });
+    const inFilter = vi.fn().mockReturnValue({ neq });
+    const select = vi.fn().mockReturnValue({ in: inFilter });
+    const denialInsert = vi.fn().mockResolvedValue({ error: null });
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert: denialInsert };
+      return { select };
+    });
+    return { from, select, inFilter, neq, denialInsert };
+  }
+
+  it("returns only the booking-relevant fields to venue staff", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, venueStaff);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toEqual([
+      {
+        id: 3,
+        name: validPayload.name,
+        proposedDate: validPayload.proposedDate,
+        startTime: validPayload.startTime,
+        endTime: validPayload.endTime,
+        expectedAttendance: validPayload.expectedAttendance,
+        venue: validPayload.venue,
+        accessibility: validPayload.accessibility,
+        equipment: validPayload.equipment,
+        technicalSupport: validPayload.technicalSupport,
+      },
+    ]);
+    const [event] = res.body.events;
+    expect(event).not.toHaveProperty("purpose");
+    expect(event).not.toHaveProperty("description");
+    expect(event).not.toHaveProperty("coordinator");
+    expect(event).not.toHaveProperty("status");
+    expect(supabase.select).toHaveBeenCalledWith("id, submitted_details");
+  });
+
+  it("never returns drafts and de-duplicates the ids", async () => {
+    const supabase = buildVenueInfoSupabase([]);
+    const app = buildApp(supabase, venueStaff);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=4,2,4");
+
+    expect(res.status).toBe(200);
+    expect(supabase.inFilter).toHaveBeenCalledWith("id", [4, 2]);
+    expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
+  });
+
+  it.each([
+    ["an organiser", { id: "user-1", role: "organiser" }],
+    ["a coordinator", coordinator],
+  ])("rejects %s with 403 and records the attempt", async (_label, user) => {
+    const supabase = buildVenueInfoSupabase([]);
+    const app = buildApp(supabase, user);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=1");
+
+    expect(res.status).toBe(403);
+    expect(supabase.select).not.toHaveBeenCalled();
+    expect(supabase.denialInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: user.id, reason: "venue_booking_info_not_venue_staff" }),
+    );
+  });
+
+  it.each([
+    ["missing", ""],
+    ["non-numeric", "?ids=abc"],
+    ["zero", "?ids=0"],
+    ["an empty entry", "?ids=1,,2"],
+    ["over the limit", `?ids=${Array.from({ length: 101 }, (_, i) => i + 1).join(",")}`],
+  ])("returns 400 when ids are %s", async (_label, query) => {
+    const supabase = buildVenueInfoSupabase([]);
+    const app = buildApp(supabase, venueStaff);
+
+    const res = await request(app).get(`/api/events/venue-booking-info${query}`);
+
+    expect(res.status).toBe(400);
+    expect(supabase.select).not.toHaveBeenCalled();
+  });
+});
