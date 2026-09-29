@@ -152,16 +152,46 @@ export async function login(email: string, password: string): Promise<AuthUser> 
   return body.user as AuthUser;
 }
 
-export async function signup(name: string, email: string, password: string): Promise<AuthUser> {
+/**
+ * E1-1: the roles a person can pick for themselves at signup. Internal
+ * staff roles (coordinator, venue staff, technical support) are seeded
+ * directly and never offered here; the backend rejects them regardless.
+ */
+export type SignupRole = "attendee" | "organiser";
+
+export type SignupField = "name" | "email" | "password" | "role";
+
+/**
+ * A signup rejection the backend pinned to one input (e.g. email already
+ * in use, password below the strength rule), so the form can show the
+ * message under that field rather than at the bottom.
+ */
+export class SignupError extends Error {
+  field: SignupField | null;
+  /** Machine-readable reason, e.g. `email_in_use` (AC2) or `weak_password` (AC3). */
+  code: string | null;
+  constructor(message: string, field: SignupField | null, code: string | null) {
+    super(message);
+    this.field = field;
+    this.code = code;
+  }
+}
+
+export async function signup(
+  name: string,
+  email: string,
+  password: string,
+  role: SignupRole,
+): Promise<AuthUser> {
   const res = await fetch(`${authBase}/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, email, password }),
+    body: JSON.stringify({ name, email, password, role }),
   });
 
   if (!res.ok) {
-    const body = await readErrorBody(res);
-    throw new Error(body.error ?? "Signup failed");
+    const body = (await readErrorBody(res)) as { error?: string; field?: SignupField; code?: string };
+    throw new SignupError(body.error ?? "Signup failed", body.field ?? null, body.code ?? null);
   }
 
   const body = await res.json();
