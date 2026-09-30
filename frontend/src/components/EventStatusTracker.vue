@@ -16,11 +16,23 @@
 import { computed } from "vue";
 import { formatEventDate, statusBadgeClass } from "../lib/eventStatus";
 
-const props = defineProps<{
-  status: string;
-  lastChangedAt: string;
-  reviewOutcome: string | null;
-}>();
+const props = withDefaults(
+  defineProps<{
+    status: string;
+    lastChangedAt: string;
+    reviewOutcome: string | null;
+    title?: string;
+    /** Show the "last updated" summary + stepper + status note. */
+    showTimeline?: boolean;
+    /** Show the "Outstanding arrangements" list (only ever rendered while Planning). */
+    showOutstanding?: boolean;
+  }>(),
+  {
+    title: "Event Status",
+    showTimeline: true,
+    showOutstanding: true,
+  },
+);
 
 type StepVariant = "neutral" | "success" | "info" | "error";
 
@@ -75,36 +87,38 @@ function stepState(index: number): "complete" | "current" | "pending" {
 
 <template>
   <div class="details-card status-card">
-    <h2 class="section-title">Event Status</h2>
+    <h2 class="section-title">{{ title }}</h2>
 
-    <div class="status-summary">
-      <p class="body-small muted status-summary__date">Last updated {{ formatEventDate(lastChangedAt) }}</p>
-    </div>
-
-    <div class="status-tracker" role="list" aria-label="Event progress" :data-status="status">
-      <div class="status-tracker__track">
-        <div class="status-tracker__track-fill" :style="{ width: trackFillPercent + '%' }" />
+    <template v-if="showTimeline">
+      <div class="status-summary">
+        <p class="body-small muted status-summary__date">Last updated {{ formatEventDate(lastChangedAt) }}</p>
       </div>
-      <template v-for="(step, index) in steps" :key="step.key">
-        <div class="status-tracker__step" role="listitem" :data-state="stepState(index)"
-          :aria-current="stepState(index) === 'current' ? 'step' : undefined">
-          <span class="status-tracker__dot-slot">
-            <span class="status-tracker__dot" />
-          </span>
-          <span class="body-small status-tracker__label">{{ step.label }}</span>
-          <span v-if="stepState(index) === 'current'" class="status-tracker__here">You are here</span>
+
+      <div class="status-tracker" role="list" aria-label="Event progress" :data-status="status">
+        <div class="status-tracker__track">
+          <div class="status-tracker__track-fill" :style="{ width: trackFillPercent + '%' }" />
         </div>
-      </template>
-    </div>
+        <template v-for="(step, index) in steps" :key="step.key">
+          <div class="status-tracker__step" role="listitem" :data-state="stepState(index)"
+            :aria-current="stepState(index) === 'current' ? 'step' : undefined">
+            <span class="status-tracker__dot-slot">
+              <span class="status-tracker__dot" />
+            </span>
+            <span class="body-small status-tracker__label">{{ step.label }}</span>
+            <span v-if="stepState(index) === 'current'" class="status-tracker__here">You are here</span>
+          </div>
+        </template>
+      </div>
 
-    <p v-if="status === 'Clarification Requested'" class="body-default pt-8">
-      Clarification has been requested from you. This request is on hold until you respond.
-    </p>
-    <p v-else-if="status === 'Rejected'" class="body-small status-note status-note--error">
-      This request was rejected{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
-    </p>
+      <p v-if="status === 'Clarification Requested'" class="body-default pt-8">
+        Clarification has been requested from you. This request is on hold until you respond.
+      </p>
+      <p v-else-if="status === 'Rejected'" class="body-small status-note status-note--error">
+        This request was rejected{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
+      </p>
+    </template>
 
-    <div v-if="status === 'Planning'" class="outstanding">
+    <div v-if="status === 'Planning' && showOutstanding" class="outstanding">
       <p class="body-small muted mb-1">Outstanding arrangements</p>
       <ul class="outstanding__list">
         <li class="outstanding__item">
