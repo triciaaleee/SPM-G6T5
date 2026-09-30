@@ -1781,10 +1781,8 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
   });
 
-  it.each([
-    ["an organiser", { id: "user-1", role: "organiser" }],
-    ["a coordinator", coordinator],
-  ])("rejects %s with 403 and records the attempt", async (_label, user) => {
+  it("rejects an organiser with 403 and records the attempt", async () => {
+    const user = { id: "user-1", role: "organiser" };
     const supabase = buildVenueInfoSupabase([]);
     const app = buildApp(supabase, user);
 
@@ -1795,6 +1793,16 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(supabase.denialInsert).toHaveBeenCalledWith(
       expect.objectContaining({ user_id: user.id, reason: "venue_booking_info_not_venue_staff" }),
     );
+  });
+
+  it("allows a coordinator too, for resolving booking timing during venue search", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, coordinator);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(1);
   });
 
   it.each([

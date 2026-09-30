@@ -185,16 +185,17 @@ describe("buildFilterOptions", () => {
   });
 });
 
-function buildApp(options: { user?: { id: string; role: string }; bookings?: { venue_id: number }[] } = {}) {
-  const bookingsQuery = {
-    eq: vi.fn(),
-    lt: vi.fn(),
-    gt: vi.fn(),
-    then: (resolve: (value: unknown) => void) => resolve({ data: options.bookings ?? [], error: null }),
-  };
-  bookingsQuery.eq.mockReturnValue(bookingsQuery);
-  bookingsQuery.lt.mockReturnValue(bookingsQuery);
-  bookingsQuery.gt.mockReturnValue(bookingsQuery);
+function buildApp(
+  options: {
+    user?: { id: string; role: string };
+    bookings?: { venue_id: number; event_id: number }[];
+    events?: Record<string, unknown>[];
+  } = {},
+) {
+  const bookingsThen = vi.fn((resolve: (value: unknown) => void) =>
+    resolve({ data: options.bookings ?? [], error: null }),
+  );
+  const bookingsQuery = { then: bookingsThen };
 
   const venuesEq = vi.fn().mockResolvedValue({ data: venues, error: null });
 
@@ -206,13 +207,22 @@ function buildApp(options: { user?: { id: string; role: string }; bookings?: { v
     }),
   };
 
+  // findUnavailableVenueIds fetches each booking's event via events-service
+  // (fetchVenueBookingInfo), same pattern as staff.test.ts.
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({ events: options.events ?? [] }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
   (globalThis as any).__mockSupabase = supabase;
   (globalThis as any).__mockUser = options.user ?? { id: "COORD-0001", role: "coordinator" };
 
   const app = express();
   app.use(express.json());
   app.use("/api/venues", venuesRouter);
-  return { app, supabase, bookingsQuery };
+  return { app, supabase, bookingsQuery, fetchMock };
 }
 
 describe("GET /api/venues", () => {
@@ -229,17 +239,30 @@ describe("GET /api/venues", () => {
     expect(res.body.fields.date).toBeDefined();
   });
 
-  it("AC2: queries bookings overlapping the window and excludes those venues", async () => {
-    const { app, bookingsQuery } = buildApp({ bookings: [{ venue_id: 1 }] });
+  it("AC2: excludes venues with a booking overlapping the window", async () => {
+    const { app } = buildApp({
+      bookings: [{ venue_id: 1, event_id: 42 }],
+      events: [{ id: 42, proposedDate: "2026-09-25", startTime: "18:00", endTime: "21:00" }],
+    });
     const res = await request(app)
       .get("/api/venues")
       .query({ date: "2026-09-25", startTime: "18:00", endTime: "21:00" });
 
     expect(res.status).toBe(200);
-    expect(bookingsQuery.eq).toHaveBeenCalledWith("booking_date", "2026-09-25");
-    expect(bookingsQuery.lt).toHaveBeenCalledWith("start_time", "21:00");
-    expect(bookingsQuery.gt).toHaveBeenCalledWith("end_time", "18:00");
     expect(res.body.venues.map((v: VenueRow) => v.id)).not.toContain(1);
+  });
+
+  it("doesn't exclude a venue whose booking is on a different date", async () => {
+    const { app } = buildApp({
+      bookings: [{ venue_id: 1, event_id: 42 }],
+      events: [{ id: 42, proposedDate: "2026-09-01", startTime: "18:00", endTime: "21:00" }],
+    });
+    const res = await request(app)
+      .get("/api/venues")
+      .query({ date: "2026-09-25", startTime: "18:00", endTime: "21:00" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.venues.map((v: VenueRow) => v.id)).toContain(1);
   });
 
   it("skips the bookings lookup when no date is given", async () => {

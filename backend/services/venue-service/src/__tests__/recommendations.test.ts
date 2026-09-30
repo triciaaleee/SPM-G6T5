@@ -83,7 +83,7 @@ function details(overrides: Record<string, unknown> = {}) {
   };
 }
 
-type Booking = { venue_id: number; event_id: number | null };
+type Booking = { venue_id: number; event_id: number };
 
 function buildApp(
   options: {
@@ -91,17 +91,12 @@ function buildApp(
     event?: Record<string, unknown>;
     eventStatus?: number;
     bookings?: Booking[];
+    bookingEvents?: Record<string, unknown>[];
   } = {},
 ) {
   const bookingsQuery = {
-    eq: vi.fn(),
-    lt: vi.fn(),
-    gt: vi.fn(),
     then: (resolve: (value: unknown) => void) => resolve({ data: options.bookings ?? [], error: null }),
   };
-  bookingsQuery.eq.mockReturnValue(bookingsQuery);
-  bookingsQuery.lt.mockReturnValue(bookingsQuery);
-  bookingsQuery.gt.mockReturnValue(bookingsQuery);
 
   const supabase = {
     from: vi.fn((table: string) => {
@@ -114,10 +109,19 @@ function buildApp(
   };
 
   const status = options.eventStatus ?? 200;
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => ({ event: { id: 7, status: "Planning", submitted_details: options.event ?? details() } }),
+  // fetchEvent (GET /api/events/:id) and fetchVenueBookingInfo (GET
+  // /api/events/venue-booking-info) both go through global fetch — tell
+  // them apart by URL, same as findUnavailableVenueIds/staff.ts do in
+  // production, just via different real endpoints.
+  const fetchMock = vi.fn((url: string) => {
+    if (url.includes("venue-booking-info")) {
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ events: options.bookingEvents ?? [] }) });
+    }
+    return Promise.resolve({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => ({ event: { id: 7, status: "Planning", submitted_details: options.event ?? details() } }),
+    });
   });
   vi.stubGlobal("fetch", fetchMock);
 
@@ -276,18 +280,16 @@ describe("GET /api/venues/recommendations/:eventId", () => {
   });
 
   it("excludes venues booked at the event's time, but not a booking held for this event", async () => {
-    const { app, bookingsQuery } = buildApp({
+    const { app } = buildApp({
       event: details({ equipment: "Projector" }),
       bookings: [
-        { venue_id: 1, event_id: null },
+        { venue_id: 1, event_id: 99 },
         { venue_id: 3, event_id: 7 },
       ],
+      bookingEvents: [{ id: 99, proposedDate: "2026-11-10", startTime: "14:00", endTime: "16:00" }],
     });
     const res = await recommend(app);
 
-    expect(bookingsQuery.eq).toHaveBeenCalledWith("booking_date", "2026-11-10");
-    expect(bookingsQuery.lt).toHaveBeenCalledWith("start_time", "16:00");
-    expect(bookingsQuery.gt).toHaveBeenCalledWith("end_time", "14:00");
     expect(ids(res.body)).toEqual([3, 5]);
   });
 

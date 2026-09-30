@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
-import { fetchEvent } from "../lib/eventsClient.js";
+import { fetchEvent, fetchVenueBookingInfo } from "../lib/eventsClient.js";
 import { extractRequirements, scheduleQuery, withFeatures } from "../lib/venueRecommendation.js";
 import {
   buildFilterOptions,
@@ -43,24 +43,43 @@ async function loadActiveVenues(supabase: NonNullable<AuthedRequest["supabase"]>
  * window, any booking that day counts. A booking held for `forEventId`
  * doesn't count — that venue is already this event's own. Resolves to
  * null when the lookup fails.
+ *
+ * venue_bookings no longer stores its own timing (migration 0015) — every
+ * booking's date/time comes from its linked event, fetched in bulk from
+ * events-service via fetchVenueBookingInfo. This means date filtering can
+ * no longer happen at the DB level (there's no local date column to
+ * filter on); every booking for every venue is fetched, then compared
+ * against each linked event's date/time in application code. Acceptable
+ * at this project's scale — see AGENTS.md's venue_bookings notes.
  */
 async function findUnavailableVenueIds(
   supabase: NonNullable<AuthedRequest["supabase"]>,
   criteria: VenueSearchCriteria,
+  authorization: string,
   forEventId?: number,
 ): Promise<Set<number> | null> {
   const unavailableVenueIds = new Set<number>();
   if (!criteria.date) return unavailableVenueIds;
 
-  let bookingsQuery = supabase.from("venue_bookings").select("venue_id, event_id").eq("booking_date", criteria.date);
-  if (criteria.startTime && criteria.endTime) {
-    bookingsQuery = bookingsQuery.lt("start_time", criteria.endTime).gt("end_time", criteria.startTime);
-  }
-
-  const { data: bookings, error } = await bookingsQuery;
+  const { data: bookings, error } = await supabase.from("venue_bookings").select("venue_id, event_id");
   if (error) return null;
-  for (const booking of bookings ?? []) {
-    if (forEventId !== undefined && booking.event_id === forEventId) continue;
+
+  const relevantBookings = (bookings ?? []).filter(
+    (booking) => forEventId === undefined || booking.event_id !== forEventId,
+  );
+  const eventIds = [...new Set(relevantBookings.map((booking) => booking.event_id as number))];
+
+  const infoResult = await fetchVenueBookingInfo(eventIds, authorization);
+  if (infoResult.status === "error") return null;
+  const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
+
+  for (const booking of relevantBookings) {
+    const event = eventsById.get(booking.event_id as number);
+    if (!event || event.proposedDate !== criteria.date) continue;
+    if (criteria.startTime && criteria.endTime) {
+      if (!event.startTime || !event.endTime) continue;
+      if (!(event.startTime < criteria.endTime && event.endTime > criteria.startTime)) continue;
+    }
     unavailableVenueIds.add(booking.venue_id as number);
   }
   return unavailableVenueIds;
@@ -99,7 +118,7 @@ venuesRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const unavailableVenueIds = await findUnavailableVenueIds(supabase, criteria);
+  const unavailableVenueIds = await findUnavailableVenueIds(supabase, criteria, req.headers.authorization!);
   if (!unavailableVenueIds) {
     res.status(500).json({ error: "Failed to check venue availability" });
     return;
@@ -153,7 +172,7 @@ venuesRouter.get("/recommendations/:eventId", async (req: AuthedRequest, res) =>
   }
   const criteria = withFeatures(parsed.criteria, requirements);
 
-  const unavailableVenueIds = await findUnavailableVenueIds(supabase, criteria, eventId);
+  const unavailableVenueIds = await findUnavailableVenueIds(supabase, criteria, req.headers.authorization!, eventId);
   if (!unavailableVenueIds) {
     res.status(500).json({ error: "Failed to check venue availability" });
     return;

@@ -139,9 +139,8 @@ select setval(pg_get_serial_sequence('events', 'id'), 6);
 --   1. Sign in as coordinator-one@example.com / password123.
 --   2. Open event 2 (Career Networking Night, 25 Sep 18:00-21:00, 150
 --      attendees) and click "Find venues" — the search opens pre-filled.
---   3. Grand Ballroom (capacity 400) is excluded: it's booked 17:00-22:00
---      that day below. Lecture Theatre LT1 is excluded on capacity (the
---      event's attendance pre-fills Capacity's minimum).
+--   3. Lecture Theatre LT1 is excluded on capacity (the event's attendance
+--      pre-fills Capacity's minimum).
 --   4. Add Facilities: Catering kitchen + Layouts: Boardroom — no venue has
 --      both, so the "no results" state appears with relax-filter options.
 
@@ -199,17 +198,8 @@ on conflict (id) do update set
 
 select setval(pg_get_serial_sequence('venues', 'id'), 10);
 
--- Existing holds that make venues unavailable (AC2). Deleted first so
--- re-running the file doesn't stack duplicates. event_id is looked up
--- rather than hard-coded: if event 1 has been deleted (or this block is
--- run on its own against a database without the seed events), the
--- booking still blocks the venue, just without the link to the event.
+-- venue_bookings (0015): no seed rows for now — every booking must have a
+-- real event_id, and none of the seed events are actually booked into a
+-- venue yet. Deleted first so re-running this file clears any stale rows
+-- from a previous version of this seed.
 delete from venue_bookings where venue_id between 1 and 10;
-
-insert into venue_bookings (venue_id, event_id, booking_date, start_time, end_time, reason) values
-  (1, null, '2026-09-25', '17:00', '22:00', 'Alumni gala dinner (external booking)'),
-  (2, (select id from events where id = 1), '2026-09-20', '08:00', '16:00', 'Freshman Orientation Fair — rain site'),
-  (6, (select id from events where id = 1), '2026-09-20', '08:00', '16:00', 'Freshman Orientation Fair'),
-  (5, null, '2026-09-25', '09:00', '12:00', 'Hackathon kickoff'),
-  (10, null, '2026-09-28', '09:00', '14:00', 'Floor maintenance'),
-  (9, null, '2026-10-05', '18:00', '23:00', 'Drama society rehearsal');
