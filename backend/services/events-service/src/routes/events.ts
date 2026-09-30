@@ -433,7 +433,7 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
 
   const { data: existing, error: fetchError } = await supabase
     .from("events")
-    .select("id, status, organiser_id, submitted_details, status_before_clarification")
+    .select("id, status, organiser_id, coordinator_id, submitted_details, status_before_clarification")
     .eq("id", Number(eventId))
     .maybeSingle();
 
@@ -444,6 +444,64 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
 
   if (!existing) {
     res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  // E3-7: the assigned coordinator edits event details during Planning —
+  // a separate path from the organiser one below, with its own status gate
+  // and a locked set of "critical" fields (schedule/venue/capacity) that
+  // must go through reject/re-request instead of a silent direct edit.
+  const isCoordinatorEditor = user.role === "coordinator";
+
+  if (isCoordinatorEditor) {
+    if (existing.coordinator_id !== user.id) {
+      await recordAccessDenial(supabase, user.id, eventId, "not_assigned_coordinator");
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+
+    if (existing.status !== "Planning") {
+      res.status(409).json({ error: "Coordinator edits are only allowed while the event is in Planning." });
+      return;
+    }
+
+    const result = validateEventRequest(req.body ?? {});
+    if (!result.valid) {
+      res.status(400).json({ error: "Validation failed", fields: result.fields });
+      return;
+    }
+
+    const oldDetails = (existing.submitted_details ?? {}) as Record<string, unknown>;
+    const changedCriticalFields = COORDINATOR_LOCKED_FIELDS.filter(
+      (field) => oldDetails[field] !== (result.value as unknown as Record<string, unknown>)[field],
+    );
+    if (changedCriticalFields.length > 0) {
+      res.status(400).json({
+        error: `Coordinators cannot change ${changedCriticalFields.join(", ")} directly.`,
+      });
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("events")
+      .update({ submitted_details: result.value })
+      .eq("id", existing.id)
+      .select(EVENT_COLUMNS)
+      .single();
+
+    if (error) {
+      res.status(500).json({ error: "Failed to save changes" });
+      return;
+    }
+
+    await recordEventHistory(
+      supabase,
+      existing.id,
+      diffSubmittedDetailsStructured(oldDetails, result.value!),
+      user.id,
+    );
+
+    res.json({ event: data });
     return;
   }
 
@@ -461,7 +519,7 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // change request" flow built yet, so this is a block + message, not a
   // real alternate workflow.
   const isClarificationResponse = existing.status === "Clarification Requested";
-  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status);
+  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status) || existing.status === "Planning";
   // E2-4 AC3: editing a draft here means submitting it — same E2-1
   // validation as a fresh request, and the same auto-assignment as POST /.
   const isDraftSubmit = existing.status === "Draft";
@@ -559,7 +617,7 @@ eventsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
   const { supabase } = req as Required<Pick<AuthedRequest, "supabase">>;
   const { data, error } = await supabase
     .from("event_history")
-    .select("id, field, old_value, new_value, changed_by, changed_by_user:changed_by(name), changed_at")
+    .select("id, field, old_value, new_value, changed_by, changed_by_user:changed_by(name, role), changed_at")
     .eq("event_id", event.id)
     .order("changed_at", { ascending: true });
 
@@ -580,6 +638,13 @@ eventsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
  */
 const PENDING_REVIEW_STATUSES = new Set(["Requested", "Unassigned"]);
 const REJECTABLE_STATUSES = new Set(["Requested", "Unassigned", "Clarification Requested"]);
+
+/**
+ * E3-7 AC1: fields the assigned coordinator cannot change through the
+ * Planning-stage direct edit — schedule/venue/capacity changes are
+ * "critical" and go through reject/re-request instead of a silent edit.
+ */
+const COORDINATOR_LOCKED_FIELDS = ["proposedDate", "startTime", "endTime", "venue", "expectedAttendance"] as const;
 
 interface ReviewEventRow {
   id: number;

@@ -196,6 +196,14 @@ const editBlockedMessage = computed(() => {
     return null;
   return "This request has already been confirmed and can no longer be edited directly. Contact your coordinator to request a change.";
 });
+/** E3-7 AC1/AC3: the assigned coordinator can edit non-critical fields
+ * while the event is in Planning — separate from the organiser paths
+ * above. Schedule/venue/capacity fields stay disabled in the form below
+ * (see COORDINATOR_LOCKED_FIELDS) since the backend rejects changes to
+ * them from this path outright. */
+const canCoordinatorEdit = computed(
+  () => isAssignedCoordinator.value && event.value?.status === "Planning",
+);
 const isEditingDetails = ref(false);
 const editForm = reactive<EventRequestPayload>({
   name: "",
@@ -288,6 +296,14 @@ function formatHistoryTimestamp(value: string): string {
   return date.toLocaleString();
 }
 
+/** "coordinator" -> "Coordinator", "venue_staff" -> "Venue Staff". */
+function formatRoleLabel(role: string): string {
+  return role
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 const NOT_PROVIDED = "Not provided";
 
 function formatDate(value: string | undefined | null): string {
@@ -355,7 +371,7 @@ onMounted(async () => {
               <div class="section-header">
                 <h2 class="section-title">Event Request Details</h2>
                 <button
-                  v-if="(canRespondToClarification || canEditDirectly) && !isEditingDetails"
+                  v-if="(canRespondToClarification || canEditDirectly || canCoordinatorEdit) && !isEditingDetails"
                   type="button"
                   class="btn-icon"
                   :title="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
@@ -413,6 +429,7 @@ onMounted(async () => {
                       type="number"
                       min="1"
                       class="edit-input"
+                      :disabled="canCoordinatorEdit && !canEditDirectly"
                     />
                     <p v-if="editFieldErrors.expectedAttendance" class="body-small error-text">
                       {{ editFieldErrors.expectedAttendance }}
@@ -423,17 +440,35 @@ onMounted(async () => {
                 <div class="field-row field-row-3">
                   <div class="field">
                     <label for="edit-proposedDate" class="body-small muted mb-1">Proposed date</label>
-                    <input id="edit-proposedDate" v-model="editForm.proposedDate" type="date" class="edit-input" />
+                    <input
+                      id="edit-proposedDate"
+                      v-model="editForm.proposedDate"
+                      type="date"
+                      class="edit-input"
+                      :disabled="canCoordinatorEdit && !canEditDirectly"
+                    />
                     <p v-if="editFieldErrors.proposedDate" class="body-small error-text">{{ editFieldErrors.proposedDate }}</p>
                   </div>
                   <div class="field">
                     <label for="edit-startTime" class="body-small muted mb-1">Start time</label>
-                    <input id="edit-startTime" v-model="editForm.startTime" type="time" class="edit-input" />
+                    <input
+                      id="edit-startTime"
+                      v-model="editForm.startTime"
+                      type="time"
+                      class="edit-input"
+                      :disabled="canCoordinatorEdit && !canEditDirectly"
+                    />
                     <p v-if="editFieldErrors.startTime" class="body-small error-text">{{ editFieldErrors.startTime }}</p>
                   </div>
                   <div class="field">
                     <label for="edit-endTime" class="body-small muted mb-1">End time</label>
-                    <input id="edit-endTime" v-model="editForm.endTime" type="time" class="edit-input" />
+                    <input
+                      id="edit-endTime"
+                      v-model="editForm.endTime"
+                      type="time"
+                      class="edit-input"
+                      :disabled="canCoordinatorEdit && !canEditDirectly"
+                    />
                     <p v-if="editFieldErrors.endTime" class="body-small error-text">{{ editFieldErrors.endTime }}</p>
                   </div>
                 </div>
@@ -496,7 +531,13 @@ onMounted(async () => {
                 <div class="field-row">
                   <div class="field">
                     <label for="edit-venue" class="body-small muted mb-1">Venue Requirements</label>
-                    <textarea id="edit-venue" v-model="editForm.venue" rows="2" class="edit-input" />
+                    <textarea
+                      id="edit-venue"
+                      v-model="editForm.venue"
+                      rows="2"
+                      class="edit-input"
+                      :disabled="canCoordinatorEdit && !canEditDirectly"
+                    />
                     <p v-if="editFieldErrors.venue" class="body-small error-text">{{ editFieldErrors.venue }}</p>
                   </div>
                   <div class="field">
@@ -699,7 +740,9 @@ onMounted(async () => {
                     <em>'{{ entry.old_value ?? "—" }}'</em> to <em>'{{ entry.new_value }}'</em>
                   </p>
                   <p class="body-small muted">
-                    {{ formatHistoryTimestamp(entry.changed_at) }} by {{ entry.changed_by_user?.name ?? entry.changed_by }}
+                    {{ formatHistoryTimestamp(entry.changed_at) }} by
+                    {{ entry.changed_by_user?.name ?? entry.changed_by }}<template v-if="entry.changed_by_user?.role">
+                      ({{ formatRoleLabel(entry.changed_by_user.role) }})</template>
                   </p>
                 </li>
               </ul>
