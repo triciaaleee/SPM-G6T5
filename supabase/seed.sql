@@ -198,8 +198,32 @@ on conflict (id) do update set
 
 select setval(pg_get_serial_sequence('venues', 'id'), 10);
 
--- venue_bookings (0015): no seed rows for now — every booking must have a
--- real event_id, and none of the seed events are actually booked into a
--- venue yet. Deleted first so re-running this file clears any stale rows
--- from a previous version of this seed.
+-- venue_bookings (0015): every booking must have a real event_id, so only
+-- the seed events actually far enough along to have a venue locked in get
+-- one — matched by attendance/theme to a suitable venue. Deleted first so
+-- re-running this file doesn't stack duplicates.
+--
+--   Event 1  Freshman Orientation Fair (Planning, 300 attendees, venue
+--            field names "Great Lawn / rain site Sports Hall") -> venue 6
+--            (Great Lawn, capacity 800), status Approved since the event
+--            itself is already approved.
+--   Event 2  Career Networking Night (Requested, 150 attendees, venue
+--            field names "Grand Ballroom") -> venue 1 (Grand Ballroom,
+--            capacity 400), status Requested — a tentative hold while the
+--            event itself is still pending review.
+--   Event 5  Design Club Showcase (Planning, 120 attendees, no venue
+--            field given) -> venue 5 (Innovation Hub, capacity 180 —
+--            open-plan space fits a gallery night), status Approved.
+--   Event 6  Robotics Demo Day (Requested, 200 attendees, no venue field
+--            given) -> venue 10 (Multipurpose Hall, capacity 250),
+--            status Requested.
+--
+-- Events 3 (Rejected) and 4 (Requested, no coordinator yet) have no
+-- booking — neither has reached the point of a venue being locked in.
 delete from venue_bookings where venue_id between 1 and 10;
+
+insert into venue_bookings (venue_id, event_id, status) values
+  (6, 1, 'Approved'),
+  (1, 2, 'Requested'),
+  (5, 5, 'Approved'),
+  (10, 6, 'Requested');
