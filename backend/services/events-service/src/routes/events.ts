@@ -315,12 +315,17 @@ const VENUE_BOOKING_INFO_FIELDS = [
 
 const MAX_VENUE_BOOKING_INFO_IDS = 100;
 
+const VENUE_BOOKING_INFO_ROLES = new Set(["venue_staff", "coordinator"]);
+
 /**
  * E1-5: booking-relevant info for the events booked at a venue, called by
- * venue-service (with the venue staff member's own token) to fill in the
- * venue schedule. Declared before GET /:id so "venue-booking-info" isn't
- * read as an event id. Drafts are never returned: a draft can't have been
- * booked, and it isn't anyone's business but the organiser's.
+ * venue-service with the caller's own token — a venue staff member's, to
+ * fill in the venue schedule, or (since the venue_bookings refactor that
+ * dropped local booking_date/start_time/end_time) a coordinator's, to
+ * resolve each booking's timing for availability search. Declared before
+ * GET /:id so "venue-booking-info" isn't read as an event id. Drafts are
+ * never returned: a draft can't have been booked, and it isn't anyone's
+ * business but the organiser's.
  */
 eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -331,7 +336,7 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
 
   const rawIds = typeof req.query.ids === "string" ? req.query.ids : "";
 
-  if (user.role !== "venue_staff") {
+  if (!VENUE_BOOKING_INFO_ROLES.has(user.role)) {
     await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_not_venue_staff");
     res.status(403).json({ error: "Access denied" });
     return;
@@ -461,7 +466,7 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // change request" flow built yet, so this is a block + message, not a
   // real alternate workflow.
   const isClarificationResponse = existing.status === "Clarification Requested";
-  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status);
+  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status) || existing.status === "Planning";
   // E2-4 AC3: editing a draft here means submitting it — same E2-1
   // validation as a fresh request, and the same auto-assignment as POST /.
   const isDraftSubmit = existing.status === "Draft";
