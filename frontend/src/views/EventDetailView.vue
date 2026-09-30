@@ -38,6 +38,7 @@ interface SubmittedEventDetails {
 }
 
 const route = useRoute();
+const activeTab = ref<"overview" | "history">("overview");
 const event = ref<EventSummary | null>(null);
 const loading = ref(true);
 const accessDenied = ref(false);
@@ -365,302 +366,297 @@ onMounted(async () => {
         <h1 class="h2">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}` }}</h1>
         <p class="body-default muted event-id">Event #{{ event.id }}</p>
 
+        <div class="tab-bar">
+          <button type="button" class="tab-btn" :class="{ active: activeTab === 'overview' }"
+            @click="activeTab = 'overview'">
+            Overview
+          </button>
+          <button type="button" class="tab-btn" :class="{ active: activeTab === 'history' }"
+            @click="activeTab = 'history'">
+            History
+          </button>
+        </div>
+
         <div class="detail-grid">
           <div class="detail-grid-col">
-            <div class="details-card">
-              <div class="section-header">
-                <h2 class="section-title">Event Request Details</h2>
-                <button
-                  v-if="(canRespondToClarification || canEditDirectly || canCoordinatorEdit) && !isEditingDetails"
-                  type="button"
-                  class="btn-icon"
-                  :title="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
-                  :aria-label="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
-                  @click="startEditingDetails"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-                    stroke="currentColor" class="btn-icon__svg">
-                    <path stroke-linecap="round" stroke-linejoin="round"
-                      d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
-                  </svg>
-                </button>
-              </div>
-
-              <p v-if="editBlockedMessage && !isEditingDetails" class="body-small muted edit-blocked-note">
-                {{ editBlockedMessage }}
-              </p>
-
-              <div class="field-row field-row-3">
-                <div class="field">
-                  <p class="body-small muted mb-1">Event Requestor</p>
-                  <p class="body-default field-value">{{ event.organiser?.name ?? NOT_PROVIDED }}</p>
-                </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Submitted date</p>
-                  <p class="body-default field-value">{{ formatDate(event.created_at) }}</p>
-                </div>
-                <div class="field">
-                  <p class="body-small muted mb-1">Status</p>
-                  <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
-                </div>
-              </div>
-
-              <hr class="divider" />
-
-              <p v-if="isEditingDetails && editGeneralError" class="body-default error-text">{{ editGeneralError }}</p>
-
-              <template v-if="isEditingDetails">
-                <div class="field-row field-row-3">
-                  <div class="field">
-                    <label for="edit-name" class="body-small muted mb-1">Title</label>
-                    <input id="edit-name" v-model="editForm.name" type="text" class="edit-input" />
-                    <p v-if="editFieldErrors.name" class="body-small error-text">{{ editFieldErrors.name }}</p>
+            <template v-if="activeTab === 'overview'">
+                <div class="details-card">
+                  <div class="section-header">
+                    <h2 class="section-title">Event Details</h2>
+                    <button v-if="(canRespondToClarification || canEditDirectly || canCoordinatorEdit) && !isEditingDetails" type="button"
+                      class="btn-icon" :title="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
+                      :aria-label="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
+                      @click="startEditingDetails">
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                        stroke="currentColor" class="btn-icon__svg">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                          d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                      </svg>
+                    </button>
                   </div>
-                  <div class="field">
-                    <label for="edit-purpose" class="body-small muted mb-1">Purpose</label>
-                    <input id="edit-purpose" v-model="editForm.purpose" type="text" class="edit-input" />
-                    <p v-if="editFieldErrors.purpose" class="body-small error-text">{{ editFieldErrors.purpose }}</p>
-                  </div>
-                  <div class="field">
-                    <label for="edit-expectedAttendance" class="body-small muted mb-1">Expected attendance</label>
-                    <input
-                      id="edit-expectedAttendance"
-                      v-model="editForm.expectedAttendance"
-                      type="number"
-                      min="1"
-                      class="edit-input"
-                      :disabled="canCoordinatorEdit && !canEditDirectly"
-                    />
-                    <p v-if="editFieldErrors.expectedAttendance" class="body-small error-text">
-                      {{ editFieldErrors.expectedAttendance }}
-                    </p>
-                  </div>
-                </div>
-
-                <div class="field-row field-row-3">
-                  <div class="field">
-                    <label for="edit-proposedDate" class="body-small muted mb-1">Proposed date</label>
-                    <input
-                      id="edit-proposedDate"
-                      v-model="editForm.proposedDate"
-                      type="date"
-                      class="edit-input"
-                      :disabled="canCoordinatorEdit && !canEditDirectly"
-                    />
-                    <p v-if="editFieldErrors.proposedDate" class="body-small error-text">{{ editFieldErrors.proposedDate }}</p>
-                  </div>
-                  <div class="field">
-                    <label for="edit-startTime" class="body-small muted mb-1">Start time</label>
-                    <input
-                      id="edit-startTime"
-                      v-model="editForm.startTime"
-                      type="time"
-                      class="edit-input"
-                      :disabled="canCoordinatorEdit && !canEditDirectly"
-                    />
-                    <p v-if="editFieldErrors.startTime" class="body-small error-text">{{ editFieldErrors.startTime }}</p>
-                  </div>
-                  <div class="field">
-                    <label for="edit-endTime" class="body-small muted mb-1">End time</label>
-                    <input
-                      id="edit-endTime"
-                      v-model="editForm.endTime"
-                      type="time"
-                      class="edit-input"
-                      :disabled="canCoordinatorEdit && !canEditDirectly"
-                    />
-                    <p v-if="editFieldErrors.endTime" class="body-small error-text">{{ editFieldErrors.endTime }}</p>
-                  </div>
-                </div>
-
-                <div class="field">
-                  <label for="edit-description" class="body-small muted mb-1">Description</label>
-                  <textarea id="edit-description" v-model="editForm.description" rows="3" class="edit-input" />
-                  <p v-if="editFieldErrors.description" class="body-small error-text">{{ editFieldErrors.description }}</p>
-                </div>
-              </template>
-
-              <template v-else>
-                <div class="field-row field-row-3">
-                  <div class="field">
-                    <p class="body-small muted mb-1">Title</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).name || "—" }}</p>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Purpose</p>
-                    <span class="badge badge-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
-                    }}</span>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Expected attendance</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).expectedAttendance
-                      ?? "—" }}</p>
-                  </div>
-                </div>
-
-                <div class="field-row field-row-3">
-                  <div class="field">
-                    <p class="body-small muted mb-1">Proposed date</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).proposedDate || "—"
-                    }}</p>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Time</p>
-                    <p class="body-default field-value">
-                      {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
-                      –
-                      {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
-                    </p>
-                  </div>
-                </div>
-
-                <div class="field">
-                  <p class="body-small muted mb-1">Description</p>
-                  <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).description || "—" }}
+                  <p v-if="editBlockedMessage && !isEditingDetails" class="body-small muted edit-blocked-note">
+                    {{ editBlockedMessage }}
                   </p>
-                </div>
-              </template>
-            </div>
-
-
-
-            <div class="details-card requirements-card">
-              <h2 class="section-title">Event Requirements</h2>
-
-              <template v-if="isEditingDetails">
-                <div class="field-row">
-                  <div class="field">
-                    <label for="edit-venue" class="body-small muted mb-1">Venue Requirements</label>
-                    <textarea
-                      id="edit-venue"
-                      v-model="editForm.venue"
-                      rows="2"
-                      class="edit-input"
-                      :disabled="canCoordinatorEdit && !canEditDirectly"
-                    />
-                    <p v-if="editFieldErrors.venue" class="body-small error-text">{{ editFieldErrors.venue }}</p>
+                  <div class="field-row field-row-3">
+                    <div class="field">
+                      <p class="body-small muted mb-1">Event Requestor</p>
+                      <p class="body-default field-value">{{ event.organiser?.name ?? NOT_PROVIDED }}</p>
+                    </div>
+                    <div class="field">
+                      <p class="body-small muted mb-1">Submitted date</p>
+                      <p class="body-default field-value">{{ formatDate(event.created_at) }}</p>
+                    </div>
+                    <div class="field">
+                      <p class="body-small muted mb-1">Status</p>
+                      <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
+                    </div>
                   </div>
-                  <div class="field">
-                    <label for="edit-equipment" class="body-small muted mb-1">Equipment Requirements</label>
-                    <textarea id="edit-equipment" v-model="editForm.equipment" rows="2" class="edit-input" />
-                    <p v-if="editFieldErrors.equipment" class="body-small error-text">{{ editFieldErrors.equipment }}</p>
-                  </div>
-                </div>
+                  <hr class="divider" />
+                  <p v-if="isEditingDetails && editGeneralError" class="body-default error-text">{{ editGeneralError }}
+                  </p>
+                  <template v-if="isEditingDetails">
+                    <div class="field-row field-row-3">
+                      <div class="field">
+                        <label for="edit-name" class="body-small muted mb-1">Title</label>
+                        <input id="edit-name" v-model="editForm.name" type="text" class="edit-input" />
+                        <p v-if="editFieldErrors.name" class="body-small error-text">{{ editFieldErrors.name }}</p>
+                      </div>
+                      <div class="field">
+                        <label for="edit-purpose" class="body-small muted mb-1">Purpose</label>
+                        <input id="edit-purpose" v-model="editForm.purpose" type="text" class="edit-input" />
+                        <p v-if="editFieldErrors.purpose" class="body-small error-text">{{ editFieldErrors.purpose }}</p>
+                      </div>
+                      <div class="field">
+                        <label for="edit-expectedAttendance" class="body-small muted mb-1">Expected attendance</label>
+                        <input id="edit-expectedAttendance" v-model="editForm.expectedAttendance" type="number" min="1"
+                          class="edit-input" :disabled="canCoordinatorEdit && !canEditDirectly" />
+                        <p v-if="editFieldErrors.expectedAttendance" class="body-small error-text">
+                          {{ editFieldErrors.expectedAttendance }}
+                        </p>
+                      </div>
+                    </div>
+                    <div class="field-row field-row-3">
+                      <div class="field">
+                        <label for="edit-proposedDate" class="body-small muted mb-1">Proposed date</label>
+                        <input id="edit-proposedDate" v-model="editForm.proposedDate" type="date" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
+                        <p v-if="editFieldErrors.proposedDate" class="body-small error-text">{{
+                          editFieldErrors.proposedDate }}</p>
+                      </div>
+                      <div class="field">
+                        <label for="edit-startTime" class="body-small muted mb-1">Start time</label>
+                        <input id="edit-startTime" v-model="editForm.startTime" type="time" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
+                        <p v-if="editFieldErrors.startTime" class="body-small error-text">{{ editFieldErrors.startTime }}
+                        </p>
+                      </div>
+                      <div class="field">
+                        <label for="edit-endTime" class="body-small muted mb-1">End time</label>
+                        <input id="edit-endTime" v-model="editForm.endTime" type="time" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
+                        <p v-if="editFieldErrors.endTime" class="body-small error-text">{{ editFieldErrors.endTime }}</p>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label for="edit-description" class="body-small muted mb-1">Description</label>
+                      <textarea id="edit-description" v-model="editForm.description" rows="3" class="edit-input" />
+                      <p v-if="editFieldErrors.description" class="body-small error-text">{{ editFieldErrors.description
+                      }}</p>
+                    </div>
+                  </template>
+<template v-else>
+                    <div class="field-row field-row-3">
+                      <div class="field">
+                        <p class="body-small muted mb-1">Title</p>
+                        <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).name || "—" }}
+                        </p>
+                      </div>
+                      <div class="field">
+                        <p class="body-small muted mb-1">Purpose</p>
+                        <span class="badge badge-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
+                        }}</span>
+                      </div>
+                      <div class="field">
+                        <p class="body-small muted mb-1">Expected attendance</p>
+                        <p class="body-default field-value">{{
+                          asSubmittedDetails(event.submitted_details).expectedAttendance
+                          ?? "—" }}</p>
+                      </div>
+                    </div>
+                    <div class="field-row field-row-3">
+                      <div class="field">
+                        <p class="body-small muted mb-1">Proposed date</p>
+                        <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).proposedDate ||
+                          "—"
+                        }}</p>
+                      </div>
+                      <div class="field">
+                        <p class="body-small muted mb-1">Time</p>
+                        <p class="body-default field-value">
+                          {{ asSubmittedDetails(event.submitted_details).startTime || "—" }}
+                          –
+                          {{ asSubmittedDetails(event.submitted_details).endTime || "—" }}
+                        </p>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <p class="body-small muted mb-1">Description</p>
+                      <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).description ||
+                        "—" }}
+                      </p>
+                    </div>
+                  </template>
+<hr class="divider" />
+<template v-if="isEditingDetails">
+                    <div class="field-row">
+                      <div class="field">
+                        <label for="edit-venue" class="body-small muted mb-1">Venue Requirements</label>
+                        <textarea id="edit-venue" v-model="editForm.venue" rows="2" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
+                        <p v-if="editFieldErrors.venue" class="body-small error-text">{{ editFieldErrors.venue }}</p>
+                      </div>
+                      <div class="field">
+                        <label for="edit-equipment" class="body-small muted mb-1">Equipment Requirements</label>
+                        <textarea id="edit-equipment" v-model="editForm.equipment" rows="2" class="edit-input" />
+                        <p v-if="editFieldErrors.equipment" class="body-small error-text">{{ editFieldErrors.equipment }}
+                        </p>
+                      </div>
+                    </div>
+                    <div class="field-row">
+                      <div class="field">
+                        <label for="edit-accessibility" class="body-small muted mb-1">Accessibility Needs</label>
+                        <textarea id="edit-accessibility" v-model="editForm.accessibility" rows="2" class="edit-input" />
+                        <p v-if="editFieldErrors.accessibility" class="body-small error-text">{{
+                          editFieldErrors.accessibility }}</p>
+                      </div>
+                      <div class="field">
+                        <label for="edit-technicalSupport" class="body-small muted mb-1">Technical Support</label>
+                        <textarea id="edit-technicalSupport" v-model="editForm.technicalSupport" rows="2"
+                          class="edit-input" />
+                        <p v-if="editFieldErrors.technicalSupport" class="body-small error-text">{{
+                          editFieldErrors.technicalSupport }}</p>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="body-small muted mb-1">Registration Needs (Where relevant)</label>
+                      <div class="flex gap-2" role="group" aria-label="Registration needed">
+                        <button type="button" class="btn"
+                          :class="editForm.registrationNeeded ? 'btn-primary' : 'btn-secondary'"
+                          :aria-pressed="editForm.registrationNeeded" @click="editForm.registrationNeeded = true">
+                          Yes
+                        </button>
+                        <button type="button" class="btn"
+                          :class="!editForm.registrationNeeded ? 'btn-primary' : 'btn-secondary'"
+                          :aria-pressed="!editForm.registrationNeeded" @click="editForm.registrationNeeded = false">
+                          No
+                        </button>
+                      </div>
+                    </div>
+                    <div class="edit-actions">
+                      <button type="button" class="btn btn-primary" :disabled="submittingEdit"
+                        @click="submitEditedDetails">
+                        {{ submittingEdit ? "Submitting…" : "Submit response" }}
+                      </button>
+                      <button type="button" class="btn btn-secondary" :disabled="submittingEdit"
+                        @click="cancelEditingDetails">
+                        Cancel
+                      </button>
+                    </div>
+                  </template>
+<template v-else>
+                    <div class="field-row">
+                      <div class="field">
+                        <p class="body-small muted mb-1">Venue Requirements</p>
+                        <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).venue ||
+                          NOT_PROVIDED }}</p>
+                      </div>
+                      <div class="field">
+                        <p class="body-small muted mb-1">Equipment Requirements</p>
+                        <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).equipment ||
+                          NOT_PROVIDED }}</p>
+                      </div>
+                    </div>
+                    <div class="field-row">
+                      <div class="field">
+                        <p class="body-small muted mb-1">Accessibility Needs</p>
+                        <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).accessibility
+                          ||
+                          NOT_PROVIDED }}</p>
+                      </div>
+                      <div class="field">
+                        <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
+                        <p class="body-default field-value">
+                          {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
+                        </p>
+                      </div>
+                    </div>
+                  </template>
+</div>
 
-                <div class="field-row">
-                  <div class="field">
-                    <label for="edit-accessibility" class="body-small muted mb-1">Accessibility Needs</label>
-                    <textarea id="edit-accessibility" v-model="editForm.accessibility" rows="2" class="edit-input" />
-                    <p v-if="editFieldErrors.accessibility" class="body-small error-text">{{ editFieldErrors.accessibility }}</p>
-                  </div>
-                  <div class="field">
-                    <label for="edit-technicalSupport" class="body-small muted mb-1">Technical Support</label>
-                    <textarea id="edit-technicalSupport" v-model="editForm.technicalSupport" rows="2" class="edit-input" />
-                    <p v-if="editFieldErrors.technicalSupport" class="body-small error-text">{{ editFieldErrors.technicalSupport }}</p>
-                  </div>
-                </div>
+<EventStatusTracker v-if="event.status === 'Planning'" :status="event.status"
+  :last-changed-at="statusLastChangedAt(event)" :review-outcome="event.review_outcome" title="Outstanding Arrangements"
+  :show-timeline="false" />
+</template>
 
-                <div class="field">
-                  <label class="body-small muted mb-1">Registration Needs (Where relevant)</label>
-                  <div class="flex gap-2" role="group" aria-label="Registration needed">
-                    <button
-                      type="button"
-                      class="btn"
-                      :class="editForm.registrationNeeded ? 'btn-primary' : 'btn-secondary'"
-                      :aria-pressed="editForm.registrationNeeded"
-                      @click="editForm.registrationNeeded = true"
-                    >
-                      Yes
-                    </button>
-                    <button
-                      type="button"
-                      class="btn"
-                      :class="!editForm.registrationNeeded ? 'btn-primary' : 'btn-secondary'"
-                      :aria-pressed="!editForm.registrationNeeded"
-                      @click="editForm.registrationNeeded = false"
-                    >
-                      No
-                    </button>
-                  </div>
-                </div>
+<template v-else>
+  <EventStatusTracker :status="event.status" :last-changed-at="statusLastChangedAt(event)"
+    :review-outcome="event.review_outcome" title="Event Timeline" :show-outstanding="false" />
 
-                <div class="edit-actions">
-                  <button type="button" class="btn btn-primary" :disabled="submittingEdit" @click="submitEditedDetails">
-                    {{ submittingEdit ? "Submitting…" : "Submit response" }}
-                  </button>
-                  <button type="button" class="btn btn-secondary" :disabled="submittingEdit" @click="cancelEditingDetails">
-                    Cancel
-                  </button>
-                </div>
-              </template>
+  <!-- E2-7 AC3: structured edit history, same visibility as the
+                   clarification thread (owning organiser or any coordinator). -->
+  <div v-if="!historyLoading && historyEntries.length > 0" class="details-card history-card">
+    <h2 class="section-title">Edit history</h2>
+    <ul class="history-list">
+      <li v-for="entry in historyEntries" :key="entry.id" class="history-list__item">
+        <p class="body-default field-value">
+          <strong>{{ entry.field }}</strong> changed from
+          <em>'{{ entry.old_value ?? "—" }}'</em> to <em>'{{ entry.new_value }}'</em>
+        </p>
+        <p class="body-small muted">
+          {{ formatHistoryTimestamp(entry.changed_at) }} by
+          {{ entry.changed_by_user?.name ?? entry.changed_by }}<template v-if="entry.changed_by_user?.role">
+            ({{ formatRoleLabel(entry.changed_by_user.role) }})</template>
+        </p>
+      </li>
+    </ul>
+  </div>
+</template>
+</div>
 
-              <template v-else>
-                <div class="field-row">
-                  <div class="field">
-                    <p class="body-small muted mb-1">Venue Requirements</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).venue ||
-                      NOT_PROVIDED }}</p>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Equipment Requirements</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).equipment ||
-                      NOT_PROVIDED }}</p>
-                  </div>
-                </div>
-
-                <div class="field-row">
-                  <div class="field">
-                    <p class="body-small muted mb-1">Accessibility Needs</p>
-                    <p class="body-default field-value">{{ asSubmittedDetails(event.submitted_details).accessibility ||
-                      NOT_PROVIDED }}</p>
-                  </div>
-                  <div class="field">
-                    <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
-                    <p class="body-default field-value">
-                      {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
-                    </p>
-                  </div>
-                </div>
-              </template>
-            </div>
-            <EventStatusTracker :status="event.status" :last-changed-at="statusLastChangedAt(event)"
-              :review-outcome="event.review_outcome" />
-          </div>
-
-          <div class="detail-grid-col">
-            <div class="coordinator-card">
-              <h2 class="section-title">Coordinator Details</h2>
-              <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
-              <div v-if="isCoordinator" class="coordinator-panel" :class="{
+<div class="detail-grid-col">
+  <div class="coordinator-card">
+    <h2 class="section-title">Coordinator Details</h2>
+    <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
+    <div v-if="isCoordinator" class="coordinator-panel" :class="{
                 'coordinator-panel--assigned': isAssignedCoordinator,
                 'coordinator-panel--blocked': isOtherCoordinatorEvent,
                 'coordinator-panel--unassigned': !isAssignedCoordinator && !isOtherCoordinatorEvent,
               }">
-                <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
-                  You are the assigned coordinator for this event.
-                </p>
-                <p v-else-if="isOtherCoordinatorEvent" class="body-default coordinator-panel__text">
-                  This event is assigned to another coordinator. Coordinator actions are not available.
-                </p>
-                <p v-else class="body-default coordinator-panel__text">
-                  No coordinator has been assigned to this event yet.
-                </p>
-              </div>
-              <div class="field mb-field">
-                <p class="body-small muted mb-1">Coordinator</p>
-                <p class="font-semibold !text-lg field-value">{{ event.coordinator?.name ?? "Not yet assigned" }}</p>
-              </div>
-              <!-- E1-4.2: coordinator review actions -->
-              <div v-if="isCoordinator">
-                <h3 class="text-lg font-semibold text-[--color-grey-900]">Coordinator actions</h3>
-                <div class="review-actions ">
-                  <p v-if="event.status === 'Rejected'" class="body-small muted">
-                    This request has been rejected and cannot be moved forward.
-                  </p>
-                  <p v-else-if="isOtherCoordinatorEvent" class="body-small muted">
-                    Only the assigned coordinator can review this request.
-                  </p>
-                  <template v-else-if="showReviewActions">
+      <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
+        You are the assigned coordinator for this event.
+      </p>
+      <p v-else-if="isOtherCoordinatorEvent" class="body-default coordinator-panel__text">
+        This event is assigned to another coordinator. Coordinator actions are not available.
+      </p>
+      <p v-else class="body-default coordinator-panel__text">
+        No coordinator has been assigned to this event yet.
+      </p>
+    </div>
+    <div class="field mb-field">
+      <p class="body-small muted mb-1">Coordinator</p>
+      <p class="font-semibold !text-lg field-value">{{ event.coordinator?.name ?? "Not yet assigned" }}</p>
+    </div>
+    <!-- E1-4.2: coordinator review actions -->
+    <div v-if="isCoordinator">
+      <h3 class="text-lg font-semibold text-[--color-grey-900]">Coordinator actions</h3>
+      <div class="review-actions ">
+        <p v-if="event.status === 'Rejected'" class="body-small muted">
+          This request has been rejected and cannot be moved forward.
+        </p>
+        <p v-else-if="isOtherCoordinatorEvent" class="body-small muted">
+          Only the assigned coordinator can review this request.
+        </p>
+        <template v-else-if="showReviewActions">
                     <p v-if="event.status === 'Planning'" class="body-small muted review-actions__note ">
                       This request has been approved and moved to Planning. You can still ask the organiser a
                       follow-up question if you need more information.
@@ -696,63 +692,43 @@ onMounted(async () => {
                         </button>
                       </template>
 
-                      <button type="button" class="btn"
-                        :class="event.status === 'Clarification Requested' ? 'btn-clarify--requested' : 'btn-clarify'"
-                        :disabled="!canAskClarification || isReviewing" @click="openClarify">
-                        {{ event.status === "Clarification Requested" ? "Clarification Requested" : "Request Clarification" }}
-                      </button>
+        <button type="button" class="btn"
+          :class="event.status === 'Clarification Requested' ? 'btn-clarify--requested' : 'btn-clarify'"
+          :disabled="!canAskClarification || isReviewing" @click="openClarify">
+          {{ event.status === "Clarification Requested" ? "Clarification Requested" : "Request Clarification" }}
+        </button>
 
-                      <template v-if="event.status !== 'Planning'">
+        <template v-if="event.status !== 'Planning'">
                         <button type="button" class="btn btn-reject-outline" :disabled="!canReject || isReviewing"
                           @click="openReject">
                           Reject
                         </button>
                       </template>
-                    </div>
-                  </template>
-                  <p v-else class="body-small muted">
-                    No coordinator actions are available for this request's current status ({{ event.status }}).
-                  </p>
-                </div>
-              </div>
-
-              <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
-              <div v-if="isCoordinator && event.status !== 'Rejected'" class="venue-search-entry">
-                <h3 class="text-lg font-semibold text-[--color-grey-900]">Venue</h3>
-                <VenueRecommendations :event-id="event.id" :details="event.submitted_details" />
-                <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
-                  Find venues
-                </RouterLink>
-              </div>
-            </div>
-
-            <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
-              :current-user-id="currentUser.id" />
-
-            <!-- E2-7 AC3: structured edit history, same visibility as the
-                 clarification thread (owning organiser or any coordinator). -->
-            <div v-if="!historyLoading && historyEntries.length > 0" class="details-card history-card">
-              <h2 class="section-title">Edit history</h2>
-              <ul class="history-list">
-                <li v-for="entry in historyEntries" :key="entry.id" class="history-list__item">
-                  <p class="body-default field-value">
-                    <strong>{{ entry.field }}</strong> changed from
-                    <em>'{{ entry.old_value ?? "—" }}'</em> to <em>'{{ entry.new_value }}'</em>
-                  </p>
-                  <p class="body-small muted">
-                    {{ formatHistoryTimestamp(entry.changed_at) }} by
-                    {{ entry.changed_by_user?.name ?? entry.changed_by }}<template v-if="entry.changed_by_user?.role">
-                      ({{ formatRoleLabel(entry.changed_by_user.role) }})</template>
-                  </p>
-                </li>
-              </ul>
-            </div>
-
-          </div>
-        </div>
       </div>
+      </template>
+      <p v-else class="body-small muted">
+        No coordinator actions are available for this request's current status ({{ event.status }}).
+      </p>
     </div>
   </div>
+</div>
+
+<!-- Venue search: opens pre-filled with this event's date, time and attendance -->
+<div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
+  <h2 class="section-title">Venue Recommendations</h2>
+  <VenueRecommendations :event-id="event.id" :details="event.submitted_details" />
+  <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
+    Find venues
+  </RouterLink>
+</div>
+
+<ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
+  :current-user-id="currentUser.id" />
+</div>
+</div>
+</div>
+</div>
+</div>
 </template>
 
 <style scoped>
@@ -879,6 +855,34 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
+.tab-bar {
+  display: flex;
+  gap: var(--spacing-24);
+  border-bottom: 1px solid var(--color-grey-100);
+  margin-bottom:var(--spacing-24)
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  padding: var(--spacing-12) 0;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-grey-500);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+
+.tab-btn:hover {
+  color: var(--color-grey-900);
+}
+
+.tab-btn.active {
+  color: var(--color-purple-700);
+  border-bottom-color: var(--color-purple-600);
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: 2fr 1fr;
@@ -909,8 +913,8 @@ onMounted(async () => {
 
 .divider {
   border: none;
-  border-top: 1px solid var(--color-grey-100);
-  margin: 0 0 var(--spacing-24);
+  border-top: 1px solid var(--color-grey-200);
+  margin: var(--spacing-24) 0;
 }
 
 .badge-neutral {
@@ -923,7 +927,7 @@ onMounted(async () => {
   font-weight: 700;
   line-height: 1.75rem;
   color: var(--color-grey-900);
-  margin: 0 0 var(--spacing-12);
+  margin-bottom:12px!important;
 }
 
 .section-header {
@@ -1159,9 +1163,6 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-8);
-  margin-top: var(--spacing-24);
-  padding-top: var(--spacing-24);
-  border-top: 1px solid var(--color-grey-100);
 }
 
 /* Style.md 3.4 outline button — the solid slot in this card belongs to Approve. */
