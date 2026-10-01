@@ -2,9 +2,12 @@
 /**
  * E4 venue recommendations for one event request, shown in the Venue part
  * of the Coordinator Details card. Every venue listed meets all of the
- * event's requirements (venue-service does the matching). All of them are
+ * event's main requirements (venue-service does the matching). All of them are
  * shown one card at a time in a carousel so the side column stays short;
- * they're ordered tightest capacity fit first.
+ * they're ordered tightest capacity fit first. The carousel loops: a copy
+ * of the last card sits before the first and a copy of the first after the
+ * last, so moving past either end keeps scrolling the same way, then
+ * silently jumps to the real card once the scroll settles.
  *
  * Column mapping: lives inside the event detail page's side column
  * (desktop: the 1fr of the 2fr/1fr detail grid; tablet/mobile: full width
@@ -12,7 +15,7 @@
  * parent's width at every breakpoint; the carousel track shows one card
  * per view.
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import VenueIcon from "./VenueIcon.vue";
 import { fetchVenueRecommendations, type VenueRecommendations } from "../../lib/venuesApi";
 
@@ -31,6 +34,20 @@ const activeIndex = ref(0);
 
 const venues = computed(() => result.value?.venues ?? []);
 
+type Venue = VenueRecommendations["venues"][number];
+
+/** Track contents: the venues, wrapped in a copy of each end when there's more than one. */
+const slides = computed<{ venue: Venue; key: string; index: number; clone: boolean }[]>(() => {
+  const list = venues.value.map((venue, index) => ({ venue, key: String(venue.id), index, clone: false }));
+  if (list.length < 2) return list;
+  const first = list[0];
+  const last = list[list.length - 1];
+  return [{ ...last, key: "clone-last", clone: true }, ...list, { ...first, key: "clone-first", clone: true }];
+});
+
+/** Track position of the first real venue (1 when the end copies are present). */
+const firstRealPosition = computed(() => (venues.value.length > 1 ? 1 : 0));
+
 const requiredFeatures = computed(() => {
   const r = result.value?.requirements;
   return r ? [...r.layouts, ...r.facilities, ...r.accessibility] : [];
@@ -42,13 +59,15 @@ async function load(): Promise<void> {
   try {
     result.value = await fetchVenueRecommendations(props.eventId);
     activeIndex.value = 0;
-    trackRef.value?.scrollTo({ left: 0 });
   } catch (err) {
     result.value = null;
     errorMessage.value = err instanceof Error ? err.message : "Failed to load venue recommendations";
   } finally {
     loading.value = false;
   }
+  // The track only renders once loading ends; start on the first real card.
+  await nextTick();
+  jumpTo(firstRealPosition.value);
 }
 
 onMounted(load);
@@ -57,18 +76,47 @@ watch(
   () => void load(),
 );
 
-function onScroll(): void {
+let settleTimer: ReturnType<typeof setTimeout> | undefined;
+
+function currentPosition(): number {
   const track = trackRef.value;
-  if (!track || track.clientWidth === 0) return;
-  activeIndex.value = Math.round(track.scrollLeft / track.clientWidth);
+  if (!track || track.clientWidth === 0) return firstRealPosition.value;
+  return Math.round(track.scrollLeft / track.clientWidth);
 }
 
-function goTo(index: number): void {
+/** Moves to a track position instantly, with no animation. */
+function jumpTo(position: number): void {
   const track = trackRef.value;
   if (!track) return;
-  const clamped = Math.max(0, Math.min(index, venues.value.length - 1));
-  track.scrollTo({ left: clamped * track.clientWidth, behavior: "smooth" });
-  activeIndex.value = clamped;
+  track.scrollTo({ left: position * track.clientWidth, behavior: "instant" });
+}
+
+/** If the scroll stopped on an end copy, swap to the real card it copies. */
+function settle(): void {
+  const position = currentPosition();
+  if (venues.value.length < 2) return;
+  if (position === 0) jumpTo(venues.value.length);
+  else if (position === venues.value.length + 1) jumpTo(1);
+}
+
+function onScroll(): void {
+  const slide = slides.value[currentPosition()];
+  if (slide) activeIndex.value = slide.index;
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(settle, 120);
+}
+
+/** Scrolls one card forward (1) or back (-1), looping past either end. */
+function step(direction: 1 | -1): void {
+  const track = trackRef.value;
+  if (!track) return;
+  // Already on an end copy (e.g. a quick second click): swap to the real card first.
+  clearTimeout(settleTimer);
+  settle();
+  const position = currentPosition() + direction;
+  track.scrollTo({ left: position * track.clientWidth, behavior: "smooth" });
+  const slide = slides.value[position];
+  if (slide) activeIndex.value = slide.index;
 }
 
 function isRequired(feature: string): boolean {
@@ -76,7 +124,7 @@ function isRequired(feature: string): boolean {
 }
 
 /** The venue's features that the event asked for, in the order listed above. */
-function matchedFeatures(venue: VenueRecommendations["venues"][number]): string[] {
+function matchedFeatures(venue: Venue): string[] {
   return [...venue.layouts, ...venue.facilities, ...venue.accessibility].filter(isRequired);
 }
 </script>
@@ -112,14 +160,15 @@ function matchedFeatures(venue: VenueRecommendations["venues"][number]): string[
       <div v-if="venues.length === 0" class="empty-state" role="status">
         <p class="body-small font-semibold">No suitable venues were found.</p>
         <p class="body-small muted">
-          No venue meets all of this event's requirements. Try Find venues to loosen the criteria.
+          No venue meets all of this event's main requirements. Try Find venues to loosen the criteria.
         </p>
       </div>
 
       <div v-else class="carousel">
         <ul ref="trackRef" class="carousel__track" aria-label="Recommended venues" @scroll.passive="onScroll">
-          <li v-for="(venue, index) in venues" :key="venue.id" class="venue-card"
-            :aria-label="`${index + 1} of ${venues.length}: ${venue.name}`">
+          <li v-for="{ venue, key, index, clone } in slides" :key="key" class="venue-card"
+            :aria-hidden="clone ? 'true' : undefined"
+            :aria-label="clone ? undefined : `${index + 1} of ${venues.length}: ${venue.name}`">
             <p class="body-default font-semibold venue-card__name">{{ venue.name }}</p>
             <p class="body-small muted venue-card__meta">
               <VenueIcon name="location" :size="14" />
@@ -141,13 +190,11 @@ function matchedFeatures(venue: VenueRecommendations["venues"][number]): string[
         </ul>
 
         <div v-if="venues.length > 1" class="carousel__controls">
-          <button type="button" class="carousel__arrow" aria-label="Previous venue" :disabled="activeIndex === 0"
-            @click="goTo(activeIndex - 1)">
+          <button type="button" class="carousel__arrow" aria-label="Previous venue" @click="step(-1)">
             <VenueIcon name="chevron-left" :size="16" />
           </button>
           <p class="body-small muted" aria-live="polite">{{ activeIndex + 1 }} of {{ venues.length }}</p>
-          <button type="button" class="carousel__arrow" aria-label="Next venue"
-            :disabled="activeIndex === venues.length - 1" @click="goTo(activeIndex + 1)">
+          <button type="button" class="carousel__arrow" aria-label="Next venue" @click="step(1)">
             <VenueIcon name="chevron-right" :size="16" />
           </button>
         </div>
@@ -305,13 +352,8 @@ function matchedFeatures(venue: VenueRecommendations["venues"][number]): string[
   cursor: pointer;
 }
 
-.carousel__arrow:not(:disabled):hover {
+.carousel__arrow:hover {
   background: var(--color-purple-100);
-}
-
-.carousel__arrow:disabled {
-  color: var(--color-grey-300);
-  cursor: default;
 }
 
 /* Style.md 8.2: single ring-brand outline for buttons. */

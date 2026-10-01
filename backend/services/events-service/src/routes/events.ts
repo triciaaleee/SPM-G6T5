@@ -315,6 +315,8 @@ const VENUE_BOOKING_INFO_FIELDS = [
 
 const MAX_VENUE_BOOKING_INFO_IDS = 100;
 
+const VENUE_BOOKING_INFO_ROLES = new Set(["venue_staff", "coordinator"]);
+
 /**
  * E1-5: booking-relevant info for the events booked at a venue, called by
  * venue-service with the caller's own token. venue_bookings only links a
@@ -335,8 +337,8 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
 
   const rawIds = typeof req.query.ids === "string" ? req.query.ids : "";
 
-  if (user.role !== "venue_staff" && user.role !== "coordinator") {
-    await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_role_not_allowed");
+  if (user.role !== "venue_staff") {
+    await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_not_venue_staff");
     res.status(403).json({ error: "Access denied" });
     return;
   }
@@ -465,7 +467,7 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // change request" flow built yet, so this is a block + message, not a
   // real alternate workflow.
   const isClarificationResponse = existing.status === "Clarification Requested";
-  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status);
+  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status) || existing.status === "Planning";
   // E2-4 AC3: editing a draft here means submitting it — same E2-1
   // validation as a fresh request, and the same auto-assignment as POST /.
   const isDraftSubmit = existing.status === "Draft";

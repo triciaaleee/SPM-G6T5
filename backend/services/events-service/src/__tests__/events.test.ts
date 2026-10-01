@@ -1693,6 +1693,16 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     );
   });
 
+  it("allows a coordinator too, for resolving booking timing during venue search", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, coordinator);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(1);
+  });
+
   it.each([
     ["missing", ""],
     ["non-numeric", "?ids=abc"],

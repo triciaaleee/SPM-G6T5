@@ -93,10 +93,12 @@ function buildApp(
     event?: Record<string, unknown>;
     eventStatus?: number;
     bookings?: Booking[];
-    bookedEvents?: BookedEvent[];
+    bookingEvents?: Record<string, unknown>[];
   } = {},
 ) {
-  const bookingsQuery = { in: vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null }) };
+  const bookingsQuery = {
+    then: (resolve: (value: unknown) => void) => resolve({ data: options.bookings ?? [], error: null }),
+  };
 
   const supabase = {
     from: vi.fn((table: string) => {
@@ -109,17 +111,19 @@ function buildApp(
   };
 
   const status = options.eventStatus ?? 200;
-  // Two events-service calls: the event being recommended for, and the
-  // schedules of events already booked into venues.
-  const fetchMock = vi.fn().mockImplementation(async (url: string) => {
-    if (url.includes("/venue-booking-info")) {
-      return { ok: true, status: 200, json: async () => ({ events: options.bookedEvents ?? [] }) };
+  // fetchEvent (GET /api/events/:id) and fetchVenueBookingInfo (GET
+  // /api/events/venue-booking-info) both go through global fetch — tell
+  // them apart by URL, same as findUnavailableVenueIds/staff.ts do in
+  // production, just via different real endpoints.
+  const fetchMock = vi.fn((url: string) => {
+    if (url.includes("venue-booking-info")) {
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ events: options.bookingEvents ?? [] }) });
     }
-    return {
+    return Promise.resolve({
       ok: status >= 200 && status < 300,
       status,
       json: async () => ({ event: { id: 7, status: "Planning", submitted_details: options.event ?? details() } }),
-    };
+    });
   });
   vi.stubGlobal("fetch", fetchMock);
 
@@ -213,7 +217,8 @@ describe("GET /api/venues/recommendations/:eventId", () => {
 
     expect(res.status).toBe(200);
     expect(ids(res.body)).toEqual([3]);
-    expect(res.body.requirements.facilities).toEqual(["Projector", "Wi-Fi"]);
+    // Wi-Fi is a minor feature, so it isn't part of the check.
+    expect(res.body.requirements.facilities).toEqual(["Projector"]);
   });
 
   it("AC2: a venue whose capacity is below the expected attendance is not recommended", async () => {
@@ -238,6 +243,20 @@ describe("GET /api/venues/recommendations/:eventId", () => {
     const res = await recommend(app);
 
     expect(ids(res.body)).toEqual([5]);
+  });
+
+  it("checks only main features, not minor ones like power outlets or a registration desk", async () => {
+    const { app } = buildApp({
+      event: details({
+        equipment: "Microphones, power outlets, registration desk",
+        accessibility: "Wheelchair access, accessible seating",
+      }),
+    });
+    const res = await recommend(app);
+
+    // Lecture Theatre 1 has neither power outlets, a registration desk nor accessible seating.
+    expect(ids(res.body)).toEqual([5]);
+    expect(res.body.requirements).toMatchObject({ accessibility: ["Wheelchair access"], facilities: ["Microphones"] });
   });
 
   it("AC4: a venue missing a required layout is not recommended", async () => {
@@ -289,6 +308,7 @@ describe("GET /api/venues/recommendations/:eventId", () => {
         { id: 20, proposedDate: "2026-11-10", startTime: "15:00", endTime: "18:00" }, // overlaps 14:00-16:00
         { id: 21, proposedDate: "2026-11-10", startTime: "09:00", endTime: "12:00" }, // same day, no overlap
       ],
+      bookingEvents: [{ id: 99, proposedDate: "2026-11-10", startTime: "14:00", endTime: "16:00" }],
     });
     const res = await recommend(app);
 
