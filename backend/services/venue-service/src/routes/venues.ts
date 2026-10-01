@@ -2,7 +2,8 @@ import { Router } from "express";
 import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
-import { fetchEvent, fetchVenueBookingInfo } from "../lib/eventsClient.js";
+import { UNAVAILABLE_BOOKING_STATUSES } from "../lib/bookingStatus.js";
+import { fetchEvent, fetchVenueBookingInfo, type VenueBookingInfo } from "../lib/eventsClient.js";
 import { extractRequirements, scheduleQuery, withFeatures } from "../lib/venueRecommendation.js";
 import {
   buildFilterOptions,
@@ -38,19 +39,26 @@ async function loadActiveVenues(supabase: NonNullable<AuthedRequest["supabase"]>
 }
 
 /**
- * AC2: venues with a booking overlapping the requested window. Two
- * windows overlap when each starts before the other ends; without a time
- * window, any booking that day counts. A booking held for `forEventId`
- * doesn't count — that venue is already this event's own. Resolves to
- * null when the lookup fails.
- *
- * venue_bookings no longer stores its own timing (migration 0015) — every
- * booking's date/time comes from its linked event, fetched in bulk from
- * events-service via fetchVenueBookingInfo. This means date filtering can
- * no longer happen at the DB level (there's no local date column to
- * filter on); every booking for every venue is fetched, then compared
- * against each linked event's date/time in application code. Acceptable
- * at this project's scale — see AGENTS.md's venue_bookings notes.
+ * Does a booked event occupy `date` during `startTime`–`endTime`? Two
+ * windows overlap when each starts before the other ends. Without a
+ * window, any booking that day counts; an event with no times recorded
+ * occupies its whole day. Times are "HH:MM", so they compare as strings.
+ */
+function occupies(event: VenueBookingInfo, date: string, startTime?: string, endTime?: string): boolean {
+  if (event.proposedDate !== date) return false;
+  if (!startTime || !endTime || !event.startTime || !event.endTime) return true;
+  return event.startTime < endTime && event.endTime > startTime;
+}
+
+/**
+ * AC2: venues with a booking overlapping the requested window. A booking
+ * only links a venue to an event, so its date and times are the booked
+ * event's own, read from events-service. Only requested or approved
+ * bookings count — a rejected one no longer holds the venue — and a
+ * booking whose event events-service doesn't return (deleted, or a draft)
+ * has no schedule to clash with. A booking held for `forEventId` doesn't
+ * count either: that venue is already this event's own. Resolves to null
+ * when either lookup fails.
  */
 async function findUnavailableVenueIds(
   supabase: NonNullable<AuthedRequest["supabase"]>,
@@ -61,26 +69,24 @@ async function findUnavailableVenueIds(
   const unavailableVenueIds = new Set<number>();
   if (!criteria.date) return unavailableVenueIds;
 
-  const { data: bookings, error } = await supabase.from("venue_bookings").select("venue_id, event_id");
+  const { data, error } = await supabase
+    .from("venue_bookings")
+    .select("venue_id, event_id")
+    .in("status", UNAVAILABLE_BOOKING_STATUSES);
   if (error) return null;
 
-  const relevantBookings = (bookings ?? []).filter(
+  const bookings = ((data ?? []) as { venue_id: number; event_id: number }[]).filter(
     (booking) => forEventId === undefined || booking.event_id !== forEventId,
   );
-  const eventIds = [...new Set(relevantBookings.map((booking) => booking.event_id as number))];
-
-  const infoResult = await fetchVenueBookingInfo(eventIds, authorization);
+  const infoResult = await fetchVenueBookingInfo([...new Set(bookings.map((b) => b.event_id))], authorization);
   if (infoResult.status === "error") return null;
   const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
 
-  for (const booking of relevantBookings) {
-    const event = eventsById.get(booking.event_id as number);
-    if (!event || event.proposedDate !== criteria.date) continue;
-    if (criteria.startTime && criteria.endTime) {
-      if (!event.startTime || !event.endTime) continue;
-      if (!(event.startTime < criteria.endTime && event.endTime > criteria.startTime)) continue;
+  for (const booking of bookings) {
+    const event = eventsById.get(booking.event_id);
+    if (event && occupies(event, criteria.date, criteria.startTime, criteria.endTime)) {
+      unavailableVenueIds.add(booking.venue_id);
     }
-    unavailableVenueIds.add(booking.venue_id as number);
   }
   return unavailableVenueIds;
 }

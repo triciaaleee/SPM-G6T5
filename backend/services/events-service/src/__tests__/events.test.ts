@@ -1665,8 +1665,22 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
   });
 
-  it("rejects an organiser with 403 and records the attempt", async () => {
-    const user = { id: "user-1", role: "organiser" };
+  it("also serves coordinators, who need booked events' schedules for venue availability", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, coordinator);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0]).toMatchObject({ id: 3, proposedDate: validPayload.proposedDate });
+    expect(res.body.events[0]).not.toHaveProperty("purpose");
+  });
+
+  it.each([
+    ["an organiser", { id: "user-1", role: "organiser" }],
+    ["an attendee", { id: "ATT-0001", role: "attendee" }],
+    ["technical support", { id: "TS-0001", role: "technical_support" }],
+  ])("rejects %s with 403 and records the attempt", async (_label, user) => {
     const supabase = buildVenueInfoSupabase([]);
     const app = buildApp(supabase, user);
 
@@ -1675,7 +1689,7 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(res.status).toBe(403);
     expect(supabase.select).not.toHaveBeenCalled();
     expect(supabase.denialInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ user_id: user.id, reason: "venue_booking_info_not_venue_staff" }),
+      expect.objectContaining({ user_id: user.id, reason: "venue_booking_info_role_not_allowed" }),
     );
   });
 

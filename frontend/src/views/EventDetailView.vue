@@ -692,14 +692,14 @@ onMounted(async () => {
   </div>
 </div>
 
-              <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
-              <div v-if="isCoordinator && event.status !== 'Rejected'" class="venue-search-entry">
-                <h3 class="text-lg font-semibold text-[--color-grey-900]">Venue</h3>
-                <VenueRecommendations :event-id="event.id" :details="event.submitted_details" />
-                <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
-                  Find venues
-                </RouterLink>
-              </div>
+<!-- Venue search: opens pre-filled with this event's date, time and attendance -->
+<div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
+  <h2 class="section-title">Venue Recommendations</h2>
+  <VenueRecommendations :event-id="event.id" :details="event.submitted_details" />
+  <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
+    Find venues
+  </RouterLink>
+</div>
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
   :current-user-id="currentUser.id" />
@@ -864,18 +864,21 @@ onMounted(async () => {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  /* minmax(0, …): a bare fr track won't shrink below its content's width, and the
+     venue carousel's track is as wide as all its cards side by side. */
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: var(--grid-desktop-gutter);
   align-items: start;
 }
 
 @media (max-width: 1024px) {
   .detail-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
 .detail-grid-col {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--grid-desktop-gutter);

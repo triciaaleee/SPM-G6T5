@@ -319,13 +319,14 @@ const VENUE_BOOKING_INFO_ROLES = new Set(["venue_staff", "coordinator"]);
 
 /**
  * E1-5: booking-relevant info for the events booked at a venue, called by
- * venue-service with the caller's own token — a venue staff member's, to
- * fill in the venue schedule, or (since the venue_bookings refactor that
- * dropped local booking_date/start_time/end_time) a coordinator's, to
- * resolve each booking's timing for availability search. Declared before
- * GET /:id so "venue-booking-info" isn't read as an event id. Drafts are
- * never returned: a draft can't have been booked, and it isn't anyone's
- * business but the organiser's.
+ * venue-service with the caller's own token. venue_bookings only links a
+ * venue to an event, so the event is where a booking's date and times
+ * live: venue staff need them for their schedule, and coordinators for
+ * venue availability in search/recommendations (coordinators already see
+ * every event in full, so this exposes nothing new to them). Declared
+ * before GET /:id so "venue-booking-info" isn't
+ * read as an event id. Drafts are never returned: a draft can't have been
+ * booked, and it isn't anyone's business but the organiser's.
  */
 eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -337,7 +338,7 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
   const rawIds = typeof req.query.ids === "string" ? req.query.ids : "";
 
   if (!VENUE_BOOKING_INFO_ROLES.has(user.role)) {
-    await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_not_venue_staff");
+    await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_role_not_allowed");
     res.status(403).json({ error: "Access denied" });
     return;
   }
