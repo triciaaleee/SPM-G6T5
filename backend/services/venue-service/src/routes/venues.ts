@@ -75,23 +75,18 @@ async function findUnavailableVenueIds(
     .in("status", UNAVAILABLE_BOOKING_STATUSES);
   if (error) return null;
 
-  const relevantBookings = (bookings ?? []).filter(
+  const bookings = ((data ?? []) as { venue_id: number; event_id: number }[]).filter(
     (booking) => forEventId === undefined || booking.event_id !== forEventId,
   );
-  const eventIds = [...new Set(relevantBookings.map((booking) => booking.event_id as number))];
-
-  const infoResult = await fetchVenueBookingInfo(eventIds, authorization);
+  const infoResult = await fetchVenueBookingInfo([...new Set(bookings.map((b) => b.event_id))], authorization);
   if (infoResult.status === "error") return null;
   const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
 
-  for (const booking of relevantBookings) {
-    const event = eventsById.get(booking.event_id as number);
-    if (!event || event.proposedDate !== criteria.date) continue;
-    if (criteria.startTime && criteria.endTime) {
-      if (!event.startTime || !event.endTime) continue;
-      if (!(event.startTime < criteria.endTime && event.endTime > criteria.startTime)) continue;
+  for (const booking of bookings) {
+    const event = eventsById.get(booking.event_id);
+    if (event && occupies(event, criteria.date, criteria.startTime, criteria.endTime)) {
+      unavailableVenueIds.add(booking.venue_id);
     }
-    unavailableVenueIds.add(booking.venue_id as number);
   }
   return unavailableVenueIds;
 }

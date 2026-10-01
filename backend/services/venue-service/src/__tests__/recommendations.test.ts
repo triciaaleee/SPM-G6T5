@@ -97,7 +97,7 @@ function buildApp(
   } = {},
 ) {
   const bookingsQuery = {
-    then: (resolve: (value: unknown) => void) => resolve({ data: options.bookings ?? [], error: null }),
+    in: vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null }),
   };
 
   const supabase = {
@@ -304,11 +304,10 @@ describe("GET /api/venues/recommendations/:eventId", () => {
         { venue_id: 3, event_id: 7 },
         { venue_id: 5, event_id: 21 },
       ],
-      bookedEvents: [
+      bookingEvents: [
         { id: 20, proposedDate: "2026-11-10", startTime: "15:00", endTime: "18:00" }, // overlaps 14:00-16:00
         { id: 21, proposedDate: "2026-11-10", startTime: "09:00", endTime: "12:00" }, // same day, no overlap
       ],
-      bookingEvents: [{ id: 99, proposedDate: "2026-11-10", startTime: "14:00", endTime: "16:00" }],
     });
     const res = await recommend(app);
 

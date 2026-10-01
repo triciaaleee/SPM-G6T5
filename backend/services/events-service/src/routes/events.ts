@@ -337,8 +337,8 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
 
   const rawIds = typeof req.query.ids === "string" ? req.query.ids : "";
 
-  if (user.role !== "venue_staff") {
-    await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_not_venue_staff");
+  if (!VENUE_BOOKING_INFO_ROLES.has(user.role)) {
+    await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_role_not_allowed");
     res.status(403).json({ error: "Access denied" });
     return;
   }
