@@ -83,7 +83,9 @@ function details(overrides: Record<string, unknown> = {}) {
   };
 }
 
-type Booking = { venue_id: number; event_id: number | null };
+/** venue_bookings only links a venue to an event; the schedule is the event's own. */
+type Booking = { venue_id: number; event_id: number };
+type BookedEvent = { id: number; proposedDate: string; startTime: string; endTime: string };
 
 function buildApp(
   options: {
@@ -91,17 +93,10 @@ function buildApp(
     event?: Record<string, unknown>;
     eventStatus?: number;
     bookings?: Booking[];
+    bookedEvents?: BookedEvent[];
   } = {},
 ) {
-  const bookingsQuery = {
-    eq: vi.fn(),
-    lt: vi.fn(),
-    gt: vi.fn(),
-    then: (resolve: (value: unknown) => void) => resolve({ data: options.bookings ?? [], error: null }),
-  };
-  bookingsQuery.eq.mockReturnValue(bookingsQuery);
-  bookingsQuery.lt.mockReturnValue(bookingsQuery);
-  bookingsQuery.gt.mockReturnValue(bookingsQuery);
+  const bookingsQuery = { in: vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null }) };
 
   const supabase = {
     from: vi.fn((table: string) => {
@@ -114,10 +109,17 @@ function buildApp(
   };
 
   const status = options.eventStatus ?? 200;
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => ({ event: { id: 7, status: "Planning", submitted_details: options.event ?? details() } }),
+  // Two events-service calls: the event being recommended for, and the
+  // schedules of events already booked into venues.
+  const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+    if (url.includes("/venue-booking-info")) {
+      return { ok: true, status: 200, json: async () => ({ events: options.bookedEvents ?? [] }) };
+    }
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => ({ event: { id: 7, status: "Planning", submitted_details: options.event ?? details() } }),
+    };
   });
   vi.stubGlobal("fetch", fetchMock);
 
@@ -276,18 +278,26 @@ describe("GET /api/venues/recommendations/:eventId", () => {
   });
 
   it("excludes venues booked at the event's time, but not a booking held for this event", async () => {
-    const { app, bookingsQuery } = buildApp({
+    const { app, bookingsQuery, fetchMock } = buildApp({
       event: details({ equipment: "Projector" }),
       bookings: [
-        { venue_id: 1, event_id: null },
+        { venue_id: 1, event_id: 20 },
         { venue_id: 3, event_id: 7 },
+        { venue_id: 5, event_id: 21 },
+      ],
+      bookedEvents: [
+        { id: 20, proposedDate: "2026-11-10", startTime: "15:00", endTime: "18:00" }, // overlaps 14:00-16:00
+        { id: 21, proposedDate: "2026-11-10", startTime: "09:00", endTime: "12:00" }, // same day, no overlap
       ],
     });
     const res = await recommend(app);
 
-    expect(bookingsQuery.eq).toHaveBeenCalledWith("booking_date", "2026-11-10");
-    expect(bookingsQuery.lt).toHaveBeenCalledWith("start_time", "16:00");
-    expect(bookingsQuery.gt).toHaveBeenCalledWith("end_time", "14:00");
+    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["Requested", "Approved"]);
+    // The event's own booking (event 7) isn't looked up: it never counts against it.
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/events\/venue-booking-info\?ids=20,21$/),
+      { headers: { Authorization: "Bearer test-token" } },
+    );
     expect(ids(res.body)).toEqual([3, 5]);
   });
 

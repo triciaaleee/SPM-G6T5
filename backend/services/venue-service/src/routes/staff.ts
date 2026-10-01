@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
+import type { BookingStatus } from "../lib/bookingStatus.js";
 import { fetchVenueBookingInfo } from "../lib/eventsClient.js";
 import { extractLayoutAndFacilities } from "../lib/venueRecommendation.js";
 import { isRealDate, type VenueRow } from "../lib/venueSearch.js";
@@ -35,18 +36,11 @@ const MAX_RANGE_DAYS = 42;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** A venue_bookings row: a venue-to-event link plus its approval status (venue_status enum). */
 interface BookingRow {
   id: number;
-  event_id: number | null;
-  booking_date: string;
-  start_time: string;
-  end_time: string;
-  reason: string | null;
-}
-
-/** Postgres `time` comes back as "HH:MM:SS"; the UI shows "HH:MM". */
-function toHourMinute(time: string): string {
-  return time.slice(0, 5);
+  event_id: number;
+  status: BookingStatus;
 }
 
 /** Active venues for the schedule's venue picker. */
@@ -62,12 +56,12 @@ staffRouter.get("/venues", async (req: AuthedRequest, res) => {
 });
 
 /**
- * Every booking at one venue between `from` and `to` (inclusive, local
- * "YYYY-MM-DD" dates), earliest first. A booking tied to an event carries
- * that event's booking-relevant details; any other booking — an external
- * hold, maintenance, or an event staff can't be shown (e.g. deleted) — is a
- * "hold" with only its reason, since all staff need to know is that the
- * venue is taken.
+ * Every booking at one venue whose event falls between `from` and `to`
+ * (inclusive, local "YYYY-MM-DD" dates), earliest first. venue_bookings
+ * only links a venue to an event, so a booking's date and times are the
+ * event's own, from events-service. Bookings whose event events-service
+ * doesn't return (deleted, or still a draft) are left out: there's
+ * nothing to set up for them.
  */
 staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
   const supabase = req.supabase!;
@@ -111,12 +105,8 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
 
   const { data: bookingData, error: bookingsError } = await supabase
     .from("venue_bookings")
-    .select("id, event_id, booking_date, start_time, end_time, reason")
-    .eq("venue_id", venue.id)
-    .gte("booking_date", from)
-    .lte("booking_date", to)
-    .order("booking_date")
-    .order("start_time");
+    .select("id, event_id, status")
+    .eq("venue_id", venue.id);
 
   if (bookingsError) {
     res.status(500).json({ error: "Failed to load bookings" });
@@ -124,7 +114,7 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
   }
   const bookings = (bookingData ?? []) as BookingRow[];
 
-  const eventIds = [...new Set(bookings.map((b) => b.event_id).filter((id): id is number => id !== null))];
+  const eventIds = [...new Set(bookings.map((b) => b.event_id))];
   const infoResult = await fetchVenueBookingInfo(eventIds, req.headers.authorization!);
   if (infoResult.status === "error") {
     res.status(502).json({ error: "Failed to load the booked events" });
@@ -132,28 +122,33 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
   }
   const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
 
+  // Pair each booking with its event, keep those in range, earliest first.
+  const scheduled = bookings
+    .flatMap((booking) => {
+      const event = eventsById.get(booking.event_id);
+      const inRange = event?.proposedDate && event.proposedDate >= from && event.proposedDate <= to;
+      return event && inRange ? [{ booking, event }] : [];
+    })
+    .sort(
+      (a, b) =>
+        a.event.proposedDate!.localeCompare(b.event.proposedDate!) ||
+        (a.event.startTime ?? "").localeCompare(b.event.startTime ?? ""),
+    );
+
   res.json({
     venue: { id: venue.id, name: venue.name },
-    bookings: bookings.map((booking) => {
-      const base = {
-        id: booking.id,
-        date: booking.booking_date,
-        startTime: toHourMinute(booking.start_time),
-        endTime: toHourMinute(booking.end_time),
-      };
-      const event = booking.event_id !== null ? eventsById.get(booking.event_id) : undefined;
-      if (!event) return { ...base, kind: "hold", reason: booking.reason };
-
-      return {
-        ...base,
-        kind: "event",
-        event: {
-          id: event.id,
-          name: event.name,
-          expectedAttendance: event.expectedAttendance,
-          ...extractLayoutAndFacilities(event, [venue as VenueRow]),
-        },
-      };
-    }),
+    bookings: scheduled.map(({ booking, event }) => ({
+      id: booking.id,
+      date: event.proposedDate,
+      startTime: event.startTime,
+      endTime: event.endTime,
+      status: booking.status,
+      event: {
+        id: event.id,
+        name: event.name,
+        expectedAttendance: event.expectedAttendance,
+        ...extractLayoutAndFacilities(event, [venue as VenueRow]),
+      },
+    })),
   });
 });

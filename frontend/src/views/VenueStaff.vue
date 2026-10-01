@@ -1,15 +1,35 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
-import CalendarPicker from "../components/venues/CalendarPicker.vue";
+import CalendarPicker, { type DayMarker } from "../components/venues/CalendarPicker.vue";
 import { fetchStaffVenues, fetchVenueBookings, type StaffVenueOption, type VenueBooking } from "../lib/venuesApi";
+
+
+// Current EVENTS  as of 1/10
+/* Great Lawn - 30 sept
+Grand ballroom - 30 sept
+Innovation Hub - 30 sep
+
 
 /**
  * E1-5: venue staff's schedule. Pick a venue and a date to see what's
  * booked there — event name, date, times, attendance, layout and facility
  * requirements only. The API never sends the wider event plan, so there's
  * nothing here to hide.
+ *
+ * Tabs split bookings by booking status: Bookings (approved) and Requested
+ * (awaiting a decision). Rejected bookings aren't shown. The tabs filter
+ * the list only: the calendar marks every day with a booking (purple dot)
+ * or a request (blue dot), whichever tab is open.
  */
+
+type ScheduleTab = "bookings" | "requested";
+
+const TABS: { key: ScheduleTab; label: string; status: VenueBooking["status"]; noun: string; empty: string }[] = [
+  { key: "bookings", label: "Bookings", status: "Approved", noun: "booking", empty: "No confirmed bookings on this day." },
+  { key: "requested", label: "Requests", status: "Requested", noun: "request", empty: "No booking requests on this day." },
+];
 
 function toKey(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -22,13 +42,32 @@ function fromKey(key: string): Date {
   return new Date(y, m - 1, d);
 }
 
-const today = new Date();
+const route = useRoute();
+const router = useRouter();
+
+/** A single string query param, or null. */
+function queryParam(name: string): string | null {
+  const value = route.query[name];
+  return typeof value === "string" ? value : null;
+}
+
+/*
+ * The selected venue, date and tab live in the URL
+ * (?venue=1&date=2026-09-25&tab=requested), so a refresh or a shared link
+ * reopens the same view instead of resetting to the first venue and today.
+ */
+const queryDate = queryParam("date");
+const initialDate = queryDate && /^\d{4}-\d{2}-\d{2}$/.test(queryDate) ? fromKey(queryDate) : new Date();
+const queryTab = queryParam("tab");
 
 const venues = ref<StaffVenueOption[]>([]);
 const venueId = ref<number | null>(null);
-const selectedDate = ref(toKey(today));
+const selectedDate = ref(toKey(initialDate));
 /** The month the calendar is showing; bookings are loaded a month at a time. */
-const visibleMonth = ref({ year: today.getFullYear(), month: today.getMonth() });
+const visibleMonth = ref({ year: initialDate.getFullYear(), month: initialDate.getMonth() });
+
+const activeTab = ref<ScheduleTab>(TABS.some((tab) => tab.key === queryTab) ? (queryTab as ScheduleTab) : "requested");
+const activeTabConfig = computed(() => TABS.find((tab) => tab.key === activeTab.value)!);
 
 const bookings = ref<VenueBooking[]>([]);
 const loadingVenues = ref(true);
@@ -36,21 +75,54 @@ const loadingBookings = ref(false);
 const venuesError = ref<string | null>(null);
 const bookingsError = ref<string | null>(null);
 
-const bookedDates = computed(() => [...new Set(bookings.value.map((b) => b.date))]);
+/** This month's bookings in the active tab. */
+const tabBookings = computed(() => bookings.value.filter((b) => b.status === activeTabConfig.value.status));
 
-const dayBookings = computed(() => bookings.value.filter((b) => b.date === selectedDate.value));
+/** Every day this month with a booking or request, for the calendar's dots. */
+const dateMarkers = computed(() => {
+  const markers: Record<string, DayMarker[]> = {};
+  for (const booking of bookings.value) {
+    const kind: DayMarker | null =
+      booking.status === "Approved" ? "booking" : booking.status === "Requested" ? "request" : null;
+    if (!kind) continue;
+    const kinds = (markers[booking.date] ??= []);
+    if (!kinds.includes(kind)) kinds.push(kind);
+  }
+  return markers;
+});
 
-const dayHeading = computed(() =>
-  fromKey(selectedDate.value).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }),
-);
+const dayBookings = computed(() => tabBookings.value.filter((b) => b.date === selectedDate.value));
+
+/** Each tab's total for the selected day, shown beside its label. */
+const tabDayCounts = computed(() => {
+  const counts: Record<ScheduleTab, number> = { bookings: 0, requested: 0 };
+  for (const booking of bookings.value) {
+    if (booking.date !== selectedDate.value) continue;
+    const tab = TABS.find((t) => t.status === booking.status);
+    if (tab) counts[tab.key] += 1;
+  }
+  return counts;
+});
+
+const dayHeading = computed(() => {
+  const date = fromKey(selectedDate.value);
+  const dayMonth = date.toLocaleDateString("en-GB", { day: "numeric", month: "long" });
+  const weekday = date.toLocaleDateString("en-GB", { weekday: "long" });
+  return `${dayMonth}, ${weekday}`;
+});
 
 const dayCount = computed(() => {
   const n = dayBookings.value.length;
-  return `${n} booking${n === 1 ? "" : "s"}`;
+  return `${n} ${activeTabConfig.value.noun}${n === 1 ? "" : "s"}`;
 });
 
 function formatLongDate(key: string): string {
   return fromKey(key).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+}
+
+/** Times come from the event, which could in principle be missing one. */
+function formatTimeRange(start: string | null, end: string | null): string {
+  return start && end ? `${start} ${end}` : "Not specified";
 }
 
 function formatAttendance(value: number | null): string {
@@ -85,10 +157,17 @@ async function loadBookings(): Promise<void> {
 
 watch([venueId, visibleMonth], loadBookings);
 
+// replace, not push: picking a date shouldn't add a history entry.
+watch([venueId, selectedDate, activeTab], ([venue, date, tab]) => {
+  if (venue === null) return;
+  void router.replace({ query: { ...route.query, venue: String(venue), date, tab } });
+});
+
 onMounted(async () => {
   try {
     venues.value = await fetchStaffVenues();
-    venueId.value = venues.value[0]?.id ?? null;
+    const queryVenue = Number(queryParam("venue"));
+    venueId.value = venues.value.find((venue) => venue.id === queryVenue)?.id ?? venues.value[0]?.id ?? null;
   } catch {
     venuesError.value = "We couldn't load the venue list. Please refresh the page.";
   } finally {
@@ -111,7 +190,7 @@ onMounted(async () => {
   <div class="page">
     <div class="page-header">
       <h1 class="h2">Venue schedule</h1>
-      <p class="subheading">Select a date to see what needs to be set up that day.</p>
+      <p class="subheading">Select a date and venue to see bookings and requests for that day</p>
     </div>
 
     <p v-if="venuesError" class="body-default error-text full-row">{{ venuesError }}</p>
@@ -124,17 +203,23 @@ onMounted(async () => {
     <template v-else>
       <!-- The venue picker scopes both the calendar's dots and the day's bookings. -->
       <div class="sidebar">
-        <label class="venue-select">
-          <span class="sr-only">Venue</span>
-          <select v-model="venueId" class="venue-select__input">
-            <option v-for="venue in venues" :key="venue.id" :value="venue.id">{{ venue.name }}</option>
-          </select>
-          <ChevronDownIcon class="venue-select__icon" aria-hidden="true" />
-        </label>
+        <div class="venue-field">
+          <label for="venue-select" class="field-label mb-1">Select Venue</label>
+          <div class="venue-select">
+            <select id="venue-select" v-model="venueId" class="venue-select__input">
+              <option v-for="venue in venues" :key="venue.id" :value="venue.id">{{ venue.name }}</option>
+            </select>
+            <ChevronDownIcon class="venue-select__icon" aria-hidden="true" />
+          </div>
+        </div>
 
         <section class="calendar-card" aria-label="Choose a date">
-          <CalendarPicker v-model="selectedDate" allow-past :marked-dates="bookedDates"
+          <CalendarPicker v-model="selectedDate" allow-past :markers="dateMarkers"
             @month-change="visibleMonth = $event" />
+          <ul class="legend" aria-hidden="true">
+            <li class="legend__item"><span class="legend__dot legend__dot--booking" />Booking</li>
+            <li class="legend__item"><span class="legend__dot legend__dot--request" />Request</li>
+          </ul>
         </section>
       </div>
 
@@ -142,30 +227,35 @@ onMounted(async () => {
         <div class="schedule__header">
           <h2 class="h5 schedule__day">
             {{ dayHeading }}
-            <span v-if="!loadingBookings && !bookingsError" class="body-default muted schedule__count">{{ dayCount
-              }}</span>
           </h2>
         </div>
 
+        <div class="tabs" role="tablist" aria-label="Booking status">
+          <button v-for="tab in TABS" :id="`tab-${tab.key}`" :key="tab.key" type="button" role="tab" class="tab"
+            :class="{ 'tab--active': activeTab === tab.key }" :aria-selected="activeTab === tab.key"
+            aria-controls="schedule-panel" :tabindex="activeTab === tab.key ? 0 : -1" @click="activeTab = tab.key">
+            {{ tab.label }} ({{ tabDayCounts[tab.key] }})
+          </button>
+        </div>
+
+        <div id="schedule-panel" role="tabpanel" :aria-labelledby="`tab-${activeTab}`">
         <p v-if="bookingsError" class="body-default error-text">{{ bookingsError }}</p>
         <p v-else-if="loadingBookings && bookings.length === 0" class="body-default muted">Loading bookings…</p>
 
         <div v-else-if="dayBookings.length === 0" class="empty-state" :class="{ 'is-stale': loadingBookings }">
-          <p class="empty-state__title">Nothing booked</p>
-          <p class="body-default muted">This venue has no bookings on this day.</p>
+          <p class="empty-state__title">Nothing here</p>
+          <p class="body-default muted">{{ activeTabConfig.empty }}</p>
         </div>
 
         <ul v-else class="booking-list" :class="{ 'is-stale': loadingBookings }">
-          <li v-for="booking in dayBookings" :key="booking.id" class="booking-card"
-            :class="{ 'booking-card--hold': booking.kind === 'hold' }">
-            <template v-if="booking.kind === 'event'">
+          <li v-for="booking in dayBookings" :key="booking.id" class="booking-card">
               <p class="card-title">{{ booking.event.name || "Untitled event" }}</p>
               <p class="body-small muted booking-card__date">{{ formatLongDate(booking.date) }}</p>
 
               <dl class="details">
                 <div class="detail detail--half">
                   <dt class="detail__label">Start – end time</dt>
-                  <dd class="detail__value">{{ booking.startTime }} – {{ booking.endTime }}</dd>
+                  <dd class="detail__value">{{ formatTimeRange(booking.startTime, booking.endTime) }}</dd>
                 </div>
                 <div class="detail detail--half">
                   <dt class="detail__label">Expected attendance</dt>
@@ -186,21 +276,9 @@ onMounted(async () => {
                   <dd v-else class="body-small muted">None specified</dd>
                 </div>
               </dl>
-            </template>
-
-            <template v-else>
-              <span class="hold-badge">Venue unavailable</span>
-              <p class="card-title">{{ booking.reason || "Venue hold" }}</p>
-              <p class="body-small muted booking-card__date">{{ formatLongDate(booking.date) }}</p>
-              <dl class="details">
-                <div class="detail">
-                  <dt class="detail__label">Start – end time</dt>
-                  <dd class="detail__value">{{ booking.startTime }} – {{ booking.endTime }}</dd>
-                </div>
-              </dl>
-            </template>
           </li>
         </ul>
+        </div>
       </section>
     </template>
   </div>
@@ -234,6 +312,39 @@ onMounted(async () => {
   padding: var(--spacing-24);
   border: 1px solid var(--color-grey-100);
   border-radius: var(--radius-sm);
+}
+
+/* Explains the calendar's dot colours (same colours as CalendarPicker's dots). */
+.legend {
+  display: flex;
+  justify-content: center;
+  gap: var(--spacing-16);
+  margin: var(--spacing-16) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-6);
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--color-grey-500);
+}
+
+.legend__dot {
+  width: var(--spacing-6);
+  height: var(--spacing-6);
+  border-radius: var(--radius-full);
+}
+
+.legend__dot--booking {
+  background: var(--color-purple-600);
+}
+
+.legend__dot--request {
+  background: var(--color-blue-500);
 }
 
 .schedule {
@@ -316,6 +427,38 @@ onMounted(async () => {
   margin-bottom: var(--spacing-16);
 }
 
+/* Tabs: Style.md 2.4 — Purple 600 marks the active tab. */
+.tabs {
+  display: flex;
+  gap: var(--spacing-24);
+  margin-bottom: var(--spacing-16);
+  border-bottom: 1px solid var(--color-grey-100);
+}
+
+.tab {
+  margin-bottom: -1px;
+  padding: var(--spacing-8) 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-grey-500);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--color-grey-800);
+}
+
+.tab--active,
+.tab--active:hover {
+  border-bottom-color: var(--color-purple-600);
+  color: var(--color-purple-600);
+}
+
 .schedule__day {
   display: flex;
   align-items: baseline;
@@ -325,6 +468,19 @@ onMounted(async () => {
 
 .schedule__count {
   font-weight: 400;
+}
+
+.venue-field {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Form label: Small Text 700, Style.md 3.2 label colour (Grey/600). */
+.field-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+  color: var(--color-grey-600);
 }
 
 .venue-select {
@@ -388,10 +544,6 @@ onMounted(async () => {
   border-radius: var(--radius-sm);
 }
 
-.booking-card--hold {
-  background: var(--color-grey-50);
-}
-
 .card-title {
   font-size: 1.25rem;
   font-weight: 700;
@@ -402,19 +554,6 @@ onMounted(async () => {
 
 .booking-card__date {
   margin: var(--spacing-4) 0 0;
-}
-
-.hold-badge {
-  display: inline-block;
-  margin-bottom: var(--spacing-8);
-  padding: var(--spacing-2) var(--spacing-8);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-full);
-  background: var(--color-grey-75);
-  color: var(--color-grey-700);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
 }
 
 /* Nested grid: 8 cols = the schedule's span on desktop (Style.md 0.3). */

@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { venuesRouter } from "../routes/venues.js";
 import { OPTION_CATALOGUE, buildFilterOptions, parseVenueSearch, searchVenues, type VenueRow } from "../lib/venueSearch.js";
@@ -185,16 +185,32 @@ describe("buildFilterOptions", () => {
   });
 });
 
-function buildApp(options: { user?: { id: string; role: string }; bookings?: { venue_id: number }[] } = {}) {
-  const bookingsQuery = {
-    eq: vi.fn(),
-    lt: vi.fn(),
-    gt: vi.fn(),
-    then: (resolve: (value: unknown) => void) => resolve({ data: options.bookings ?? [], error: null }),
-  };
-  bookingsQuery.eq.mockReturnValue(bookingsQuery);
-  bookingsQuery.lt.mockReturnValue(bookingsQuery);
-  bookingsQuery.gt.mockReturnValue(bookingsQuery);
+/** A booked event's schedule, as events-service's /venue-booking-info returns it. */
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function bookedEvent(id: number, proposedDate: string, startTime: string, endTime: string) {
+  return { id, name: `Event ${id}`, proposedDate, startTime, endTime, expectedAttendance: 50 };
+}
+
+function buildApp(
+  options: {
+    user?: { id: string; role: string };
+    bookings?: { venue_id: number; event_id: number }[];
+    bookedEvents?: ReturnType<typeof bookedEvent>[];
+  } = {},
+) {
+  // venue_bookings only links a venue to an event; its schedule comes from events-service.
+  const bookingsIn = vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null });
+  const bookingsQuery = { in: bookingsIn };
+
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({ events: options.bookedEvents ?? [] }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
 
   const venuesEq = vi.fn().mockResolvedValue({ data: venues, error: null });
 
@@ -212,7 +228,7 @@ function buildApp(options: { user?: { id: string; role: string }; bookings?: { v
   const app = express();
   app.use(express.json());
   app.use("/api/venues", venuesRouter);
-  return { app, supabase, bookingsQuery };
+  return { app, supabase, bookingsQuery, fetchMock };
 }
 
 describe("GET /api/venues", () => {
@@ -229,17 +245,55 @@ describe("GET /api/venues", () => {
     expect(res.body.fields.date).toBeDefined();
   });
 
-  it("AC2: queries bookings overlapping the window and excludes those venues", async () => {
-    const { app, bookingsQuery } = buildApp({ bookings: [{ venue_id: 1 }] });
+  it("AC2: excludes venues whose booked event overlaps the window, using the event's own schedule", async () => {
+    const { app, bookingsQuery, fetchMock } = buildApp({
+      bookings: [
+        { venue_id: 1, event_id: 11 },
+        { venue_id: 2, event_id: 12 },
+      ],
+      bookedEvents: [
+        bookedEvent(11, "2026-09-25", "17:00", "22:00"), // overlaps 18:00-21:00
+        bookedEvent(12, "2026-09-25", "09:00", "12:00"), // same day, no overlap
+      ],
+    });
     const res = await request(app)
       .get("/api/venues")
-      .query({ date: "2026-09-25", startTime: "18:00", endTime: "21:00" });
+      .query({ date: "2026-09-25", startTime: "18:00", endTime: "21:00" })
+      .set("Authorization", "Bearer test-token");
 
     expect(res.status).toBe(200);
-    expect(bookingsQuery.eq).toHaveBeenCalledWith("booking_date", "2026-09-25");
-    expect(bookingsQuery.lt).toHaveBeenCalledWith("start_time", "21:00");
-    expect(bookingsQuery.gt).toHaveBeenCalledWith("end_time", "18:00");
-    expect(res.body.venues.map((v: VenueRow) => v.id)).not.toContain(1);
+    // A rejected booking request no longer holds the venue.
+    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["Requested", "Approved"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/events\/venue-booking-info\?ids=11,12$/),
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    const ids = res.body.venues.map((v: VenueRow) => v.id);
+    expect(ids).not.toContain(1);
+    expect(ids).toContain(2);
+  });
+
+  it("AC2: without a time window, any booked event that day makes the venue unavailable", async () => {
+    const { app } = buildApp({
+      bookings: [
+        { venue_id: 1, event_id: 11 },
+        { venue_id: 2, event_id: 12 },
+      ],
+      bookedEvents: [bookedEvent(11, "2026-09-25", "09:00", "10:00"), bookedEvent(12, "2026-09-26", "09:00", "10:00")],
+    });
+    const res = await request(app).get("/api/venues").query({ date: "2026-09-25" }).set("Authorization", "Bearer t");
+
+    const ids = res.body.venues.map((v: VenueRow) => v.id);
+    expect(ids).not.toContain(1);
+    expect(ids).toContain(2);
+  });
+
+  it("returns 500 when booked events can't be loaded from events-service", async () => {
+    const { app, fetchMock } = buildApp({ bookings: [{ venue_id: 1, event_id: 11 }] });
+    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+    const res = await request(app).get("/api/venues").query({ date: "2026-09-25" }).set("Authorization", "Bearer t");
+
+    expect(res.status).toBe(500);
   });
 
   it("skips the bookings lookup when no date is given", async () => {

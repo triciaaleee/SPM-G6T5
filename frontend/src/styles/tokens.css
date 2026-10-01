@@ -39,6 +39,7 @@
   --color-warning-700: #E06A27;
   --color-warning-800: #C65D00;
   --color-warning-900: #994400;
+  --color-success-200: #DAEDD9;
   --color-success-600: #008545;
   --color-success-700: #006E3A;
 
@@ -59,6 +60,7 @@
   /* Spacing (4px base unit) */
   --spacing-2: 2px;
   --spacing-4: 4px;
+  --spacing-6: 6px;
   --spacing-8: 8px;
   --spacing-12: 12px;
   --spacing-16: 16px;

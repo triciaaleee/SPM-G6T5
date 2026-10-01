@@ -317,8 +317,12 @@ const MAX_VENUE_BOOKING_INFO_IDS = 100;
 
 /**
  * E1-5: booking-relevant info for the events booked at a venue, called by
- * venue-service (with the venue staff member's own token) to fill in the
- * venue schedule. Declared before GET /:id so "venue-booking-info" isn't
+ * venue-service with the caller's own token. venue_bookings only links a
+ * venue to an event, so the event is where a booking's date and times
+ * live: venue staff need them for their schedule, and coordinators for
+ * venue availability in search/recommendations (coordinators already see
+ * every event in full, so this exposes nothing new to them). Declared
+ * before GET /:id so "venue-booking-info" isn't
  * read as an event id. Drafts are never returned: a draft can't have been
  * booked, and it isn't anyone's business but the organiser's.
  */
@@ -331,8 +335,8 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
 
   const rawIds = typeof req.query.ids === "string" ? req.query.ids : "";
 
-  if (user.role !== "venue_staff") {
-    await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_not_venue_staff");
+  if (user.role !== "venue_staff" && user.role !== "coordinator") {
+    await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_role_not_allowed");
     res.status(403).json({ error: "Access denied" });
     return;
   }
