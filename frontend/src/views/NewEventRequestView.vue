@@ -77,7 +77,8 @@ async function handleSaveDraft() {
       const event = await saveDraft(form);
       draftId.value = event.id;
     }
-    router.push({ name: "events-list" });
+    // Land back on the Drafts tab, since that's where this draft now lives.
+    router.push({ name: "events-list", query: { tab: "drafts" } });
   } catch {
     generalError.value = "We couldn't save your draft. Please try again.";
   } finally {

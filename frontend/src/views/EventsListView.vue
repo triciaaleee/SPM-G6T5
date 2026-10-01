@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useRoute } from "vue-router";
 import { deleteDraft, fetchMyEvents, getCurrentUser, type EventSummary } from "../lib/eventsApi";
 import { statusBadgeClass, statusLabel } from "../lib/eventStatus";
 
+const route = useRoute();
 const events = ref<EventSummary[]>([]);
 const loading = ref(true);
 const errorMessage = ref<string | null>(null);
@@ -21,7 +23,9 @@ const tabs: { key: EventsTab; label: string }[] = [
   { key: "submitted", label: "Submitted Requests" },
 ];
 
-const activeTab = ref<EventsTab>("submitted");
+// E2-4: after saving a draft, the form redirects here with ?tab=drafts so
+// the Drafts tab is what the organiser lands on, instead of Submitted Requests.
+const activeTab = ref<EventsTab>(route.query.tab === "drafts" ? "drafts" : "submitted");
 
 const filteredEvents = computed(() => {
   if (activeTab.value === "drafts") return events.value.filter((event) => event.status === "Draft");
