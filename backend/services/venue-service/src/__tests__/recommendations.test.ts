@@ -215,7 +215,8 @@ describe("GET /api/venues/recommendations/:eventId", () => {
 
     expect(res.status).toBe(200);
     expect(ids(res.body)).toEqual([3]);
-    expect(res.body.requirements.facilities).toEqual(["Projector", "Wi-Fi"]);
+    // Wi-Fi is a minor feature, so it isn't part of the check.
+    expect(res.body.requirements.facilities).toEqual(["Projector"]);
   });
 
   it("AC2: a venue whose capacity is below the expected attendance is not recommended", async () => {
@@ -240,6 +241,20 @@ describe("GET /api/venues/recommendations/:eventId", () => {
     const res = await recommend(app);
 
     expect(ids(res.body)).toEqual([5]);
+  });
+
+  it("checks only main features, not minor ones like power outlets or a registration desk", async () => {
+    const { app } = buildApp({
+      event: details({
+        equipment: "Microphones, power outlets, registration desk",
+        accessibility: "Wheelchair access, accessible seating",
+      }),
+    });
+    const res = await recommend(app);
+
+    // Lecture Theatre 1 has neither power outlets, a registration desk nor accessible seating.
+    expect(ids(res.body)).toEqual([5]);
+    expect(res.body.requirements).toMatchObject({ accessibility: ["Wheelchair access"], facilities: ["Microphones"] });
   });
 
   it("AC4: a venue missing a required layout is not recommended", async () => {

@@ -132,7 +132,7 @@ venuesRouter.get("/", async (req: AuthedRequest, res) => {
  * Recommended venues for one event request: every venue that meets all of
  * the event's requirements — fits the expected attendance (capacity equal
  * to attendance counts), is free at the event's date and time, and has
- * every accessibility feature, layout and facility the organiser asked for
+ * every main accessibility feature, layout and facility the organiser asked for
  * (see lib/venueRecommendation.ts). All of them are returned, tightest
  * capacity fit first, along with the
  * requirements that were checked so the coordinator can see why.

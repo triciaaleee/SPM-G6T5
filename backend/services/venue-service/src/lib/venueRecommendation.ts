@@ -90,6 +90,36 @@ const ALIASES: Record<string, string[]> = {
   Parking: ["car park", "carpark"],
 };
 
+/**
+ * The main features recommendations are checked against. The organiser's
+ * text often names minor features too (power outlets, a registration desk,
+ * Wi-Fi), and requiring every one of them rules out venues that suit the
+ * event in every way that matters. Minor features are still read from the
+ * text (venue staff see them, E1-5); they just don't filter recommendations.
+ * Every layout counts — the room's arrangement is always a main need.
+ */
+const MAIN_FEATURES: Record<FeatureGroup, ReadonlySet<string> | "all"> = {
+  accessibility: new Set(["Wheelchair access", "Step-free entry", "Lift access", "Accessible toilets", "Hearing loop"]),
+  layouts: "all",
+  facilities: new Set([
+    "Projector",
+    "Screen",
+    "PA system",
+    "Microphones",
+    "Stage",
+    "Lighting rig",
+    "Livestream equipment",
+    "Video conferencing",
+    "Catering kitchen",
+    "Outdoor space",
+  ]),
+};
+
+function mainFeaturesOnly(group: FeatureGroup, values: Set<string>): string[] {
+  const main = MAIN_FEATURES[group];
+  return main === "all" ? [...values] : [...values].filter((value) => main.has(value));
+}
+
 /** "no projector", "without a stage", "don't need mics" — within the same clause. */
 const NEGATION_PATTERN = /\b(no|not|without|except|don'?t need|doesn'?t need|won'?t need|needn'?t)\b/;
 
@@ -227,9 +257,9 @@ export function extractRequirements(details: EventRequirementDetails, venues: Ve
     date: readString(details.proposedDate),
     startTime: readString(details.startTime),
     endTime: readString(details.endTime),
-    accessibility: [...features.accessibility],
-    layouts: [...features.layouts],
-    facilities: [...features.facilities],
+    accessibility: mainFeaturesOnly("accessibility", features.accessibility),
+    layouts: mainFeaturesOnly("layouts", features.layouts),
+    facilities: mainFeaturesOnly("facilities", features.facilities),
   };
 }
 
