@@ -21,7 +21,7 @@ import { statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
 import EventStatusTracker from "../components/EventStatusTracker.vue";
 import ClarificationPanel from "../components/ClarificationPanel.vue";
 import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
-import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
+
 
 interface SubmittedEventDetails {
   name?: string;
@@ -730,7 +730,7 @@ onMounted(async () => {
 </div>
 </div>
 </div>
-</div>
+
 </template>
 
 <style scoped>
