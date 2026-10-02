@@ -80,7 +80,7 @@ workspace "ConnectSphere - C2 Containers" "Level 2 of the C4 model. Seven backen
         connectsphere.eventLifecycle -> connectsphere.registration   "Reads registered counts against proposed capacity (E3-10)" "JSON over HTTPS"
         connectsphere.venue          -> connectsphere.eventLifecycle "Reads event date, time and attendance to pre-fill search and run suitability checks (E4-6, E4-7)" "JSON over HTTPS"
         connectsphere.equipment      -> connectsphere.eventLifecycle "Reads event date, time and venue to scope availability windows (E5-4)" "JSON over HTTPS"
-        connectsphere.registration   -> connectsphere.venue          "Reads the maximum capacity of the booked venue as the effective limit (E6-1, E6-7)" "JSON over HTTPS"
+        connectsphere.registration   -> connectsphere.venue          "Reads the maximum capacity of the booked venue as the effective limit (E6-1, E6-6)" "JSON over HTTPS"
         connectsphere.notification   -> connectsphere.identity       "Resolves recipients and confirms they still have access to the event (E7-2)" "JSON over HTTPS"
 
         # --- Asynchronous: publishers -----------------------------------------

@@ -121,7 +121,7 @@ Exchange `connectsphere.events`. Five services publish; four consume.
 
 ### D7. Synchronous REST only for live cross-service reads
 
-Used where eventual consistency is unacceptable: the E3-4 confirmation gate, E3-10 impact assessment, E6-1 and E6-7 capacity checks.
+Used where eventual consistency is unacceptable: the E3-4 confirmation gate, E3-10 impact assessment, E6-1 and E6-6 capacity checks.
 
 **Consequence:** runtime coupling on those paths. A venue service outage blocks confirmation.
 
