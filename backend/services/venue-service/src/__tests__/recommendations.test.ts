@@ -94,7 +94,6 @@ function buildApp(
     eventStatus?: number;
     bookings?: Booking[];
     bookingEvents?: Record<string, unknown>[];
-    bookingEvents?: Record<string, unknown>[];
   } = {},
 ) {
   const bookingsQuery = {
@@ -112,19 +111,6 @@ function buildApp(
   };
 
   const status = options.eventStatus ?? 200;
-  // fetchEvent (GET /api/events/:id) and fetchVenueBookingInfo (GET
-  // /api/events/venue-booking-info) both go through global fetch — tell
-  // them apart by URL, same as findUnavailableVenueIds/staff.ts do in
-  // production, just via different real endpoints.
-  const fetchMock = vi.fn((url: string) => {
-    if (url.includes("venue-booking-info")) {
-      return Promise.resolve({ ok: true, status: 200, json: async () => ({ events: options.bookingEvents ?? [] }) });
-    }
-    return Promise.resolve({
-      ok: status >= 200 && status < 300,
-      status,
-      json: async () => ({ event: { id: 7, status: "Planning", submitted_details: options.event ?? details() } }),
-    });
   // fetchEvent (GET /api/events/:id) and fetchVenueBookingInfo (GET
   // /api/events/venue-booking-info) both go through global fetch — tell
   // them apart by URL, same as findUnavailableVenueIds/staff.ts do in
@@ -322,7 +308,6 @@ describe("GET /api/venues/recommendations/:eventId", () => {
         { id: 20, proposedDate: "2026-11-10", startTime: "15:00", endTime: "18:00" }, // overlaps 14:00-16:00
         { id: 21, proposedDate: "2026-11-10", startTime: "09:00", endTime: "12:00" }, // same day, no overlap
       ],
-      bookingEvents: [{ id: 99, proposedDate: "2026-11-10", startTime: "14:00", endTime: "16:00" }],
     });
     const res = await recommend(app);
 

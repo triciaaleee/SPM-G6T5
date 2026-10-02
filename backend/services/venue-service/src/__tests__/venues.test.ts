@@ -185,11 +185,11 @@ describe("buildFilterOptions", () => {
   });
 });
 
-/** A booked event's schedule, as events-service's /venue-booking-info returns it. */
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** A booked event's schedule, as events-service's /venue-booking-info returns it. */
 function bookedEvent(id: number, proposedDate: string, startTime: string, endTime: string) {
   return { id, name: `Event ${id}`, proposedDate, startTime, endTime, expectedAttendance: 50 };
 }
@@ -221,15 +221,6 @@ function buildApp(
       throw new Error(`unexpected table ${table}`);
     }),
   };
-
-  // findUnavailableVenueIds fetches each booking's event via events-service
-  // (fetchVenueBookingInfo), same pattern as staff.test.ts.
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: true,
-    status: 200,
-    json: async () => ({ events: options.events ?? [] }),
-  });
-  vi.stubGlobal("fetch", fetchMock);
 
   (globalThis as any).__mockSupabase = supabase;
   (globalThis as any).__mockUser = options.user ?? { id: "COORD-0001", role: "coordinator" };
@@ -310,19 +301,6 @@ describe("GET /api/venues", () => {
     const { app } = buildApp({
       bookings: [{ venue_id: 1, event_id: 42 }],
       bookedEvents: [bookedEvent(42, "2026-09-01", "18:00", "21:00")],
-    });
-    const res = await request(app)
-      .get("/api/venues")
-      .query({ date: "2026-09-25", startTime: "18:00", endTime: "21:00" });
-
-    expect(res.status).toBe(200);
-    expect(res.body.venues.map((v: VenueRow) => v.id)).toContain(1);
-  });
-
-  it("doesn't exclude a venue whose booking is on a different date", async () => {
-    const { app } = buildApp({
-      bookings: [{ venue_id: 1, event_id: 42 }],
-      events: [{ id: 42, proposedDate: "2026-09-01", startTime: "18:00", endTime: "21:00" }],
     });
     const res = await request(app)
       .get("/api/venues")

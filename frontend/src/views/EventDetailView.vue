@@ -40,7 +40,6 @@ interface SubmittedEventDetails {
 
 const route = useRoute();
 const activeTab = ref<"overview" | "history">("overview");
-const activeTab = ref<"overview" | "history">("overview");
 const event = ref<EventSummary | null>(null);
 const loading = ref(true);
 const accessDenied = ref(false);
@@ -379,24 +378,13 @@ onMounted(async () => {
           </button>
         </div>
 
-        <div class="tab-bar">
-          <button type="button" class="tab-btn" :class="{ active: activeTab === 'overview' }"
-            @click="activeTab = 'overview'">
-            Overview
-          </button>
-          <button type="button" class="tab-btn" :class="{ active: activeTab === 'history' }"
-            @click="activeTab = 'history'">
-            History
-          </button>
-        </div>
-
         <div class="detail-grid">
           <div class="detail-grid-col">
             <template v-if="activeTab === 'overview'">
                 <div class="details-card">
                   <div class="section-header">
                     <h2 class="section-title">Event Details</h2>
-                    <button v-if="(canRespondToClarification || canEditDirectly) && !isEditingDetails" type="button"
+                    <button v-if="(canRespondToClarification || canEditDirectly || canCoordinatorEdit) && !isEditingDetails" type="button"
                       class="btn-icon" :title="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
                       :aria-label="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
                       @click="startEditingDetails">
@@ -442,7 +430,7 @@ onMounted(async () => {
                       <div class="field">
                         <label for="edit-expectedAttendance" class="body-small muted mb-1">Expected attendance</label>
                         <input id="edit-expectedAttendance" v-model="editForm.expectedAttendance" type="number" min="1"
-                          class="edit-input" />
+                          class="edit-input" :disabled="canCoordinatorEdit && !canEditDirectly" />
                         <p v-if="editFieldErrors.expectedAttendance" class="body-small error-text">
                           {{ editFieldErrors.expectedAttendance }}
                         </p>
@@ -451,19 +439,22 @@ onMounted(async () => {
                     <div class="field-row field-row-3">
                       <div class="field">
                         <label for="edit-proposedDate" class="body-small muted mb-1">Proposed date</label>
-                        <input id="edit-proposedDate" v-model="editForm.proposedDate" type="date" class="edit-input" />
+                        <input id="edit-proposedDate" v-model="editForm.proposedDate" type="date" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
                         <p v-if="editFieldErrors.proposedDate" class="body-small error-text">{{
                           editFieldErrors.proposedDate }}</p>
                       </div>
                       <div class="field">
                         <label for="edit-startTime" class="body-small muted mb-1">Start time</label>
-                        <input id="edit-startTime" v-model="editForm.startTime" type="time" class="edit-input" />
+                        <input id="edit-startTime" v-model="editForm.startTime" type="time" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
                         <p v-if="editFieldErrors.startTime" class="body-small error-text">{{ editFieldErrors.startTime }}
                         </p>
                       </div>
                       <div class="field">
                         <label for="edit-endTime" class="body-small muted mb-1">End time</label>
-                        <input id="edit-endTime" v-model="editForm.endTime" type="time" class="edit-input" />
+                        <input id="edit-endTime" v-model="editForm.endTime" type="time" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
                         <p v-if="editFieldErrors.endTime" class="body-small error-text">{{ editFieldErrors.endTime }}</p>
                       </div>
                     </div>
@@ -521,7 +512,8 @@ onMounted(async () => {
                     <div class="field-row">
                       <div class="field">
                         <label for="edit-venue" class="body-small muted mb-1">Venue Requirements</label>
-                        <textarea id="edit-venue" v-model="editForm.venue" rows="2" class="edit-input" />
+                        <textarea id="edit-venue" v-model="editForm.venue" rows="2" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
                         <p v-if="editFieldErrors.venue" class="body-small error-text">{{ editFieldErrors.venue }}</p>
                       </div>
                       <div class="field">
@@ -636,40 +628,10 @@ onMounted(async () => {
     <h2 class="section-title">Coordinator Details</h2>
     <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
     <div v-if="isCoordinator" class="coordinator-panel" :class="{
-<div class="detail-grid-col">
-  <div class="coordinator-card">
-    <h2 class="section-title">Coordinator Details</h2>
-    <!-- Coordinator assignment panel — visible to coordinators only (#68) -->
-    <div v-if="isCoordinator" class="coordinator-panel" :class="{
                 'coordinator-panel--assigned': isAssignedCoordinator,
                 'coordinator-panel--blocked': isOtherCoordinatorEvent,
                 'coordinator-panel--unassigned': !isAssignedCoordinator && !isOtherCoordinatorEvent,
               }">
-      <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
-        You are the assigned coordinator for this event.
-      </p>
-      <p v-else-if="isOtherCoordinatorEvent" class="body-default coordinator-panel__text">
-        This event is assigned to another coordinator. Coordinator actions are not available.
-      </p>
-      <p v-else class="body-default coordinator-panel__text">
-        No coordinator has been assigned to this event yet.
-      </p>
-    </div>
-    <div class="field mb-field">
-      <p class="body-small muted mb-1">Coordinator</p>
-      <p class="font-semibold !text-lg field-value">{{ event.coordinator?.name ?? "Not yet assigned" }}</p>
-    </div>
-    <!-- E1-4.2: coordinator review actions -->
-    <div v-if="isCoordinator">
-      <h3 class="text-lg font-semibold text-[--color-grey-900]">Coordinator actions</h3>
-      <div class="review-actions ">
-        <p v-if="event.status === 'Rejected'" class="body-small muted">
-          This request has been rejected and cannot be moved forward.
-        </p>
-        <p v-else-if="isOtherCoordinatorEvent" class="body-small muted">
-          Only the assigned coordinator can review this request.
-        </p>
-        <template v-else-if="showReviewActions">
       <p v-if="isAssignedCoordinator" class="body-default coordinator-panel__text">
         You are the assigned coordinator for this event.
       </p>
@@ -735,27 +697,13 @@ onMounted(async () => {
           :disabled="!canAskClarification || isReviewing" @click="openClarify">
           {{ event.status === "Clarification Requested" ? "Clarification Requested" : "Request Clarification" }}
         </button>
-        <button type="button" class="btn"
-          :class="event.status === 'Clarification Requested' ? 'btn-clarify--requested' : 'btn-clarify'"
-          :disabled="!canAskClarification || isReviewing" @click="openClarify">
-          {{ event.status === "Clarification Requested" ? "Clarification Requested" : "Request Clarification" }}
-        </button>
 
-        <template v-if="event.status !== 'Planning'">
         <template v-if="event.status !== 'Planning'">
                         <button type="button" class="btn btn-reject-outline" :disabled="!canReject || isReviewing"
                           @click="openReject">
                           Reject
                         </button>
                       </template>
-      </div>
-      </template>
-      <p v-else class="body-small muted">
-        No coordinator actions are available for this request's current status ({{ event.status }}).
-      </p>
-    </div>
-  </div>
-</div>
       </div>
       </template>
       <p v-else class="body-small muted">
@@ -905,34 +853,6 @@ onMounted(async () => {
 
 .denied-panel .card-title {
   color: var(--color-error-600);
-}
-
-.tab-bar {
-  display: flex;
-  gap: var(--spacing-24);
-  border-bottom: 1px solid var(--color-grey-100);
-  margin-bottom:var(--spacing-24)
-}
-
-.tab-btn {
-  background: none;
-  border: none;
-  padding: var(--spacing-12) 0;
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-grey-500);
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  cursor: pointer;
-}
-
-.tab-btn:hover {
-  color: var(--color-grey-900);
-}
-
-.tab-btn.active {
-  color: var(--color-purple-700);
-  border-bottom-color: var(--color-purple-600);
 }
 
 .tab-bar {

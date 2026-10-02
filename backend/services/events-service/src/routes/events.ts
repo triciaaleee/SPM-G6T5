@@ -317,8 +317,6 @@ const MAX_VENUE_BOOKING_INFO_IDS = 100;
 
 const VENUE_BOOKING_INFO_ROLES = new Set(["venue_staff", "coordinator"]);
 
-const VENUE_BOOKING_INFO_ROLES = new Set(["venue_staff", "coordinator"]);
-
 /**
  * E1-5: booking-relevant info for the events booked at a venue, called by
  * venue-service with the caller's own token. venue_bookings only links a
@@ -527,7 +525,6 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // change request" flow built yet, so this is a block + message, not a
   // real alternate workflow.
   const isClarificationResponse = existing.status === "Clarification Requested";
-  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status) || existing.status === "Planning";
   const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status) || existing.status === "Planning";
   // E2-4 AC3: editing a draft here means submitting it — same E2-1
   // validation as a fresh request, and the same auto-assignment as POST /.
