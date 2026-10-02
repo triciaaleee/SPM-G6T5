@@ -190,8 +190,8 @@ export interface EventHistoryEntry {
   old_value: string | null;
   new_value: string;
   changed_by: string;
-  /** The editor's display name, embedded via the FK on changed_by. */
-  changed_by_user: { name: string } | null;
+  /** The editor's display name and role, embedded via the FK on changed_by. */
+  changed_by_user: { name: string; role: string } | null;
   changed_at: string;
 }
 

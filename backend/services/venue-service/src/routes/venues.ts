@@ -64,6 +64,7 @@ async function findUnavailableVenueIds(
   supabase: NonNullable<AuthedRequest["supabase"]>,
   criteria: VenueSearchCriteria,
   authorization: string,
+  authorization: string,
   forEventId?: number,
 ): Promise<Set<number> | null> {
   const unavailableVenueIds = new Set<number>();
@@ -125,6 +126,7 @@ venuesRouter.get("/", async (req: AuthedRequest, res) => {
   }
 
   const unavailableVenueIds = await findUnavailableVenueIds(supabase, criteria, req.headers.authorization!);
+  const unavailableVenueIds = await findUnavailableVenueIds(supabase, criteria, req.headers.authorization!);
   if (!unavailableVenueIds) {
     res.status(500).json({ error: "Failed to check venue availability" });
     return;
@@ -178,6 +180,7 @@ venuesRouter.get("/recommendations/:eventId", async (req: AuthedRequest, res) =>
   }
   const criteria = withFeatures(parsed.criteria, requirements);
 
+  const unavailableVenueIds = await findUnavailableVenueIds(supabase, criteria, req.headers.authorization!, eventId);
   const unavailableVenueIds = await findUnavailableVenueIds(supabase, criteria, req.headers.authorization!, eventId);
   if (!unavailableVenueIds) {
     res.status(500).json({ error: "Failed to check venue availability" });

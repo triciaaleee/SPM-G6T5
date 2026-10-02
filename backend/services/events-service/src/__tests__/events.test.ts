@@ -1028,6 +1028,7 @@ function buildPatchSupabase(options: {
         id: number;
         status: string;
         organiser_id: string;
+        coordinator_id?: string | null;
         submitted_details: Record<string, unknown>;
         status_before_clarification?: string | null;
       }
@@ -1065,7 +1066,7 @@ function buildPatchSupabase(options: {
     return { select: lookupSelect, update };
   });
 
-  return { from, update, clarificationInsert, historyInsert };
+  return { from, update, clarificationInsert, historyInsert, denialInsert };
 }
 
 describe("POST /api/events/draft", () => {
@@ -1542,6 +1543,121 @@ describe("PATCH /api/events/:id", () => {
     expect(res.status).toBe(200);
     expect(historyInsert).not.toHaveBeenCalled();
   });
+
+  describe("coordinator edits during Planning (E3-7, issue #32)", () => {
+    const coordinator = { id: "COORD-0001", role: "coordinator" };
+
+    it("lets the assigned coordinator edit a non-critical field", async () => {
+      const oldDetails = { ...validPayload, equipment: "Old equipment list" };
+      const { from, update, historyInsert } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: oldDetails,
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(200);
+      expect(update).toHaveBeenCalledWith({
+        submitted_details: expect.objectContaining({ equipment: validPayload.equipment }),
+      });
+      expect(historyInsert).toHaveBeenCalled();
+    });
+
+    it("blocks a critical-field change from the coordinator (AC1)", async () => {
+      const oldDetails = { ...validPayload, venue: "Old Hall" };
+      const { from, update, historyInsert } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: oldDetails,
+        },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(400);
+      expect(update).not.toHaveBeenCalled();
+      expect(historyInsert).not.toHaveBeenCalled();
+    });
+
+    it("blocks a coordinator who isn't the assigned one (AC3)", async () => {
+      const { from, denialInsert } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: "COORD-0002",
+          submitted_details: validPayload,
+        },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(403);
+      expect(denialInsert).toHaveBeenCalled();
+    });
+
+    it("blocks the assigned coordinator outside Planning", async () => {
+      const { from, update } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Confirmed",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: validPayload,
+        },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(409);
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it("accepts repeated edits, recording history each time (AC4)", async () => {
+      const first = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: { ...validPayload, equipment: "v1" },
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app1 = buildApp({ from: first.from }, coordinator);
+      const res1 = await request(app1).patch("/api/events/1").send({ ...validPayload, equipment: "v2" });
+      expect(res1.status).toBe(200);
+      expect(first.historyInsert).toHaveBeenCalledTimes(1);
+
+      const second = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: { ...validPayload, equipment: "v2" },
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app2 = buildApp({ from: second.from }, coordinator);
+      const res2 = await request(app2).patch("/api/events/1").send({ ...validPayload, equipment: "v3" });
+      expect(res2.status).toBe(200);
+      expect(second.historyInsert).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe("GET /api/events/:id/history", () => {
@@ -1691,6 +1807,16 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(supabase.denialInsert).toHaveBeenCalledWith(
       expect.objectContaining({ user_id: user.id, reason: "venue_booking_info_role_not_allowed" }),
     );
+  });
+
+  it("allows a coordinator too, for resolving booking timing during venue search", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, coordinator);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(1);
   });
 
   it("allows a coordinator too, for resolving booking timing during venue search", async () => {
