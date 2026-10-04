@@ -1845,3 +1845,114 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(supabase.select).not.toHaveBeenCalled();
   });
 });
+
+describe("GET /api/events — E3-2 coordinator workload view", () => {
+  it("returns events across all active statuses without any extra status filter", async () => {
+    const multiStatusEvents = [
+      { id: 1, status: "Requested",              organiser: { name: "Alice" }, coordinator: null },
+      { id: 2, status: "Unassigned",             organiser: { name: "Bob" },   coordinator: null },
+      { id: 3, status: "Clarification Requested", organiser: { name: "Carol" }, coordinator: { name: "COORD" } },
+      { id: 4, status: "Planning",               organiser: { name: "Dave" },  coordinator: { name: "COORD" } },
+      { id: 5, status: "Confirmed",              organiser: { name: "Eve" },   coordinator: { name: "COORD" } },
+      { id: 6, status: "Completed",              organiser: { name: "Frank" }, coordinator: { name: "COORD" } },
+      { id: 7, status: "Rejected",               organiser: { name: "Grace" }, coordinator: { name: "COORD" } },
+    ];
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: multiStatusEvents, error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(7);
+    const statuses = res.body.events.map((e: { status: string }) => e.status);
+    expect(statuses).toContain("Unassigned");
+    expect(statuses).toContain("Clarification Requested");
+    expect(statuses).toContain("Planning");
+    expect(statuses).toContain("Confirmed");
+    expect(statuses).toContain("Completed");
+    expect(statuses).toContain("Rejected");
+  });
+
+  it("passes through embedded organiser name for the workload view's 'Requested by' field", async () => {
+    const event = {
+      id: 1,
+      status: "Requested",
+      submitted_details: { name: "Tech Conference" },
+      coordinator_id: "COORD-0001",
+      coordinator: { name: "Alice Coordinator" },
+      organiser: { name: "Bob Organiser" },
+      review_outcome: null,
+      created_at: "2026-01-01",
+    };
+    const neq = vi.fn().mockResolvedValue({ data: [event], error: null });
+    const select = vi.fn().mockReturnValue({ neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].organiser).toEqual({ name: "Bob Organiser" });
+  });
+
+  it("passes through embedded coordinator name for the all-events view", async () => {
+    const event = {
+      id: 2,
+      status: "Planning",
+      submitted_details: {},
+      coordinator_id: "COORD-0001",
+      coordinator: { name: "Alice Coordinator" },
+      organiser: { name: "Bob Organiser" },
+      review_outcome: null,
+      created_at: "2026-01-01",
+    };
+    const neq = vi.fn().mockResolvedValue({ data: [event], error: null });
+    const select = vi.fn().mockReturnValue({ neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].coordinator).toEqual({ name: "Alice Coordinator" });
+  });
+
+  it("includes Unassigned events so coordinators can pick them up from the workload view", async () => {
+    const unassignedEvent = {
+      id: 3,
+      status: "Unassigned",
+      submitted_details: { name: "Hackathon" },
+      coordinator_id: null,
+      coordinator: null,
+      organiser: { name: "Sam Organiser" },
+      review_outcome: null,
+      created_at: "2026-01-01",
+    };
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: [unassignedEvent], error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].status).toBe("Unassigned");
+    expect(res.body.events[0].coordinator).toBeNull();
+  });
+
+  it("does not filter by coordinator_id — My vs All scoping is handled client-side", async () => {
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: [], error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    await request(app).get("/api/events");
+
+    expect(eq).not.toHaveBeenCalledWith("coordinator_id", expect.anything());
+  });
+});
