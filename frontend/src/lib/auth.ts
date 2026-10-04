@@ -104,7 +104,7 @@ export function isAuthenticated(): boolean {
  */
 const LANDING_ROUTE_BY_ROLE: Record<string, string> = {
   organiser: "events-list",
-  coordinator: "events-list",
+  coordinator: "coordinator-workload",
   attendee: "events-list",
   venue_staff: "venue-schedule",
   technical_support: "events-list",
