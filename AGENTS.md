@@ -76,47 +76,55 @@ The `-n` names and `-c` colours lists must stay the same length as the list of c
 
 The event status machine is **fixed**. Use exactly these status values (exact casing and spacing) and **only** these transitions. Do not add, rename or skip statuses (no `Submitted`, `Approved`, `Cancelled`, etc.) unless the team updates this section first.
 
-`Draft` is allowed, but it sits **before** the process: it's the organiser's unsubmitted work. The lifecycle process itself starts at `Requested`. Once an event leaves `Draft` it can never go back.
+`Draft` is allowed, but it sits **before** the process: it's the organiser's unsubmitted work. The lifecycle process itself starts at `Unassigned` (Week 7 change 5: new requests are no longer auto-assigned to a coordinator). Once an event leaves `Draft` it can never go back.
+
+> **Week 7 customer changes (Release 1).** This section reflects `Week 7 Customer Changes.pdf`. Items marked *(assumption)* are interpretations the team has not confirmed with the customer — confirm them, then remove the marker.
 
 ### Statuses
 
-`events.status` is a Postgres enum (`event_status`, migration `0014`) — the database itself now rejects any value outside this list, not just application code.
+`events.status` is a Postgres enum (`event_status`, migration `0014`) — the database itself rejects any value outside this list, not just application code.
 
 | Status | Type |
 |---|---|
 | `Draft` | Pre-process (optional, not part of the lifecycle) |
-| `Requested` | **Start** of the lifecycle |
-| `Unassigned` | Same as `Requested`, but no coordinator was available to auto-assign at submission time (E2-6 AC4) |
+| `Unassigned` | **Start** of the lifecycle. Every submitted request waits here in the Event Coordinator Lead's unassigned queue until the Lead assigns it to a coordinator (Week 7 change 5). Replaces the E2-6 round-robin auto-assignment. |
+| `Requested` | Assigned to an Event Coordinator, awaiting that coordinator's review |
 | `Clarification Requested` | Intermediate |
-| `Planning` | Intermediate |
+| `Planning` | Intermediate. Venue and technical arrangements are made here. |
 | `Rejected` | **End** (terminal) |
-| `Confirmed` | Intermediate |
+| `Safety Review` | Intermediate. Venue bookings are confirmed and equipment is reserved; awaiting the Safety Officer's Operational Safety Check (E3-12/13/14). Outcomes are recorded in `event_safety_reviews` (migration `0012`). |
+| `Confirmed` | Intermediate. Safety-approved: arrangements are locked in and the event may proceed to preparation. *(There is deliberately no `Preparation` status — the Week 7 PDF only says the event cannot "proceed to preparation" until safety approves; `Confirmed` is that point.)* |
 | `Completed` | **End** (terminal) |
 
 ### Diagram
 
 ```
   (pre-process)         (lifecycle START)
- ┌─────────┐  submit   ┌───────────────┐              ┌─────────────────────────┐
- │  Draft  │ ────────▶ │   Requested   │ ◀──────────▶ │ Clarification Requested │
- └─────────┘           └───────┬───────┘              └─────────────────────────┘
-  optional                     │
-                   ┌───────────┴───────────┐
-                   ▼                       ▼
-           ┌───────────────┐       ┌───────────────┐
-           │   Planning    │       │   Rejected    │  END
-           └───────┬───────┘       └───────────────┘
-                   │  ▲
-                   │  └────────▶ Clarification Requested (returns to Planning)
-                   ▼
-           ┌───────────────┐
-           │   Confirmed   │
-           └───────┬───────┘
-                   │ after event concludes
-                   ▼
-           ┌───────────────┐
-           │   Completed   │  END
-           └───────────────┘
+ ┌─────────┐  submit   ┌───────────────┐  Lead assigns  ┌───────────────┐              ┌─────────────────────────┐
+ │  Draft  │ ────────▶ │  Unassigned   │ ─────────────▶ │   Requested   │ ◀──────────▶ │ Clarification Requested │
+ └─────────┘           └───────────────┘                └───────┬───────┘              └─────────────────────────┘
+  optional                                                      │
+                                                    ┌───────────┴───────────┐
+                                                    ▼                       ▼
+                                            ┌───────────────┐       ┌───────────────┐
+                                            │   Planning    │       │   Rejected    │  END
+                                            └───┬───────┬───┘       └───────────────┘
+                                                │  ▲    └────────▶ Clarification Requested (returns to Planning)
+                  coordinator submits for │  │ safety: changes requested / rejected
+                  safety review           ▼  │
+                                            ┌───────────────┐
+                                            │ Safety Review │
+                                            └───────┬───────┘
+                                                    │ Safety Officer approves
+                                                    ▼
+                                            ┌───────────────┐
+                                            │   Confirmed   │
+                                            └───────┬───────┘
+                                                    │ after event concludes
+                                                    ▼
+                                            ┌───────────────┐
+                                            │   Completed   │  END
+                                            └───────────────┘
 ```
 
 ### Allowed transitions (the only ones)
@@ -124,28 +132,57 @@ The event status machine is **fixed**. Use exactly these status values (exact ca
 | From | To | Notes |
 |---|---|---|
 | — | `Draft` | Optional: organiser saves without submitting. |
-| `Draft` | `Requested` | Organiser submits. This is where the lifecycle process starts. |
-| — | `Requested` | Submitting directly (no draft) also lands here. |
-| `Requested` | `Planning` | Coordinator approves the request. |
-| `Requested` | `Rejected` | Coordinator rejects. Terminal. |
+| `Draft` | `Unassigned` | Organiser submits. This is where the lifecycle process starts. |
+| — | `Unassigned` | Submitting directly (no draft) also lands here. |
+| `Unassigned` | `Requested` | Event Coordinator Lead assigns the request to a coordinator; that coordinator is notified. |
+| `Requested` | `Requested` | Lead **reassigns** to a different coordinator (status unchanged, `coordinator_id` changes; both coordinators notified). Also allowed from `Planning`, `Clarification Requested` and `Safety Review` while the event is active, with no status change. |
+| `Requested` | `Planning` | Assigned coordinator approves the request. |
+| `Requested` | `Rejected` | Assigned coordinator rejects. Terminal. |
 | `Requested` | `Clarification Requested` | Set `status_before_clarification = 'Requested'`. |
 | `Clarification Requested` | `Requested` | Organiser responds (when `status_before_clarification = 'Requested'`). |
 | `Planning` | `Clarification Requested` | Set `status_before_clarification = 'Planning'`. |
 | `Clarification Requested` | `Planning` | Organiser responds (when `status_before_clarification = 'Planning'`). |
-| `Planning` | `Confirmed` | Planning finalised. |
-| `Confirmed` | `Completed` | Only **after the event has concluded** (event end date/time is in the past). Terminal. |
+| `Planning` | `Safety Review` | Assigned coordinator submits for safety review once all venue bookings are confirmed and all requested equipment is reserved (E3-4; blocked and the outstanding arrangements named otherwise). Appears in the Safety Officer's queue (E1-10). |
+| `Safety Review` | `Confirmed` | Safety Officer **approves**; the assigned coordinator and Organiser are notified (E3-12). |
+| `Safety Review` | `Planning` | Safety Officer **rejects** the safety arrangement with a required reason; the coordinator is notified (E3-13). |
+| `Safety Review` | `Planning` | Safety Officer **requests changes**, recording what must change; the affected venue/equipment arrangements are flagged for re-review (E3-14). *(E3-14 says "relevant earlier planning stage" — treated as `Planning`.)* |
+| `Confirmed` | `Completed` | Only **after the event has concluded** (event end date/time is in the past). Terminal. Every `Confirmed` event has already passed the Operational Safety Check (E3-5). |
 
 Rules:
 
-- `Clarification Requested` must always return to the status it came from, tracked in `events.status_before_clarification` (migration `0010`). It can never jump straight to `Confirmed`, `Rejected` or `Completed`.
-- `Draft` is outside the process: coordinators don't see or act on drafts, and a draft's only exit is `Draft → Requested`. Nothing ever moves back into `Draft`.
+- `Clarification Requested` must always return to the status it came from, tracked in `events.status_before_clarification` (migration `0010`). It can never jump straight to `Safety Review`, `Confirmed`, `Rejected` or `Completed`.
+- `Draft` is outside the process: coordinators don't see or act on drafts, and a draft's only exit is `Draft → Unassigned`. Nothing ever moves back into `Draft`.
 - `Rejected` and `Completed` are terminal. No transitions out.
-- There is **no** `Planning → Rejected`, `Requested → Confirmed`, or `Confirmed → Planning`.
+- There is **no** `Planning → Confirmed` (every event must pass `Safety Review`; the Safety Officer always responds, so it cannot be skipped or time out), and no `Planning → Rejected`, `Unassigned → Planning`, `Requested → Confirmed`, `Safety Review → Completed` or `Confirmed → Planning`.
+- Only the **assigned** Event Coordinator can act on an event; the **Event Coordinator Lead** can view every assignment and active event and is the only role that assigns or reassigns. Only the **Safety Officer** can move an event out of `Safety Review`.
+- Every safety outcome (approve / request changes / reject) records the Safety Officer, a timestamp and a reason (required for the two non-approve outcomes).
 - Validate every transition on the **backend** against this table and return `409 Conflict` (or `400`) for an illegal one. The frontend may hide invalid actions, but the backend is the source of truth.
 - Keep status strings in one constant/enum per service; don't scatter string literals.
 - DB defaults, seeds and migrations must use these exact values too.
 
 > Note: `c4_diagrams/ArchitectureDecisionRecord.md` §1.2 lists `Cancelled`. **This section overrides that.** There is no `Cancelled` status. The lifecycle above is the agreed one.
+
+---
+
+## 3a. Venue bookings (Week 7 changes 1–4)
+
+`venue_bookings.status` is the Postgres enum `venue_status` (migration `0014`). A booking links one venue to one event; its date and times come from the event (via events-service), never stored on the booking.
+
+| Status | Meaning | Blocks the venue? |
+|---|---|---|
+| `Requested` | Tentative hold while the coordinator finalises arrangements. **Must have an expiry** (`hold_expires_at`). | Yes, until it expires |
+| `Approved` | Confirmed booking. | Yes |
+| `Rejected` | Booking refused. | No |
+| `Expired` | A `Requested` hold passed `hold_expires_at` without action (Week 7 change 4). Never treated as a confirmed booking. Added in `0014`. | No |
+| `Replacement Required` | The venue became unavailable after booking (Week 7 change 2). The event is **not** cancelled and its information is preserved; the booking is flagged and the coordinator searches for and requests a replacement venue. Added in `0014`. | No (the venue itself is blocked by its unavailability period) |
+
+Rules:
+
+- **Setup and turnaround (change 1).** Each venue has a configurable setup time and turnaround time (`venues.setup_minutes`, `venues.turnaround_minutes`). Availability and conflict checks use the *occupied window* = event start − setup to event end + turnaround (a 10:00–12:00 event with 30 min setup and 45 min turnaround occupies 09:30–12:45). An existing booking that becomes a conflict under a new or changed setup/turnaround is **identified and flagged**, never silently removed.
+- **Venue unavailable after booking (change 2).** Venue Staff mark a venue unavailable for a period with a reason (maintenance, equipment failure, renovation, safety, other), stored in `venue_unavailability` (`venue_id`, `starts_at`, `ends_at`, `reason`, `created_by`; migration `0011`). Bookings overlapping it are set to `Replacement Required` and the affected Event Coordinators are notified. Nothing is auto-cancelled.
+- **Multiple venues per event (change 3).** An event may have any number of `venue_bookings` rows. Each is checked independently for suitability, availability and conflicts. Changing or cancelling one booking never removes the others unless explicitly required.
+- **Tentative holds expire (change 4).** A `Requested` booking blocks the venue only until `hold_expires_at`. When it passes without action, the booking becomes `Expired`, the venue is released, and the Event Coordinator is notified before or when it expires. Expiry must be applied when availability is checked (and by a scheduled sweep), so a stale `Requested` row never blocks a venue.
+- Statuses that block a venue are the single constant `UNAVAILABLE_BOOKING_STATUSES` in venue-service `lib/bookingStatus.ts` (`Requested` only while unexpired, and `Approved`).
 
 ---
 
@@ -166,10 +203,11 @@ All frontend work **must** follow [`Style.md`](Style.md). Read it before creatin
 - **Backend:** TypeScript, Express 5, ESM (`"type": "module"`), `tsx watch` for dev, `vitest` + `supertest` for tests.
 - **Config:** all env lives in the single `backend/.env`. Don't create per-service `.env` files.
 - **Auth:** `user-service` issues JWTs. Every other service only **verifies** them with the shared `JWT_SECRET`.
-- **Database:** Supabase Postgres. Schema changes go in a new migration `supabase/migrations/NNNN_description.sql` (next number, re-runnable/guarded where possible). Never edit an already-applied migration.
+- **Database:** Supabase Postgres. Schema changes go in a new migration `supabase/migrations/NNNN_description.sql` (next number, re-runnable/guarded where possible). **Until the first production deploy, migrations may be edited in place** (the scripts only ever run against a fresh prod DB, and any change to an existing dev database is applied by hand to match). After the first production deploy, never edit an applied migration — add a new one.
 - **Enum types:** three columns are backed by Postgres enums, not free text — the database rejects any value outside the list, so a new status/role must be added to the enum (a migration, e.g. `alter type ... add value ...`) before any code can write it:
-  - `users.role` → `app_role` (migration `0004`): `attendee`, `organiser`, `coordinator`, `venue_staff`, `technical_support`.
-  - `events.status` → `event_status` (migration `0014`): the 8 values in §3's table above.
-  - `venue_bookings.status` → `venue_status` (migration `0014`): `Requested`, `Approved`, `Rejected` — backs a **booking-approval** workflow (a specific booking request gets approved/rejected, not the venue itself). This column exists in the schema but no application code reads or writes it yet — the venue-service's search/booking routes (`backend/services/venue-service/src/routes/venues.ts`, `lib/venueSearch.ts`) and the frontend (`frontend/src/lib/venuesApi.ts`, `VenueSearchView.vue`) all need to be extended to actually use it before it does anything. Until then, every booking row defaults to `Requested` and is otherwise inert.
+  - `users.role` → `app_role` (migration `0004`): `attendee`, `organiser`, `coordinator`, `venue_staff`, `technical_support`, plus the Week 7 roles `coordinator_lead` (Event Coordinator Lead: oversees the unassigned queue, assigns and reassigns coordinators) and `safety_officer` (Operational Safety Check). Their user-id prefixes are `LEAD-` and `SAF-`, each with its own sequence (see `generate_user_id()` in `0004` and `sync_user_id_sequences()` in `0013`).
+  - `events.status` → `event_status` (migration `0014`): the 9 values in §3's table above (`Safety Review` is new).
+  - `venue_bookings.status` → `venue_status` (migration `0014`): `Requested`, `Approved`, `Rejected`, plus `Expired` and `Replacement Required` — see §3a. It backs a **booking-approval** workflow (a specific booking request is approved/rejected, not the venue itself).
+- **Postgres enum caveat:** once a database exists, `alter type ... add value` cannot be used in the same transaction as the statements that use the new value, so apply it on its own. (Because the enums are created with all their values up front, this only matters when hand-patching an existing DB.)
 - **Tests:** add or update tests for any backend route or lifecycle change. Run `npm test` in each service you touched before finishing.
 - **Docs:** when you add a service, port, env var or script, update `backend/README.md` in the same change.

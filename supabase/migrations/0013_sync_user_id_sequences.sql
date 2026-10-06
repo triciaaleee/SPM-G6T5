@@ -32,7 +32,9 @@ begin
       ('COORD-', 'coordinator_id_seq'),
       ('ATT-', 'attendee_id_seq'),
       ('VEN-', 'venue_staff_id_seq'),
-      ('TS-', 'technical_support_id_seq')
+      ('TS-', 'technical_support_id_seq'),
+      ('LEAD-', 'coordinator_lead_id_seq'),
+      ('SAF-', 'safety_officer_id_seq')
     ) as t(prefix, seq)
   loop
     select max(substring(id from length(r.prefix) + 1)::bigint)

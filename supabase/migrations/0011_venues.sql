@@ -29,7 +29,24 @@ create table if not exists venues (
   layouts text[] not null default '{}',
   facilities text[] not null default '{}',
   active boolean not null default true,
+  -- Week 7 change 1: availability checks count these around each event.
+  setup_minutes integer not null default 0 check (setup_minutes >= 0),
+  turnaround_minutes integer not null default 0 check (turnaround_minutes >= 0),
   created_at timestamptz not null default now()
+);
+
+-- Week 7 change 2: periods Venue Staff mark a venue unavailable (maintenance,
+-- equipment failure, renovation, safety, other). Bookings overlapping one
+-- are flagged "Replacement Required", never auto-cancelled.
+create table if not exists venue_unavailability (
+  id bigserial primary key,
+  venue_id integer not null references venues (id) on delete cascade,
+  starts_at timestamptz not null,
+  ends_at timestamptz not null,
+  reason text not null,
+  created_by text not null references users (id),
+  created_at timestamptz not null default now(),
+  check (ends_at > starts_at)
 );
 
 create table if not exists venue_bookings (
@@ -50,4 +67,5 @@ create index if not exists venue_bookings_date_idx on venue_bookings (booking_da
 -- Same stance as users (0004): RLS on with no policies, so only the
 -- backend's service-role key can reach these tables.
 alter table venues enable row level security;
+alter table venue_unavailability enable row level security;
 alter table venue_bookings enable row level security;
