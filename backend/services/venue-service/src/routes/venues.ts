@@ -3,6 +3,7 @@ import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEvent, fetchVenueBookingInfo } from "../lib/eventsClient.js";
+import { findBlockedVenueIds } from "../lib/unavailability.js";
 import { extractRequirements, scheduleQuery, withFeatures } from "../lib/venueRecommendation.js";
 import {
   buildFilterOptions,
@@ -60,6 +61,11 @@ async function findUnavailableVenueIds(
 ): Promise<Set<number> | null> {
   const unavailableVenueIds = new Set<number>();
   if (!criteria.date) return unavailableVenueIds;
+
+  // E4-3 AC3: venues staff have blocked out for this slot are excluded too.
+  const blockedVenueIds = await findBlockedVenueIds(supabase, criteria.date, criteria.startTime, criteria.endTime);
+  if (blockedVenueIds === null) return null;
+  for (const id of blockedVenueIds) unavailableVenueIds.add(id);
 
   const { data: bookings, error } = await supabase.from("venue_bookings").select("venue_id, event_id");
   if (error) return null;

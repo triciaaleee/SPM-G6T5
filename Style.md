@@ -288,6 +288,24 @@ Treat this the way a secondary colour is meant to work: a minority presence that
 | App background | `Colors/Grey/25` | `#FCFCFC` | Root page background |
 | Primary surface | `Colors/Grey/50` | `#F7F7F7` | Large background areas, alternate sections, subtle separation |
 
+### 3.5 Availability & Notification States
+
+Patterns for venue availability (E4-3) and in-app notifications (E7-1). Built only from existing tokens.
+
+| Pattern | Treatment | Use |
+|---------|-----------|-----|
+| `pattern-unavailable` | Diagonal stripes at 135°: `Colors/Grey/200` for `spacing-4`, then `Colors/Grey/50` for `spacing-4`, repeating. Border `Colors/Grey/300`. Text `Colors/Grey/900`, icon `Colors/Grey/700`. | A venue blocked out (unavailable) — calendar days and block-out cards. Stripes read as "closed" at a glance without borrowing a semantic colour. |
+| `pattern-unavailable-selected` | Same stripes using `Colors/Purple Primary/600` and `Colors/Purple Primary/700`, text `Colors/Base/White`. | A blocked calendar day that is also the selected day, so the block stays visible when selected. |
+| `pattern-unavailable-partial` | `pattern-unavailable` on the bottom half of the element only. | A day blocked for some hours, not the whole day. |
+| Replacement Required badge | Background `Colors/Orange Warning/200`, border `Colors/Orange Warning/300`, text `Colors/Orange Warning/900`, Small Text / Tag style, `radius-full`. | A booking caught by a block-out that needs a new venue — the Warning set's "on-hold" role. |
+| Unread notification badge | Background `Colors/Red Error/400`, text `Colors/Base/White`, Small Text / Tag style, `radius-full`. | Count of unread notifications on the bell — the `Red Error/400` "New" tag role (Section 2.5). |
+| Unread notification row | Background `Colors/Purple Primary/100`. Read rows use `Colors/Base/White`. | Distinguishes unread items in the notification dropdown. |
+| Toast | Background `Colors/Base/White`, border `Colors/Grey/100`, `radius-sm`, elevation `shadow-popover`, `spacing-16` padding. | Transient alert for a newly arrived notification; floats above content, so `shadow-popover` applies. |
+| Drawer scrim | `Grey/40% Dark #454545` behind a side drawer or modal. | Dims the page while a drawer (e.g. Block out time) is open. |
+
+**USE:** `pattern-unavailable` only for genuinely unavailable time — never as decoration.  
+**AVOID:** Red for unavailability — it isn't an error (Section 2.5). Reserve Orange Warning for bookings that need action (Replacement Required), not for the block itself.
+
 ### 3.4 Button Hierarchy
 
 A view should have exactly one visual "loudest" action. Solid, fully-saturated fills (Purple Primary/600 or Secondary Blue/600) both read as maximum emphasis regardless of hue — pairing two of them in the same view creates two competing focal points and erases the primary/secondary distinction the colours exist to signal.

@@ -29,30 +29,11 @@ const venue = {
 
 type Booking = {
   id: number;
-  event_id: number | null;
-  booking_date: string;
-  start_time: string;
-  end_time: string;
-  reason: string | null;
+  event_id: number;
+  status?: string;
 };
 
-const eventBooking: Booking = {
-  id: 1,
-  event_id: 7,
-  booking_date: "2026-09-24",
-  start_time: "09:00:00",
-  end_time: "20:00:00",
-  reason: "Nut Festival",
-};
-
-const holdBooking: Booking = {
-  id: 2,
-  event_id: null,
-  booking_date: "2026-09-28",
-  start_time: "09:00:00",
-  end_time: "14:00:00",
-  reason: "Floor maintenance",
-};
+const eventBooking: Booking = { id: 1, event_id: 7, status: "Approved" };
 
 /** What events-service's GET /venue-booking-info returns for event 7. */
 const eventInfo = {
@@ -79,13 +60,8 @@ function buildApp(
   } = {},
 ) {
   const bookingsQuery = {
-    eq: vi.fn(),
-    gte: vi.fn(),
-    lte: vi.fn(),
-    order: vi.fn(),
-    then: (resolve: (value: unknown) => void) => resolve({ data: options.bookings ?? [], error: null }),
+    eq: vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null }),
   };
-  for (const method of ["eq", "gte", "lte", "order"] as const) bookingsQuery[method].mockReturnValue(bookingsQuery);
 
   // venues is read two ways: the picker list (.eq("active").order("name"))
   // and the single-venue lookup (.eq("id").eq("active").maybeSingle()).
@@ -174,6 +150,7 @@ describe("GET /api/venues/staff/:venueId/bookings", () => {
         date: "2026-09-24",
         startTime: "09:00",
         endTime: "20:00",
+        status: "Approved",
         kind: "event",
         event: {
           id: 7,
@@ -203,37 +180,44 @@ describe("GET /api/venues/staff/:venueId/bookings", () => {
     expect(JSON.stringify(res.body)).not.toContain("PA system and power outlets");
   });
 
-  it("returns a booking with no event as a hold with its reason, without calling events-service", async () => {
-    const { app, fetchMock } = buildApp({ bookings: [holdBooking] });
+  it("returns no bookings without calling events-service when the venue has none", async () => {
+    const { app, fetchMock } = buildApp({ bookings: [] });
 
     const res = await getBookings(app);
 
     expect(res.status).toBe(200);
-    expect(res.body.bookings).toEqual([
-      { id: 2, date: "2026-09-28", startTime: "09:00", endTime: "14:00", kind: "hold", reason: "Floor maintenance" },
-    ]);
+    expect(res.body.bookings).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("shows a booked event events-service didn't return (e.g. deleted) as a hold", async () => {
+  it("leaves out a booked event events-service didn't return (e.g. a draft)", async () => {
     const { app } = buildApp({ bookings: [eventBooking], events: [] });
 
     const res = await getBookings(app);
 
-    expect(res.body.bookings[0]).toMatchObject({ kind: "hold", reason: "Nut Festival" });
-    expect(res.body.bookings[0]).not.toHaveProperty("event");
+    expect(res.status).toBe(200);
+    expect(res.body.bookings).toEqual([]);
   });
 
-  it("queries only this venue's bookings within the range, earliest first", async () => {
-    const { app, bookingsQuery } = buildApp();
+  it("queries only this venue's bookings and keeps those whose event falls in the range, earliest first", async () => {
+    const bookings = [
+      { id: 1, event_id: 7 },
+      { id: 2, event_id: 8 },
+      { id: 3, event_id: 9 },
+      { id: 4, event_id: 10 },
+    ];
+    const events = [
+      { ...eventInfo, id: 7, proposedDate: "2026-09-24", startTime: "09:00" },
+      { ...eventInfo, id: 8, proposedDate: "2026-09-10", startTime: "14:00" },
+      { ...eventInfo, id: 9, proposedDate: "2026-10-05", startTime: "09:00" },
+      { ...eventInfo, id: 10, proposedDate: "2026-09-10", startTime: "08:00" },
+    ];
+    const { app, bookingsQuery } = buildApp({ bookings, events });
 
-    await getBookings(app);
+    const res = await getBookings(app);
 
     expect(bookingsQuery.eq).toHaveBeenCalledWith("venue_id", 6);
-    expect(bookingsQuery.gte).toHaveBeenCalledWith("booking_date", "2026-09-01");
-    expect(bookingsQuery.lte).toHaveBeenCalledWith("booking_date", "2026-09-30");
-    expect(bookingsQuery.order).toHaveBeenNthCalledWith(1, "booking_date");
-    expect(bookingsQuery.order).toHaveBeenNthCalledWith(2, "start_time");
+    expect(res.body.bookings.map((b: { id: number }) => b.id)).toEqual([4, 2, 1]);
   });
 
   it("returns 404 for an unknown or retired venue", async () => {

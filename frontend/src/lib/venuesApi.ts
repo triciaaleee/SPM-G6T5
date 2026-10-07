@@ -170,6 +170,8 @@ interface BookingBase {
   /** "HH:MM". */
   startTime: string;
   endTime: string;
+  /** venue_status, e.g. "Replacement Required" after a block-out (E4-3). */
+  status?: string;
 }
 
 /**

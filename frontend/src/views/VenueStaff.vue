@@ -2,7 +2,15 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
 import CalendarPicker from "../components/venues/CalendarPicker.vue";
+import BlockOutPanel from "../components/venues/BlockOutPanel.vue";
+import UnavailabilityCard from "../components/venues/UnavailabilityCard.vue";
 import { fetchStaffVenues, fetchVenueBookings, type StaffVenueOption, type VenueBooking } from "../lib/venuesApi";
+import {
+  deleteUnavailability,
+  fetchUnavailability,
+  type CreatePeriodResult,
+  type UnavailabilityPeriod,
+} from "../lib/unavailabilityApi";
 
 /**
  * E1-5: venue staff's schedule. Pick a venue and a date to see what's
@@ -85,6 +93,106 @@ async function loadBookings(): Promise<void> {
 
 watch([venueId, visibleMonth], loadBookings);
 
+// ---- E4-3: block-out periods -------------------------------------------
+
+const periods = ref<UnavailabilityPeriod[]>([]);
+const periodsError = ref<string | null>(null);
+const panelOpen = ref(false);
+const removingId = ref<number | null>(null);
+/** Outcome of the last block-out or removal, shown above the day's list. */
+const notice = ref<{ text: string; warning: boolean } | null>(null);
+
+const selectedVenueName = computed(() => venues.value.find((v) => v.id === venueId.value)?.name ?? "");
+
+/** Every visible-month day a period covers, split into all-day and some-hours. */
+const blockedDays = computed(() => {
+  const { year, month } = visibleMonth.value;
+  const first = toKey(new Date(year, month, 1));
+  const last = toKey(new Date(year, month + 1, 0));
+  const full = new Set<string>();
+  const partial = new Set<string>();
+  for (const period of periods.value) {
+    const from = fromKey(period.startDate > first ? period.startDate : first);
+    const to = period.endDate < last ? period.endDate : last;
+    for (const day = from; toKey(day) <= to; day.setDate(day.getDate() + 1)) {
+      (period.allDay ? full : partial).add(toKey(day));
+    }
+  }
+  return { full: [...full], partial: [...partial].filter((key) => !full.has(key)) };
+});
+
+/** Periods covering the selected day: all-day first, then by start time. */
+const dayPeriods = computed(() =>
+  periods.value
+    .filter((p) => p.startDate <= selectedDate.value && p.endDate >= selectedDate.value)
+    .sort((a, b) => Number(b.allDay) - Number(a.allDay) || (a.startTime ?? "").localeCompare(b.startTime ?? "")),
+);
+
+let periodsSeq = 0;
+
+async function loadUnavailability(): Promise<void> {
+  if (venueId.value === null) return;
+  const { year, month } = visibleMonth.value;
+  const from = toKey(new Date(year, month, 1));
+  const to = toKey(new Date(year, month + 1, 0));
+
+  const seq = ++periodsSeq;
+  try {
+    const result = await fetchUnavailability(venueId.value, from, to);
+    if (seq !== periodsSeq) return;
+    periods.value = result;
+    periodsError.value = null;
+  } catch {
+    if (seq !== periodsSeq) return;
+    periods.value = [];
+    periodsError.value = "We couldn't load this venue's unavailable periods.";
+  }
+}
+
+watch([venueId, visibleMonth], loadUnavailability);
+watch(venueId, () => (notice.value = null));
+
+/** The period being edited in the panel; null while adding a new one. */
+const editingPeriod = ref<UnavailabilityPeriod | null>(null);
+
+function openBlockOut(period: UnavailabilityPeriod | null = null): void {
+  editingPeriod.value = period;
+  panelOpen.value = true;
+}
+
+function onBlockOutSaved(result: CreatePeriodResult): void {
+  const verb = editingPeriod.value ? "Block-out updated." : "Period blocked out.";
+  panelOpen.value = false;
+  editingPeriod.value = null;
+  const count = result.affected.length;
+  if (count === 0) {
+    notice.value = { text: `${verb} It shows as unavailable on the calendar.`, warning: false };
+  } else {
+    const bookings = `${count} booking${count === 1 ? "" : "s"} marked Replacement Required`;
+    const notified = result.notificationsFailed
+      ? "but we couldn't notify the coordinators — please let them know directly."
+      : `and ${result.coordinatorsNotified} coordinator${result.coordinatorsNotified === 1 ? "" : "s"} notified.`;
+    notice.value = { text: `${verb} ${bookings}, ${notified}`, warning: result.notificationsFailed };
+  }
+  selectedDate.value = result.period.startDate;
+  void loadUnavailability();
+  void loadBookings();
+}
+
+async function removePeriod(period: UnavailabilityPeriod): Promise<void> {
+  if (!window.confirm(`Remove this block-out (${period.reason})? The venue will show as available again.`)) return;
+  removingId.value = period.id;
+  try {
+    await deleteUnavailability(period.id);
+    notice.value = { text: "Block-out removed.", warning: false };
+    await loadUnavailability();
+  } catch {
+    notice.value = { text: "We couldn't remove that block-out. Please try again.", warning: true };
+  } finally {
+    removingId.value = null;
+  }
+}
+
 onMounted(async () => {
   try {
     venues.value = await fetchStaffVenues();
@@ -100,8 +208,9 @@ onMounted(async () => {
 <template>
   <!--
     Column mapping — Venue Schedule
-    Desktop (12-col, grid-desktop-margin 80px): header col 1-12; sidebar (venue picker above calendar card) col 1-4;
-      schedule col 5-12.
+    Desktop (12-col, grid-desktop-margin 80px): header col 1-12 (title left, "Block out time" right); sidebar
+      (venue picker above calendar card + key) col 1-4; schedule col 5-12, block-out cards above the bookings.
+      The Block out time panel is an overlay drawer outside this grid (mapping in BlockOutPanel.vue).
       Nested grid: each booking card's detail rows use a local 8-col grid (the schedule's span);
       time and attendance span 4 each, layout and facilities span 8.
     Tablet (6-col, grid-tablet-margin 32px): header, sidebar and schedule each col 1-6, stacked.
@@ -109,9 +218,15 @@ onMounted(async () => {
     Mobile (4-col, grid-mobile-margin 6px): everything col 1-4, stacked; card detail rows span 4.
   -->
   <div class="page">
-    <div class="page-header">
-      <h1 class="h2">Venue schedule</h1>
-      <p class="subheading">Select a date to see what needs to be set up that day.</p>
+    <div class="page-header page-header--with-action">
+      <div>
+        <h1 class="h2">Venue schedule</h1>
+        <p class="subheading">Select a date to see what needs to be set up that day.</p>
+      </div>
+      <!-- E4-3: the page's one primary action. -->
+      <button v-if="venueId !== null" type="button" class="btn-primary" @click="openBlockOut()">
+        Block out time
+      </button>
     </div>
 
     <p v-if="venuesError" class="body-default error-text full-row">{{ venuesError }}</p>
@@ -134,7 +249,15 @@ onMounted(async () => {
 
         <section class="calendar-card" aria-label="Choose a date">
           <CalendarPicker v-model="selectedDate" allow-past :marked-dates="bookedDates"
+            :blocked-dates="blockedDays.full" :partly-blocked-dates="blockedDays.partial"
             @month-change="visibleMonth = $event" />
+          <ul class="legend" aria-label="Calendar key">
+            <li class="legend__item"><span class="legend__dot" aria-hidden="true" />Booked</li>
+            <li class="legend__item"><span class="legend__swatch" aria-hidden="true" />Unavailable all day</li>
+            <li class="legend__item">
+              <span class="legend__swatch legend__swatch--partial" aria-hidden="true" />Partly unavailable
+            </li>
+          </ul>
         </section>
       </div>
 
@@ -146,6 +269,19 @@ onMounted(async () => {
               }}</span>
           </h2>
         </div>
+
+        <p v-if="notice" class="notice" :class="{ 'notice--warning': notice.warning }" role="status">
+          {{ notice.text }}
+        </p>
+        <p v-if="periodsError" class="body-default error-text">{{ periodsError }}</p>
+
+        <!-- E4-3 AC1: block-outs come first so an unavailable day is obvious at a glance. -->
+        <ul v-if="dayPeriods.length > 0" class="booking-list block-list">
+          <li v-for="period in dayPeriods" :key="period.id">
+            <UnavailabilityCard :period="period" :removing="removingId === period.id" @edit="openBlockOut(period)"
+              @remove="removePeriod(period)" />
+          </li>
+        </ul>
 
         <p v-if="bookingsError" class="body-default error-text">{{ bookingsError }}</p>
         <p v-else-if="loadingBookings && bookings.length === 0" class="body-default muted">Loading bookings…</p>
@@ -159,6 +295,9 @@ onMounted(async () => {
           <li v-for="booking in dayBookings" :key="booking.id" class="booking-card"
             :class="{ 'booking-card--hold': booking.kind === 'hold' }">
             <template v-if="booking.kind === 'event'">
+              <span v-if="booking.status === 'Replacement Required'" class="replacement-badge">
+                Replacement Required
+              </span>
               <p class="card-title">{{ booking.event.name || "Untitled event" }}</p>
               <p class="body-small muted booking-card__date">{{ formatLongDate(booking.date) }}</p>
 
@@ -203,6 +342,10 @@ onMounted(async () => {
         </ul>
       </section>
     </template>
+
+    <BlockOutPanel v-if="panelOpen && venueId !== null" :key="editingPeriod?.id ?? 'new'" :venue-id="venueId"
+      :venue-name="selectedVenueName" :initial-date="selectedDate" :period="editingPeriod"
+      @close="panelOpen = false; editingPeriod = null" @saved="onBlockOutSaved" />
   </div>
 </template>
 
@@ -517,5 +660,116 @@ onMounted(async () => {
   font-weight: 700;
   line-height: 1.75rem;
   color: var(--color-grey-900);
+}
+
+/* ---- E4-3: block-out periods ---- */
+
+.page-header--with-action {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--spacing-16);
+}
+
+.btn-primary {
+  height: 40px;
+  padding: 0 var(--spacing-16);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: var(--color-purple-600);
+  color: var(--color-base-white);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  cursor: pointer;
+}
+
+.btn-primary:hover {
+  background: var(--color-purple-500);
+}
+
+.btn-primary:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-8) var(--spacing-16);
+  margin: var(--spacing-16) 0 0;
+  padding: var(--spacing-16) 0 0;
+  border-top: 1px solid var(--color-grey-100);
+  list-style: none;
+}
+
+.legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--color-grey-700);
+}
+
+.legend__dot {
+  width: var(--spacing-4);
+  height: var(--spacing-4);
+  border-radius: var(--radius-full);
+  background: var(--color-purple-600);
+}
+
+/* Style.md 3.5: pattern-unavailable / -partial, as calendar swatches. */
+.legend__swatch {
+  width: var(--spacing-16);
+  height: var(--spacing-16);
+  border-radius: var(--radius-xs);
+  box-shadow: inset 0 0 0 1px var(--color-grey-300);
+  background: repeating-linear-gradient(135deg,
+      var(--color-grey-200) 0 var(--spacing-4),
+      var(--color-grey-50) var(--spacing-4) var(--spacing-8));
+}
+
+.legend__swatch--partial {
+  background: repeating-linear-gradient(135deg,
+      var(--color-grey-200) 0 var(--spacing-4),
+      var(--color-grey-50) var(--spacing-4) var(--spacing-8)) bottom / 100% 50% no-repeat;
+}
+
+.notice {
+  margin: 0 0 var(--spacing-16);
+  padding: var(--spacing-12) var(--spacing-16);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-xs);
+  background: var(--color-grey-50);
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-700);
+}
+
+.notice--warning {
+  border-color: var(--color-warning-300);
+  background: var(--color-warning-100);
+  color: var(--color-warning-900);
+}
+
+.block-list {
+  margin-bottom: var(--spacing-16);
+}
+
+/* Style.md 3.5: Replacement Required badge. */
+.replacement-badge {
+  display: inline-block;
+  margin-bottom: var(--spacing-8);
+  padding: var(--spacing-2) var(--spacing-8);
+  border: 1px solid var(--color-warning-300);
+  border-radius: var(--radius-full);
+  background: var(--color-warning-200);
+  color: var(--color-warning-900);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
 }
 </style>

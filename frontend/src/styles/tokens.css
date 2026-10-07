@@ -29,6 +29,9 @@
 
   /* Semantic */
   --color-error-200: #FFE3E0;
+  --color-error-400: #FF5444;
+  /* Grey/40% Dark #454545 (Style.md 2.3) — modal/drawer scrim. */
+  --color-grey-alpha-40-dark: rgba(69, 69, 69, 0.4);
   --color-error-600: #CC1000;
   --color-warning-100: #FEF5E7;
   --color-warning-200: #FCE1B6;

@@ -37,16 +37,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface BookingRow {
   id: number;
-  event_id: number | null;
-  booking_date: string;
-  start_time: string;
-  end_time: string;
-  reason: string | null;
+  event_id: number;
+  /** venue_status — e.g. Replacement Required after a block-out (E4-3). */
+  status: string;
 }
 
-/** Postgres `time` comes back as "HH:MM:SS"; the UI shows "HH:MM". */
-function toHourMinute(time: string): string {
-  return time.slice(0, 5);
+/** Times may arrive as "HH:MM:SS"; the UI shows "HH:MM". */
+function toHourMinute(time: string | null): string {
+  return (time ?? "").slice(0, 5);
 }
 
 /** Active venues for the schedule's venue picker. */
@@ -63,11 +61,8 @@ staffRouter.get("/venues", async (req: AuthedRequest, res) => {
 
 /**
  * Every booking at one venue between `from` and `to` (inclusive, local
- * "YYYY-MM-DD" dates), earliest first. A booking tied to an event carries
- * that event's booking-relevant details; any other booking — an external
- * hold, maintenance, or an event staff can't be shown (e.g. deleted) — is a
- * "hold" with only its reason, since all staff need to know is that the
- * venue is taken.
+ * "YYYY-MM-DD" dates), earliest first. Every booking is tied to an event
+ * (migration 0015) and carries that event's booking-relevant details.
  */
 staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
   const supabase = req.supabase!;
@@ -109,22 +104,21 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // venue_bookings no longer stores its own timing (migration 0015): each
+  // booking's date/time comes from its linked event, so the range filter and
+  // sort happen here rather than in the query.
   const { data: bookingData, error: bookingsError } = await supabase
     .from("venue_bookings")
-    .select("id, event_id, booking_date, start_time, end_time, reason")
-    .eq("venue_id", venue.id)
-    .gte("booking_date", from)
-    .lte("booking_date", to)
-    .order("booking_date")
-    .order("start_time");
+    .select("id, event_id, status")
+    .eq("venue_id", venue.id);
 
   if (bookingsError) {
     res.status(500).json({ error: "Failed to load bookings" });
     return;
   }
-  const bookings = (bookingData ?? []) as BookingRow[];
+  const bookingRows = (bookingData ?? []) as BookingRow[];
 
-  const eventIds = [...new Set(bookings.map((b) => b.event_id).filter((id): id is number => id !== null))];
+  const eventIds = [...new Set(bookingRows.map((b) => b.event_id))];
   const infoResult = await fetchVenueBookingInfo(eventIds, req.headers.authorization!);
   if (infoResult.status === "error") {
     res.status(502).json({ error: "Failed to load the booked events" });
@@ -132,28 +126,31 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
   }
   const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
 
+  // Events events-service didn't return (e.g. still a draft) or with no
+  // proposed date can't be placed on the schedule, so they're left out.
+  const bookings = bookingRows
+    .flatMap((booking) => {
+      const event = eventsById.get(booking.event_id);
+      if (!event?.proposedDate || event.proposedDate < from || event.proposedDate > to) return [];
+      return [{ booking, event, date: event.proposedDate, startTime: toHourMinute(event.startTime) }];
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
+
   res.json({
     venue: { id: venue.id, name: venue.name },
-    bookings: bookings.map((booking) => {
-      const base = {
-        id: booking.id,
-        date: booking.booking_date,
-        startTime: toHourMinute(booking.start_time),
-        endTime: toHourMinute(booking.end_time),
-      };
-      const event = booking.event_id !== null ? eventsById.get(booking.event_id) : undefined;
-      if (!event) return { ...base, kind: "hold", reason: booking.reason };
-
-      return {
-        ...base,
-        kind: "event",
-        event: {
-          id: event.id,
-          name: event.name,
-          expectedAttendance: event.expectedAttendance,
-          ...extractLayoutAndFacilities(event, [venue as VenueRow]),
-        },
-      };
-    }),
+    bookings: bookings.map(({ booking, event, date, startTime }) => ({
+      id: booking.id,
+      date,
+      startTime,
+      endTime: toHourMinute(event.endTime),
+      status: booking.status,
+      kind: "event",
+      event: {
+        id: event.id,
+        name: event.name,
+        expectedAttendance: event.expectedAttendance,
+        ...extractLayoutAndFacilities(event, [venue as VenueRow]),
+      },
+    })),
   });
 });
