@@ -1,6 +1,6 @@
--- Captures venues.setup_minutes / venues.turnaround_minutes, already added
--- live in Supabase Studio but never written down as a migration (see
--- AGENTS.md's migration rule).
+-- venues.setup_minutes / venues.turnaround_minutes. A fresh database already
+-- gets them from 0011 (edited in place for Week 7 change 1); this catches up
+-- a dev database created before that edit, where they were added by hand.
 --
 -- A booking occupies its venue from event start − setup to event end +
 -- turnaround: a 10:00–12:00 event with 30 min setup and 45 min turnaround

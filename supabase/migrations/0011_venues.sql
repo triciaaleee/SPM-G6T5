@@ -29,8 +29,16 @@ create table if not exists venues (
   layouts text[] not null default '{}',
   facilities text[] not null default '{}',
   active boolean not null default true,
+  -- Week 7 change 1: availability checks count these around each event.
+  setup_minutes integer not null default 0 check (setup_minutes >= 0),
+  turnaround_minutes integer not null default 0 check (turnaround_minutes >= 0),
   created_at timestamptz not null default now()
 );
+
+-- Week 7 change 2 (venue unavailable after booking): the venue_unavailability
+-- table is created in 0016_venue_unavailability.sql (E4-3). A period there
+-- is a date range that either blocks whole days or the same hours on each
+-- day, so "09:00–13:00 every day for a week" is one row.
 
 create table if not exists venue_bookings (
   id bigserial primary key,

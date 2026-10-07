@@ -187,8 +187,13 @@ function formatAffected(booking: AffectedBooking): string {
 }
 
 function statusLabel(booking: AffectedBooking): string {
-  return booking.status === "Requested" ? "Pending request" : "Approved";
+  if (booking.status === "Requested") return "Pending request";
+  if (booking.status === "On Hold") return "On hold";
+  return "Approved";
 }
+
+const flaggedCount = computed(() => affected.value.filter((b) => b.replacementRequired).length);
+const pendingCount = computed(() => affected.value.length - flaggedCount.value);
 
 async function submit(): Promise<void> {
   attempted.value = true;
@@ -325,7 +330,13 @@ onBeforeUnmount(() => {
                 </li>
               </ul>
               <p class="warning__body">
-                Each booking will be marked Replacement Required and its coordinator told to find another venue.
+                <template v-if="flaggedCount > 0">
+                  Approved bookings will be marked Replacement Required and their coordinators told to find another
+                  venue.
+                </template>
+                <template v-if="pendingCount > 0">
+                  Pending ones keep their status, but their coordinators are told the slot can't be honoured.
+                </template>
                 The events themselves are not changed.
               </p>
             </div>

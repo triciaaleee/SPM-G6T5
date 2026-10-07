@@ -4,16 +4,21 @@
 -- ("schema changes go in a new migration"), so a fresh environment ends
 -- up with the same schema the dev project already has.
 --
--- event_status: all 8 status strings the app actually writes (see
--- AGENTS.md §3), including "Unassigned" — written by E2-6 AC4 when a
--- request is submitted and no coordinator exists yet to auto-assign.
+-- event_status: every status in AGENTS.md §3, including "Unassigned"
+-- (the Event Coordinator Lead's unassigned queue) and "Safety Review"
+-- (awaiting the Safety Officer's Operational Safety Check, Week 7 change 6)
+-- and "Cancelled" (the Organiser cancelled their own event).
 --
 -- venue_status: new, backs a booking-approval workflow (a booking request
 -- for a venue gets approved/rejected — not the venue itself). The column
 -- was created live as venue_bookings."Status" (capitalized); this
 -- migration renames it to the lowercase `status` every other column in
--- the schema uses. Application code doesn't read/write this column yet —
--- see AGENTS.md for the follow-up this unblocks.
+-- the schema uses. Statuses and their meaning: AGENTS.md §3a (Week 7
+-- changes 2 and 4 add "On Hold", "Expired" and "Replacement Required";
+-- "Withdrawn" is a booking the coordinator released or that an event
+-- cancellation released).
+-- An "On Hold" booking is Venue Staff's tentative hold and carries
+-- hold_expires_at, added below.
 --
 -- Guarded so this is safe to re-run.
 
@@ -26,20 +31,12 @@ begin
       'Unassigned',
       'Clarification Requested',
       'Planning',
+      'Safety Review',
       'Rejected',
       'Confirmed',
-      'Completed'
+      'Completed',
+      'Cancelled'
     );
-  else
-    -- The enum already exists live (created via Supabase Studio) without
-    -- Unassigned — add it if it's missing, since ADD VALUE can't run
-    -- inside the same transaction/block as the CREATE TYPE above.
-    if not exists (
-      select 1 from pg_enum
-      where enumtypid = 'event_status'::regtype and enumlabel = 'Unassigned'
-    ) then
-      alter type event_status add value 'Unassigned';
-    end if;
   end if;
 end
 $$;
@@ -51,7 +48,15 @@ alter table events alter column status set default 'Requested'::event_status;
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'venue_status') then
-    create type venue_status as enum ('Requested', 'Approved', 'Rejected');
+    create type venue_status as enum (
+      'Requested',
+      'On Hold',
+      'Approved',
+      'Rejected',
+      'Expired',
+      'Replacement Required',
+      'Withdrawn'
+    );
   end if;
 end
 $$;
@@ -81,3 +86,7 @@ begin
   end if;
 end
 $$;
+
+-- Tentative-hold expiry (Week 7 change 4): an 'On Hold' booking blocks its
+-- venue only until this moment. Null for every other status.
+alter table venue_bookings add column if not exists hold_expires_at timestamptz;

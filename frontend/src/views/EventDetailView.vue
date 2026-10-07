@@ -22,6 +22,7 @@ import EventStatusTracker from "../components/EventStatusTracker.vue";
 import ClarificationPanel from "../components/ClarificationPanel.vue";
 import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
 
+
 interface SubmittedEventDetails {
   name?: string;
   purpose?: string;
@@ -197,6 +198,14 @@ const editBlockedMessage = computed(() => {
     return null;
   return "This request has already been confirmed and can no longer be edited directly. Contact your coordinator to request a change.";
 });
+/** E3-7 AC1/AC3: the assigned coordinator can edit non-critical fields
+ * while the event is in Planning — separate from the organiser paths
+ * above. Schedule/venue/capacity fields stay disabled in the form below
+ * (see COORDINATOR_LOCKED_FIELDS) since the backend rejects changes to
+ * them from this path outright. */
+const canCoordinatorEdit = computed(
+  () => isAssignedCoordinator.value && event.value?.status === "Planning",
+);
 const isEditingDetails = ref(false);
 const editForm = reactive<EventRequestPayload>({
   name: "",
@@ -289,6 +298,14 @@ function formatHistoryTimestamp(value: string): string {
   return date.toLocaleString();
 }
 
+/** "coordinator" -> "Coordinator", "venue_staff" -> "Venue Staff". */
+function formatRoleLabel(role: string): string {
+  return role
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 const NOT_PROVIDED = "Not provided";
 
 function formatDate(value: string | undefined | null): string {
@@ -367,7 +384,7 @@ onMounted(async () => {
                 <div class="details-card">
                   <div class="section-header">
                     <h2 class="section-title">Event Details</h2>
-                    <button v-if="(canRespondToClarification || canEditDirectly) && !isEditingDetails" type="button"
+                    <button v-if="(canRespondToClarification || canEditDirectly || canCoordinatorEdit) && !isEditingDetails" type="button"
                       class="btn-icon" :title="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
                       :aria-label="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
                       @click="startEditingDetails">
@@ -413,7 +430,7 @@ onMounted(async () => {
                       <div class="field">
                         <label for="edit-expectedAttendance" class="body-small muted mb-1">Expected attendance</label>
                         <input id="edit-expectedAttendance" v-model="editForm.expectedAttendance" type="number" min="1"
-                          class="edit-input" />
+                          class="edit-input" :disabled="canCoordinatorEdit && !canEditDirectly" />
                         <p v-if="editFieldErrors.expectedAttendance" class="body-small error-text">
                           {{ editFieldErrors.expectedAttendance }}
                         </p>
@@ -422,19 +439,22 @@ onMounted(async () => {
                     <div class="field-row field-row-3">
                       <div class="field">
                         <label for="edit-proposedDate" class="body-small muted mb-1">Proposed date</label>
-                        <input id="edit-proposedDate" v-model="editForm.proposedDate" type="date" class="edit-input" />
+                        <input id="edit-proposedDate" v-model="editForm.proposedDate" type="date" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
                         <p v-if="editFieldErrors.proposedDate" class="body-small error-text">{{
                           editFieldErrors.proposedDate }}</p>
                       </div>
                       <div class="field">
                         <label for="edit-startTime" class="body-small muted mb-1">Start time</label>
-                        <input id="edit-startTime" v-model="editForm.startTime" type="time" class="edit-input" />
+                        <input id="edit-startTime" v-model="editForm.startTime" type="time" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
                         <p v-if="editFieldErrors.startTime" class="body-small error-text">{{ editFieldErrors.startTime }}
                         </p>
                       </div>
                       <div class="field">
                         <label for="edit-endTime" class="body-small muted mb-1">End time</label>
-                        <input id="edit-endTime" v-model="editForm.endTime" type="time" class="edit-input" />
+                        <input id="edit-endTime" v-model="editForm.endTime" type="time" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
                         <p v-if="editFieldErrors.endTime" class="body-small error-text">{{ editFieldErrors.endTime }}</p>
                       </div>
                     </div>
@@ -492,7 +512,8 @@ onMounted(async () => {
                     <div class="field-row">
                       <div class="field">
                         <label for="edit-venue" class="body-small muted mb-1">Venue Requirements</label>
-                        <textarea id="edit-venue" v-model="editForm.venue" rows="2" class="edit-input" />
+                        <textarea id="edit-venue" v-model="editForm.venue" rows="2" class="edit-input"
+                          :disabled="canCoordinatorEdit && !canEditDirectly" />
                         <p v-if="editFieldErrors.venue" class="body-small error-text">{{ editFieldErrors.venue }}</p>
                       </div>
                       <div class="field">
@@ -692,14 +713,14 @@ onMounted(async () => {
   </div>
 </div>
 
-              <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
-              <div v-if="isCoordinator && event.status !== 'Rejected'" class="venue-search-entry">
-                <h3 class="text-lg font-semibold text-[--color-grey-900]">Venue</h3>
-                <VenueRecommendations :event-id="event.id" :details="event.submitted_details" />
-                <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
-                  Find venues
-                </RouterLink>
-              </div>
+<!-- Venue search: opens pre-filled with this event's date, time and attendance -->
+<div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
+  <h2 class="section-title">Venue Recommendations</h2>
+  <VenueRecommendations :event-id="event.id" :details="event.submitted_details" />
+  <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
+    Find venues
+  </RouterLink>
+</div>
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
   :current-user-id="currentUser.id" />
@@ -864,18 +885,21 @@ onMounted(async () => {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  /* minmax(0, …): a bare fr track won't shrink below its content's width, and the
+     venue carousel's track is as wide as all its cards side by side. */
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: var(--grid-desktop-gutter);
   align-items: start;
 }
 
 @media (max-width: 1024px) {
   .detail-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
 .detail-grid-col {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--grid-desktop-gutter);
@@ -894,6 +918,8 @@ onMounted(async () => {
   border: none;
   border-top: 1px solid var(--color-grey-200);
   margin: var(--spacing-24) 0;
+  border-top: 1px solid var(--color-grey-200);
+  margin: var(--spacing-24) 0;
 }
 
 .badge-neutral {
@@ -906,6 +932,7 @@ onMounted(async () => {
   font-weight: 700;
   line-height: 1.75rem;
   color: var(--color-grey-900);
+  margin-bottom:12px!important;
   margin-bottom:12px!important;
 }
 

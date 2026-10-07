@@ -227,10 +227,10 @@ describe("POST /api/venues/unavailability/preview (AC2)", () => {
     expect(res.body.affected).toEqual([
       {
         bookingId: 1, status: "Approved", eventId: 1, eventName: "Event 1", date: "2026-10-13",
-        startTime: "10:00", endTime: "12:00", occupiedStart: "10:00", occupiedEnd: "12:00", hasCoordinator: true,
+        startTime: "10:00", endTime: "12:00", occupiedStart: "10:00", occupiedEnd: "12:00", hasCoordinator: true, replacementRequired: true,
       },
     ]);
-    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["Requested", "Approved"]);
+    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["Requested", "On Hold", "Approved"]);
     expect(insert).not.toHaveBeenCalled();
   });
 
@@ -245,7 +245,7 @@ describe("POST /api/venues/unavailability/preview (AC2)", () => {
       venueId: 6, startDate: "2026-10-21", endDate: "2026-10-21", allDay: false, startTime: "17:00", endTime: "20:00", reason: "Maintenance",
     });
 
-    expect(res.body.affected).toEqual([expect.objectContaining({ bookingId: 7, status: "Requested" })]);
+    expect(res.body.affected).toEqual([expect.objectContaining({ bookingId: 7, status: "Requested", replacementRequired: false })]);
   });
 
   it("widens each event by the venue's setup and turnaround time", async () => {
@@ -333,7 +333,7 @@ describe("POST /api/venues/unavailability (AC1 + AC2)", () => {
 
   it("flags affected bookings Replacement Required and notifies their coordinators", async () => {
     const { app, update, updateQuery, fetchMock } = buildApp({
-      bookings: [{ id: 1, event_id: 1 }, { id: 2, event_id: 2 }],
+      bookings: [{ id: 1, event_id: 1, status: "Approved" }, { id: 2, event_id: 2, status: "Approved" }],
       events: [eventInfo(1, "2026-10-13", "10:00", "12:00"), eventInfo(2, "2026-11-01", "10:00", "12:00")],
     });
 
@@ -342,7 +342,7 @@ describe("POST /api/venues/unavailability (AC1 + AC2)", () => {
     expect(res.status).toBe(201);
     expect(update).toHaveBeenCalledWith({ status: "Replacement Required" });
     expect(updateQuery.in).toHaveBeenCalledWith("id", [1]);
-    expect(updateQuery.in).toHaveBeenCalledWith("status", ["Requested", "Approved"]);
+    expect(updateQuery.eq).toHaveBeenCalledWith("status", "Approved");
 
     const notifyCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/notifications"));
     const sent = JSON.parse(notifyCall![1]!.body!).notifications;
@@ -354,9 +354,25 @@ describe("POST /api/venues/unavailability (AC1 + AC2)", () => {
     expect(res.body).toMatchObject({ coordinatorsNotified: 1, notificationsFailed: false });
   });
 
+  it("leaves pending bookings' status alone (AGENTS.md §3a) but still notifies their coordinators", async () => {
+    const { app, update, fetchMock } = buildApp({
+      bookings: [{ id: 7, event_id: 1, status: "Requested" }, { id: 8, event_id: 2, status: "On Hold" }],
+      events: [eventInfo(1, "2026-10-13", "10:00", "12:00"), eventInfo(2, "2026-10-14", "10:00", "12:00")],
+    });
+
+    const res = await request(app).post("/api/venues/unavailability").send(fullDays);
+
+    expect(res.status).toBe(201);
+    expect(update).not.toHaveBeenCalled();
+    expect(res.body.affected.map((b: { replacementRequired: boolean }) => b.replacementRequired)).toEqual([false, false]);
+    const notifyCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/notifications"));
+    const sent = JSON.parse(notifyCall![1]!.body!).notifications;
+    expect(sent.map((n: { type: string }) => n.type)).toEqual(["venue_unavailable_pending", "venue_unavailable_pending"]);
+  });
+
   it("still saves, but reports it, when notification-service can't be reached", async () => {
     const { app } = buildApp({
-      bookings: [{ id: 1, event_id: 1 }],
+      bookings: [{ id: 1, event_id: 1, status: "Approved" }],
       events: [eventInfo(1, "2026-10-13", "10:00", "12:00")],
       notificationsStatus: 500,
     });

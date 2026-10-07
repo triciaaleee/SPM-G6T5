@@ -27,11 +27,8 @@ const venue = {
   facilities: ["PA system", "Power outlets", "Outdoor space"],
 };
 
-type Booking = {
-  id: number;
-  event_id: number;
-  status?: string;
-};
+/** venue_bookings only links a venue to an event; the date and times are the event's. */
+type Booking = { id: number; event_id: number; status: "Requested" | "Approved" | "Rejected" };
 
 const eventBooking: Booking = { id: 1, event_id: 7, status: "Approved" };
 
@@ -59,9 +56,7 @@ function buildApp(
     venueList?: { id: number; name: string }[];
   } = {},
 ) {
-  const bookingsQuery = {
-    eq: vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null }),
-  };
+  const bookingsQuery = { eq: vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null }) };
 
   // venues is read two ways: the picker list (.eq("active").order("name"))
   // and the single-venue lookup (.eq("id").eq("active").maybeSingle()).
@@ -151,7 +146,6 @@ describe("GET /api/venues/staff/:venueId/bookings", () => {
         startTime: "09:00",
         endTime: "20:00",
         status: "Approved",
-        kind: "event",
         event: {
           id: 7,
           name: "Nut Festival",
@@ -180,17 +174,7 @@ describe("GET /api/venues/staff/:venueId/bookings", () => {
     expect(JSON.stringify(res.body)).not.toContain("PA system and power outlets");
   });
 
-  it("returns no bookings without calling events-service when the venue has none", async () => {
-    const { app, fetchMock } = buildApp({ bookings: [] });
-
-    const res = await getBookings(app);
-
-    expect(res.status).toBe(200);
-    expect(res.body.bookings).toEqual([]);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("leaves out a booked event events-service didn't return (e.g. a draft)", async () => {
+  it("leaves out a booking whose event events-service didn't return (deleted, or a draft)", async () => {
     const { app } = buildApp({ bookings: [eventBooking], events: [] });
 
     const res = await getBookings(app);
@@ -199,25 +183,37 @@ describe("GET /api/venues/staff/:venueId/bookings", () => {
     expect(res.body.bookings).toEqual([]);
   });
 
-  it("queries only this venue's bookings and keeps those whose event falls in the range, earliest first", async () => {
-    const bookings = [
-      { id: 1, event_id: 7 },
-      { id: 2, event_id: 8 },
-      { id: 3, event_id: 9 },
-      { id: 4, event_id: 10 },
-    ];
-    const events = [
-      { ...eventInfo, id: 7, proposedDate: "2026-09-24", startTime: "09:00" },
-      { ...eventInfo, id: 8, proposedDate: "2026-09-10", startTime: "14:00" },
-      { ...eventInfo, id: 9, proposedDate: "2026-10-05", startTime: "09:00" },
-      { ...eventInfo, id: 10, proposedDate: "2026-09-10", startTime: "08:00" },
-    ];
-    const { app, bookingsQuery } = buildApp({ bookings, events });
+  it("returns no bookings, without calling events-service, when the venue has none", async () => {
+    const { app, fetchMock, bookingsQuery } = buildApp();
 
     const res = await getBookings(app);
 
+    expect(res.body.bookings).toEqual([]);
     expect(bookingsQuery.eq).toHaveBeenCalledWith("venue_id", 6);
-    expect(res.body.bookings.map((b: { id: number }) => b.id)).toEqual([4, 2, 1]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps only bookings whose event falls in the range, earliest first", async () => {
+    const at = (id: number, proposedDate: string, startTime: string) => ({ ...eventInfo, id, proposedDate, startTime });
+    const { app } = buildApp({
+      bookings: [
+        { id: 1, event_id: 11, status: "Approved" },
+        { id: 2, event_id: 12, status: "Requested" },
+        { id: 3, event_id: 13, status: "Approved" },
+        { id: 4, event_id: 14, status: "Approved" },
+      ],
+      events: [
+        at(11, "2026-09-24", "14:00"),
+        at(12, "2026-10-02", "09:00"), // next month: out of range
+        at(13, "2026-09-24", "08:00"),
+        at(14, "2026-09-02", "10:00"),
+      ],
+    });
+
+    const res = await getBookings(app);
+
+    expect(res.body.bookings.map((b: { id: number }) => b.id)).toEqual([4, 3, 1]);
+    expect(res.body.bookings.map((b: { status: string }) => b.status)).toEqual(["Approved", "Approved", "Approved"]);
   });
 
   it("returns 404 for an unknown or retired venue", async () => {

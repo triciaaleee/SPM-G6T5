@@ -8,14 +8,20 @@ import VenueIcon from "./VenueIcon.vue";
  * rather than toISOString(), which would shift a day in UTC+ timezones.
  * Past days are disabled by default: availability for a date that's gone
  * is moot. `allowPast` lifts that for views that look back (the venue
- * schedule). `markedDates` puts a dot under days that have something on.
- * `blockedDates` / `partlyBlockedDates` (E4-3) stripe days a venue is
- * unavailable all day / for some hours (Style.md 3.5).
+ * schedule). `markers` puts dots under days that have something on: a
+ * purple dot for a booking, a blue dot for a request, both side by side
+ * when a day has each. The day's label says the same in words, so the
+ * meaning never rests on colour alone. `blockedDates` /
+ * `partlyBlockedDates` (E4-3) stripe days a venue is unavailable all day /
+ * for some hours (Style.md 3.5).
  */
+export type DayMarker = "booking" | "request";
+
 const props = defineProps<{
   modelValue: string | null;
   allowPast?: boolean;
-  markedDates?: string[];
+  /** Date key ("YYYY-MM-DD") → the kinds of booking on that day. */
+  markers?: Record<string, DayMarker[]>;
   blockedDates?: string[];
   partlyBlockedDates?: string[];
 }>();
@@ -25,7 +31,20 @@ const emit = defineEmits<{
   "month-change": [value: { year: number; month: number }];
 }>();
 
-const marked = computed(() => new Set(props.markedDates ?? []));
+const MARKER_ORDER: DayMarker[] = ["booking", "request"];
+
+/** The day's markers in a fixed order, so dots never swap places. */
+function markersFor(key: string): DayMarker[] {
+  const kinds = props.markers?.[key] ?? [];
+  return MARKER_ORDER.filter((kind) => kinds.includes(kind));
+}
+
+/** ", has a booking", ", has a request" or ", has a booking and a request". */
+function markerLabel(key: string): string {
+  const kinds = markersFor(key);
+  return kinds.length === 0 ? "" : `, has ${kinds.map((kind) => `a ${kind}`).join(" and ")}`;
+}
+
 const blocked = computed(() => new Set(props.blockedDates ?? []));
 const partlyBlocked = computed(() => new Set(props.partlyBlockedDates ?? []));
 
@@ -119,10 +138,12 @@ function shiftMonth(delta: number): void {
           'calendar__day--partly-blocked': !blocked.has(cell.key) && partlyBlocked.has(cell.key),
         }" :disabled="!allowPast && cell.key < todayKey && cell.key !== modelValue"
           :aria-pressed="cell.key === modelValue"
-          :aria-label="fromKey(cell.key).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + (marked.has(cell.key) ? ', has bookings' : '') + availabilityLabel(cell.key)"
+          :aria-label="fromKey(cell.key).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + markerLabel(cell.key) + availabilityLabel(cell.key)"
           @click="emit('update:modelValue', cell.key)">
           {{ cell.day }}
-          <span v-if="marked.has(cell.key)" class="calendar__dot" aria-hidden="true" />
+          <span v-if="markersFor(cell.key).length > 0" class="calendar__dots" aria-hidden="true">
+            <span v-for="kind in markersFor(cell.key)" :key="kind" class="calendar__dot" :class="`calendar__dot--${kind}`" />
+          </span>
         </button>
       </template>
     </div>
@@ -220,20 +241,38 @@ function shiftMonth(delta: number): void {
   cursor: default;
 }
 
-/* Marks a day with bookings: spacing-4 dot, purple on light, white on the selected fill. */
-.calendar__dot {
+/* Day markers: spacing-4 dots centred under the date. */
+.calendar__dots {
   position: absolute;
   left: 50%;
   bottom: var(--spacing-2);
-  width: var(--spacing-4);
-  height: var(--spacing-4);
-  border-radius: var(--radius-full);
-  background: var(--color-purple-600);
+  display: flex;
+  gap: var(--spacing-2);
   transform: translateX(-50%);
 }
 
-.calendar__day--selected .calendar__dot {
+.calendar__dot {
+  width: var(--spacing-4);
+  height: var(--spacing-4);
+  border-radius: var(--radius-full);
+}
+
+/* Booking: Purple Primary (the firm thing). Request: Secondary Blue accent (pending). */
+.calendar__dot--booking {
+  background: var(--color-purple-600);
+}
+
+.calendar__dot--request {
+  background: var(--color-blue-500);
+}
+
+/* Light variants so the dots stay visible on the selected day's purple fill. */
+.calendar__day--selected .calendar__dot--booking {
   background: var(--color-base-white);
+}
+
+.calendar__day--selected .calendar__dot--request {
+  background: var(--color-blue-300);
 }
 
 /* E4-3, Style.md 3.5: pattern-unavailable (all day) / -partial (some hours) / -selected. */

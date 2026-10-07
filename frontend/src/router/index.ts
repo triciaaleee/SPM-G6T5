@@ -6,6 +6,7 @@ import LoginView from "../views/LoginView.vue";
 import SignupView from "../views/SignupView.vue";
 import VenueSearchView from "../views/VenueSearchView.vue";
 import VenueStaff from "../views/VenueStaff.vue";
+import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
 
 export const router = createRouter({
@@ -32,6 +33,12 @@ export const router = createRouter({
       name: "event-detail",
       component: EventDetailView,
       meta: { requiresAuth: true },
+    },
+    {
+      path: "/coordinator",
+      name: "coordinator-workload",
+      component: CoordinatorWorkloadView,
+      meta: { requiresAuth: true, roles: ["coordinator"] },
     },
     {
       path: "/venues",
@@ -83,6 +90,12 @@ router.beforeEach((to) => {
   // would only ever be empty for them — send them to their schedule.
   if (authed && to.name === "events-list" && getStoredUser()?.role === "venue_staff") {
     return { name: "venue-schedule" };
+  }
+
+  // E3-2: coordinators have their own grouped workload view — redirect them
+  // away from the organiser-oriented events list.
+  if (authed && to.name === "events-list" && getStoredUser()?.role === "coordinator") {
+    return { name: "coordinator-workload" };
   }
 
   return true;

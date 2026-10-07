@@ -28,7 +28,7 @@ export interface PeriodDraft {
   reason: string;
 }
 
-/** A live (Requested or Approved) booking a block-out cuts across. */
+/** A live (Requested, On Hold or Approved) booking a block-out cuts across. */
 export interface AffectedBooking {
   bookingId: number;
   status: string;
@@ -41,6 +41,8 @@ export interface AffectedBooking {
   occupiedStart: string | null;
   occupiedEnd: string | null;
   hasCoordinator: boolean;
+  /** True for an Approved booking, which moves to Replacement Required; pending ones keep their status. */
+  replacementRequired: boolean;
 }
 
 export interface CreatePeriodResult {

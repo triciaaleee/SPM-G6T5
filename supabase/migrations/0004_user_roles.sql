@@ -28,7 +28,9 @@ begin
       'organiser',
       'coordinator',
       'venue_staff',
-      'technical_support'
+      'technical_support',
+      'coordinator_lead',
+      'safety_officer'
     );
   end if;
 end
@@ -39,6 +41,8 @@ create sequence if not exists coordinator_id_seq;
 create sequence if not exists attendee_id_seq;
 create sequence if not exists venue_staff_id_seq;
 create sequence if not exists technical_support_id_seq;
+create sequence if not exists coordinator_lead_id_seq;
+create sequence if not exists safety_officer_id_seq;
 
 create or replace function generate_user_id(p_role app_role)
 returns text
@@ -51,6 +55,8 @@ begin
     when 'attendee' then 'ATT-' || lpad(nextval('attendee_id_seq')::text, 4, '0')
     when 'venue_staff' then 'VEN-' || lpad(nextval('venue_staff_id_seq')::text, 4, '0')
     when 'technical_support' then 'TS-' || lpad(nextval('technical_support_id_seq')::text, 4, '0')
+    when 'coordinator_lead' then 'LEAD-' || lpad(nextval('coordinator_lead_id_seq')::text, 4, '0')
+    when 'safety_officer' then 'SAF-' || lpad(nextval('safety_officer_id_seq')::text, 4, '0')
   end;
 end;
 $$;

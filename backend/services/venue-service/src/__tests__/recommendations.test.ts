@@ -83,7 +83,9 @@ function details(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** venue_bookings only links a venue to an event; the schedule is the event's own. */
 type Booking = { venue_id: number; event_id: number };
+type BookedEvent = { id: number; proposedDate: string; startTime: string; endTime: string };
 
 function buildApp(
   options: {
@@ -95,7 +97,7 @@ function buildApp(
   } = {},
 ) {
   const bookingsQuery = {
-    then: (resolve: (value: unknown) => void) => resolve({ data: options.bookings ?? [], error: null }),
+    in: vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null }),
   };
 
   const supabase = {
@@ -299,16 +301,26 @@ describe("GET /api/venues/recommendations/:eventId", () => {
   });
 
   it("excludes venues booked at the event's time, but not a booking held for this event", async () => {
-    const { app } = buildApp({
+    const { app, bookingsQuery, fetchMock } = buildApp({
       event: details({ equipment: "Projector" }),
       bookings: [
-        { venue_id: 1, event_id: 99 },
+        { venue_id: 1, event_id: 20 },
         { venue_id: 3, event_id: 7 },
+        { venue_id: 5, event_id: 21 },
       ],
-      bookingEvents: [{ id: 99, proposedDate: "2026-11-10", startTime: "14:00", endTime: "16:00" }],
+      bookingEvents: [
+        { id: 20, proposedDate: "2026-11-10", startTime: "15:00", endTime: "18:00" }, // overlaps 14:00-16:00
+        { id: 21, proposedDate: "2026-11-10", startTime: "09:00", endTime: "12:00" }, // same day, no overlap
+      ],
     });
     const res = await recommend(app);
 
+    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["Requested", "Approved"]);
+    // The event's own booking (event 7) isn't looked up: it never counts against it.
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/events\/venue-booking-info\?ids=20,21$/),
+      { headers: { Authorization: "Bearer test-token" } },
+    );
     expect(ids(res.body)).toEqual([3, 5]);
   });
 

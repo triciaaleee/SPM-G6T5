@@ -9,10 +9,11 @@
 --
 -- Owned by venue-service, alongside venues and venue_bookings.
 --
--- 'Replacement Required' is added to venue_status (0014): an Approved
--- booking that falls inside a new period is moved there, and its
--- coordinator is told an alternative venue is needed. The event itself is
--- left untouched — its status and details are preserved as they were.
+-- 'Replacement Required' is part of venue_status (0014); the add below only
+-- catches up a dev database whose enum predates that. An Approved booking
+-- that falls inside a new period is moved there, and its coordinator is
+-- told an alternative venue is needed. The event itself is left untouched —
+-- its status and details are preserved as they were (AGENTS.md §3a).
 --
 -- Guarded so this is safe to re-run.
 

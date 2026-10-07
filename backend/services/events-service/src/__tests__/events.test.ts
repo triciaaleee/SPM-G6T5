@@ -1028,6 +1028,7 @@ function buildPatchSupabase(options: {
         id: number;
         status: string;
         organiser_id: string;
+        coordinator_id?: string | null;
         submitted_details: Record<string, unknown>;
         status_before_clarification?: string | null;
       }
@@ -1065,7 +1066,7 @@ function buildPatchSupabase(options: {
     return { select: lookupSelect, update };
   });
 
-  return { from, update, clarificationInsert, historyInsert };
+  return { from, update, clarificationInsert, historyInsert, denialInsert };
 }
 
 describe("POST /api/events/draft", () => {
@@ -1542,6 +1543,121 @@ describe("PATCH /api/events/:id", () => {
     expect(res.status).toBe(200);
     expect(historyInsert).not.toHaveBeenCalled();
   });
+
+  describe("coordinator edits during Planning (E3-7, issue #32)", () => {
+    const coordinator = { id: "COORD-0001", role: "coordinator" };
+
+    it("lets the assigned coordinator edit a non-critical field", async () => {
+      const oldDetails = { ...validPayload, equipment: "Old equipment list" };
+      const { from, update, historyInsert } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: oldDetails,
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(200);
+      expect(update).toHaveBeenCalledWith({
+        submitted_details: expect.objectContaining({ equipment: validPayload.equipment }),
+      });
+      expect(historyInsert).toHaveBeenCalled();
+    });
+
+    it("blocks a critical-field change from the coordinator (AC1)", async () => {
+      const oldDetails = { ...validPayload, venue: "Old Hall" };
+      const { from, update, historyInsert } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: oldDetails,
+        },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(400);
+      expect(update).not.toHaveBeenCalled();
+      expect(historyInsert).not.toHaveBeenCalled();
+    });
+
+    it("blocks a coordinator who isn't the assigned one (AC3)", async () => {
+      const { from, denialInsert } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: "COORD-0002",
+          submitted_details: validPayload,
+        },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(403);
+      expect(denialInsert).toHaveBeenCalled();
+    });
+
+    it("blocks the assigned coordinator outside Planning", async () => {
+      const { from, update } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Confirmed",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: validPayload,
+        },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(409);
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it("accepts repeated edits, recording history each time (AC4)", async () => {
+      const first = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: { ...validPayload, equipment: "v1" },
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app1 = buildApp({ from: first.from }, coordinator);
+      const res1 = await request(app1).patch("/api/events/1").send({ ...validPayload, equipment: "v2" });
+      expect(res1.status).toBe(200);
+      expect(first.historyInsert).toHaveBeenCalledTimes(1);
+
+      const second = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: { ...validPayload, equipment: "v2" },
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app2 = buildApp({ from: second.from }, coordinator);
+      const res2 = await request(app2).patch("/api/events/1").send({ ...validPayload, equipment: "v3" });
+      expect(res2.status).toBe(200);
+      expect(second.historyInsert).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe("GET /api/events/:id/history", () => {
@@ -1666,8 +1782,22 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
   });
 
-  it("rejects an organiser with 403 and records the attempt", async () => {
-    const user = { id: "user-1", role: "organiser" };
+  it("also serves coordinators, who need booked events' schedules for venue availability", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, coordinator);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0]).toMatchObject({ id: 3, proposedDate: validPayload.proposedDate });
+    expect(res.body.events[0]).not.toHaveProperty("purpose");
+  });
+
+  it.each([
+    ["an organiser", { id: "user-1", role: "organiser" }],
+    ["an attendee", { id: "ATT-0001", role: "attendee" }],
+    ["technical support", { id: "TS-0001", role: "technical_support" }],
+  ])("rejects %s with 403 and records the attempt", async (_label, user) => {
     const supabase = buildVenueInfoSupabase([]);
     const app = buildApp(supabase, user);
 
@@ -1676,8 +1806,18 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(res.status).toBe(403);
     expect(supabase.select).not.toHaveBeenCalled();
     expect(supabase.denialInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ user_id: user.id, reason: "venue_booking_info_not_venue_staff" }),
+      expect.objectContaining({ user_id: user.id, reason: "venue_booking_info_role_not_allowed" }),
     );
+  });
+
+  it("allows a coordinator too, for resolving booking timing during venue search", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, coordinator);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(1);
   });
 
   it("allows a coordinator too, for resolving booking timing during venue search", async () => {
@@ -1704,5 +1844,116 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
 
     expect(res.status).toBe(400);
     expect(supabase.select).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/events — E3-2 coordinator workload view", () => {
+  it("returns events across all active statuses without any extra status filter", async () => {
+    const multiStatusEvents = [
+      { id: 1, status: "Requested",              organiser: { name: "Alice" }, coordinator: null },
+      { id: 2, status: "Unassigned",             organiser: { name: "Bob" },   coordinator: null },
+      { id: 3, status: "Clarification Requested", organiser: { name: "Carol" }, coordinator: { name: "COORD" } },
+      { id: 4, status: "Planning",               organiser: { name: "Dave" },  coordinator: { name: "COORD" } },
+      { id: 5, status: "Confirmed",              organiser: { name: "Eve" },   coordinator: { name: "COORD" } },
+      { id: 6, status: "Completed",              organiser: { name: "Frank" }, coordinator: { name: "COORD" } },
+      { id: 7, status: "Rejected",               organiser: { name: "Grace" }, coordinator: { name: "COORD" } },
+    ];
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: multiStatusEvents, error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(7);
+    const statuses = res.body.events.map((e: { status: string }) => e.status);
+    expect(statuses).toContain("Unassigned");
+    expect(statuses).toContain("Clarification Requested");
+    expect(statuses).toContain("Planning");
+    expect(statuses).toContain("Confirmed");
+    expect(statuses).toContain("Completed");
+    expect(statuses).toContain("Rejected");
+  });
+
+  it("passes through embedded organiser name for the workload view's 'Requested by' field", async () => {
+    const event = {
+      id: 1,
+      status: "Requested",
+      submitted_details: { name: "Tech Conference" },
+      coordinator_id: "COORD-0001",
+      coordinator: { name: "Alice Coordinator" },
+      organiser: { name: "Bob Organiser" },
+      review_outcome: null,
+      created_at: "2026-01-01",
+    };
+    const neq = vi.fn().mockResolvedValue({ data: [event], error: null });
+    const select = vi.fn().mockReturnValue({ neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].organiser).toEqual({ name: "Bob Organiser" });
+  });
+
+  it("passes through embedded coordinator name for the all-events view", async () => {
+    const event = {
+      id: 2,
+      status: "Planning",
+      submitted_details: {},
+      coordinator_id: "COORD-0001",
+      coordinator: { name: "Alice Coordinator" },
+      organiser: { name: "Bob Organiser" },
+      review_outcome: null,
+      created_at: "2026-01-01",
+    };
+    const neq = vi.fn().mockResolvedValue({ data: [event], error: null });
+    const select = vi.fn().mockReturnValue({ neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].coordinator).toEqual({ name: "Alice Coordinator" });
+  });
+
+  it("includes Unassigned events so coordinators can pick them up from the workload view", async () => {
+    const unassignedEvent = {
+      id: 3,
+      status: "Unassigned",
+      submitted_details: { name: "Hackathon" },
+      coordinator_id: null,
+      coordinator: null,
+      organiser: { name: "Sam Organiser" },
+      review_outcome: null,
+      created_at: "2026-01-01",
+    };
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: [unassignedEvent], error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].status).toBe("Unassigned");
+    expect(res.body.events[0].coordinator).toBeNull();
+  });
+
+  it("does not filter by coordinator_id — My vs All scoping is handled client-side", async () => {
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: [], error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    await request(app).get("/api/events");
+
+    expect(eq).not.toHaveBeenCalledWith("coordinator_id", expect.anything());
   });
 });
