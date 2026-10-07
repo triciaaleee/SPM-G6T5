@@ -199,8 +199,14 @@ function buildApp(
     user?: { id: string; role: string };
     bookings?: { venue_id: number; event_id: number }[];
     bookedEvents?: ReturnType<typeof bookedEvent>[];
+    unavailability?: Record<string, unknown>[];
+    buffers?: { id: number; setup_minutes: number; turnaround_minutes: number }[];
   } = {},
 ) {
+  // E4-3: block-out periods and the blocked venues' setup/turnaround, read by findBlockedVenueIds.
+  const unavailabilityGte = vi.fn().mockResolvedValue({ data: options.unavailability ?? [], error: null });
+  const venuesIn = vi.fn().mockResolvedValue({ data: options.buffers ?? [], error: null });
+
   // venue_bookings only links a venue to an event; its schedule comes from events-service.
   const bookingsIn = vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null });
   const bookingsQuery = { in: bookingsIn };
@@ -216,8 +222,9 @@ function buildApp(
 
   const supabase = {
     from: vi.fn((table: string) => {
-      if (table === "venues") return { select: vi.fn().mockReturnValue({ eq: venuesEq }) };
+      if (table === "venues") return { select: vi.fn().mockReturnValue({ eq: venuesEq, in: venuesIn }) };
       if (table === "venue_bookings") return { select: vi.fn().mockReturnValue(bookingsQuery) };
+      if (table === "venue_unavailability") return { select: () => ({ lte: () => ({ gte: unavailabilityGte }) }) };
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -308,6 +315,56 @@ describe("GET /api/venues", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.venues.map((v: VenueRow) => v.id)).toContain(1);
+  });
+
+  it("E4-3 AC3: excludes a venue blocked out for the requested window", async () => {
+    const { app } = buildApp({
+      unavailability: [
+        { id: 1, venue_id: 1, start_date: "2026-09-24", end_date: "2026-09-26", all_day: false,
+          start_time: "17:00:00", end_time: "19:00:00", reason: "Maintenance" },
+        { id: 2, venue_id: 2, start_date: "2026-09-25", end_date: "2026-09-25", all_day: true,
+          start_time: null, end_time: null, reason: "Private hire" },
+      ],
+    });
+    const res = await request(app)
+      .get("/api/venues")
+      .query({ date: "2026-09-25", startTime: "18:00", endTime: "21:00" });
+
+    expect(res.status).toBe(200);
+    const ids = res.body.venues.map((v: VenueRow) => v.id);
+    expect(ids).not.toContain(1);
+    expect(ids).not.toContain(2);
+  });
+
+  it("E4-3 AC3: keeps a venue whose block-out hours don't overlap the window", async () => {
+    const { app } = buildApp({
+      unavailability: [
+        { id: 1, venue_id: 1, start_date: "2026-09-25", end_date: "2026-09-25", all_day: false,
+          start_time: "09:00:00", end_time: "13:00:00", reason: "Maintenance" },
+      ],
+    });
+    const res = await request(app)
+      .get("/api/venues")
+      .query({ date: "2026-09-25", startTime: "18:00", endTime: "21:00" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.venues.map((v: VenueRow) => v.id)).toContain(1);
+  });
+
+  it("E4-3 AC3: counts the venue's setup time against a block-out ending at the slot's start", async () => {
+    const { app } = buildApp({
+      unavailability: [
+        { id: 1, venue_id: 1, start_date: "2026-09-25", end_date: "2026-09-25", all_day: false,
+          start_time: "16:00:00", end_time: "18:00:00", reason: "Maintenance" },
+      ],
+      buffers: [{ id: 1, setup_minutes: 30, turnaround_minutes: 0 }],
+    });
+    const res = await request(app)
+      .get("/api/venues")
+      .query({ date: "2026-09-25", startTime: "18:00", endTime: "21:00" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.venues.map((v: VenueRow) => v.id)).not.toContain(1);
   });
 
   it("skips the bookings lookup when no date is given", async () => {

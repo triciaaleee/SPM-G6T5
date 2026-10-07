@@ -175,8 +175,8 @@ export interface VenueBooking {
   /** "HH:MM". */
   startTime: string | null;
   endTime: string | null;
-  /** venue_bookings.status (venue_status enum). */
-  status: "Requested" | "Approved" | "Rejected";
+  /** venue_bookings.status (venue_status enum). Replacement Required: caught by a block-out (E4-3). */
+  status: "Requested" | "Approved" | "Rejected" | "Replacement Required";
   event: {
     id: number;
     name: string | null;

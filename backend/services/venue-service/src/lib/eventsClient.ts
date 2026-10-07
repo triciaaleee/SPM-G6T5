@@ -56,6 +56,8 @@ export interface VenueBookingInfo {
   accessibility: string | null;
   equipment: string | null;
   technicalSupport: string | null;
+  /** E4-3: who to notify when this booking needs a replacement venue. */
+  coordinatorId?: string | null;
 }
 
 export type FetchVenueBookingInfoResult = { status: "ok"; events: VenueBookingInfo[] } | { status: "error" };

@@ -352,7 +352,7 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, submitted_details")
+    .select("id, submitted_details, coordinator_id")
     .in("id", ids)
     .neq("status", "Draft");
 
@@ -363,7 +363,10 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
 
   const events = (data ?? []).map((row) => {
     const details = (row.submitted_details ?? {}) as Record<string, unknown>;
-    const info: Record<string, unknown> = { id: row.id };
+    // E4-3: venue-service needs the assigned coordinator's id (only the id,
+    // never their name or contact details) to tell them a blocked-out
+    // venue means their booking needs a replacement.
+    const info: Record<string, unknown> = { id: row.id, coordinatorId: row.coordinator_id ?? null };
     for (const field of VENUE_BOOKING_INFO_FIELDS) info[field] = details[field] ?? null;
     return info;
   });

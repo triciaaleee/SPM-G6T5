@@ -106,6 +106,10 @@ function buildApp(
         return { select: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ data: venues, error: null }) }) };
       }
       if (table === "venue_bookings") return { select: vi.fn().mockReturnValue(bookingsQuery) };
+      // E4-3: no block-out periods in these tests.
+      if (table === "venue_unavailability") {
+        return { select: () => ({ lte: () => ({ gte: vi.fn().mockResolvedValue({ data: [], error: null }) }) }) };
+      }
       throw new Error(`unexpected table ${table}`);
     }),
   };

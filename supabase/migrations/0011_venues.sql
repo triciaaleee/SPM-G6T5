@@ -35,19 +35,10 @@ create table if not exists venues (
   created_at timestamptz not null default now()
 );
 
--- Week 7 change 2: periods Venue Staff mark a venue unavailable (maintenance,
--- equipment failure, renovation, safety, other). Bookings overlapping one
--- are flagged "Replacement Required", never auto-cancelled.
-create table if not exists venue_unavailability (
-  id bigserial primary key,
-  venue_id integer not null references venues (id) on delete cascade,
-  starts_at timestamptz not null,
-  ends_at timestamptz not null,
-  reason text not null,
-  created_by text not null references users (id),
-  created_at timestamptz not null default now(),
-  check (ends_at > starts_at)
-);
+-- Week 7 change 2 (venue unavailable after booking): the venue_unavailability
+-- table is created in 0016_venue_unavailability.sql (E4-3). A period there
+-- is a date range that either blocks whole days or the same hours on each
+-- day, so "09:00–13:00 every day for a week" is one row.
 
 create table if not exists venue_bookings (
   id bigserial primary key,
@@ -67,5 +58,4 @@ create index if not exists venue_bookings_date_idx on venue_bookings (booking_da
 -- Same stance as users (0004): RLS on with no policies, so only the
 -- backend's service-role key can reach these tables.
 alter table venues enable row level security;
-alter table venue_unavailability enable row level security;
 alter table venue_bookings enable row level security;

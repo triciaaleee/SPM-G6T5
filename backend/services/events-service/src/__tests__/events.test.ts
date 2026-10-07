@@ -1742,7 +1742,7 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
   }
 
   it("returns only the booking-relevant fields to venue staff", async () => {
-    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload, coordinator_id: "COORD-0001" }]);
     const app = buildApp(supabase, venueStaff);
 
     const res = await request(app).get("/api/events/venue-booking-info?ids=3");
@@ -1751,6 +1751,7 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(res.body.events).toEqual([
       {
         id: 3,
+        coordinatorId: "COORD-0001",
         name: validPayload.name,
         proposedDate: validPayload.proposedDate,
         startTime: validPayload.startTime,
@@ -1767,7 +1768,7 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(event).not.toHaveProperty("description");
     expect(event).not.toHaveProperty("coordinator");
     expect(event).not.toHaveProperty("status");
-    expect(supabase.select).toHaveBeenCalledWith("id, submitted_details");
+    expect(supabase.select).toHaveBeenCalledWith("id, submitted_details, coordinator_id");
   });
 
   it("never returns drafts and de-duplicates the ids", async () => {
