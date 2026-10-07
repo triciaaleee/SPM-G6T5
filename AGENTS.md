@@ -167,6 +167,26 @@ Rules:
 - Keep status strings in one constant/enum per service; don't scatter string literals.
 - DB defaults, seeds and migrations must use these exact values too.
 
+### Who can edit an event's details (business rule)
+
+Event details (`submitted_details`) can only be edited **up to and including `Planning`**. Once an event moves past `Planning`, **no one** can edit it directly.
+
+| Status | Organiser (owner) | Assigned coordinator | Event Coordinator Lead |
+|---|---|---|---|
+| `Draft` | Yes (draft routes; submitting validates) | — | — |
+| `Unassigned` | **Yes** (direct edit) | No | No |
+| `Requested` | Yes (direct edit, E2-7) | No | No |
+| `Clarification Requested` | Yes (responding edit, E2-10) | No | No |
+| `Planning` | Yes (direct edit) | Non-critical fields only (E3-7) | No |
+| `Safety Review`, `Confirmed`, `Completed`, `Rejected`, `Cancelled` | **No** | **No** | **No** |
+
+- Every edit is recorded in event history (field, old value, new value, timestamp, author).
+- A rejection or "request changes" from the Safety Officer returns the event to `Planning`, which makes it editable again; that is the only route to change an event in `Safety Review`.
+- After `Confirmed`, the Organiser raises a **change request** instead (E3-9). Critical fields are held for coordinator review (E3-8).
+- Editing never changes who is assigned: the Lead's assign/reassign (E2-12/13) is separate and is not an edit of event details.
+- Cancelling (E3-6) is not an edit, so the Organiser can still cancel at any active stage.
+- Backend enforcement: `PATCH /api/events/:id` returns `409` for any status not marked "Yes" above for the caller's role.
+
 > Note: `c4_diagrams/ArchitectureDecisionRecord.md` §1.2 lists `Cancelled`. It is now part of the agreed lifecycle, but only for the Organiser cancelling their own event. This section overrides the ADR for everything else.
 
 ---
