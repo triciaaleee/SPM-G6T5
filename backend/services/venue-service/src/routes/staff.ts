@@ -159,6 +159,114 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
   });
 });
 
+/**
+ * E4-10 AC6: the decision queue — every booking at this staff member's
+ * venues still waiting on them, ordered by event date so the most urgent
+ * surfaces first. A booking's date lives on its event, so ordering happens
+ * here rather than in SQL.
+ *
+ * Holds that have passed their deadline are swept to `Expired` on the way
+ * through and left out: §3a requires expiry to be applied whenever
+ * availability is checked, and E4-12 AC4 says an expired booking offers no
+ * action.
+ */
+staffRouter.get("/requests", async (req: AuthedRequest, res) => {
+  const supabase = req.supabase!;
+
+  const assigned = await assignedVenueIds(supabase, req.user!.id);
+  if (assigned.status === "error") {
+    res.status(500).json({ error: "Failed to load your venues" });
+    return;
+  }
+  if (assigned.venueIds.length === 0) {
+    res.json({ requests: [] });
+    return;
+  }
+
+  const { data: bookingData, error: bookingsError } = await supabase
+    .from("venue_bookings")
+    .select(BOOKING_COLUMNS)
+    .in("venue_id", assigned.venueIds)
+    .in("status", ["Requested", "On Hold"]);
+  if (bookingsError) {
+    res.status(500).json({ error: "Failed to load booking requests" });
+    return;
+  }
+  const pendingRows = (bookingData ?? []) as DecisionBookingRow[];
+
+  const now = new Date();
+  const lapsed = pendingRows.filter((booking) => booking.status === "On Hold" && !blocksVenue(booking, now));
+  if (lapsed.length > 0) {
+    await supabase
+      .from("venue_bookings")
+      .update({ status: "Expired", decided_at: now.toISOString(), decided_by: null })
+      .in(
+        "id",
+        lapsed.map((booking) => booking.id),
+      )
+      .eq("status", "On Hold");
+  }
+  const pending = pendingRows.filter((booking) => !lapsed.some((expired) => expired.id === booking.id));
+
+  const { data: venueData, error: venuesError } = await supabase
+    .from("venues")
+    .select("id, name, location, capacity, accessibility, layouts, facilities, setup_minutes, turnaround_minutes")
+    .in("id", assigned.venueIds);
+  if (venuesError) {
+    res.status(500).json({ error: "Failed to load your venues" });
+    return;
+  }
+  const venuesById = new Map(((venueData ?? []) as VenueRow[]).map((venue) => [venue.id, venue]));
+
+  const queueInfo = await fetchVenueBookingInfo(
+    [...new Set(pending.map((booking) => booking.event_id))],
+    req.headers.authorization!,
+  );
+  if (queueInfo.status === "error") {
+    res.status(502).json({ error: "Failed to load the requested events" });
+    return;
+  }
+  const queueEventsById = new Map(queueInfo.events.map((event) => [event.id, event]));
+
+  // A booking whose event events-service won't return (deleted, or back to
+  // draft) has nothing to decide on.
+  const requests = pending
+    .flatMap((booking) => {
+      const event = queueEventsById.get(booking.event_id);
+      const venue = venuesById.get(booking.venue_id);
+      return event && venue ? [{ booking, event, venue }] : [];
+    })
+    .sort(
+      (a, b) =>
+        (a.event.proposedDate ?? "").localeCompare(b.event.proposedDate ?? "") ||
+        (a.event.startTime ?? "").localeCompare(b.event.startTime ?? ""),
+    );
+
+  res.json({
+    requests: requests.map(({ booking, event, venue }) => ({
+      id: booking.id,
+      status: booking.status,
+      holdExpiresAt: booking.hold_expires_at,
+      venue: {
+        id: venue.id,
+        name: venue.name,
+        location: venue.location,
+        setupMinutes: venue.setup_minutes ?? 0,
+        turnaroundMinutes: venue.turnaround_minutes ?? 0,
+      },
+      event: {
+        id: event.id,
+        name: event.name,
+        date: event.proposedDate,
+        startTime: event.startTime,
+        endTime: event.endTime,
+        expectedAttendance: event.expectedAttendance,
+        ...extractLayoutAndFacilities(event, [venue]),
+      },
+    })),
+  });
+});
+
 const BOOKING_ID_PATTERN = /^[1-9]\d*$/;
 
 /**

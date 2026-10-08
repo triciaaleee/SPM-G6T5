@@ -17,6 +17,22 @@ export const BOOKING_STATUSES = [
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 
 /**
+ * The same statuses by name, for code that reads better referring to one
+ * status than indexing the list — `BOOKING_STATUS.replacementRequired`
+ * rather than the literal "Replacement Required", which is easy to
+ * mistype and impossible to grep for reliably.
+ */
+export const BOOKING_STATUS = {
+  requested: "Requested",
+  onHold: "On Hold",
+  approved: "Approved",
+  rejected: "Rejected",
+  expired: "Expired",
+  replacementRequired: "Replacement Required",
+  withdrawn: "Withdrawn",
+} as const satisfies Record<string, BookingStatus>;
+
+/**
  * Bookings that can make a venue unavailable (AGENTS.md §3a). `Requested`
  * is deliberately absent: a request is not a hold, so several coordinators
  * may request the same venue and slot at once and the first one Venue Staff

@@ -370,14 +370,11 @@ onMounted(async () => {
         </div>
 
         <ul v-else class="booking-list" :class="{ 'is-stale': loadingBookings }">
-          <li v-for="booking in dayBookings" :key="booking.id" class="booking-card"
-            :class="{ 'booking-card--hold': booking.kind === 'hold' }">
-            <template v-if="booking.kind === 'event'">
-              <span v-if="booking.status === 'Replacement Required'" class="replacement-badge">
-                Replacement Required
-              </span>
           <li v-for="booking in dayBookings" :key="booking.id" class="booking-card">
-              <p class="card-title">{{ booking.event.name || "Untitled event" }}</p>
+            <span v-if="booking.status === 'Replacement Required'" class="replacement-badge">
+              Replacement Required
+            </span>
+            <p class="card-title">{{ booking.event.name || "Untitled event" }}</p>
               <p class="body-small muted booking-card__date">{{ formatLongDate(booking.date) }}</p>
 
               <dl class="details">
@@ -403,10 +400,9 @@ onMounted(async () => {
                   </dd>
                   <dd v-else class="body-small muted">None specified</dd>
                 </div>
-              </dl>
+            </dl>
           </li>
         </ul>
-        </div>
       </section>
     </template>
 

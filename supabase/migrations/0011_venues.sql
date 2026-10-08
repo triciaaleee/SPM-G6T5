@@ -22,7 +22,8 @@
 -- booking without an event.
 --
 -- Periods a venue is unavailable (maintenance, equipment failure,
--- renovation, safety) get their own maintenance table in a later migration.
+-- renovation, safety) live in venue_unavailability, created by migration
+-- 0016 — not here.
 --
 -- Guarded so this is safe to re-run.
 
@@ -68,9 +69,6 @@ begin
   end if;
 end
 $$;
-
--- Unavailability periods moved to the forthcoming maintenance table.
-drop table if exists venue_unavailability;
 
 create table if not exists venue_bookings (
   id bigserial primary key,

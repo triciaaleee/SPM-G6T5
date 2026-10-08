@@ -9,7 +9,7 @@
 --
 -- Owned by venue-service, alongside venues and venue_bookings.
 --
--- 'Replacement Required' is added to venue_status (0014): an Approved
+-- 'Replacement Required' is added to venue_booking_status (0014): an Approved
 -- booking that falls inside a new period is moved there, and its
 -- coordinator is told an alternative venue is needed. The event itself is
 -- left untouched — its status and details are preserved as they were.
@@ -41,4 +41,4 @@ create index if not exists venue_unavailability_venue_dates_idx
 -- only the backend's service-role key can reach the table.
 alter table venue_unavailability enable row level security;
 
-alter type venue_status add value if not exists 'Replacement Required';
+alter type venue_booking_status add value if not exists 'Replacement Required';

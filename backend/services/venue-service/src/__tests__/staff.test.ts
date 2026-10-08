@@ -142,6 +142,9 @@ describe("GET /api/venues/staff/:venueId/bookings", () => {
     expect(res.body.bookings).toEqual([
       {
         id: 1,
+        // The schedule tags every row so block-out periods can share the
+        // list later; only "event" is produced today.
+        kind: "event",
         date: "2026-09-24",
         startTime: "09:00",
         endTime: "20:00",

@@ -79,6 +79,8 @@ function buildApp(
     bookedEvents?: Record<string, unknown>[];
     existing?: { id: number; status: string }[];
     insertError?: boolean;
+    /** Who the venue is assigned to (venues.staff_id); null means nobody. */
+    staffId?: string | null;
   } = {},
 ) {
   const bookingRows = (options.bookings ?? []).map((booking, index) => ({
@@ -112,7 +114,22 @@ function buildApp(
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === "venues") {
-        return { select: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ data: venues, error: null }) }) };
+        // Read two ways: the full list for the search/suitability check, and
+        // the assigned staff member for the notification (E4-8 AC1).
+        return {
+          select: vi.fn((columns: string) =>
+            columns.includes("staff_id")
+              ? {
+                  eq: vi.fn().mockReturnValue({
+                    maybeSingle: vi.fn().mockResolvedValue({
+                      data: { staff_id: options.staffId === undefined ? "VENUE-0001" : options.staffId },
+                      error: null,
+                    }),
+                  }),
+                }
+              : { eq: vi.fn().mockResolvedValue({ data: venues, error: null }) },
+          ),
+        };
       }
       if (table === "venue_bookings") return { select: bookingsSelect, insert };
       throw new Error(`unexpected table ${table}`);
@@ -121,6 +138,9 @@ function buildApp(
 
   const eventHttpStatus = options.eventHttpStatus ?? 200;
   const fetchMock = vi.fn(async (url: string) => {
+    if (String(url).includes("/api/notifications")) {
+      return { ok: true, status: 201, json: async () => ({ notifications: [] }) };
+    }
     if (String(url).includes("venue-booking-info")) {
       return { ok: true, status: 200, json: async () => ({ events: options.bookedEvents ?? [] }) };
     }
@@ -234,6 +254,57 @@ describe("POST /api/venues/bookings", () => {
       status: "Requested",
       venue: { id: 1, name: "Grand Ballroom", location: "Central Campus" },
     });
+  });
+
+  it("AC1: tells the venue's assigned staff a request is waiting on them", async () => {
+    const { app, fetchMock } = buildApp({ staffId: "VENUE-0007" });
+    const res = await submit(app);
+
+    expect(res.status).toBe(201);
+    expect(res.body.staffNotified).toBe(true);
+
+    const call = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/notifications"));
+    expect(call).toBeDefined();
+    const [, init] = call as unknown as [string, { headers: Record<string, string>; body: string }];
+    expect(init.headers.Authorization).toBe("Bearer test-token");
+    expect(JSON.parse(init.body).notifications).toEqual([
+      {
+        recipientId: "VENUE-0007",
+        type: "venue_booking_requested",
+        title: "New booking request for Grand Ballroom",
+        body: "Alumni Dinner has requested Grand Ballroom for 2026-11-10, 10:00–12:00. Hold, approve or reject it from your booking requests.",
+        link: "/venue-requests",
+      },
+    ]);
+  });
+
+  it("still creates the booking when the venue has nobody assigned", async () => {
+    const { app, fetchMock } = buildApp({ staffId: null });
+    const res = await submit(app);
+
+    expect(res.status).toBe(201);
+    expect(res.body.staffNotified).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/notifications"))).toBe(false);
+  });
+
+  it("still creates the booking when notification-service is down", async () => {
+    const { app, fetchMock } = buildApp();
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("/api/notifications")) throw new Error("ECONNREFUSED");
+      if (String(url).includes("venue-booking-info")) {
+        return { ok: true, status: 200, json: async () => ({ events: [] }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ event: { id: 7, status: "Planning", submitted_details: eventDetails() } }),
+      };
+    });
+
+    const res = await submit(app);
+
+    expect(res.status).toBe(201);
+    expect(res.body.staffNotified).toBe(false);
   });
 
   it("returns 400 with field errors for missing ids", async () => {

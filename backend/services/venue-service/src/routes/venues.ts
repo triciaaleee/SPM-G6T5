@@ -5,6 +5,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { UNAVAILABLE_BOOKING_STATUSES, blocksVenue, type BookingStatus } from "../lib/bookingStatus.js";
 import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "../lib/bookingConflicts.js";
 import { fetchEvent, fetchVenueBookingInfo } from "../lib/eventsClient.js";
+import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
 import { findBlockedVenueIds } from "../lib/unavailability.js";
 import { extractRequirements, scheduleQuery, withFeatures } from "../lib/venueRecommendation.js";
 import {
@@ -113,26 +114,26 @@ async function findUnavailableVenueIds(
   if (blockedVenueIds === null) return null;
   for (const id of blockedVenueIds) unavailableVenueIds.add(id);
 
-  const { data: bookings, error } = await supabase.from("venue_bookings").select("venue_id, event_id");
-  if (error) return null;
+  // Only "On Hold" (unexpired) and "Approved" bookings hold a venue (§3a),
+  // and each window is padded by that venue's setup and turnaround times,
+  // so a request is measured exactly as the booking it is compared against.
+  const blocking = await loadBlockingWindows(supabase, venues, authorization, forEventId);
+  if (!blocking) return null;
 
-  const relevantBookings = (bookings ?? []).filter(
-    (booking) => forEventId === undefined || booking.event_id !== forEventId,
-  );
-  const eventIds = [...new Set(relevantBookings.map((booking) => booking.event_id as number))];
+  const venuesById = new Map(venues.map((venue) => [venue.id, venue]));
+  const wanted = new Map<number, OccupiedWindow>();
+  for (const venue of venues) {
+    const window = occupiedWindow(
+      { proposedDate: criteria.date, startTime: criteria.startTime, endTime: criteria.endTime },
+      venue,
+    );
+    if (window) wanted.set(venue.id, window);
+  }
 
-  const infoResult = await fetchVenueBookingInfo(eventIds, authorization);
-  if (infoResult.status === "error") return null;
-  const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
-
-  for (const booking of relevantBookings) {
-    const event = eventsById.get(booking.event_id as number);
-    if (!event || event.proposedDate !== criteria.date) continue;
-    if (criteria.startTime && criteria.endTime) {
-      if (!event.startTime || !event.endTime) continue;
-      if (!(event.startTime < criteria.endTime && event.endTime > criteria.startTime)) continue;
-    }
-    unavailableVenueIds.add(booking.venue_id as number);
+  for (const { booking, window } of blocking) {
+    if (!venuesById.has(booking.venue_id)) continue;
+    const requested = wanted.get(booking.venue_id);
+    if (requested && overlaps(requested, window)) unavailableVenueIds.add(booking.venue_id);
   }
   return unavailableVenueIds;
 }
@@ -237,6 +238,44 @@ venuesRouter.get("/recommendations/:eventId", async (req: AuthedRequest, res) =>
     venues: suitable,
   });
 });
+
+/**
+ * E4-8 AC1: tell the venue's staff a request is waiting on them. The
+ * recipient is whoever the venue is assigned to (`venues.staff_id`,
+ * migration 0015) — read here rather than carried on the venue row the
+ * search returns, so a coordinator's results never expose staff identities.
+ *
+ * Best-effort: the booking is already created, and a request nobody was
+ * notified about still appears in the staff queue. Resolves false when
+ * there is no one assigned or the send failed.
+ */
+async function notifyVenueStaff(
+  supabase: NonNullable<AuthedRequest["supabase"]>,
+  venue: VenueRow,
+  eventId: number,
+  details: Record<string, unknown>,
+  authorization: string,
+): Promise<boolean> {
+  const { data, error } = await supabase.from("venues").select("staff_id").eq("id", venue.id).maybeSingle();
+  const staffId = (data as { staff_id: string | null } | null)?.staff_id;
+  if (error || !staffId) return false;
+
+  const eventName = typeof details.name === "string" && details.name ? details.name : `Event #${eventId}`;
+  const date = typeof details.proposedDate === "string" ? details.proposedDate : null;
+  const startTime = typeof details.startTime === "string" ? details.startTime : null;
+  const endTime = typeof details.endTime === "string" ? details.endTime : null;
+  const when = date ? `${date}${startTime && endTime ? `, ${startTime}–${endTime}` : ""}` : "a date to be confirmed";
+
+  const notification: NewNotification = {
+    recipientId: staffId,
+    type: "venue_booking_requested",
+    title: `New booking request for ${venue.name}`,
+    body: `${eventName} has requested ${venue.name} for ${when}. Hold, approve or reject it from your booking requests.`,
+    link: "/venue-requests",
+  };
+
+  return sendNotifications([notification], authorization);
+}
 
 /** Statuses that mean this event still holds (or is still asking for) the venue. */
 const ACTIVE_BOOKING_STATUSES: readonly BookingStatus[] = ["Requested", "On Hold", "Approved"];
@@ -387,7 +426,18 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // AC1: routed to Venue Staff — it is in their queue either way, and they
+  // are told about it when the venue has someone assigned.
+  const staffNotified = await notifyVenueStaff(
+    supabase,
+    venue,
+    eventId,
+    (eventResult.event.submitted_details ?? {}) as Record<string, unknown>,
+    req.headers.authorization!,
+  );
+
   res.status(201).json({
+    staffNotified,
     booking: {
       id: (booking as { id: number }).id,
       status: (booking as { status: BookingStatus }).status,

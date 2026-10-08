@@ -1,3 +1,12 @@
+<script lang="ts">
+/**
+ * What a day can be flagged as on the schedule: a confirmed booking, or a
+ * request still awaiting a decision. Each gets its own dot colour, and a
+ * day can carry both.
+ */
+export type DayMarker = "booking" | "request";
+</script>
+
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import VenueIcon from "./VenueIcon.vue";
@@ -8,14 +17,16 @@ import VenueIcon from "./VenueIcon.vue";
  * rather than toISOString(), which would shift a day in UTC+ timezones.
  * Past days are disabled by default: availability for a date that's gone
  * is moot. `allowPast` lifts that for views that look back (the venue
- * schedule). `markedDates` puts a dot under days that have something on.
+ * schedule). `markers` puts a dot under each day that has something on —
+ * one per kind, so a day with both a booking and a request shows both.
  * `blockedDates` / `partlyBlockedDates` (E4-3) stripe days a venue is
  * unavailable all day / for some hours (Style.md 3.5).
  */
 const props = defineProps<{
   modelValue: string | null;
   allowPast?: boolean;
-  markedDates?: string[];
+  /** Day key ("YYYY-MM-DD") to the kinds of thing happening that day. */
+  markers?: Record<string, DayMarker[]>;
   blockedDates?: string[];
   partlyBlockedDates?: string[];
 }>();
@@ -25,7 +36,9 @@ const emit = defineEmits<{
   "month-change": [value: { year: number; month: number }];
 }>();
 
-const marked = computed(() => new Set(props.markedDates ?? []));
+function markersFor(key: string): DayMarker[] {
+  return props.markers?.[key] ?? [];
+}
 const blocked = computed(() => new Set(props.blockedDates ?? []));
 const partlyBlocked = computed(() => new Set(props.partlyBlockedDates ?? []));
 
@@ -119,7 +132,7 @@ function shiftMonth(delta: number): void {
           'calendar__day--partly-blocked': !blocked.has(cell.key) && partlyBlocked.has(cell.key),
         }" :disabled="!allowPast && cell.key < todayKey && cell.key !== modelValue"
           :aria-pressed="cell.key === modelValue"
-          :aria-label="fromKey(cell.key).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + (marked.has(cell.key) ? ', has bookings' : '') + availabilityLabel(cell.key)"
+          :aria-label="fromKey(cell.key).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + (markersFor(cell.key).length > 0 ? ', has bookings' : '') + availabilityLabel(cell.key)"
           @click="emit('update:modelValue', cell.key)">
           {{ cell.day }}
           <span v-if="markersFor(cell.key).length > 0" class="calendar__dots" aria-hidden="true">

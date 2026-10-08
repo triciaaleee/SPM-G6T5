@@ -199,15 +199,16 @@ function buildApp(
     user?: { id: string; role: string };
     bookings?: { venue_id: number; event_id: number; status?: string; hold_expires_at?: string | null }[];
     bookedEvents?: ReturnType<typeof bookedEvent>[];
+    /** E4-3 block-out periods, read by findBlockedVenueIds. */
+    unavailability?: Record<string, unknown>[];
+    /** The blocked venues' setup/turnaround minutes. */
+    buffers?: Record<string, unknown>[];
   } = {},
 ) {
-  // E4-3: block-out periods and the blocked venues' setup/turnaround, read by findBlockedVenueIds.
+  // E4-3: block-out periods and the blocked venues' setup/turnaround.
   const unavailabilityGte = vi.fn().mockResolvedValue({ data: options.unavailability ?? [], error: null });
   const venuesIn = vi.fn().mockResolvedValue({ data: options.buffers ?? [], error: null });
-  const bookingsThen = vi.fn((resolve: (value: unknown) => void) =>
-    resolve({ data: options.bookings ?? [], error: null }),
-  );
-  const bookingsQuery = { then: bookingsThen };
+
   // venue_bookings only links a venue to an event; its schedule comes from
   // events-service. Only "On Hold" (unexpired) and "Approved" bookings block a
   // venue, so a fixture that means to block defaults to "Approved".
@@ -217,8 +218,13 @@ function buildApp(
     hold_expires_at: null,
     ...booking,
   }));
+  // Read two ways: the blocking-status query (.in("status", …)) and the
+  // block-out check, which awaits the builder with no filter at all.
   const bookingsIn = vi.fn().mockResolvedValue({ data: bookingRows, error: null });
-  const bookingsQuery = { in: bookingsIn };
+  const bookingsQuery = {
+    in: bookingsIn,
+    then: (resolve: (value: unknown) => unknown) => resolve({ data: bookingRows, error: null }),
+  };
 
   const fetchMock = vi.fn().mockResolvedValue({
     ok: true,
@@ -244,7 +250,6 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/venues", venuesRouter);
-  return { app, supabase, bookingsQuery, fetchMock };
   return { app, supabase, bookingsQuery, fetchMock };
 }
 
