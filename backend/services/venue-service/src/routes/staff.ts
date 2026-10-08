@@ -42,7 +42,13 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 interface BookingRow {
   id: number;
   event_id: number;
-  status: BookingStatus;
+  /** venue_status — e.g. Replacement Required after a block-out (E4-3). */
+  status: string;
+}
+
+/** Times may arrive as "HH:MM:SS"; the UI shows "HH:MM". */
+function toHourMinute(time: string | null): string {
+  return (time ?? "").slice(0, 5);
 }
 
 /** Available venues for the schedule's venue picker. */
@@ -58,12 +64,9 @@ staffRouter.get("/venues", async (req: AuthedRequest, res) => {
 });
 
 /**
- * Every booking at one venue whose event falls between `from` and `to`
- * (inclusive, local "YYYY-MM-DD" dates), earliest first. venue_bookings
- * only links a venue to an event, so a booking's date and times are the
- * event's own, from events-service. Bookings whose event events-service
- * doesn't return (deleted, or still a draft) are left out: there's
- * nothing to set up for them.
+ * Every booking at one venue between `from` and `to` (inclusive, local
+ * "YYYY-MM-DD" dates), earliest first. Every booking is tied to an event
+ * (migration 0015) and carries that event's booking-relevant details.
  */
 staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
   const supabase = req.supabase!;
@@ -105,6 +108,9 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // venue_bookings no longer stores its own timing (migration 0015): each
+  // booking's date/time comes from its linked event, so the range filter and
+  // sort happen here rather than in the query.
   const { data: bookingData, error: bookingsError } = await supabase
     .from("venue_bookings")
     .select("id, event_id, status")
@@ -114,9 +120,9 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
     res.status(500).json({ error: "Failed to load bookings" });
     return;
   }
-  const bookings = (bookingData ?? []) as BookingRow[];
+  const bookingRows = (bookingData ?? []) as BookingRow[];
 
-  const eventIds = [...new Set(bookings.map((b) => b.event_id))];
+  const eventIds = [...new Set(bookingRows.map((b) => b.event_id))];
   const infoResult = await fetchVenueBookingInfo(eventIds, req.headers.authorization!);
   if (infoResult.status === "error") {
     res.status(502).json({ error: "Failed to load the booked events" });
@@ -124,140 +130,30 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
   }
   const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
 
-  // Pair each booking with its event, keep those in range, earliest first.
-  const scheduled = bookings
+  // Events events-service didn't return (e.g. still a draft) or with no
+  // proposed date can't be placed on the schedule, so they're left out.
+  const bookings = bookingRows
     .flatMap((booking) => {
       const event = eventsById.get(booking.event_id);
-      const inRange = event?.proposedDate && event.proposedDate >= from && event.proposedDate <= to;
-      return event && inRange ? [{ booking, event }] : [];
+      if (!event?.proposedDate || event.proposedDate < from || event.proposedDate > to) return [];
+      return [{ booking, event, date: event.proposedDate, startTime: toHourMinute(event.startTime) }];
     })
-    .sort(
-      (a, b) =>
-        a.event.proposedDate!.localeCompare(b.event.proposedDate!) ||
-        (a.event.startTime ?? "").localeCompare(b.event.startTime ?? ""),
-    );
+    .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
 
   res.json({
     venue: { id: venue.id, name: venue.name },
-    bookings: scheduled.map(({ booking, event }) => ({
+    bookings: bookings.map(({ booking, event, date, startTime }) => ({
       id: booking.id,
-      date: event.proposedDate,
-      startTime: event.startTime,
-      endTime: event.endTime,
+      date,
+      startTime,
+      endTime: toHourMinute(event.endTime),
       status: booking.status,
+      kind: "event",
       event: {
         id: event.id,
         name: event.name,
         expectedAttendance: event.expectedAttendance,
         ...extractLayoutAndFacilities(event, [venue as VenueRow]),
-      },
-    })),
-  });
-});
-
-/**
- * E4-10 AC6: the decision queue — every booking at this staff member's
- * venues still waiting on them, ordered by event date so the most urgent
- * surfaces first. A booking's date lives on its event, so ordering happens
- * here rather than in SQL.
- *
- * Holds that have passed their deadline are swept to `Expired` on the way
- * through and left out: §3a requires expiry to be applied whenever
- * availability is checked, and E4-12 AC4 says an expired booking offers no
- * action.
- */
-staffRouter.get("/requests", async (req: AuthedRequest, res) => {
-  const supabase = req.supabase!;
-
-  const assigned = await assignedVenueIds(supabase, req.user!.id);
-  if (assigned.status === "error") {
-    res.status(500).json({ error: "Failed to load your venues" });
-    return;
-  }
-  if (assigned.venueIds.length === 0) {
-    res.json({ requests: [] });
-    return;
-  }
-
-  const { data: bookingData, error: bookingsError } = await supabase
-    .from("venue_bookings")
-    .select(BOOKING_COLUMNS)
-    .in("venue_id", assigned.venueIds)
-    .in("status", ["Requested", "On Hold"]);
-  if (bookingsError) {
-    res.status(500).json({ error: "Failed to load booking requests" });
-    return;
-  }
-  const bookings = (bookingData ?? []) as DecisionBookingRow[];
-
-  const now = new Date();
-  const lapsed = bookings.filter((booking) => booking.status === "On Hold" && !blocksVenue(booking, now));
-  if (lapsed.length > 0) {
-    await supabase
-      .from("venue_bookings")
-      .update({ status: "Expired", decided_at: now.toISOString(), decided_by: null })
-      .in(
-        "id",
-        lapsed.map((booking) => booking.id),
-      )
-      .eq("status", "On Hold");
-  }
-  const pending = bookings.filter((booking) => !lapsed.some((expired) => expired.id === booking.id));
-
-  const { data: venueData, error: venuesError } = await supabase
-    .from("venues")
-    .select("id, name, location, capacity, accessibility, layouts, facilities, setup_minutes, turnaround_minutes")
-    .in("id", assigned.venueIds);
-  if (venuesError) {
-    res.status(500).json({ error: "Failed to load your venues" });
-    return;
-  }
-  const venuesById = new Map(((venueData ?? []) as VenueRow[]).map((venue) => [venue.id, venue]));
-
-  const infoResult = await fetchVenueBookingInfo(
-    [...new Set(pending.map((booking) => booking.event_id))],
-    req.headers.authorization!,
-  );
-  if (infoResult.status === "error") {
-    res.status(502).json({ error: "Failed to load the requested events" });
-    return;
-  }
-  const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
-
-  // A booking whose event events-service won't return (deleted, or back to
-  // draft) has nothing to decide on.
-  const requests = pending
-    .flatMap((booking) => {
-      const event = eventsById.get(booking.event_id);
-      const venue = venuesById.get(booking.venue_id);
-      return event && venue ? [{ booking, event, venue }] : [];
-    })
-    .sort(
-      (a, b) =>
-        (a.event.proposedDate ?? "").localeCompare(b.event.proposedDate ?? "") ||
-        (a.event.startTime ?? "").localeCompare(b.event.startTime ?? ""),
-    );
-
-  res.json({
-    requests: requests.map(({ booking, event, venue }) => ({
-      id: booking.id,
-      status: booking.status,
-      holdExpiresAt: booking.hold_expires_at,
-      venue: {
-        id: venue.id,
-        name: venue.name,
-        location: venue.location,
-        setupMinutes: venue.setup_minutes ?? 0,
-        turnaroundMinutes: venue.turnaround_minutes ?? 0,
-      },
-      event: {
-        id: event.id,
-        name: event.name,
-        date: event.proposedDate,
-        startTime: event.startTime,
-        endTime: event.endTime,
-        expectedAttendance: event.expectedAttendance,
-        ...extractLayoutAndFacilities(event, [venue]),
       },
     })),
   });

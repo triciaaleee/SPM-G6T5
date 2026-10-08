@@ -201,6 +201,13 @@ function buildApp(
     bookedEvents?: ReturnType<typeof bookedEvent>[];
   } = {},
 ) {
+  // E4-3: block-out periods and the blocked venues' setup/turnaround, read by findBlockedVenueIds.
+  const unavailabilityGte = vi.fn().mockResolvedValue({ data: options.unavailability ?? [], error: null });
+  const venuesIn = vi.fn().mockResolvedValue({ data: options.buffers ?? [], error: null });
+  const bookingsThen = vi.fn((resolve: (value: unknown) => void) =>
+    resolve({ data: options.bookings ?? [], error: null }),
+  );
+  const bookingsQuery = { then: bookingsThen };
   // venue_bookings only links a venue to an event; its schedule comes from
   // events-service. Only "On Hold" (unexpired) and "Approved" bookings block a
   // venue, so a fixture that means to block defaults to "Approved".
@@ -224,8 +231,9 @@ function buildApp(
 
   const supabase = {
     from: vi.fn((table: string) => {
-      if (table === "venues") return { select: vi.fn().mockReturnValue({ eq: venuesEq }) };
+      if (table === "venues") return { select: vi.fn().mockReturnValue({ eq: venuesEq, in: venuesIn }) };
       if (table === "venue_bookings") return { select: vi.fn().mockReturnValue(bookingsQuery) };
+      if (table === "venue_unavailability") return { select: () => ({ lte: () => ({ gte: unavailabilityGte }) }) };
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -305,7 +313,7 @@ describe("GET /api/venues", () => {
     expect(res.status).toBe(500);
   });
 
-  it("doesn't exclude a venue whose booking is on a different date", async () => {
+  it("E4-3 AC3: keeps a venue whose block-out hours don't overlap the window", async () => {
     const { app } = buildApp({
       bookings: [{ venue_id: 1, event_id: 42 }],
       bookedEvents: [bookedEvent(42, "2026-09-01", "18:00", "21:00")],

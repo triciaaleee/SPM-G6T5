@@ -5,6 +5,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { UNAVAILABLE_BOOKING_STATUSES, blocksVenue, type BookingStatus } from "../lib/bookingStatus.js";
 import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "../lib/bookingConflicts.js";
 import { fetchEvent, fetchVenueBookingInfo } from "../lib/eventsClient.js";
+import { findBlockedVenueIds } from "../lib/unavailability.js";
 import { extractRequirements, scheduleQuery, withFeatures } from "../lib/venueRecommendation.js";
 import {
   buildFilterOptions,
@@ -107,23 +108,31 @@ async function findUnavailableVenueIds(
   const unavailableVenueIds = new Set<number>();
   if (!criteria.date) return unavailableVenueIds;
 
-  const blocking = await loadBlockingWindows(supabase, venues, authorization, forEventId);
-  if (!blocking) return null;
+  // E4-3 AC3: venues staff have blocked out for this slot are excluded too.
+  const blockedVenueIds = await findBlockedVenueIds(supabase, criteria.date, criteria.startTime, criteria.endTime);
+  if (blockedVenueIds === null) return null;
+  for (const id of blockedVenueIds) unavailableVenueIds.add(id);
 
-  const venuesById = new Map(venues.map((venue) => [venue.id, venue]));
-  const wanted = new Map<number, OccupiedWindow>();
-  for (const venue of venues) {
-    const window = occupiedWindow(
-      { proposedDate: criteria.date, startTime: criteria.startTime, endTime: criteria.endTime },
-      venue,
-    );
-    if (window) wanted.set(venue.id, window);
-  }
+  const { data: bookings, error } = await supabase.from("venue_bookings").select("venue_id, event_id");
+  if (error) return null;
 
-  for (const { booking, window } of blocking) {
-    if (!venuesById.has(booking.venue_id)) continue;
-    const requested = wanted.get(booking.venue_id);
-    if (requested && overlaps(requested, window)) unavailableVenueIds.add(booking.venue_id);
+  const relevantBookings = (bookings ?? []).filter(
+    (booking) => forEventId === undefined || booking.event_id !== forEventId,
+  );
+  const eventIds = [...new Set(relevantBookings.map((booking) => booking.event_id as number))];
+
+  const infoResult = await fetchVenueBookingInfo(eventIds, authorization);
+  if (infoResult.status === "error") return null;
+  const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
+
+  for (const booking of relevantBookings) {
+    const event = eventsById.get(booking.event_id as number);
+    if (!event || event.proposedDate !== criteria.date) continue;
+    if (criteria.startTime && criteria.endTime) {
+      if (!event.startTime || !event.endTime) continue;
+      if (!(event.startTime < criteria.endTime && event.endTime > criteria.startTime)) continue;
+    }
+    unavailableVenueIds.add(booking.venue_id as number);
   }
   return unavailableVenueIds;
 }

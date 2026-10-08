@@ -12,6 +12,7 @@ backend/
     events-service/       # port 4001
     user-service/         # port 4002
     venue-service/        # port 4003
+    notification-service/ # port 4004
 frontend/                 # Vue 3 + Vite + Tailwind
 supabase/migrations/      # numbered SQL migrations (NNNN_description.sql)
 Style.md                  # frontend design system — source of truth
@@ -259,9 +260,8 @@ All frontend work **must** follow [`Style.md`](Style.md). Read it before creatin
 - **Auth:** `user-service` issues JWTs. Every other service only **verifies** them with the shared `JWT_SECRET`.
 - **Database:** Supabase Postgres. Schema changes go in a new migration `supabase/migrations/NNNN_description.sql` (next number, re-runnable/guarded where possible). **Until the first production deploy, migrations may be edited in place** (the scripts only ever run against a fresh prod DB, and any change to an existing dev database is applied by hand to match). After the first production deploy, never edit an applied migration — add a new one.
 - **Enum types:** three columns are backed by Postgres enums, not free text — the database rejects any value outside the list, so a new status/role must be added to the enum (a migration, e.g. `alter type ... add value ...`) before any code can write it:
-  - `users.role` → `app_role` (migration `0004`): `attendee`, `organiser`, `coordinator`, `venue_staff`, `technical_support`, plus the Week 7 roles `coordinator_lead` (Event Coordinator Lead: oversees the unassigned queue, assigns and reassigns coordinators) and `safety_officer` (Operational Safety Check). Their user-id prefixes are `LEAD-` and `SAF-`, each with its own sequence (see `generate_user_id()` in `0004` and `sync_user_id_sequences()` in `0013`).
-  - `events.status` → `event_status` (migration `0014`): the 10 values in §3's table above (`Safety Review` and `Cancelled` are new).
-  - `venue_bookings.status` → `venue_booking_status` (migration `0014`): `Requested`, `On Hold`, `Approved`, `Rejected`, `Expired`, `Replacement Required` and `Withdrawn` — see §3a. It backs a **booking-approval** workflow (a specific booking request is approved/rejected, not the venue itself).
-- **Postgres enum caveat:** once a database exists, `alter type ... add value` cannot be used in the same transaction as the statements that use the new value, so apply it on its own. (Because the enums are created with all their values up front, this only matters when hand-patching an existing DB.)
+  - `users.role` → `app_role` (migration `0004`): `attendee`, `organiser`, `coordinator`, `venue_staff`, `technical_support`.
+  - `events.status` → `event_status` (migration `0014`): the 8 values in §3's table above.
+  - `venue_bookings.status` → `venue_status` (migrations `0014`, `0016`): `Requested`, `Approved`, `Rejected`, `Replacement Required` — backs a **booking-approval** workflow (a specific booking request gets approved/rejected, not the venue itself). `Replacement Required` (E4-3) is set by venue-service when venue staff block out (or edit a block-out to cover) a `Requested` or `Approved` booking — checked against the event's occupied window, i.e. its times widened by `venues.setup_minutes` / `venues.turnaround_minutes` (migration `0018`); only the booking changes — the event's own status is untouched. Status strings live in `venue-service/src/lib/bookingStatus.ts`. Apart from that, and the staff schedule displaying the value, no application code reads or writes it yet — the venue-service's search/booking routes (`backend/services/venue-service/src/routes/venues.ts`, `lib/venueSearch.ts`) and the frontend (`frontend/src/lib/venuesApi.ts`, `VenueSearchView.vue`) all need to be extended to actually use it before it does anything. Until then, every booking row defaults to `Requested` and is otherwise inert.
 - **Tests:** add or update tests for any backend route or lifecycle change. Run `npm test` in each service you touched before finishing.
 - **Docs:** when you add a service, port, env var or script, update `backend/README.md` in the same change.

@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { formatRole, getStoredUser, logout } from "./lib/auth";
+import NotificationBell from "./components/notifications/NotificationBell.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -27,6 +28,8 @@ async function handleLogout() {
   <header v-if="user" class="app-header">
     <span class="brand">ConnectSphere</span>
     <div class="account">
+      <!-- E7-1: coordinators are the only notification recipients so far (E4-3). -->
+      <NotificationBell v-if="user.role === 'coordinator'" :key="user.id" />
       <span class="account-name">{{ user.name }}</span>
       <span class="role-pill">{{ formatRole(user.role) }}</span>
       <button type="button" class="btn-logout" @click="handleLogout">Log out</button>

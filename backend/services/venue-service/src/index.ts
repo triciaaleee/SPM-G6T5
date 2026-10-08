@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import { eventBookingsRouter } from "./routes/eventBookings.js";
 import { staffRouter } from "./routes/staff.js";
+import { unavailabilityRouter } from "./routes/unavailability.js";
 import { venuesRouter } from "./routes/venues.js";
 
 /**
@@ -30,6 +31,8 @@ app.use(express.json());
 // every path under it, so venue staff requests and an organiser's view of
 // their own event's bookings must be answered first.
 app.use("/api/venues/staff", staffRouter);
+// E4-3: venue staff only, so also mounted ahead of venuesRouter.
+app.use("/api/venues/unavailability", unavailabilityRouter);
 app.use("/api/venues/events", eventBookingsRouter);
 app.use("/api/venues", venuesRouter);
 
