@@ -13,21 +13,23 @@ import {
   type UnavailabilityPeriod,
 } from "../lib/unavailabilityApi";
 
+
+// Current EVENTS  as of 1/10
+/* Great Lawn - 30 sept
+Grand ballroom - 30 sept
+Innovation Hub - 30 sep
+
+
 /**
  * E1-5: venue staff's schedule. Pick a venue and a date to see what's
  * booked there — event name, date, times, attendance, layout and facility
  * requirements only. The API never sends the wider event plan, so there's
  * nothing here to hide.
  *
- * Tabs split bookings by booking status: Bookings (approved), Requested
- * (awaiting a decision) and On Hold (tentatively held by venue staff, E4-10).
- * Rejected bookings aren't shown. The tabs filter the list only: the
- * calendar marks every day with a booking (purple dot) or a request (blue
- * dot), whichever tab is open.
- *
- * Deciding on a request happens in the queue (VenueRequestQueue.vue), which
- * orders by event date across venues; this view stays the per-venue, per-day
- * schedule.
+ * Tabs split bookings by booking status: Bookings (approved) and Requested
+ * (awaiting a decision). Rejected bookings aren't shown. The tabs filter
+ * the list only: the calendar marks every day with a booking (purple dot)
+ * or a request (blue dot), whichever tab is open.
  */
 
 type ScheduleTab = "bookings" | "requested" | "held";
@@ -82,15 +84,28 @@ const loadingBookings = ref(false);
 const venuesError = ref<string | null>(null);
 const bookingsError = ref<string | null>(null);
 
+/**
+ * Whether a booking belongs in a tab. A booking flagged Replacement
+ * Required by a block-out (E4-3) was approved, so it stays under Bookings
+ * (with a badge) rather than disappearing from both tabs.
+ */
+function inTab(booking: VenueBooking, tab: (typeof TABS)[number]): boolean {
+  return booking.status === tab.status || (tab.key === "bookings" && booking.status === "Replacement Required");
+}
+
 /** This month's bookings in the active tab. */
-const tabBookings = computed(() => bookings.value.filter((b) => b.status === activeTabConfig.value.status));
+const tabBookings = computed(() => bookings.value.filter((b) => inTab(b, activeTabConfig.value)));
 
 /** Every day this month with a booking or request, for the calendar's dots. */
 const dateMarkers = computed(() => {
   const markers: Record<string, DayMarker[]> = {};
   for (const booking of bookings.value) {
     const kind: DayMarker | null =
-      booking.status === "Approved" ? "booking" : booking.status === "Requested" ? "request" : null;
+      booking.status === "Approved" || booking.status === "Replacement Required"
+        ? "booking"
+        : booking.status === "Requested"
+          ? "request"
+          : null;
     if (!kind) continue;
     const kinds = (markers[booking.date] ??= []);
     if (!kinds.includes(kind)) kinds.push(kind);
@@ -105,7 +120,7 @@ const tabDayCounts = computed(() => {
   const counts: Record<ScheduleTab, number> = { bookings: 0, requested: 0, held: 0 };
   for (const booking of bookings.value) {
     if (booking.date !== selectedDate.value) continue;
-    const tab = TABS.find((t) => t.status === booking.status);
+    const tab = TABS.find((t) => inTab(booking, t));
     if (tab) counts[tab.key] += 1;
   }
   return counts;
@@ -169,8 +184,10 @@ watch([venueId, visibleMonth], loadBookings);
 const periods = ref<UnavailabilityPeriod[]>([]);
 const periodsError = ref<string | null>(null);
 const panelOpen = ref(false);
+/** The period being edited in the panel; null while adding a new one. */
+const editingPeriod = ref<UnavailabilityPeriod | null>(null);
 const removingId = ref<number | null>(null);
-/** Outcome of the last block-out or removal, shown above the day's list. */
+/** Outcome of the last block-out change, shown above the day's list. */
 const notice = ref<{ text: string; warning: boolean } | null>(null);
 
 const selectedVenueName = computed(() => venues.value.find((v) => v.id === venueId.value)?.name ?? "");
@@ -183,9 +200,8 @@ const blockedDays = computed(() => {
   const full = new Set<string>();
   const partial = new Set<string>();
   for (const period of periods.value) {
-    const from = fromKey(period.startDate > first ? period.startDate : first);
     const to = period.endDate < last ? period.endDate : last;
-    for (const day = from; toKey(day) <= to; day.setDate(day.getDate() + 1)) {
+    for (const day = fromKey(period.startDate > first ? period.startDate : first); toKey(day) <= to; day.setDate(day.getDate() + 1)) {
       (period.allDay ? full : partial).add(toKey(day));
     }
   }
@@ -223,27 +239,32 @@ async function loadUnavailability(): Promise<void> {
 watch([venueId, visibleMonth], loadUnavailability);
 watch(venueId, () => (notice.value = null));
 
-/** The period being edited in the panel; null while adding a new one. */
-const editingPeriod = ref<UnavailabilityPeriod | null>(null);
-
 function openBlockOut(period: UnavailabilityPeriod | null = null): void {
   editingPeriod.value = period;
   panelOpen.value = true;
 }
 
-function onBlockOutSaved(result: CreatePeriodResult): void {
-  const verb = editingPeriod.value ? "Block-out updated." : "Period blocked out.";
+function closeBlockOut(): void {
   panelOpen.value = false;
   editingPeriod.value = null;
-  const count = result.affected.length;
-  if (count === 0) {
+}
+
+function onBlockOutSaved(result: CreatePeriodResult): void {
+  const verb = editingPeriod.value ? "Block-out updated." : "Period blocked out.";
+  closeBlockOut();
+
+  const flagged = result.affected.filter((b) => b.replacementRequired).length;
+  const pending = result.affected.length - flagged;
+  if (result.affected.length === 0) {
     notice.value = { text: `${verb} It shows as unavailable on the calendar.`, warning: false };
   } else {
-    const bookings = `${count} booking${count === 1 ? "" : "s"} marked Replacement Required`;
+    const parts = [];
+    if (flagged > 0) parts.push(`${flagged} booking${flagged === 1 ? "" : "s"} marked Replacement Required`);
+    if (pending > 0) parts.push(`${pending} pending request${pending === 1 ? "" : "s"} clash with it`);
     const notified = result.notificationsFailed
       ? "but we couldn't notify the coordinators — please let them know directly."
-      : `and ${result.coordinatorsNotified} coordinator${result.coordinatorsNotified === 1 ? "" : "s"} notified.`;
-    notice.value = { text: `${verb} ${bookings}, ${notified}`, warning: result.notificationsFailed };
+      : `${result.coordinatorsNotified} coordinator${result.coordinatorsNotified === 1 ? "" : "s"} notified.`;
+    notice.value = { text: `${verb} ${parts.join("; ")}; ${notified}`, warning: result.notificationsFailed };
   }
   selectedDate.value = result.period.startDate;
   void loadUnavailability();
@@ -264,6 +285,12 @@ async function removePeriod(period: UnavailabilityPeriod): Promise<void> {
   }
 }
 
+// replace, not push: picking a date shouldn't add a history entry.
+watch([venueId, selectedDate, activeTab], ([venue, date, tab]) => {
+  if (venue === null) return;
+  void router.replace({ query: { ...route.query, venue: String(venue), date, tab } });
+});
+
 onMounted(async () => {
   try {
     venues.value = await fetchStaffVenues();
@@ -281,7 +308,7 @@ onMounted(async () => {
   <!--
     Column mapping — Venue Schedule
     Desktop (12-col, grid-desktop-margin 80px): header col 1-12 (title left, "Block out time" right); sidebar
-      (venue picker above calendar card + key) col 1-4; schedule col 5-12, block-out cards above the bookings.
+      (venue picker above calendar card + key) col 1-4; schedule col 5-12, block-out cards above the tabs.
       The Block out time panel is an overlay drawer outside this grid (mapping in BlockOutPanel.vue).
       Nested grid: each booking card's detail rows use a local 8-col grid (the schedule's span);
       time and attendance span 4 each, layout and facilities span 8.
@@ -293,7 +320,7 @@ onMounted(async () => {
     <div class="page-header page-header--with-action">
       <div>
         <h1 class="h2">Venue schedule</h1>
-        <p class="subheading">Select a date to see what needs to be set up that day.</p>
+        <p class="subheading">Select a date and venue to see bookings and requests for that day</p>
         <!-- E4-10: decisions are made in the queue, which orders by event date. -->
         <RouterLink :to="{ name: 'venue-requests' }" class="queue-link">Go to booking requests</RouterLink>
       </div>
@@ -330,13 +357,8 @@ onMounted(async () => {
           <ul class="legend" aria-hidden="true">
             <li class="legend__item"><span class="legend__dot legend__dot--booking" />Booking</li>
             <li class="legend__item"><span class="legend__dot legend__dot--request" />Request</li>
-          </ul>
-          <ul class="legend" aria-label="Calendar key">
-            <li class="legend__item"><span class="legend__dot" aria-hidden="true" />Booked</li>
-            <li class="legend__item"><span class="legend__swatch" aria-hidden="true" />Unavailable all day</li>
-            <li class="legend__item">
-              <span class="legend__swatch legend__swatch--partial" aria-hidden="true" />Partly unavailable
-            </li>
+            <li class="legend__item"><span class="legend__swatch" />Unavailable</li>
+            <li class="legend__item"><span class="legend__swatch legend__swatch--partial" />Partly unavailable</li>
           </ul>
         </section>
       </div>
@@ -353,7 +375,7 @@ onMounted(async () => {
         </p>
         <p v-if="periodsError" class="body-default error-text">{{ periodsError }}</p>
 
-        <!-- E4-3 AC1: block-outs come first so an unavailable day is obvious at a glance. -->
+        <!-- E4-3 AC1: block-outs sit above the tabs so an unavailable day is obvious whichever tab is open. -->
         <ul v-if="dayPeriods.length > 0" class="booking-list block-list">
           <li v-for="period in dayPeriods" :key="period.id">
             <UnavailabilityCard :period="period" :removing="removingId === period.id" @edit="openBlockOut(period)"
@@ -361,6 +383,15 @@ onMounted(async () => {
           </li>
         </ul>
 
+        <div class="tabs" role="tablist" aria-label="Booking status">
+          <button v-for="tab in TABS" :id="`tab-${tab.key}`" :key="tab.key" type="button" role="tab" class="tab"
+            :class="{ 'tab--active': activeTab === tab.key }" :aria-selected="activeTab === tab.key"
+            aria-controls="schedule-panel" :tabindex="activeTab === tab.key ? 0 : -1" @click="activeTab = tab.key">
+            {{ tab.label }} ({{ tabDayCounts[tab.key] }})
+          </button>
+        </div>
+
+        <div id="schedule-panel" role="tabpanel" :aria-labelledby="`tab-${activeTab}`">
         <p v-if="bookingsError" class="body-default error-text">{{ bookingsError }}</p>
         <p v-else-if="loadingBookings && bookings.length === 0" class="body-default muted">Loading bookings…</p>
 
@@ -370,9 +401,7 @@ onMounted(async () => {
         </div>
 
         <ul v-else class="booking-list" :class="{ 'is-stale': loadingBookings }">
-          <li v-for="booking in dayBookings" :key="booking.id" class="booking-card"
-            :class="{ 'booking-card--hold': booking.kind === 'hold' }">
-            <template v-if="booking.kind === 'event'">
+          <li v-for="booking in dayBookings" :key="booking.id" class="booking-card">
               <span v-if="booking.status === 'Replacement Required'" class="replacement-badge">
                 Replacement Required
               </span>
@@ -402,31 +431,16 @@ onMounted(async () => {
                   </dd>
                   <dd v-else class="body-small muted">None specified</dd>
                 </div>
-            </dl>
-            </template>
-
-            <!-- E4-14: anything else occupying the venue — an external
-                 booking or maintenance — with its reason in place of an
-                 event's details. -->
-            <template v-else>
-              <span class="hold-badge">Venue unavailable</span>
-              <p class="card-title">{{ booking.reason || "Venue hold" }}</p>
-              <p class="body-small muted booking-card__date">{{ formatLongDate(booking.date) }}</p>
-              <dl class="details">
-                <div class="detail">
-                  <dt class="detail__label">Start – end time</dt>
-                  <dd class="detail__value">{{ formatTimeRange(booking.startTime, booking.endTime) }}</dd>
-                </div>
               </dl>
-            </template>
           </li>
         </ul>
+        </div>
       </section>
     </template>
 
     <BlockOutPanel v-if="panelOpen && venueId !== null" :key="editingPeriod?.id ?? 'new'" :venue-id="venueId"
       :venue-name="selectedVenueName" :initial-date="selectedDate" :period="editingPeriod"
-      @close="panelOpen = false; editingPeriod = null" @saved="onBlockOutSaved" />
+      @close="closeBlockOut" @saved="onBlockOutSaved" />
   </div>
 </template>
 
@@ -543,6 +557,22 @@ onMounted(async () => {
   margin: 0;
 }
 
+.queue-link {
+  color: var(--color-purple-600);
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.queue-link:hover {
+  text-decoration: underline;
+}
+
+.queue-link:focus-visible {
+  outline: 2px solid var(--color-purple-600);
+  outline-offset: 2px;
+}
+
 .subheading {
   font-size: 1.125rem;
   font-weight: 400;
@@ -571,23 +601,6 @@ onMounted(async () => {
 
 .schedule__header {
   margin-bottom: var(--spacing-16);
-}
-
-/* Style.md 2.4: brand purple for a navigational link. */
-.queue-link {
-  color: var(--color-purple-600);
-  font-size: 0.875rem;
-  font-weight: 700;
-  text-decoration: none;
-}
-
-.queue-link:hover {
-  text-decoration: underline;
-}
-
-.queue-link:focus-visible {
-  outline: 2px solid var(--color-purple-600);
-  outline-offset: 2px;
 }
 
 /* Tabs: Style.md 2.4 — Purple 600 marks the active tab. */
@@ -854,47 +867,27 @@ onMounted(async () => {
   outline-offset: 2px;
 }
 
+/* Four keys no longer fit on one line in the sidebar. */
 .legend {
-  display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-8) var(--spacing-16);
-  margin: var(--spacing-16) 0 0;
-  padding: var(--spacing-16) 0 0;
-  border-top: 1px solid var(--color-grey-100);
-  list-style: none;
-}
-
-.legend__item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  font-size: 0.75rem;
-  line-height: 1rem;
-  color: var(--color-grey-700);
-}
-
-.legend__dot {
-  width: var(--spacing-4);
-  height: var(--spacing-4);
-  border-radius: var(--radius-full);
-  background: var(--color-purple-600);
+  row-gap: var(--spacing-8);
 }
 
 /* Style.md 3.5: pattern-unavailable / -partial, as calendar swatches. */
 .legend__swatch {
-  width: var(--spacing-16);
-  height: var(--spacing-16);
+  width: var(--spacing-12);
+  height: var(--spacing-12);
   border-radius: var(--radius-xs);
   box-shadow: inset 0 0 0 1px var(--color-grey-300);
   background: repeating-linear-gradient(135deg,
-      var(--color-grey-200) 0 var(--spacing-4),
-      var(--color-grey-50) var(--spacing-4) var(--spacing-8));
+      var(--color-grey-200) 0 var(--spacing-2),
+      var(--color-grey-50) var(--spacing-2) var(--spacing-4));
 }
 
 .legend__swatch--partial {
   background: repeating-linear-gradient(135deg,
-      var(--color-grey-200) 0 var(--spacing-4),
-      var(--color-grey-50) var(--spacing-4) var(--spacing-8)) bottom / 100% 50% no-repeat;
+      var(--color-grey-200) 0 var(--spacing-2),
+      var(--color-grey-50) var(--spacing-2) var(--spacing-4)) bottom / 100% 50% no-repeat;
 }
 
 .notice {
@@ -919,23 +912,6 @@ onMounted(async () => {
 }
 
 /* Style.md 3.5: Replacement Required badge. */
-.booking-card--hold {
-  background: var(--color-grey-50);
-}
-
-.hold-badge {
-  display: inline-block;
-  margin-bottom: var(--spacing-8);
-  padding: var(--spacing-2) var(--spacing-8);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-full);
-  background: var(--color-grey-75);
-  color: var(--color-grey-700);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-}
-
 .replacement-badge {
   display: inline-block;
   margin-bottom: var(--spacing-8);

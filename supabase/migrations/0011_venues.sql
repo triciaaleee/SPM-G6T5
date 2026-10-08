@@ -45,6 +45,9 @@ create table if not exists venues (
   layouts text[] not null default '{}',
   facilities text[] not null default '{}',
   status venue_availability_status not null default 'Available',
+  -- Still read by parts of the codebase that predate `status`; kept until
+  -- they all move over.
+  active boolean not null default true,
   -- Week 7 change 1: availability checks count these around each event.
   setup_minutes integer not null default 0 check (setup_minutes >= 0),
   turnaround_minutes integer not null default 0 check (turnaround_minutes >= 0),
@@ -53,22 +56,20 @@ create table if not exists venues (
 
 -- For databases created before these columns existed.
 alter table venues add column if not exists status venue_availability_status not null default 'Available';
+alter table venues add column if not exists active boolean not null default true;
 alter table venues add column if not exists setup_minutes integer not null default 0;
 alter table venues add column if not exists turnaround_minutes integer not null default 0;
 
--- `status` replaces the old `active` boolean: carry any existing value over
--- before dropping it.
-do $$
-begin
-  if exists (
-    select 1 from information_schema.columns
-    where table_name = 'venues' and column_name = 'active'
-  ) then
-    update venues set status = 'Unavailable' where active = false;
-    alter table venues drop column active;
-  end if;
-end
-$$;
+-- `status` is the venue's own availability. The older `active` boolean is
+-- deliberately left in place for now: part of the codebase still reads it,
+-- so a venue taken out of use must be updated in both until everything
+-- moves over to `status`.
+update venues set status = 'Unavailable' where active = false;
+
+-- Week 7 change 2 (venue unavailable after booking): the venue_unavailability
+-- table is created in 0016_venue_unavailability.sql (E4-3). A period there
+-- is a date range that either blocks whole days or the same hours on each
+-- day, so "09:00–13:00 every day for a week" is one row.
 
 create table if not exists venue_bookings (
   id bigserial primary key,

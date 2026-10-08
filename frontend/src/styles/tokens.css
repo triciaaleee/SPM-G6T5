@@ -42,7 +42,9 @@
   --color-warning-700: #E06A27;
   --color-warning-800: #C65D00;
   --color-warning-900: #994400;
+  --color-success-100: #F3F9F3;
   --color-success-200: #DAEDD9;
+  --color-success-300: #BBE2C1;
   --color-success-600: #008545;
   --color-success-700: #006E3A;
 
@@ -67,9 +69,11 @@
   --spacing-8: 8px;
   --spacing-12: 12px;
   --spacing-16: 16px;
+  --spacing-20: 20px;
   --spacing-24: 24px;
   --spacing-32: 32px;
   --spacing-40: 40px;
+  --spacing-48: 48px;
   --spacing-80: 80px;
 
   /* Grid */

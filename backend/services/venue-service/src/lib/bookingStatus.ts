@@ -16,18 +16,14 @@ export const BOOKING_STATUSES = [
 
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 
-/**
- * The same statuses by name, for code that reads better referring to one
- * status than indexing the list — `BOOKING_STATUS.replacementRequired`
- * rather than the literal "Replacement Required", which is easy to
- * mistype and impossible to grep for reliably.
- */
+/** Named access to the same values, for code that checks or sets a specific status. */
 export const BOOKING_STATUS = {
   requested: "Requested",
   onHold: "On Hold",
   approved: "Approved",
   rejected: "Rejected",
   expired: "Expired",
+  /** E4-3: an Approved booking caught by a block-out; its coordinator must find another venue. */
   replacementRequired: "Replacement Required",
   withdrawn: "Withdrawn",
 } as const satisfies Record<string, BookingStatus>;
@@ -100,4 +96,15 @@ const ALLOWED_TRANSITIONS: Record<BookingStatus, readonly BookingStatus[]> = {
 
 export function canTransition(from: BookingStatus, to: BookingStatus): boolean {
   return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+/**
+ * The same check under the name main's call sites use. Kept as a thin
+ * wrapper rather than a rename so neither side of the merge had to change.
+ */
+export function isBlockingBooking(
+  booking: { status: string; hold_expires_at?: string | null },
+  now: Date = new Date(),
+): boolean {
+  return blocksVenue(booking as BlockingBooking, now);
 }

@@ -270,8 +270,8 @@ describe("GET /api/venues", () => {
   it("AC2: excludes venues whose booked event overlaps the window, using the event's own schedule", async () => {
     const { app, bookingsQuery, fetchMock } = buildApp({
       bookings: [
-        { venue_id: 1, event_id: 11 },
-        { venue_id: 2, event_id: 12 },
+        { venue_id: 1, event_id: 11, status: "Approved", hold_expires_at: null },
+        { venue_id: 2, event_id: 12, status: "Approved", hold_expires_at: null },
       ],
       bookedEvents: [
         bookedEvent(11, "2026-09-25", "17:00", "22:00"), // overlaps 18:00-21:00
@@ -298,8 +298,8 @@ describe("GET /api/venues", () => {
   it("AC2: without a time window, any booked event that day makes the venue unavailable", async () => {
     const { app } = buildApp({
       bookings: [
-        { venue_id: 1, event_id: 11 },
-        { venue_id: 2, event_id: 12 },
+        { venue_id: 1, event_id: 11, status: "Approved", hold_expires_at: null },
+        { venue_id: 2, event_id: 12, status: "Approved", hold_expires_at: null },
       ],
       bookedEvents: [bookedEvent(11, "2026-09-25", "09:00", "10:00"), bookedEvent(12, "2026-09-26", "09:00", "10:00")],
     });
@@ -311,7 +311,7 @@ describe("GET /api/venues", () => {
   });
 
   it("returns 500 when booked events can't be loaded from events-service", async () => {
-    const { app, fetchMock } = buildApp({ bookings: [{ venue_id: 1, event_id: 11 }] });
+    const { app, fetchMock } = buildApp({ bookings: [{ venue_id: 1, event_id: 11, status: "Approved", hold_expires_at: null }] });
     fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
     const res = await request(app).get("/api/venues").query({ date: "2026-09-25" }).set("Authorization", "Bearer t");
 
@@ -320,7 +320,7 @@ describe("GET /api/venues", () => {
 
   it("E4-3 AC3: keeps a venue whose block-out hours don't overlap the window", async () => {
     const { app } = buildApp({
-      bookings: [{ venue_id: 1, event_id: 42 }],
+      bookings: [{ venue_id: 1, event_id: 42, status: "Approved", hold_expires_at: null }],
       bookedEvents: [bookedEvent(42, "2026-09-01", "18:00", "21:00")],
     });
     const res = await request(app)

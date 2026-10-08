@@ -15,6 +15,16 @@ const user = computed(() => {
   return getStoredUser();
 });
 
+/** Top tabs per role. Roles with a single screen get none. */
+const NAV_TABS: Record<string, { name: string; label: string }[]> = {
+  coordinator: [
+    { name: "coordinator-workload", label: "Events" },
+    { name: "venue-availability", label: "Venue Availability" },
+  ],
+};
+
+const navTabs = computed(() => (user.value ? NAV_TABS[user.value.role] ?? [] : []));
+
 async function handleLogout() {
   // AC4: drop the token, then send the user to login. `replace` keeps the
   // protected page they were on out of the history, so Back can't put it
@@ -27,6 +37,13 @@ async function handleLogout() {
 <template>
   <header v-if="user" class="app-header">
     <span class="brand">ConnectSphere</span>
+    <nav v-if="navTabs.length > 0" class="nav" aria-label="Main">
+      <RouterLink v-for="tab in navTabs" :key="tab.name" :to="{ name: tab.name }" class="nav__tab"
+        :class="{ 'nav__tab--active': route.name === tab.name }"
+        :aria-current="route.name === tab.name ? 'page' : undefined">
+        {{ tab.label }}
+      </RouterLink>
+    </nav>
     <div class="account">
       <!-- E7-1: coordinators are the only notification recipients so far (E4-3). -->
       <NotificationBell v-if="user.role === 'coordinator'" :key="user.id" />
@@ -67,6 +84,56 @@ async function handleLogout() {
   font-size: 1rem;
   font-weight: 700;
   color: var(--color-purple-700);
+}
+
+/* Tabs: Style.md 2.4 — Purple 600 marks the active tab, as on the venue schedule's tabs. */
+.nav {
+  display: flex;
+  align-self: stretch;
+  gap: var(--spacing-24);
+  margin-right: auto;
+  margin-left: var(--spacing-24);
+}
+
+.nav__tab {
+  display: flex;
+  align-items: center;
+  margin: calc(var(--spacing-12) * -1) 0;
+  padding: var(--spacing-12) 0;
+  border-bottom: 2px solid transparent;
+  color: var(--color-grey-500);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  text-decoration: none;
+}
+
+.nav__tab:hover {
+  color: var(--color-grey-800);
+}
+
+.nav__tab--active,
+.nav__tab--active:hover {
+  border-bottom-color: var(--color-purple-600);
+  color: var(--color-purple-600);
+}
+
+.nav__tab:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+/* On mobile the tabs drop to their own row under the brand and account. */
+@media (max-width: 640px) {
+  .app-header {
+    flex-wrap: wrap;
+  }
+
+  .nav {
+    order: 3;
+    flex-basis: 100%;
+    margin: 0;
+  }
 }
 
 .account {

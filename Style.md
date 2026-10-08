@@ -302,8 +302,13 @@ Patterns for venue availability (E4-3) and in-app notifications (E7-1). Built on
 | Unread notification row | Background `Colors/Purple Primary/100`. Read rows use `Colors/Base/White`. | Distinguishes unread items in the notification dropdown. |
 | Toast | Background `Colors/Base/White`, border `Colors/Grey/100`, `radius-sm`, elevation `shadow-popover`, `spacing-16` padding. | Transient alert for a newly arrived notification; floats above content, so `shadow-popover` applies. |
 | Drawer scrim | `Grey/40% Dark #454545` behind a side drawer or modal. | Dims the page while a drawer (e.g. Block out time) is open. |
+| `booking-approved` | Fill `Colors/Purple Primary/100` across the padded window (setup → turnaround), `Colors/Purple Primary/200` across the advertised event time. Border 1px solid `Colors/Purple Primary/300`, `spacing-4` left bar `Colors/Purple Primary/600`. Text `Colors/Purple Primary/800`, `radius-xs`. | An Approved venue booking on the coordinator's availability calendar — confirmed, so solid. |
+| `booking-on-hold` | Fill `Colors/Orange Warning/100` across the padded window, `Colors/Orange Warning/200` across the event time. Border 1px **dashed** `Colors/Orange Warning/300`, `spacing-4` left bar `Colors/Orange Warning/500`. Text `Colors/Orange Warning/900`, `radius-xs`. | An On Hold booking — the Warning set's "on-hold" role (Section 2.6). The dashed border says "tentative" without relying on colour alone. |
+| `pattern-closed` | Solid `Colors/Grey/75` fill, no border. Text `Colors/Grey/500`. | Time outside a venue's operating hours. Plain grey, distinct from the striped `pattern-unavailable` used for recorded block-outs. |
+| `slot-available` | Fill `Colors/Green Success/100`, border 1px dashed `Colors/Green Success/300`, text `Colors/Green Success/600`, `radius-xs`. | A free slot inside the coordinator's target date and time range — highlighted so it stands out from everything unavailable. |
 
 **USE:** `pattern-unavailable` only for genuinely unavailable time — never as decoration.  
+**USE:** On the availability calendar, every unavailable kind has its own treatment (`booking-approved`, `booking-on-hold`, `pattern-unavailable`, `pattern-closed`) and a legend naming each — never colour alone.  
 **AVOID:** Red for unavailability — it isn't an error (Section 2.5). Reserve Orange Warning for bookings that need action (Replacement Required), not for the block itself.
 
 ### 3.4 Button Hierarchy

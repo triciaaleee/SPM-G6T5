@@ -312,9 +312,9 @@ describe("GET /api/venues/recommendations/:eventId", () => {
     const { app, bookingsQuery, fetchMock } = buildApp({
       event: details({ equipment: "Projector" }),
       bookings: [
-        { venue_id: 1, event_id: 20 },
-        { venue_id: 3, event_id: 7 },
-        { venue_id: 5, event_id: 21 },
+        { venue_id: 1, event_id: 20, status: "Approved", hold_expires_at: null },
+        { venue_id: 3, event_id: 7, status: "Approved", hold_expires_at: null },
+        { venue_id: 5, event_id: 21, status: "Approved", hold_expires_at: null },
       ],
       bookingEvents: [
         { id: 20, proposedDate: "2026-11-10", startTime: "15:00", endTime: "18:00" }, // overlaps 14:00-16:00

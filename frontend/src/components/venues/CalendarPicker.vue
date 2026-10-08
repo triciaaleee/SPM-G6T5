@@ -17,10 +17,12 @@ import VenueIcon from "./VenueIcon.vue";
  * rather than toISOString(), which would shift a day in UTC+ timezones.
  * Past days are disabled by default: availability for a date that's gone
  * is moot. `allowPast` lifts that for views that look back (the venue
- * schedule). `markers` puts a dot under each day that has something on —
- * one per kind, so a day with both a booking and a request shows both.
- * `blockedDates` / `partlyBlockedDates` (E4-3) stripe days a venue is
- * unavailable all day / for some hours (Style.md 3.5).
+ * schedule). `markers` puts dots under days that have something on: a
+ * purple dot for a booking, a blue dot for a request, both side by side
+ * when a day has each. The day's label says the same in words, so the
+ * meaning never rests on colour alone. `blockedDates` /
+ * `partlyBlockedDates` (E4-3) stripe days a venue is unavailable all day /
+ * for some hours (Style.md 3.5).
  */
 const props = defineProps<{
   modelValue: string | null;
@@ -39,6 +41,12 @@ const emit = defineEmits<{
 function markersFor(key: string): DayMarker[] {
   return props.markers?.[key] ?? [];
 }
+/** The day's markers in words, so the dots' meaning never rests on colour. */
+function markerLabel(key: string): string {
+  const kinds = markersFor(key);
+  return kinds.length === 0 ? "" : `, has ${kinds.map((kind) => `a ${kind}`).join(" and ")}`;
+}
+
 const blocked = computed(() => new Set(props.blockedDates ?? []));
 const partlyBlocked = computed(() => new Set(props.partlyBlockedDates ?? []));
 
@@ -132,7 +140,7 @@ function shiftMonth(delta: number): void {
           'calendar__day--partly-blocked': !blocked.has(cell.key) && partlyBlocked.has(cell.key),
         }" :disabled="!allowPast && cell.key < todayKey && cell.key !== modelValue"
           :aria-pressed="cell.key === modelValue"
-          :aria-label="fromKey(cell.key).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + (markersFor(cell.key).length > 0 ? ', has bookings' : '') + availabilityLabel(cell.key)"
+          :aria-label="fromKey(cell.key).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + markerLabel(cell.key) + availabilityLabel(cell.key)"
           @click="emit('update:modelValue', cell.key)">
           {{ cell.day }}
           <span v-if="markersFor(cell.key).length > 0" class="calendar__dots" aria-hidden="true">
@@ -263,6 +271,54 @@ function shiftMonth(delta: number): void {
 /* Light variants so the dots stay visible on the selected day's purple fill. */
 .calendar__day--selected .calendar__dot--booking {
   background: var(--color-base-white);
+}
+
+/* E4-3, Style.md 3.5: pattern-unavailable (all day) / -partial (some hours) / -selected. */
+.calendar__day--blocked,
+.calendar__day--blocked:hover:not(:disabled) {
+  background: repeating-linear-gradient(135deg,
+      var(--color-grey-200) 0 var(--spacing-4),
+      var(--color-grey-50) var(--spacing-4) var(--spacing-8));
+  box-shadow: inset 0 0 0 1px var(--color-grey-300);
+  color: var(--color-grey-900);
+  font-weight: 700;
+}
+
+.calendar__day--partly-blocked,
+.calendar__day--partly-blocked:hover:not(:disabled) {
+  background:
+    repeating-linear-gradient(135deg,
+      var(--color-grey-200) 0 var(--spacing-4),
+      var(--color-grey-50) var(--spacing-4) var(--spacing-8)) bottom / 100% 50% no-repeat;
+  box-shadow: inset 0 0 0 1px var(--color-grey-300);
+  color: var(--color-grey-900);
+  font-weight: 700;
+}
+
+/* Today keeps its purple ring when it's blocked. */
+.calendar__day--today.calendar__day--blocked,
+.calendar__day--today.calendar__day--partly-blocked {
+  box-shadow: inset 0 0 0 1px var(--color-purple-300);
+}
+
+.calendar__day--blocked.calendar__day--selected,
+.calendar__day--blocked.calendar__day--selected:hover:not(:disabled),
+.calendar__day--partly-blocked.calendar__day--selected,
+.calendar__day--partly-blocked.calendar__day--selected:hover:not(:disabled) {
+  background: repeating-linear-gradient(135deg,
+      var(--color-purple-600) 0 var(--spacing-4),
+      var(--color-purple-700) var(--spacing-4) var(--spacing-8));
+  box-shadow: none;
+  color: var(--color-base-white);
+}
+
+.calendar__day--partly-blocked.calendar__day--selected,
+.calendar__day--partly-blocked.calendar__day--selected:hover:not(:disabled) {
+  background:
+    repeating-linear-gradient(135deg,
+      var(--color-purple-600) 0 var(--spacing-4),
+      var(--color-purple-700) var(--spacing-4) var(--spacing-8)) bottom / 100% 50% no-repeat,
+    var(--color-purple-600);
 }
 
 /* E4-3, Style.md 3.5: pattern-unavailable (all day) / -partial (some hours) / -selected. */

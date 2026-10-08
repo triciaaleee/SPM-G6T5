@@ -22,12 +22,15 @@ import { isRealDate } from "../lib/venueSearch.js";
  * E4-3: venue staff block out periods when a venue can't be used.
  *
  * AC1 — a saved period is returned by GET for the schedule's calendar.
- * AC2 — live bookings (Requested or Approved) whose occupied window — the
- *        event's times widened by the venue's setup and turnaround — falls
- *        inside a new or edited period move to Replacement Required, and
- *        their coordinators are notified (via notification-service). The
- *        events themselves are never touched. POST /preview lists those
- *        bookings before anything is saved, so staff see the impact first.
+ * AC2 — live bookings whose occupied window — the event's times widened by
+ *        the venue's setup and turnaround — falls inside a new or edited
+ *        period are found and their coordinators notified (via
+ *        notification-service). Only Approved ones move to Replacement
+ *        Required: that's the one transition AGENTS.md §3a allows. Pending
+ *        ones (Requested / On Hold) keep their status, but their
+ *        coordinators are still told the slot can't be honoured. The events
+ *        themselves are never touched. POST /preview lists the bookings
+ *        before anything is saved, so staff see the impact first.
  * AC3 — venue search excludes blocked venues (lib/unavailability.ts's
  *        findBlockedVenueIds, used by routes/venues.ts).
  */
@@ -52,11 +55,16 @@ const MAX_RANGE_DAYS = 42;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Bookings a block-out can still affect. A pending request is caught as
- * well as an approved one — neither can be honoured once the venue is
- * blocked. Rejected and already-flagged bookings are left alone.
+ * Bookings a block-out can still affect: pending (Requested, On Hold) as
+ * well as approved — none can be honoured once the venue is blocked.
+ * Rejected, Expired, Withdrawn and already-flagged bookings are left alone.
  */
-const LIVE_BOOKING_STATUSES = [BOOKING_STATUS.requested, BOOKING_STATUS.approved];
+const LIVE_BOOKING_STATUSES = [BOOKING_STATUS.requested, BOOKING_STATUS.onHold, BOOKING_STATUS.approved];
+
+/** Only an Approved booking may move to Replacement Required (AGENTS.md §3a). */
+function needsReplacement(booking: { status: string }): boolean {
+  return booking.status === BOOKING_STATUS.approved;
+}
 
 type Supabase = NonNullable<AuthedRequest["supabase"]>;
 
@@ -148,7 +156,7 @@ async function findAffectedBookings(
 
 /** What venue staff see of an affected booking — no coordinator ids. */
 function toPublicAffected({ coordinatorId, ...booking }: AffectedBooking) {
-  return { ...booking, hasCoordinator: coordinatorId !== null };
+  return { ...booking, hasCoordinator: coordinatorId !== null, replacementRequired: needsReplacement(booking) };
 }
 
 function formatDate(date: string): string {
@@ -171,22 +179,33 @@ function describePeriod(period: PeriodInput): string {
 function buildNotification(venue: Venue, period: PeriodInput, booking: AffectedBooking): NewNotification | null {
   if (!booking.coordinatorId) return null;
   const eventName = booking.eventName || "Your event";
+  const unavailable = `${venue.name} is unavailable ${describePeriod(period)}: ${period.reason}.`;
+  if (needsReplacement(booking)) {
+    return {
+      recipientId: booking.coordinatorId,
+      type: "venue_unavailable",
+      title: `Alternative venue needed for ${eventName}`,
+      body: `${unavailable} ${eventName} on ${formatDate(booking.date)} needs a replacement venue.`,
+      link: `/events/${booking.eventId}`,
+    };
+  }
   return {
     recipientId: booking.coordinatorId,
-    type: "venue_unavailable",
-    title: `Alternative venue needed for ${eventName}`,
+    type: "venue_unavailable_pending",
+    title: `Venue request for ${eventName} can't be met`,
     body:
-      `${venue.name} is unavailable ${describePeriod(period)}: ${period.reason}. ` +
-      `${eventName} on ${formatDate(booking.date)} needs a replacement venue.`,
+      `${unavailable} Your pending request for ${eventName} on ${formatDate(booking.date)} ` +
+      `clashes with it — consider requesting another venue or time.`,
     link: `/events/${booking.eventId}`,
   };
 }
 
 /**
- * AC2, after a period is saved: flag the affected bookings and tell their
- * coordinators. Only the booking's own status changes — the event record is
- * preserved. Re-checking the live statuses keeps a booking decided in the
- * meantime from being overwritten. Resolves false if the flagging failed.
+ * AC2, after a period is saved: flag the affected Approved bookings and
+ * tell every affected booking's coordinator. Only the booking's own status
+ * changes — the event record is preserved. Re-checking `Approved` keeps a
+ * booking decided in the meantime from being overwritten. Resolves
+ * flagged: false if the flagging failed.
  */
 async function flagAndNotify(
   supabase: Supabase,
@@ -195,15 +214,13 @@ async function flagAndNotify(
   affected: AffectedBooking[],
   authorization: string,
 ): Promise<{ flagged: boolean; coordinatorsNotified: number; notificationsFailed: boolean }> {
-  if (affected.length > 0) {
+  const toFlag = affected.filter(needsReplacement).map((b) => b.bookingId);
+  if (toFlag.length > 0) {
     const { error } = await supabase
       .from("venue_bookings")
       .update({ status: BOOKING_STATUS.replacementRequired })
-      .in(
-        "id",
-        affected.map((b) => b.bookingId),
-      )
-      .in("status", LIVE_BOOKING_STATUSES);
+      .in("id", toFlag)
+      .eq("status", BOOKING_STATUS.approved);
     if (error) return { flagged: false, coordinatorsNotified: 0, notificationsFailed: false };
   }
 

@@ -1,5 +1,6 @@
 import { authHeader, redirectIfUnauthenticated } from "./eventsApi";
 import type { BookingStatus } from "./bookingStatus";
+import type { UnavailabilityPeriod } from "./unavailabilityApi";
 
 export interface Venue {
   id: number;
@@ -164,7 +165,12 @@ export interface StaffVenueOption {
   name: string;
 }
 
-interface BookingBase {
+/**
+ * E1-5: one booking on the venue schedule. venue_bookings only links a
+ * venue to an event, so the date and times are the event's own. Carries
+ * only what venue staff need to set up — never the event's wider plan.
+ */
+export interface VenueBooking {
   id: number;
   /** Local "YYYY-MM-DD". */
   date: string;
@@ -173,26 +179,14 @@ interface BookingBase {
   endTime: string | null;
   /** venue_bookings.status (venue_booking_status enum). */
   status: BookingStatus;
+  event: {
+    id: number;
+    name: string | null;
+    expectedAttendance: number | null;
+    layouts: string[];
+    facilities: string[];
+  };
 }
-
-/**
- * E1-5: one entry on the venue schedule. An event booking links a venue to
- * an event, so its date and times are the event's own, and it carries only
- * what venue staff need to set up — never the event's wider plan. Anything
- * else occupying the venue (external booking, maintenance) is a hold.
- */
-export type VenueBooking =
-  | (BookingBase & {
-      kind: "event";
-      event: {
-        id: number;
-        name: string | null;
-        expectedAttendance: number | null;
-        layouts: string[];
-        facilities: string[];
-      };
-    })
-  | (BookingBase & { kind: "hold"; reason: string | null });
 
 export async function fetchStaffVenues(): Promise<StaffVenueOption[]> {
   const res = await fetch(`${apiBase}/staff/venues`, { headers: authHeader() });
@@ -209,6 +203,82 @@ export async function fetchVenueBookings(venueId: number, from: string, to: stri
   const body = await res.json();
   if (!res.ok) throw new Error(body.error ?? "Failed to load bookings");
   return (body as { bookings: VenueBooking[] }).bookings;
+}
+
+/** A booking that makes the venue unavailable on the coordinator's availability calendar. */
+export interface AvailabilityBooking {
+  id: number;
+  status: "Approved" | "On Hold";
+  /** Local "YYYY-MM-DD" — the event's own date. */
+  date: string;
+  /** The event's advertised times ("HH:MM"); null when it has none. */
+  startTime: string | null;
+  endTime: string | null;
+  /** The advertised times padded by the venue's setup and turnaround ("24:00" = midnight). */
+  occupiedStart: string;
+  occupiedEnd: string;
+  /** On Hold only: when the hold lapses (ISO timestamp). */
+  holdExpiresAt: string | null;
+  event: { id: number; name: string | null };
+}
+
+/** A free stretch inside the target; eventStart–eventEnd is the event that fits once setup/turnaround are allowed for. */
+export interface FreeSlot {
+  date: string;
+  start: string;
+  end: string;
+  eventStart: string;
+  eventEnd: string;
+}
+
+export interface AvailabilityTarget {
+  fromDate: string;
+  toDate: string;
+  startTime: string | null;
+  endTime: string | null;
+}
+
+export interface VenueAvailability {
+  venue: {
+    id: number;
+    name: string;
+    location: string;
+    capacity: number;
+    setupMinutes: number;
+    turnaroundMinutes: number;
+    /** "HH:MM"; closingTime may be "24:00". */
+    openingTime: string;
+    closingTime: string;
+  };
+  bookings: AvailabilityBooking[];
+  unavailability: UnavailabilityPeriod[];
+  target: AvailabilityTarget | null;
+  freeSlots: FreeSlot[];
+}
+
+/**
+ * One venue's availability between two local dates (inclusive, at most 42
+ * days), plus free slots when a target is given.
+ */
+export async function fetchVenueAvailability(
+  venueId: number,
+  from: string,
+  to: string,
+  target: AvailabilityTarget | null = null,
+  signal?: AbortSignal,
+): Promise<VenueAvailability> {
+  const params = new URLSearchParams({ from, to });
+  if (target) {
+    params.set("targetFrom", target.fromDate);
+    params.set("targetTo", target.toDate);
+    if (target.startTime) params.set("targetStart", target.startTime);
+    if (target.endTime) params.set("targetEnd", target.endTime);
+  }
+  const res = await fetch(`${apiBase}/${venueId}/availability?${params}`, { headers: authHeader(), signal });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new VenueSearchError(body.error ?? "Failed to load venue availability", body.fields ?? {});
+  return body as VenueAvailability;
 }
 
 /**

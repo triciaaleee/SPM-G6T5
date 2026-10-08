@@ -5,6 +5,7 @@ import NewEventRequestView from "../views/NewEventRequestView.vue";
 import LoginView from "../views/LoginView.vue";
 import SignupView from "../views/SignupView.vue";
 import VenueSearchView from "../views/VenueSearchView.vue";
+import VenueAvailabilityView from "../views/VenueAvailabilityView.vue";
 import VenueStaff from "../views/VenueStaff.vue";
 import VenueRequestQueue from "../views/VenueRequestQueue.vue";
 import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
@@ -54,6 +55,11 @@ export const router = createRouter({
       name: "venue-requests",
       component: VenueRequestQueue,
       meta: { requiresAuth: true, roles: ["venue_staff"] },
+      // Venue availability calendar: when a venue could realistically be requested.
+      path: "/venue-availability",
+      name: "venue-availability",
+      component: VenueAvailabilityView,
+      meta: { requiresAuth: true, roles: ["coordinator"] },
     },
     {
       // E1-5: venue staff's schedule — bookings per venue and day, limited
