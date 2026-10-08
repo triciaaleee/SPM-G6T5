@@ -84,7 +84,7 @@ function details(overrides: Record<string, unknown> = {}) {
 }
 
 /** venue_bookings only links a venue to an event; the schedule is the event's own. */
-type Booking = { venue_id: number; event_id: number };
+type Booking = { venue_id: number; event_id: number; status: string; hold_expires_at: string | null };
 type BookedEvent = { id: number; proposedDate: string; startTime: string; endTime: string };
 
 function buildApp(
@@ -304,9 +304,9 @@ describe("GET /api/venues/recommendations/:eventId", () => {
     const { app, bookingsQuery, fetchMock } = buildApp({
       event: details({ equipment: "Projector" }),
       bookings: [
-        { venue_id: 1, event_id: 20 },
-        { venue_id: 3, event_id: 7 },
-        { venue_id: 5, event_id: 21 },
+        { venue_id: 1, event_id: 20, status: "Approved", hold_expires_at: null },
+        { venue_id: 3, event_id: 7, status: "Approved", hold_expires_at: null },
+        { venue_id: 5, event_id: 21, status: "Approved", hold_expires_at: null },
       ],
       bookingEvents: [
         { id: 20, proposedDate: "2026-11-10", startTime: "15:00", endTime: "18:00" }, // overlaps 14:00-16:00
@@ -315,7 +315,7 @@ describe("GET /api/venues/recommendations/:eventId", () => {
     });
     const res = await recommend(app);
 
-    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["Requested", "Approved"]);
+    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["On Hold", "Approved"]);
     // The event's own booking (event 7) isn't looked up: it never counts against it.
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/api\/events\/venue-booking-info\?ids=20,21$/),

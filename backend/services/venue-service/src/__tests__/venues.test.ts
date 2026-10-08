@@ -197,7 +197,7 @@ function bookedEvent(id: number, proposedDate: string, startTime: string, endTim
 function buildApp(
   options: {
     user?: { id: string; role: string };
-    bookings?: { venue_id: number; event_id: number }[];
+    bookings?: { venue_id: number; event_id: number; status: string; hold_expires_at: string | null }[];
     bookedEvents?: ReturnType<typeof bookedEvent>[];
     unavailability?: Record<string, unknown>[];
     buffers?: { id: number; setup_minutes: number; turnaround_minutes: number }[];
@@ -256,8 +256,8 @@ describe("GET /api/venues", () => {
   it("AC2: excludes venues whose booked event overlaps the window, using the event's own schedule", async () => {
     const { app, bookingsQuery, fetchMock } = buildApp({
       bookings: [
-        { venue_id: 1, event_id: 11 },
-        { venue_id: 2, event_id: 12 },
+        { venue_id: 1, event_id: 11, status: "Approved", hold_expires_at: null },
+        { venue_id: 2, event_id: 12, status: "Approved", hold_expires_at: null },
       ],
       bookedEvents: [
         bookedEvent(11, "2026-09-25", "17:00", "22:00"), // overlaps 18:00-21:00
@@ -271,7 +271,7 @@ describe("GET /api/venues", () => {
 
     expect(res.status).toBe(200);
     // A rejected booking request no longer holds the venue.
-    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["Requested", "Approved"]);
+    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["On Hold", "Approved"]);
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/api\/events\/venue-booking-info\?ids=11,12$/),
       { headers: { Authorization: "Bearer test-token" } },
@@ -284,8 +284,8 @@ describe("GET /api/venues", () => {
   it("AC2: without a time window, any booked event that day makes the venue unavailable", async () => {
     const { app } = buildApp({
       bookings: [
-        { venue_id: 1, event_id: 11 },
-        { venue_id: 2, event_id: 12 },
+        { venue_id: 1, event_id: 11, status: "Approved", hold_expires_at: null },
+        { venue_id: 2, event_id: 12, status: "Approved", hold_expires_at: null },
       ],
       bookedEvents: [bookedEvent(11, "2026-09-25", "09:00", "10:00"), bookedEvent(12, "2026-09-26", "09:00", "10:00")],
     });
@@ -297,7 +297,7 @@ describe("GET /api/venues", () => {
   });
 
   it("returns 500 when booked events can't be loaded from events-service", async () => {
-    const { app, fetchMock } = buildApp({ bookings: [{ venue_id: 1, event_id: 11 }] });
+    const { app, fetchMock } = buildApp({ bookings: [{ venue_id: 1, event_id: 11, status: "Approved", hold_expires_at: null }] });
     fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
     const res = await request(app).get("/api/venues").query({ date: "2026-09-25" }).set("Authorization", "Bearer t");
 
@@ -306,7 +306,7 @@ describe("GET /api/venues", () => {
 
   it("doesn't exclude a venue whose booking is on a different date", async () => {
     const { app } = buildApp({
-      bookings: [{ venue_id: 1, event_id: 42 }],
+      bookings: [{ venue_id: 1, event_id: 42, status: "Approved", hold_expires_at: null }],
       bookedEvents: [bookedEvent(42, "2026-09-01", "18:00", "21:00")],
     });
     const res = await request(app)
@@ -315,6 +315,21 @@ describe("GET /api/venues", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.venues.map((v: VenueRow) => v.id)).toContain(1);
+  });
+
+  it("doesn't exclude a venue whose On Hold booking has lapsed (AGENTS.md §3a)", async () => {
+    const { app } = buildApp({
+      bookings: [
+        { venue_id: 1, event_id: 11, status: "On Hold", hold_expires_at: "2000-01-01T00:00:00Z" },
+        { venue_id: 2, event_id: 12, status: "On Hold", hold_expires_at: "2999-01-01T00:00:00Z" },
+      ],
+      bookedEvents: [bookedEvent(11, "2026-09-25", "18:00", "21:00"), bookedEvent(12, "2026-09-25", "18:00", "21:00")],
+    });
+    const res = await request(app).get("/api/venues").query({ date: "2026-09-25" }).set("Authorization", "Bearer t");
+
+    const ids = res.body.venues.map((v: VenueRow) => v.id);
+    expect(ids).toContain(1);
+    expect(ids).not.toContain(2);
   });
 
   it("E4-3 AC3: excludes a venue blocked out for the requested window", async () => {

@@ -29,8 +29,23 @@ export const BOOKING_STATUS = {
 } as const satisfies Record<string, BookingStatus>;
 
 /**
- * Bookings that make a venue unavailable. A pending request is a tentative
- * hold, so two events can't both be requested into the same slot; a
- * rejected one frees the slot.
+ * Bookings that make a venue unavailable (AGENTS.md §3a): an Approved
+ * booking, and an On Hold one until its hold_expires_at passes. A
+ * Requested booking doesn't block — several coordinators may request the
+ * same slot — and Rejected, Expired and Withdrawn ones free it.
  */
-export const UNAVAILABLE_BOOKING_STATUSES: readonly BookingStatus[] = ["Requested", "Approved"];
+export const UNAVAILABLE_BOOKING_STATUSES: readonly BookingStatus[] = [BOOKING_STATUS.onHold, BOOKING_STATUS.approved];
+
+/**
+ * Whether a booking row blocks its venue right now. A stale On Hold row
+ * (its hold already past) is treated as Expired, so it never blocks even
+ * before the expiry sweep has rewritten its status.
+ */
+export function isBlockingBooking(
+  booking: { status: string; hold_expires_at?: string | null },
+  now: Date = new Date(),
+): boolean {
+  if (booking.status === BOOKING_STATUS.approved) return true;
+  if (booking.status !== BOOKING_STATUS.onHold) return false;
+  return !booking.hold_expires_at || Date.parse(booking.hold_expires_at) > now.getTime();
+}

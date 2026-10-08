@@ -5,6 +5,7 @@ import NewEventRequestView from "../views/NewEventRequestView.vue";
 import LoginView from "../views/LoginView.vue";
 import SignupView from "../views/SignupView.vue";
 import VenueSearchView from "../views/VenueSearchView.vue";
+import VenueAvailabilityView from "../views/VenueAvailabilityView.vue";
 import VenueStaff from "../views/VenueStaff.vue";
 import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
@@ -44,6 +45,13 @@ export const router = createRouter({
       path: "/venues",
       name: "venue-search",
       component: VenueSearchView,
+      meta: { requiresAuth: true, roles: ["coordinator"] },
+    },
+    {
+      // Venue availability calendar: when a venue could realistically be requested.
+      path: "/venue-availability",
+      name: "venue-availability",
+      component: VenueAvailabilityView,
       meta: { requiresAuth: true, roles: ["coordinator"] },
     },
     {
