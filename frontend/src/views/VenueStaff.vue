@@ -293,9 +293,9 @@ onMounted(async () => {
     <div class="page-header page-header--with-action">
       <div>
         <h1 class="h2">Venue schedule</h1>
-        <p class="subheading">Select a date and venue to see bookings and requests for that day</p>
-      <!-- E4-10: decisions are made in the queue, which orders by event date. -->
-      <RouterLink :to="{ name: 'venue-requests' }" class="queue-link">Go to booking requests</RouterLink>
+        <p class="subheading">Select a date to see what needs to be set up that day.</p>
+        <!-- E4-10: decisions are made in the queue, which orders by event date. -->
+        <RouterLink :to="{ name: 'venue-requests' }" class="queue-link">Go to booking requests</RouterLink>
       </div>
       <!-- E4-3: the page's one primary action. -->
       <button v-if="venueId !== null" type="button" class="btn-primary" @click="openBlockOut()">
@@ -370,11 +370,13 @@ onMounted(async () => {
         </div>
 
         <ul v-else class="booking-list" :class="{ 'is-stale': loadingBookings }">
-          <li v-for="booking in dayBookings" :key="booking.id" class="booking-card">
-            <span v-if="booking.status === 'Replacement Required'" class="replacement-badge">
-              Replacement Required
-            </span>
-            <p class="card-title">{{ booking.event.name || "Untitled event" }}</p>
+          <li v-for="booking in dayBookings" :key="booking.id" class="booking-card"
+            :class="{ 'booking-card--hold': booking.kind === 'hold' }">
+            <template v-if="booking.kind === 'event'">
+              <span v-if="booking.status === 'Replacement Required'" class="replacement-badge">
+                Replacement Required
+              </span>
+              <p class="card-title">{{ booking.event.name || "Untitled event" }}</p>
               <p class="body-small muted booking-card__date">{{ formatLongDate(booking.date) }}</p>
 
               <dl class="details">
@@ -401,6 +403,22 @@ onMounted(async () => {
                   <dd v-else class="body-small muted">None specified</dd>
                 </div>
             </dl>
+            </template>
+
+            <!-- E4-14: anything else occupying the venue — an external
+                 booking or maintenance — with its reason in place of an
+                 event's details. -->
+            <template v-else>
+              <span class="hold-badge">Venue unavailable</span>
+              <p class="card-title">{{ booking.reason || "Venue hold" }}</p>
+              <p class="body-small muted booking-card__date">{{ formatLongDate(booking.date) }}</p>
+              <dl class="details">
+                <div class="detail">
+                  <dt class="detail__label">Start – end time</dt>
+                  <dd class="detail__value">{{ formatTimeRange(booking.startTime, booking.endTime) }}</dd>
+                </div>
+              </dl>
+            </template>
           </li>
         </ul>
       </section>
@@ -901,6 +919,23 @@ onMounted(async () => {
 }
 
 /* Style.md 3.5: Replacement Required badge. */
+.booking-card--hold {
+  background: var(--color-grey-50);
+}
+
+.hold-badge {
+  display: inline-block;
+  margin-bottom: var(--spacing-8);
+  padding: var(--spacing-2) var(--spacing-8);
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-full);
+  background: var(--color-grey-75);
+  color: var(--color-grey-700);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+}
+
 .replacement-badge {
   display: inline-block;
   margin-bottom: var(--spacing-8);

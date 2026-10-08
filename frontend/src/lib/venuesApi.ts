@@ -164,28 +164,35 @@ export interface StaffVenueOption {
   name: string;
 }
 
-/**
- * E1-5: one booking on the venue schedule. venue_bookings only links a
- * venue to an event, so the date and times are the event's own. Carries
- * only what venue staff need to set up — never the event's wider plan.
- */
-export interface VenueBooking {
+interface BookingBase {
   id: number;
   /** Local "YYYY-MM-DD". */
   date: string;
-  /** "HH:MM". */
+  /** "HH:MM"; null when the event never recorded one. */
   startTime: string | null;
   endTime: string | null;
   /** venue_bookings.status (venue_booking_status enum). */
   status: BookingStatus;
-  event: {
-    id: number;
-    name: string | null;
-    expectedAttendance: number | null;
-    layouts: string[];
-    facilities: string[];
-  };
 }
+
+/**
+ * E1-5: one entry on the venue schedule. An event booking links a venue to
+ * an event, so its date and times are the event's own, and it carries only
+ * what venue staff need to set up — never the event's wider plan. Anything
+ * else occupying the venue (external booking, maintenance) is a hold.
+ */
+export type VenueBooking =
+  | (BookingBase & {
+      kind: "event";
+      event: {
+        id: number;
+        name: string | null;
+        expectedAttendance: number | null;
+        layouts: string[];
+        facilities: string[];
+      };
+    })
+  | (BookingBase & { kind: "hold"; reason: string | null });
 
 export async function fetchStaffVenues(): Promise<StaffVenueOption[]> {
   const res = await fetch(`${apiBase}/staff/venues`, { headers: authHeader() });
