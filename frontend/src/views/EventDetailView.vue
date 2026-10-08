@@ -21,6 +21,7 @@ import { statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
 import EventStatusTracker from "../components/EventStatusTracker.vue";
 import ClarificationPanel from "../components/ClarificationPanel.vue";
 import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
+import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel.vue";
 
 
 interface SubmittedEventDetails {
@@ -720,6 +721,12 @@ onMounted(async () => {
   <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
     Find venues
   </RouterLink>
+</div>
+
+<!-- E5-1: equipment requirements, recorded by the assigned coordinator while Planning -->
+<div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card">
+  <EquipmentRequestPanel :event-id="event.id" :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null"
+    :can-submit="canCoordinatorEdit" />
 </div>
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"

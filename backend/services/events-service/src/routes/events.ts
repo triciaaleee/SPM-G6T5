@@ -297,6 +297,12 @@ eventsRouter.get("/", async (req: AuthedRequest, res) => {
  * requirement fields are included because venue-service reads layout and
  * facility needs out of them; it drops the text before replying to the
  * browser.
+ *
+ * E5-1: equipment-service reuses this same batch lookup for Technical
+ * Support's equipment request list — it needs exactly the same shape
+ * (event name/date/time, plus the Organiser's original equipment note as
+ * AC2's reference text), so technical_support is included below rather
+ * than standing up a near-duplicate endpoint.
  */
 
 /* Zo note: built a new endpoint instead of just using the existing one but only extracting the needed info for venue because of security purposes. This is more secure compared to using the existing one to fetch and filter.
@@ -315,7 +321,7 @@ const VENUE_BOOKING_INFO_FIELDS = [
 
 const MAX_VENUE_BOOKING_INFO_IDS = 100;
 
-const VENUE_BOOKING_INFO_ROLES = new Set(["venue_staff", "coordinator"]);
+const VENUE_BOOKING_INFO_ROLES = new Set(["venue_staff", "coordinator", "technical_support"]);
 
 /**
  * E1-5: booking-relevant info for the events booked at a venue, called by

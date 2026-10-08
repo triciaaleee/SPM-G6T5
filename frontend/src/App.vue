@@ -45,8 +45,8 @@ async function handleLogout() {
       </RouterLink>
     </nav>
     <div class="account">
-      <!-- E7-1: coordinators are the only notification recipients so far (E4-3). -->
-      <NotificationBell v-if="user.role === 'coordinator'" :key="user.id" />
+      <!-- E7-1: coordinators (E4-3) and, since E5-1, technical support are the notification recipients so far. -->
+      <NotificationBell v-if="user.role === 'coordinator' || user.role === 'technical_support'" :key="user.id" />
       <span class="account-name">{{ user.name }}</span>
       <span class="role-pill">{{ formatRole(user.role) }}</span>
       <button type="button" class="btn-logout" @click="handleLogout">Log out</button>

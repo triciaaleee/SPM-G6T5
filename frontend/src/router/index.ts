@@ -8,6 +8,7 @@ import VenueSearchView from "../views/VenueSearchView.vue";
 import VenueAvailabilityView from "../views/VenueAvailabilityView.vue";
 import VenueStaff from "../views/VenueStaff.vue";
 import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
+import TechnicalSupportView from "../views/TechnicalSupportView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
 
 export const router = createRouter({
@@ -62,6 +63,13 @@ export const router = createRouter({
       component: VenueStaff,
       meta: { requiresAuth: true, roles: ["venue_staff"] },
     },
+    {
+      // E5-1 AC1: Technical Support's view of every equipment request.
+      path: "/equipment-requests",
+      name: "equipment-requests",
+      component: TechnicalSupportView,
+      meta: { requiresAuth: true, roles: ["technical_support"] },
+    },
   ],
 });
 
@@ -98,6 +106,12 @@ router.beforeEach((to) => {
   // would only ever be empty for them — send them to their schedule.
   if (authed && to.name === "events-list" && getStoredUser()?.role === "venue_staff") {
     return { name: "venue-schedule" };
+  }
+
+  // E5-1: Technical Support have no events of their own either — send them
+  // to their equipment request queue instead of an empty events list.
+  if (authed && to.name === "events-list" && getStoredUser()?.role === "technical_support") {
+    return { name: "equipment-requests" };
   }
 
   // E3-2: coordinators have their own grouped workload view — redirect them
