@@ -1742,7 +1742,7 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
   }
 
   it("returns only the booking-relevant fields to venue staff", async () => {
-    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const supabase = buildVenueInfoSupabase([{ id: 3, status: "Planning", submitted_details: validPayload }]);
     const app = buildApp(supabase, venueStaff);
 
     const res = await request(app).get("/api/events/venue-booking-info?ids=3");
@@ -1751,6 +1751,12 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(res.body.events).toEqual([
       {
         id: 3,
+        // E4-10 AC2: venue-service may only hold or approve a booking while
+        // the event is in "Planning", and venue staff cannot call
+        // GET /:id (owner-or-coordinator only), so the lifecycle status
+        // travels on this narrow view. It never reaches the browser —
+        // venue-service maps its responses field by field and drops it.
+        status: "Planning",
         name: validPayload.name,
         proposedDate: validPayload.proposedDate,
         startTime: validPayload.startTime,
@@ -1766,8 +1772,7 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(event).not.toHaveProperty("purpose");
     expect(event).not.toHaveProperty("description");
     expect(event).not.toHaveProperty("coordinator");
-    expect(event).not.toHaveProperty("status");
-    expect(supabase.select).toHaveBeenCalledWith("id, submitted_details");
+    expect(supabase.select).toHaveBeenCalledWith("id, status, submitted_details");
   });
 
   it("never returns drafts and de-duplicates the ids", async () => {

@@ -1,4 +1,5 @@
 import { authHeader, redirectIfUnauthenticated } from "./eventsApi";
+import type { BookingStatus } from "./bookingStatus";
 
 export interface Venue {
   id: number;
@@ -175,8 +176,8 @@ export interface VenueBooking {
   /** "HH:MM". */
   startTime: string | null;
   endTime: string | null;
-  /** venue_bookings.status (venue_status enum). */
-  status: "Requested" | "Approved" | "Rejected";
+  /** venue_bookings.status (venue_booking_status enum). */
+  status: BookingStatus;
   event: {
     id: number;
     name: string | null;
@@ -214,4 +215,173 @@ export function timeWindowError(filters: VenueFilters): string | null {
   if (!startTime || !endTime) return "Give both a start and an end time, or leave both empty for the whole day.";
   if (endTime <= startTime) return "End time must be after start time.";
   return null;
+}
+
+/** E4-8 AC5: one of an event's venue requests, as shown on the event page. */
+export interface EventVenueBooking {
+  id: number;
+  status: BookingStatus;
+  /** Set only while `On Hold`: when the hold lapses (E4-12). */
+  holdExpiresAt: string | null;
+  /** E4-10 AC4: why Venue Staff refused it, or the automatic reason. */
+  decisionReason: string | null;
+  createdAt: string;
+  venue: { id: number; name: string; location: string } | null;
+}
+
+/**
+ * E4-8 AC4/AC6: why a request was refused — the booking already holding
+ * the venue, the window it occupies and the window that was asked for,
+ * both including the venue's setup and turnaround time.
+ */
+export interface BookingConflict {
+  bookingId: number;
+  status: BookingStatus;
+  window: string;
+  requestedWindow: string;
+  setupMinutes: number;
+  turnaroundMinutes: number;
+}
+
+export class BookingConflictError extends Error {
+  conflict: BookingConflict | null;
+  constructor(message: string, conflict: BookingConflict | null = null) {
+    super(message);
+    this.conflict = conflict;
+  }
+}
+
+/** A booking request whose date/attendance the server rejected, per field. */
+export class BookingRequestError extends Error {
+  fields: Record<string, string>;
+  constructor(message: string, fields: Record<string, string> = {}) {
+    super(message);
+    this.fields = fields;
+  }
+}
+
+/**
+ * E4-8: request `venueId` for `eventId`. The event supplies the date,
+ * times, attendance and requirements, so nothing else is sent. A 409 means
+ * the venue is already held or approved for an overlapping period, and
+ * carries that window.
+ */
+export async function submitVenueBooking(eventId: number, venueId: number): Promise<EventVenueBooking> {
+  const res = await fetch(`${apiBase}/bookings`, {
+    method: "POST",
+    headers: { ...authHeader(), "Content-Type": "application/json" },
+    body: JSON.stringify({ eventId, venueId }),
+  });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (res.status === 409) throw new BookingConflictError(body.error ?? "Venue is not available", body.conflict ?? null);
+  if (!res.ok) throw new BookingRequestError(body.error ?? "Failed to request this venue", body.fields ?? {});
+  return (body as { booking: EventVenueBooking }).booking;
+}
+
+/**
+ * E4-8 AC5: every venue request made for one event, oldest first. Readable
+ * by the owning organiser as well as a coordinator — E3-1 AC3 shows the
+ * organiser whether a venue is still outstanding.
+ */
+export async function fetchEventVenueBookings(eventId: number): Promise<EventVenueBooking[]> {
+  const res = await fetch(`${apiBase}/events/${eventId}/bookings`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? "Failed to load this event's venue requests");
+  return (body as { bookings: EventVenueBooking[] }).bookings;
+}
+
+/** E4-10 AC6: one booking awaiting this staff member's decision. */
+export interface PendingVenueRequest {
+  id: number;
+  status: BookingStatus;
+  holdExpiresAt: string | null;
+  venue: {
+    id: number;
+    name: string;
+    location: string;
+    setupMinutes: number;
+    turnaroundMinutes: number;
+  };
+  event: {
+    id: number;
+    name: string | null;
+    /** Local "YYYY-MM-DD". */
+    date: string | null;
+    startTime: string | null;
+    endTime: string | null;
+    expectedAttendance: number | null;
+    layouts: string[];
+    facilities: string[];
+  };
+}
+
+/** The booking as it stands after Venue Staff decided on it. */
+export interface DecidedBooking {
+  id: number;
+  status: BookingStatus;
+  holdExpiresAt: string | null;
+  decisionReason: string | null;
+  decidedAt: string | null;
+  venue: { id: number; name: string; location: string };
+}
+
+export interface BookingDecisionResult {
+  booking: DecidedBooking;
+  /** Overlapping requests this decision knocked out (§3a, E4-11 AC4). */
+  autoRejectedBookingIds: number[];
+}
+
+/**
+ * E4-10 AC6: every request at the staff member's venues still waiting on
+ * a decision, soonest event first. Holds that lapsed are expired
+ * server-side and never appear here.
+ */
+export async function fetchPendingRequests(): Promise<PendingVenueRequest[]> {
+  const res = await fetch(`${apiBase}/staff/requests`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? "Failed to load booking requests");
+  return (body as { requests: PendingVenueRequest[] }).requests;
+}
+
+/**
+ * Hold, approve or reject one booking. A 409 is a refusal with its reason
+ * (AC2) — the venue is taken, the event moved on, or the hold lapsed — and
+ * carries the clashing window when there is one, so it reuses E4-8's
+ * BookingConflictError.
+ */
+async function decideBooking(
+  bookingId: number,
+  action: "hold" | "approve" | "reject",
+  body?: Record<string, unknown>,
+): Promise<BookingDecisionResult> {
+  const res = await fetch(`${apiBase}/staff/bookings/${bookingId}/${action}`, {
+    method: "POST",
+    headers: { ...authHeader(), "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  await redirectIfUnauthenticated(res);
+  const payload = await res.json();
+  if (res.status === 409) {
+    throw new BookingConflictError(payload.error ?? "This action is no longer possible", payload.conflict ?? null);
+  }
+  if (!res.ok) throw new BookingRequestError(payload.error ?? "Failed to update the booking", payload.fields ?? {});
+  return payload as BookingDecisionResult;
+}
+
+/** AC1: hold the venue tentatively; the server sets the expiry. */
+export function holdBooking(bookingId: number): Promise<BookingDecisionResult> {
+  return decideBooking(bookingId, "hold");
+}
+
+/** AC3: confirm the booking. */
+export function approveBooking(bookingId: number): Promise<BookingDecisionResult> {
+  return decideBooking(bookingId, "approve");
+}
+
+/** AC4: refuse it — a reason is required and the coordinator is told it. */
+export function rejectBooking(bookingId: number, reason: string): Promise<BookingDecisionResult> {
+  return decideBooking(bookingId, "reject", { reason });
 }

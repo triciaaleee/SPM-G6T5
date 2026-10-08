@@ -58,8 +58,8 @@ function buildApp(
 ) {
   const bookingsQuery = { eq: vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null }) };
 
-  // venues is read two ways: the picker list (.eq("active").order("name"))
-  // and the single-venue lookup (.eq("id").eq("active").maybeSingle()).
+  // venues is read two ways: the picker list (.eq("status").order("name"))
+  // and the single-venue lookup (.eq("id").eq("status").maybeSingle()).
   const venuesQuery = {
     eq: vi.fn(),
     order: vi.fn().mockResolvedValue({ data: options.venueList ?? [], error: null }),
@@ -117,7 +117,7 @@ describe("venue staff access", () => {
 });
 
 describe("GET /api/venues/staff/venues", () => {
-  it("lists active venues for the picker", async () => {
+  it("lists available venues for the picker", async () => {
     const venueList = [
       { id: 6, name: "Great Lawn" },
       { id: 2, name: "Lecture Theatre 1" },

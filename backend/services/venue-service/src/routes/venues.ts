@@ -2,8 +2,9 @@ import { Router } from "express";
 import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
-import { UNAVAILABLE_BOOKING_STATUSES } from "../lib/bookingStatus.js";
-import { fetchEvent, fetchVenueBookingInfo, type VenueBookingInfo } from "../lib/eventsClient.js";
+import { UNAVAILABLE_BOOKING_STATUSES, blocksVenue, type BookingStatus } from "../lib/bookingStatus.js";
+import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "../lib/bookingConflicts.js";
+import { fetchEvent, fetchVenueBookingInfo } from "../lib/eventsClient.js";
 import { extractRequirements, scheduleQuery, withFeatures } from "../lib/venueRecommendation.js";
 import {
   buildFilterOptions,
@@ -32,36 +33,73 @@ function requireCoordinator(req: AuthedRequest, res: Response, next: NextFunctio
 
 venuesRouter.use(requireCoordinator);
 
-const VENUE_COLUMNS = "id, name, location, description, capacity, accessibility, layouts, facilities";
+const VENUE_COLUMNS =
+  "id, name, location, description, capacity, accessibility, layouts, facilities, setup_minutes, turnaround_minutes";
 
-async function loadActiveVenues(supabase: NonNullable<AuthedRequest["supabase"]>) {
-  return supabase.from("venues").select(VENUE_COLUMNS).eq("active", true);
+async function loadAvailableVenues(supabase: NonNullable<AuthedRequest["supabase"]>) {
+  return supabase.from("venues").select(VENUE_COLUMNS).eq("status", "Available");
 }
 
+/** A venue_bookings row, as far as availability is concerned. */
+interface BlockingBookingRow {
+  id: number;
+  venue_id: number;
+  event_id: number;
+  status: BookingStatus;
+  hold_expires_at: string | null;
+}
+
+const BOOKING_AVAILABILITY_COLUMNS = "id, venue_id, event_id, status, hold_expires_at";
+
 /**
- * Does a booked event occupy `date` during `startTime`–`endTime`? Two
- * windows overlap when each starts before the other ends. Without a
- * window, any booking that day counts; an event with no times recorded
- * occupies its whole day. Times are "HH:MM", so they compare as strings.
+ * The bookings that currently block a venue, paired with the window each
+ * one occupies there. Only `On Hold` (while unexpired) and `Approved`
+ * bookings block — see lib/bookingStatus.ts — and each window is padded by
+ * its own venue's setup/turnaround times. A booking whose event
+ * events-service doesn't return (deleted, or a draft) has no schedule to
+ * clash with, and one held `forEventId` doesn't count either: that venue is
+ * already this event's own. Resolves to null when either lookup fails.
  */
-function occupies(event: VenueBookingInfo, date: string, startTime?: string, endTime?: string): boolean {
-  if (event.proposedDate !== date) return false;
-  if (!startTime || !endTime || !event.startTime || !event.endTime) return true;
-  return event.startTime < endTime && event.endTime > startTime;
+async function loadBlockingWindows(
+  supabase: NonNullable<AuthedRequest["supabase"]>,
+  venues: VenueRow[],
+  authorization: string,
+  forEventId?: number,
+): Promise<{ booking: BlockingBookingRow; window: OccupiedWindow }[] | null> {
+  const { data, error } = await supabase
+    .from("venue_bookings")
+    .select(BOOKING_AVAILABILITY_COLUMNS)
+    .in("status", UNAVAILABLE_BOOKING_STATUSES);
+  if (error) return null;
+
+  const now = new Date();
+  const bookings = ((data ?? []) as BlockingBookingRow[]).filter(
+    (booking) => blocksVenue(booking, now) && booking.event_id !== forEventId,
+  );
+
+  const infoResult = await fetchVenueBookingInfo([...new Set(bookings.map((b) => b.event_id))], authorization);
+  if (infoResult.status === "error") return null;
+  const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
+  const venuesById = new Map(venues.map((venue) => [venue.id, venue]));
+
+  return bookings.flatMap((booking) => {
+    const event = eventsById.get(booking.event_id);
+    const venue = venuesById.get(booking.venue_id);
+    if (!event || !venue) return [];
+    const window = occupiedWindow(event, venue);
+    return window ? [{ booking, window }] : [];
+  });
 }
 
 /**
- * AC2: venues with a booking overlapping the requested window. A booking
- * only links a venue to an event, so its date and times are the booked
- * event's own, read from events-service. Only requested or approved
- * bookings count — a rejected one no longer holds the venue — and a
- * booking whose event events-service doesn't return (deleted, or a draft)
- * has no schedule to clash with. A booking held for `forEventId` doesn't
- * count either: that venue is already this event's own. Resolves to null
- * when either lookup fails.
+ * AC2: venues with a blocking booking overlapping the requested window.
+ * The requested window is padded by the same venue's setup/turnaround
+ * times as the booking it is compared against, so the two are measured the
+ * same way. Resolves to null when a lookup fails.
  */
 async function findUnavailableVenueIds(
   supabase: NonNullable<AuthedRequest["supabase"]>,
+  venues: VenueRow[],
   criteria: VenueSearchCriteria,
   authorization: string,
   forEventId?: number,
@@ -69,31 +107,30 @@ async function findUnavailableVenueIds(
   const unavailableVenueIds = new Set<number>();
   if (!criteria.date) return unavailableVenueIds;
 
-  const { data, error } = await supabase
-    .from("venue_bookings")
-    .select("venue_id, event_id")
-    .in("status", UNAVAILABLE_BOOKING_STATUSES);
-  if (error) return null;
+  const blocking = await loadBlockingWindows(supabase, venues, authorization, forEventId);
+  if (!blocking) return null;
 
-  const bookings = ((data ?? []) as { venue_id: number; event_id: number }[]).filter(
-    (booking) => forEventId === undefined || booking.event_id !== forEventId,
-  );
-  const infoResult = await fetchVenueBookingInfo([...new Set(bookings.map((b) => b.event_id))], authorization);
-  if (infoResult.status === "error") return null;
-  const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
+  const venuesById = new Map(venues.map((venue) => [venue.id, venue]));
+  const wanted = new Map<number, OccupiedWindow>();
+  for (const venue of venues) {
+    const window = occupiedWindow(
+      { proposedDate: criteria.date, startTime: criteria.startTime, endTime: criteria.endTime },
+      venue,
+    );
+    if (window) wanted.set(venue.id, window);
+  }
 
-  for (const booking of bookings) {
-    const event = eventsById.get(booking.event_id);
-    if (event && occupies(event, criteria.date, criteria.startTime, criteria.endTime)) {
-      unavailableVenueIds.add(booking.venue_id);
-    }
+  for (const { booking, window } of blocking) {
+    if (!venuesById.has(booking.venue_id)) continue;
+    const requested = wanted.get(booking.venue_id);
+    if (requested && overlaps(requested, window)) unavailableVenueIds.add(booking.venue_id);
   }
   return unavailableVenueIds;
 }
 
 /** Option lists for the filter bar, derived from the venues table. */
 venuesRouter.get("/filters", async (req: AuthedRequest, res) => {
-  const { data, error } = await loadActiveVenues(req.supabase!);
+  const { data, error } = await loadAvailableVenues(req.supabase!);
 
   if (error) {
     res.status(500).json({ error: "Failed to load venue filters" });
@@ -118,19 +155,20 @@ venuesRouter.get("/", async (req: AuthedRequest, res) => {
   }
   const { criteria } = parsed;
 
-  const { data: venues, error: venuesError } = await loadActiveVenues(supabase);
+  const { data: venues, error: venuesError } = await loadAvailableVenues(supabase);
   if (venuesError) {
     res.status(500).json({ error: "Failed to search venues" });
     return;
   }
+  const venueRows = (venues ?? []) as VenueRow[];
 
-  const unavailableVenueIds = await findUnavailableVenueIds(supabase, criteria, req.headers.authorization!);
+  const unavailableVenueIds = await findUnavailableVenueIds(supabase, venueRows, criteria, req.headers.authorization!);
   if (!unavailableVenueIds) {
     res.status(500).json({ error: "Failed to check venue availability" });
     return;
   }
 
-  const result = searchVenues((venues ?? []) as VenueRow[], criteria, unavailableVenueIds);
+  const result = searchVenues(venueRows, criteria, unavailableVenueIds);
   res.json(result);
 });
 
@@ -163,7 +201,7 @@ venuesRouter.get("/recommendations/:eventId", async (req: AuthedRequest, res) =>
     return;
   }
 
-  const { data: venues, error: venuesError } = await loadActiveVenues(supabase);
+  const { data: venues, error: venuesError } = await loadAvailableVenues(supabase);
   if (venuesError) {
     res.status(500).json({ error: "Failed to load venues" });
     return;
@@ -178,7 +216,7 @@ venuesRouter.get("/recommendations/:eventId", async (req: AuthedRequest, res) =>
   }
   const criteria = withFeatures(parsed.criteria, requirements);
 
-  const unavailableVenueIds = await findUnavailableVenueIds(supabase, criteria, req.headers.authorization!, eventId);
+  const unavailableVenueIds = await findUnavailableVenueIds(supabase, venueRows, criteria, req.headers.authorization!, eventId);
   if (!unavailableVenueIds) {
     res.status(500).json({ error: "Failed to check venue availability" });
     return;
@@ -188,5 +226,164 @@ venuesRouter.get("/recommendations/:eventId", async (req: AuthedRequest, res) =>
   res.json({
     requirements,
     venues: suitable,
+  });
+});
+
+/** Statuses that mean this event still holds (or is still asking for) the venue. */
+const ACTIVE_BOOKING_STATUSES: readonly BookingStatus[] = ["Requested", "On Hold", "Approved"];
+
+/**
+ * The event's own schedule as a window at `venue`, or the reason it can't
+ * be worked out. The date, times and attendance all come from the event
+ * (events.submitted_details) — a booking never stores its own timing (§3a),
+ * so a request carries nothing but the event and the venue.
+ */
+function eventWindow(
+  event: { submitted_details: Record<string, unknown> },
+  venue: VenueRow,
+  venues: VenueRow[],
+): { ok: true; window: OccupiedWindow } | { ok: false; fields: Record<string, string> } {
+  const requirements = extractRequirements(event.submitted_details ?? {}, venues);
+  const parsed = parseVenueSearch(scheduleQuery(requirements));
+  if (!parsed.valid) return { ok: false, fields: parsed.fields };
+
+  const window = occupiedWindow(
+    {
+      proposedDate: parsed.criteria.date,
+      startTime: parsed.criteria.startTime,
+      endTime: parsed.criteria.endTime,
+    },
+    venue,
+  );
+  if (!window) return { ok: false, fields: { date: "This event has no date to book a venue for." } };
+  return { ok: true, window };
+}
+
+/**
+ * E4-8: request a venue for one event. The booking is created as
+ * `Requested`, which does not yet hold the venue — Venue Staff decide
+ * (E4-10). An event may have any number of venue bookings (§3a change 3)
+ * and each is checked on its own, so requesting a second venue never
+ * touches the first.
+ *
+ * A request that overlaps a booking already blocking the venue is refused
+ * here rather than created and auto-rejected later (AC4), and the clashing
+ * occupied window — setup and turnaround included — comes back with it so
+ * the coordinator can pick another time or venue (AC6).
+ *
+ * The check and the insert are two statements, not one transaction: two
+ * simultaneous submissions can both succeed, which is harmless because
+ * `Requested` blocks nothing and the first booking to reach `On Hold` or
+ * `Approved` auto-rejects the rest (§3a, E4-10/E4-11).
+ */
+venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
+  const supabase = req.supabase!;
+  const body = (req.body ?? {}) as { eventId?: unknown; venueId?: unknown };
+
+  const fields: Record<string, string> = {};
+  const eventId = Number(body.eventId);
+  const venueId = Number(body.venueId);
+  if (!Number.isInteger(eventId) || eventId < 1) fields.eventId = "Choose an event to request a venue for.";
+  if (!Number.isInteger(venueId) || venueId < 1) fields.venueId = "Choose a venue to request.";
+  if (Object.keys(fields).length > 0) {
+    res.status(400).json({ error: "Invalid booking request", fields });
+    return;
+  }
+
+  // events-service is asked with the coordinator's own token, so its access
+  // rules decide whether this event is theirs to plan.
+  const eventResult = await fetchEvent(eventId, req.headers.authorization!);
+  if (eventResult.status === "not_found") {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+  if (eventResult.status === "error") {
+    res.status(502).json({ error: "Failed to load the event" });
+    return;
+  }
+  // §3a: — → `Requested` happens while venue arrangements are being made.
+  if (eventResult.event.status !== "Planning") {
+    res.status(409).json({ error: "A venue can only be requested while the event is in Planning" });
+    return;
+  }
+
+  const { data: venues, error: venuesError } = await loadAvailableVenues(supabase);
+  if (venuesError) {
+    res.status(500).json({ error: "Failed to load venues" });
+    return;
+  }
+  const venueRows = (venues ?? []) as VenueRow[];
+  const venue = venueRows.find((row) => row.id === venueId);
+  if (!venue) {
+    res.status(404).json({ error: "Venue not found" });
+    return;
+  }
+
+  const requested = eventWindow(eventResult.event, venue, venueRows);
+  if (!requested.ok) {
+    res.status(422).json({ error: "This event's date or time is invalid", fields: requested.fields });
+    return;
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from("venue_bookings")
+    .select("id, status")
+    .eq("event_id", eventId)
+    .eq("venue_id", venueId)
+    .in("status", ACTIVE_BOOKING_STATUSES);
+  if (existingError) {
+    res.status(500).json({ error: "Failed to check existing bookings" });
+    return;
+  }
+  const alreadyRequested = ((existing ?? []) as { id: number; status: BookingStatus }[])[0];
+  if (alreadyRequested) {
+    res.status(409).json({
+      error: `This event already has a ${alreadyRequested.status} booking for this venue`,
+      booking: { id: alreadyRequested.id, status: alreadyRequested.status },
+    });
+    return;
+  }
+
+  const blocking = await loadBlockingWindows(supabase, venueRows, req.headers.authorization!, eventId);
+  if (!blocking) {
+    res.status(500).json({ error: "Failed to check venue availability" });
+    return;
+  }
+  const clash = blocking.find(
+    ({ booking, window }) => booking.venue_id === venueId && overlaps(requested.window, window),
+  );
+  if (clash) {
+    res.status(409).json({
+      error: "Venue is not available for this period",
+      conflict: {
+        bookingId: clash.booking.id,
+        status: clash.booking.status,
+        window: formatWindow(clash.window),
+        requestedWindow: formatWindow(requested.window),
+        setupMinutes: venue.setup_minutes ?? 0,
+        turnaroundMinutes: venue.turnaround_minutes ?? 0,
+      },
+    });
+    return;
+  }
+
+  // AC3: stated outright rather than left to the column default.
+  const { data: booking, error: insertError } = await supabase
+    .from("venue_bookings")
+    .insert({ venue_id: venueId, event_id: eventId, status: "Requested" })
+    .select("id, status, created_at")
+    .single();
+  if (insertError || !booking) {
+    res.status(500).json({ error: "Failed to submit the booking request" });
+    return;
+  }
+
+  res.status(201).json({
+    booking: {
+      id: (booking as { id: number }).id,
+      status: (booking as { status: BookingStatus }).status,
+      createdAt: (booking as { created_at: string }).created_at,
+      venue: { id: venue.id, name: venue.name, location: venue.location },
+    },
   });
 });

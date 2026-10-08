@@ -197,12 +197,20 @@ function bookedEvent(id: number, proposedDate: string, startTime: string, endTim
 function buildApp(
   options: {
     user?: { id: string; role: string };
-    bookings?: { venue_id: number; event_id: number }[];
+    bookings?: { venue_id: number; event_id: number; status?: string; hold_expires_at?: string | null }[];
     bookedEvents?: ReturnType<typeof bookedEvent>[];
   } = {},
 ) {
-  // venue_bookings only links a venue to an event; its schedule comes from events-service.
-  const bookingsIn = vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null });
+  // venue_bookings only links a venue to an event; its schedule comes from
+  // events-service. Only "On Hold" (unexpired) and "Approved" bookings block a
+  // venue, so a fixture that means to block defaults to "Approved".
+  const bookingRows = (options.bookings ?? []).map((booking) => ({
+    id: booking.venue_id * 100 + booking.event_id,
+    status: "Approved",
+    hold_expires_at: null,
+    ...booking,
+  }));
+  const bookingsIn = vi.fn().mockResolvedValue({ data: bookingRows, error: null });
   const bookingsQuery = { in: bookingsIn };
 
   const fetchMock = vi.fn().mockResolvedValue({
@@ -263,8 +271,8 @@ describe("GET /api/venues", () => {
       .set("Authorization", "Bearer test-token");
 
     expect(res.status).toBe(200);
-    // A rejected booking request no longer holds the venue.
-    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["Requested", "Approved"]);
+    // Only a hold or an approved booking holds the venue; a request does not.
+    expect(bookingsQuery.in).toHaveBeenCalledWith("status", ["On Hold", "Approved"]);
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/api\/events\/venue-booking-info\?ids=11,12$/),
       { headers: { Authorization: "Bearer test-token" } },

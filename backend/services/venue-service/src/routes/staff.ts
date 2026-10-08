@@ -2,7 +2,9 @@ import { Router } from "express";
 import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
-import type { BookingStatus } from "../lib/bookingStatus.js";
+import { blocksVenue, type BookingStatus } from "../lib/bookingStatus.js";
+import { BOOKING_COLUMNS, decideBooking, type BookingRow as DecisionBookingRow, type Decision } from "../lib/bookingDecisions.js";
+import { assignedVenueIds, NOT_ASSIGNED_MESSAGE } from "../lib/venueStaff.js";
 import { fetchVenueBookingInfo } from "../lib/eventsClient.js";
 import { extractLayoutAndFacilities } from "../lib/venueRecommendation.js";
 import { isRealDate, type VenueRow } from "../lib/venueSearch.js";
@@ -36,16 +38,16 @@ const MAX_RANGE_DAYS = 42;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** A venue_bookings row: a venue-to-event link plus its approval status (venue_status enum). */
+/** A venue_bookings row: a venue-to-event link plus its approval status (venue_booking_status enum). */
 interface BookingRow {
   id: number;
   event_id: number;
   status: BookingStatus;
 }
 
-/** Active venues for the schedule's venue picker. */
+/** Available venues for the schedule's venue picker. */
 staffRouter.get("/venues", async (req: AuthedRequest, res) => {
-  const { data, error } = await req.supabase!.from("venues").select("id, name").eq("active", true).order("name");
+  const { data, error } = await req.supabase!.from("venues").select("id, name").eq("status", "Available").order("name");
 
   if (error) {
     res.status(500).json({ error: "Failed to load venues" });
@@ -89,9 +91,9 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
 
   const { data: venue, error: venueError } = await supabase
     .from("venues")
-    .select("id, name, location, description, capacity, accessibility, layouts, facilities")
+    .select("id, name, location, description, capacity, accessibility, layouts, facilities, setup_minutes, turnaround_minutes")
     .eq("id", Number(rawId))
-    .eq("active", true)
+    .eq("status", "Available")
     .maybeSingle();
 
   if (venueError) {
@@ -152,3 +154,185 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
     })),
   });
 });
+
+/**
+ * E4-10 AC6: the decision queue — every booking at this staff member's
+ * venues still waiting on them, ordered by event date so the most urgent
+ * surfaces first. A booking's date lives on its event, so ordering happens
+ * here rather than in SQL.
+ *
+ * Holds that have passed their deadline are swept to `Expired` on the way
+ * through and left out: §3a requires expiry to be applied whenever
+ * availability is checked, and E4-12 AC4 says an expired booking offers no
+ * action.
+ */
+staffRouter.get("/requests", async (req: AuthedRequest, res) => {
+  const supabase = req.supabase!;
+
+  const assigned = await assignedVenueIds(supabase, req.user!.id);
+  if (assigned.status === "error") {
+    res.status(500).json({ error: "Failed to load your venues" });
+    return;
+  }
+  if (assigned.venueIds.length === 0) {
+    res.json({ requests: [] });
+    return;
+  }
+
+  const { data: bookingData, error: bookingsError } = await supabase
+    .from("venue_bookings")
+    .select(BOOKING_COLUMNS)
+    .in("venue_id", assigned.venueIds)
+    .in("status", ["Requested", "On Hold"]);
+  if (bookingsError) {
+    res.status(500).json({ error: "Failed to load booking requests" });
+    return;
+  }
+  const bookings = (bookingData ?? []) as DecisionBookingRow[];
+
+  const now = new Date();
+  const lapsed = bookings.filter((booking) => booking.status === "On Hold" && !blocksVenue(booking, now));
+  if (lapsed.length > 0) {
+    await supabase
+      .from("venue_bookings")
+      .update({ status: "Expired", decided_at: now.toISOString(), decided_by: null })
+      .in(
+        "id",
+        lapsed.map((booking) => booking.id),
+      )
+      .eq("status", "On Hold");
+  }
+  const pending = bookings.filter((booking) => !lapsed.some((expired) => expired.id === booking.id));
+
+  const { data: venueData, error: venuesError } = await supabase
+    .from("venues")
+    .select("id, name, location, capacity, accessibility, layouts, facilities, setup_minutes, turnaround_minutes")
+    .in("id", assigned.venueIds);
+  if (venuesError) {
+    res.status(500).json({ error: "Failed to load your venues" });
+    return;
+  }
+  const venuesById = new Map(((venueData ?? []) as VenueRow[]).map((venue) => [venue.id, venue]));
+
+  const infoResult = await fetchVenueBookingInfo(
+    [...new Set(pending.map((booking) => booking.event_id))],
+    req.headers.authorization!,
+  );
+  if (infoResult.status === "error") {
+    res.status(502).json({ error: "Failed to load the requested events" });
+    return;
+  }
+  const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
+
+  // A booking whose event events-service won't return (deleted, or back to
+  // draft) has nothing to decide on.
+  const requests = pending
+    .flatMap((booking) => {
+      const event = eventsById.get(booking.event_id);
+      const venue = venuesById.get(booking.venue_id);
+      return event && venue ? [{ booking, event, venue }] : [];
+    })
+    .sort(
+      (a, b) =>
+        (a.event.proposedDate ?? "").localeCompare(b.event.proposedDate ?? "") ||
+        (a.event.startTime ?? "").localeCompare(b.event.startTime ?? ""),
+    );
+
+  res.json({
+    requests: requests.map(({ booking, event, venue }) => ({
+      id: booking.id,
+      status: booking.status,
+      holdExpiresAt: booking.hold_expires_at,
+      venue: {
+        id: venue.id,
+        name: venue.name,
+        location: venue.location,
+        setupMinutes: venue.setup_minutes ?? 0,
+        turnaroundMinutes: venue.turnaround_minutes ?? 0,
+      },
+      event: {
+        id: event.id,
+        name: event.name,
+        date: event.proposedDate,
+        startTime: event.startTime,
+        endTime: event.endTime,
+        expectedAttendance: event.expectedAttendance,
+        ...extractLayoutAndFacilities(event, [venue]),
+      },
+    })),
+  });
+});
+
+const BOOKING_ID_PATTERN = /^[1-9]\d*$/;
+
+/**
+ * E4-10: one decision endpoint shape for hold, approve and reject — the
+ * rules are in lib/bookingDecisions.ts so all three agree. A refusal is a
+ * 409 carrying why (AC2), since the staff member needs to know whether the
+ * venue is taken, the event moved on, or the hold already lapsed.
+ */
+async function decide(req: AuthedRequest, res: Response, decision: Decision): Promise<void> {
+  const rawId = Array.isArray(req.params.bookingId) ? req.params.bookingId[0] : req.params.bookingId;
+  if (!BOOKING_ID_PATTERN.test(rawId)) {
+    res.status(400).json({ error: "Invalid booking id" });
+    return;
+  }
+
+  const reason = typeof (req.body as { reason?: unknown })?.reason === "string" ? (req.body as { reason: string }).reason : "";
+  if (decision === "Rejected" && reason.trim() === "") {
+    // AC4: a rejection must carry a reason — the coordinator is told it.
+    res.status(400).json({ error: "A reason is required", fields: { reason: "Give a reason for rejecting this request." } });
+    return;
+  }
+
+  const result = await decideBooking(req.supabase!, {
+    bookingId: Number(rawId),
+    decision,
+    staffId: req.user!.id,
+    authorization: req.headers.authorization!,
+    reason,
+  });
+
+  switch (result.status) {
+    case "not_found":
+      res.status(404).json({ error: "Booking not found" });
+      return;
+    case "not_assigned":
+      res.status(403).json({ error: NOT_ASSIGNED_MESSAGE });
+      return;
+    case "blocked":
+      res.status(409).json({ error: result.message });
+      return;
+    case "conflict":
+      res.status(409).json({ error: result.message, conflict: result.conflict });
+      return;
+    case "event_error":
+      res.status(502).json({ error: "Failed to load the booked event" });
+      return;
+    case "error":
+      res.status(500).json({ error: "Failed to update the booking" });
+      return;
+    default:
+      res.json({
+        booking: {
+          id: result.booking.id,
+          status: result.booking.status,
+          holdExpiresAt: result.booking.hold_expires_at,
+          decisionReason: result.booking.decision_reason,
+          decidedAt: result.booking.decided_at,
+          venue: { id: result.venue.id, name: result.venue.name, location: result.venue.location },
+        },
+        // §3a/E4-11 AC4: the other requests this decision knocked out.
+        autoRejectedBookingIds: result.autoRejectedIds,
+      });
+  }
+}
+
+/** AC1: hold the venue tentatively, with an expiry (E4-12). */
+staffRouter.post("/bookings/:bookingId/hold", (req: AuthedRequest, res) => decide(req, res, "On Hold"));
+
+/** AC3: confirm the booking. */
+staffRouter.post("/bookings/:bookingId/approve", (req: AuthedRequest, res) => decide(req, res, "Approved"));
+
+/** AC4: refuse the booking, with a reason, releasing any hold. */
+staffRouter.post("/bookings/:bookingId/reject", (req: AuthedRequest, res) => decide(req, res, "Rejected"));

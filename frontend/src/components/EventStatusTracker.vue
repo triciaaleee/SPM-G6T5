@@ -15,6 +15,7 @@
  */
 import { computed } from "vue";
 import { formatEventDate, statusBadgeClass } from "../lib/eventStatus";
+import type { EventVenueBooking } from "../lib/venuesApi";
 
 const props = withDefaults(
   defineProps<{
@@ -26,13 +27,46 @@ const props = withDefaults(
     showTimeline?: boolean;
     /** Show the "Outstanding arrangements" list (only ever rendered while Planning). */
     showOutstanding?: boolean;
+    /**
+     * This event's venue bookings, so AC3's venue line says what is actually
+     * true. Undefined while they are still loading, or when the caller has no
+     * way to read them.
+     */
+    venueBookings?: EventVenueBooking[];
   }>(),
   {
     title: "Event Status",
     showTimeline: true,
     showOutstanding: true,
+    venueBookings: undefined,
   },
 );
+
+/**
+ * E3-1 AC3, venue half. An event may have several venue bookings and each
+ * is decided on its own (AGENTS.md §3a), so the venue counts as arranged
+ * only once at least one is `Approved` and none is still awaiting a
+ * decision — a second venue still sitting with Venue Staff is an
+ * outstanding arrangement even though the first is confirmed.
+ */
+const venueArrangement = computed<{ done: boolean; label: string }>(() => {
+  const bookings = props.venueBookings;
+  if (!bookings) return { done: false, label: "Venue — checking…" };
+
+  const approved = bookings.filter((booking) => booking.status === "Approved");
+  const pending = bookings.filter((booking) => booking.status === "Requested" || booking.status === "On Hold");
+
+  if (approved.length > 0 && pending.length === 0) {
+    const names = approved.map((booking) => booking.venue?.name).filter(Boolean);
+    return { done: true, label: `Venue — ${names.length > 0 ? names.join(", ") : `${approved.length} booked`}` };
+  }
+  if (pending.length > 0) {
+    const held = pending.filter((booking) => booking.status === "On Hold").length;
+    const detail = held > 0 ? `${held} on hold` : `${pending.length} awaiting Venue Staff`;
+    return { done: false, label: `Venue — ${detail}` };
+  }
+  return { done: false, label: "Venue — not yet booked" };
+});
 
 type StepVariant = "neutral" | "success" | "info" | "error";
 
@@ -121,10 +155,12 @@ function stepState(index: number): "complete" | "current" | "pending" {
     <div v-if="status === 'Planning' && showOutstanding" class="outstanding">
       <p class="body-small muted mb-1">Outstanding arrangements</p>
       <ul class="outstanding__list">
-        <li class="outstanding__item">
-          <span class="outstanding__dot" />
-          Venue — not yet booked
+        <li class="outstanding__item" :class="{ 'outstanding__item--done': venueArrangement.done }">
+          <span class="outstanding__dot" :class="{ 'outstanding__dot--done': venueArrangement.done }" />
+          {{ venueArrangement.label }}
         </li>
+        <!-- Equipment has no service yet (epic E5), so there is nothing to
+             read: this line stays a placeholder until E5-1 lands. -->
         <li class="outstanding__item">
           <span class="outstanding__dot" />
           Equipment — not yet arranged
@@ -378,6 +414,14 @@ function stepState(index: number): "complete" | "current" | "pending" {
   gap: var(--spacing-8);
   font-size: 1rem;
   color: var(--color-grey-900);
+}
+
+.outstanding__item--done {
+  color: var(--color-success-700);
+}
+
+.outstanding__dot--done {
+  background: var(--color-success-700);
 }
 
 .outstanding__dot {

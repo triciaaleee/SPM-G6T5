@@ -26,6 +26,9 @@ export interface VenueRow {
   accessibility: string[];
   layouts: string[];
   facilities: string[];
+  /** Week 7 change 1: padding around a booking's own window (see lib/bookingConflicts.ts). */
+  setup_minutes?: number;
+  turnaround_minutes?: number;
 }
 
 export interface VenueSearchCriteria {

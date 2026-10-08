@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
 import CalendarPicker, { type DayMarker } from "../components/venues/CalendarPicker.vue";
 import { fetchStaffVenues, fetchVenueBookings, type StaffVenueOption, type VenueBooking } from "../lib/venuesApi";
@@ -18,17 +18,23 @@ Innovation Hub - 30 sep
  * requirements only. The API never sends the wider event plan, so there's
  * nothing here to hide.
  *
- * Tabs split bookings by booking status: Bookings (approved) and Requested
- * (awaiting a decision). Rejected bookings aren't shown. The tabs filter
- * the list only: the calendar marks every day with a booking (purple dot)
- * or a request (blue dot), whichever tab is open.
+ * Tabs split bookings by booking status: Bookings (approved), Requested
+ * (awaiting a decision) and On Hold (tentatively held by venue staff, E4-10).
+ * Rejected bookings aren't shown. The tabs filter the list only: the
+ * calendar marks every day with a booking (purple dot) or a request (blue
+ * dot), whichever tab is open.
+ *
+ * Deciding on a request happens in the queue (VenueRequestQueue.vue), which
+ * orders by event date across venues; this view stays the per-venue, per-day
+ * schedule.
  */
 
-type ScheduleTab = "bookings" | "requested";
+type ScheduleTab = "bookings" | "requested" | "held";
 
 const TABS: { key: ScheduleTab; label: string; status: VenueBooking["status"]; noun: string; empty: string }[] = [
   { key: "bookings", label: "Bookings", status: "Approved", noun: "booking", empty: "No confirmed bookings on this day." },
   { key: "requested", label: "Requests", status: "Requested", noun: "request", empty: "No booking requests on this day." },
+  { key: "held", label: "On Hold", status: "On Hold", noun: "hold", empty: "No venues held on this day." },
 ];
 
 function toKey(date: Date): string {
@@ -95,7 +101,7 @@ const dayBookings = computed(() => tabBookings.value.filter((b) => b.date === se
 
 /** Each tab's total for the selected day, shown beside its label. */
 const tabDayCounts = computed(() => {
-  const counts: Record<ScheduleTab, number> = { bookings: 0, requested: 0 };
+  const counts: Record<ScheduleTab, number> = { bookings: 0, requested: 0, held: 0 };
   for (const booking of bookings.value) {
     if (booking.date !== selectedDate.value) continue;
     const tab = TABS.find((t) => t.status === booking.status);
@@ -191,6 +197,8 @@ onMounted(async () => {
     <div class="page-header">
       <h1 class="h2">Venue schedule</h1>
       <p class="subheading">Select a date and venue to see bookings and requests for that day</p>
+      <!-- E4-10: decisions are made in the queue, which orders by event date. -->
+      <RouterLink :to="{ name: 'venue-requests' }" class="queue-link">Go to booking requests</RouterLink>
     </div>
 
     <p v-if="venuesError" class="body-default error-text full-row">{{ venuesError }}</p>
@@ -425,6 +433,23 @@ onMounted(async () => {
 
 .schedule__header {
   margin-bottom: var(--spacing-16);
+}
+
+/* Style.md 2.4: brand purple for a navigational link. */
+.queue-link {
+  color: var(--color-purple-600);
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.queue-link:hover {
+  text-decoration: underline;
+}
+
+.queue-link:focus-visible {
+  outline: 2px solid var(--color-purple-600);
+  outline-offset: 2px;
 }
 
 /* Tabs: Style.md 2.4 — Purple 600 marks the active tab. */
