@@ -22,6 +22,8 @@ import EventStatusTracker from "../components/EventStatusTracker.vue";
 import ClarificationPanel from "../components/ClarificationPanel.vue";
 import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
 import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel.vue";
+import VenueRequestsPanel from "../components/venues/VenueRequestsPanel.vue";
+import { fetchEventVenueBookings, type EventVenueBooking } from "../lib/venuesApi";
 
 
 interface SubmittedEventDetails {
@@ -67,6 +69,7 @@ const canReview = computed(() => isCoordinator.value && !isOtherCoordinatorEvent
 // exists, but only the reviewing coordinator can add a fresh top-level
 // question or resolve one, and only while one is actually outstanding (AC2).
 const clarificationPanelRef = ref<InstanceType<typeof ClarificationPanel> | null>(null);
+
 const canManageClarifications = computed(
   () => canReview.value && event.value?.status === "Clarification Requested",
 );
@@ -293,6 +296,32 @@ async function loadHistory(): Promise<void> {
   }
 }
 
+/**
+ * E3-1 AC3 / E4-8 AC5: this event's venue bookings, owned here so the
+ * outstanding-arrangements line and the requests panel read the same list
+ * and refresh together after a request is submitted. Undefined until the
+ * first load finishes, which is how the tracker knows not to claim a venue
+ * is missing before it has looked.
+ */
+const venueBookings = ref<EventVenueBooking[] | undefined>(undefined);
+const venueBookingsError = ref<string | null>(null);
+const venueBookingsLoading = ref(false);
+
+async function loadVenueBookings(): Promise<void> {
+  if (!event.value) return;
+  venueBookingsLoading.value = true;
+  venueBookingsError.value = null;
+  try {
+    venueBookings.value = await fetchEventVenueBookings(event.value.id);
+  } catch (err) {
+    venueBookings.value = [];
+    venueBookingsError.value =
+      err instanceof Error ? err.message : "Failed to load this event's venue requests";
+  } finally {
+    venueBookingsLoading.value = false;
+  }
+}
+
 function formatHistoryTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -323,6 +352,8 @@ onMounted(async () => {
     event.value = eventData;
     currentUser.value = user;
     await loadHistory();
+    // Only an event in Planning shows arrangements or a requests panel.
+    if (eventData.status === "Planning") await loadVenueBookings();
   } catch (err) {
     if (err instanceof AccessDeniedError) {
       accessDenied.value = true;
@@ -597,7 +628,7 @@ onMounted(async () => {
 
 <EventStatusTracker v-if="event.status === 'Planning'" :status="event.status"
   :last-changed-at="statusLastChangedAt(event)" :review-outcome="event.review_outcome" title="Outstanding Arrangements"
-  :show-timeline="false" />
+  :show-timeline="false" :venue-bookings="venueBookings" />
 </template>
 
 <template v-else>
@@ -717,7 +748,8 @@ onMounted(async () => {
 <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
 <div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
   <h2 class="section-title">Venue Recommendations</h2>
-  <VenueRecommendations :event-id="event.id" :details="event.submitted_details" />
+  <VenueRecommendations :event-id="event.id" :details="event.submitted_details"
+    :can-request="event.status === 'Planning'" @requested="loadVenueBookings()" />
   <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
     Find venues
   </RouterLink>
@@ -728,6 +760,10 @@ onMounted(async () => {
   <EquipmentRequestPanel :event-id="event.id" :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null"
     :can-submit="canCoordinatorEdit" />
 </div>
+
+<!-- E4-8 AC5: this event's venue requests and the state each one is in -->
+<VenueRequestsPanel v-if="isCoordinator && event.status !== 'Rejected'" :bookings="venueBookings"
+  :loading="venueBookingsLoading" :load-error="venueBookingsError" />
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
   :current-user-id="currentUser.id" />

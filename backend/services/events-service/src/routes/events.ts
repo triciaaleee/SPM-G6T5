@@ -358,7 +358,7 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, submitted_details, coordinator_id")
+    .select("id, status, submitted_details, coordinator_id")
     .in("id", ids)
     .neq("status", "Draft");
 
@@ -367,12 +367,22 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // The lifecycle status rides along because venue-service needs it to
+  // decide on a booking (E4-10 AC2: a venue can only be held or approved
+  // while the event is still in "Planning"). Venue staff can't call
+  // GET /:id — it is owner-or-coordinator only — and the status says
+  // nothing about the event's content, so it belongs in this narrow view
+  // rather than widening that one.
   const events = (data ?? []).map((row) => {
     const details = (row.submitted_details ?? {}) as Record<string, unknown>;
     // E4-3: venue-service needs the assigned coordinator's id (only the id,
     // never their name or contact details) to tell them a blocked-out
     // venue means their booking needs a replacement.
-    const info: Record<string, unknown> = { id: row.id, coordinatorId: row.coordinator_id ?? null };
+    const info: Record<string, unknown> = {
+      id: row.id,
+      status: row.status,
+      coordinatorId: row.coordinator_id ?? null,
+    };
     for (const field of VENUE_BOOKING_INFO_FIELDS) info[field] = details[field] ?? null;
     return info;
   });

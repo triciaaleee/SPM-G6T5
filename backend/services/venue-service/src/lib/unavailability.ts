@@ -1,4 +1,5 @@
 import type { AuthedRequest } from "../middleware/auth.js";
+import { overlaps, type OccupiedWindow } from "./bookingConflicts.js";
 import { isRealDate } from "./venueSearch.js";
 
 /**
@@ -215,4 +216,72 @@ export async function findBlockedVenueIds(
     if (periodBlocksSlot(toPeriod(row), date, slot.start, slot.end)) blocked.add(row.venue_id);
   }
   return blocked;
+}
+
+const MINUTE_MS = 60 * 1000;
+
+/** "YYYY-MM-DD" of an epoch-ms instant, read as UTC like lib/bookingConflicts. */
+function dateOf(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function minutesOf(time: string): number {
+  const [h, m] = time.slice(0, 5).split(":").map(Number);
+  return h * 60 + m;
+}
+
+/**
+ * Whether `period` blocks any part of an occupied window (setup and
+ * turnaround already included). A partial overlap counts (§3a change 2).
+ * The window is walked day by day because padding can carry it past
+ * midnight, and a timed period repeats the same hours on each of its days.
+ */
+export function periodOverlapsWindow(
+  period: Pick<Period, "startDate" | "endDate" | "allDay" | "startTime" | "endTime">,
+  window: OccupiedWindow,
+): boolean {
+  const firstDay = Math.floor(window.startMs / DAY_MS) * DAY_MS;
+  for (let day = firstDay; day < window.endMs; day += DAY_MS) {
+    const date = dateOf(day);
+    if (date < period.startDate || date > period.endDate) continue;
+    const block =
+      period.allDay || !period.startTime || !period.endTime
+        ? { startMs: day, endMs: day + DAY_MS }
+        : {
+            startMs: day + minutesOf(period.startTime) * MINUTE_MS,
+            endMs: day + minutesOf(period.endTime) * MINUTE_MS,
+          };
+    if (overlaps(block, window)) return true;
+  }
+  return false;
+}
+
+/**
+ * The first unavailability period at `venueId` that cuts across `window`,
+ * or null when the venue is free of block-outs for it. Used wherever a
+ * booking would start holding the venue — a new request (E4-8) or a hold
+ * or approval (E4-10) — so a blocked venue can't be promised.
+ */
+export async function findClashingPeriod(
+  supabase: Supabase,
+  venueId: number,
+  window: OccupiedWindow,
+): Promise<{ status: "ok"; period: Period | null } | { status: "error" }> {
+  const { data, error } = await supabase
+    .from("venue_unavailability")
+    .select(PERIOD_COLUMNS)
+    .eq("venue_id", venueId)
+    .lte("start_date", dateOf(window.endMs - 1))
+    .gte("end_date", dateOf(window.startMs));
+  if (error) return { status: "error" };
+
+  const clash = ((data ?? []) as PeriodRow[]).map(toPeriod).find((period) => periodOverlapsWindow(period, window));
+  return { status: "ok", period: clash ?? null };
+}
+
+/** "on 2026-11-10 (12:30–17:00)" / "from 2026-11-10 to 2026-11-12 (all day)" — for error messages. */
+export function describePeriod(period: Period): string {
+  const days = period.startDate === period.endDate ? `on ${period.startDate}` : `from ${period.startDate} to ${period.endDate}`;
+  const hours = period.allDay ? "all day" : `${period.startTime}–${period.endTime}`;
+  return `${days} (${hours})`;
 }
