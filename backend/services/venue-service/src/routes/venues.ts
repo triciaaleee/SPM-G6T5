@@ -13,7 +13,15 @@ import {
 import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "../lib/bookingConflicts.js";
 import { fetchEvent, fetchVenueBookingInfo, type VenueBookingInfo } from "../lib/eventsClient.js";
 import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
-import { PERIOD_COLUMNS, findBlockedVenueIds, toBuffers, toPeriod, type PeriodRow } from "../lib/unavailability.js";
+import {
+  PERIOD_COLUMNS,
+  describePeriod,
+  findBlockedVenueIds,
+  findClashingPeriod,
+  toBuffers,
+  toPeriod,
+  type PeriodRow,
+} from "../lib/unavailability.js";
 import { extractRequirements, scheduleQuery, withFeatures } from "../lib/venueRecommendation.js";
 import {
   buildFilterOptions,
@@ -608,6 +616,22 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
         setupMinutes: venue.setup_minutes ?? 0,
         turnaroundMinutes: venue.turnaround_minutes ?? 0,
       },
+    });
+    return;
+  }
+
+  // §3a change 2: a venue marked unavailable over the occupied window can't
+  // be requested for it, and the period is shown so another time can be picked.
+  const blockOut = await findClashingPeriod(supabase, venueId, requested.window);
+  if (blockOut.status === "error") {
+    res.status(500).json({ error: "Failed to check venue availability" });
+    return;
+  }
+  if (blockOut.period) {
+    res.status(409).json({
+      error: `Venue is unavailable ${describePeriod(blockOut.period)}: ${blockOut.period.reason}`,
+      unavailability: blockOut.period,
+      requestedWindow: formatWindow(requested.window),
     });
     return;
   }

@@ -44,6 +44,47 @@ const venues = [
   },
 ];
 
+/** A venue_unavailability row (E4-3), as the venue_unavailability table stores it. */
+interface PeriodFixture {
+  id?: number;
+  venue_id: number;
+  start_date: string;
+  end_date?: string;
+  all_day?: boolean;
+  start_time?: string | null;
+  end_time?: string | null;
+  reason?: string;
+}
+
+/** select().eq("venue_id").lte().gte(), resolved by awaiting — the block-out check (§3a change 2). */
+function unavailabilityTable(periods: PeriodFixture[]) {
+  const rows = periods.map((period, index) => ({
+    id: period.id ?? index + 800,
+    end_date: period.start_date,
+    all_day: true,
+    start_time: null,
+    end_time: null,
+    reason: "Maintenance",
+    ...period,
+  }));
+  return {
+    select: vi.fn(() => {
+      let venueId: unknown;
+      const q: any = {
+        eq: vi.fn((_column: string, value: unknown) => {
+          venueId = value;
+          return q;
+        }),
+        lte: vi.fn(() => q),
+        gte: vi.fn(() => q),
+      };
+      q.then = (resolve: (value: unknown) => unknown) =>
+        resolve({ data: rows.filter((row) => row.venue_id === venueId), error: null });
+      return q;
+    }),
+  };
+}
+
 interface BookingFixture {
   id: number;
   venue_id: number;
@@ -109,6 +150,8 @@ function buildApp(
     appearsAfterUpdate?: BookingFixture;
     /** AC4: notification-service's answer, separate from events-service's. */
     notificationHttpStatus?: number;
+    /** §3a change 2: block-out periods on the venues. */
+    unavailability?: PeriodFixture[];
   } = {},
 ) {
   const rows = options.bookings ?? [];
@@ -239,6 +282,7 @@ function buildApp(
         q.then = (resolve: (value: unknown) => unknown) => resolve({ data: matching(), error: null });
         return { select: vi.fn(() => q) };
       }
+      if (table === "venue_unavailability") return unavailabilityTable(options.unavailability ?? []);
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -565,6 +609,49 @@ describe("POST /bookings/:id/approve", () => {
 
     // AC5: a booking that yielded must not drag the other requests down.
     expect(updates.some((update) => update.ids?.includes(11))).toBe(false);
+  });
+
+  it("§3a change 2: refuses to approve over a block-out, even one that only cuts into the turnaround", async () => {
+    // 10:00–12:00 occupies 09:30–12:45 at venue 1; maintenance from 12:30.
+    const { app, updates } = buildApp({
+      bookings: [booking({ id: 10 })],
+      unavailability: [
+        {
+          venue_id: 1,
+          start_date: "2026-11-10",
+          all_day: false,
+          start_time: "12:30:00",
+          end_time: "17:00:00",
+          reason: "Electrical maintenance",
+        },
+      ],
+    });
+    const res = await act(app, "approve");
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/unavailable on 2026-11-10 \(12:30–17:00\): Electrical maintenance/);
+    expect(res.body.error).toMatch(/can't be approved/);
+    expect(updates).toHaveLength(0);
+  });
+
+  it("§3a change 2: refuses to hold over a block-out too", async () => {
+    const { app, updates } = buildApp({
+      bookings: [booking({ id: 10 })],
+      unavailability: [{ venue_id: 1, start_date: "2026-11-09", end_date: "2026-11-12" }],
+    });
+    const res = await act(app, "hold");
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/can't be held/);
+    expect(updates).toHaveLength(0);
+  });
+
+  it("§3a change 2: a block-out on another day doesn't stop the decision", async () => {
+    const { app } = buildApp({
+      bookings: [booking({ id: 10 })],
+      unavailability: [{ venue_id: 1, start_date: "2026-11-11" }],
+    });
+    expect((await act(app, "approve")).status).toBe(200);
   });
 
   it("409s when another decision landed first", async () => {

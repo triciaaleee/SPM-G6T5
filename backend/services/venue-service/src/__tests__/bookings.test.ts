@@ -61,6 +61,47 @@ function eventDetails(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** A venue_unavailability row (E4-3), as the venue_unavailability table stores it. */
+interface PeriodFixture {
+  id?: number;
+  venue_id: number;
+  start_date: string;
+  end_date?: string;
+  all_day?: boolean;
+  start_time?: string | null;
+  end_time?: string | null;
+  reason?: string;
+}
+
+/** select().eq("venue_id").lte().gte(), resolved by awaiting — the block-out check (§3a change 2). */
+function unavailabilityTable(periods: PeriodFixture[]) {
+  const rows = periods.map((period, index) => ({
+    id: period.id ?? index + 800,
+    end_date: period.start_date,
+    all_day: true,
+    start_time: null,
+    end_time: null,
+    reason: "Maintenance",
+    ...period,
+  }));
+  return {
+    select: vi.fn(() => {
+      let venueId: unknown;
+      const q: any = {
+        eq: vi.fn((_column: string, value: unknown) => {
+          venueId = value;
+          return q;
+        }),
+        lte: vi.fn(() => q),
+        gte: vi.fn(() => q),
+      };
+      q.then = (resolve: (value: unknown) => unknown) =>
+        resolve({ data: rows.filter((row) => row.venue_id === venueId), error: null });
+      return q;
+    }),
+  };
+}
+
 interface BookingFixture {
   id?: number;
   venue_id: number;
@@ -81,6 +122,8 @@ function buildApp(
     insertError?: boolean;
     /** Who the venue is assigned to (venues.staff_id); null means nobody. */
     staffId?: string | null;
+    /** §3a change 2: block-out periods on the venues. */
+    unavailability?: PeriodFixture[];
   } = {},
 ) {
   const bookingRows = (options.bookings ?? []).map((booking, index) => ({
@@ -132,6 +175,7 @@ function buildApp(
         };
       }
       if (table === "venue_bookings") return { select: bookingsSelect, insert };
+      if (table === "venue_unavailability") return unavailabilityTable(options.unavailability ?? []);
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -448,6 +492,45 @@ describe("POST /api/venues/bookings", () => {
       bookedEvents: [{ id: 7, proposedDate: "2026-11-10", startTime: "10:00", endTime: "12:00" }],
     });
 
+    expect((await submit(app)).status).toBe(201);
+  });
+
+  it("§3a change 2: refuses a request when the venue is unavailable that day, and shows the period", async () => {
+    const { app, insert } = buildApp({
+      unavailability: [{ venue_id: 1, start_date: "2026-11-10", reason: "Renovation" }],
+    });
+    const res = await submit(app);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/unavailable on 2026-11-10 \(all day\): Renovation/);
+    expect(res.body.unavailability).toMatchObject({ venueId: 1, startDate: "2026-11-10", reason: "Renovation" });
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("§3a change 2: a block-out that only cuts into the turnaround still counts", async () => {
+    // 10:00–12:00 occupies 09:30–12:45 at venue 1; the block starts at 12:30.
+    const { app, insert } = buildApp({
+      unavailability: [
+        { venue_id: 1, start_date: "2026-11-10", all_day: false, start_time: "12:30:00", end_time: "17:00:00" },
+      ],
+    });
+    const res = await submit(app);
+
+    expect(res.status).toBe(409);
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("§3a change 2: a block-out ending exactly when setup starts doesn't clash", async () => {
+    const { app } = buildApp({
+      unavailability: [
+        { venue_id: 1, start_date: "2026-11-10", all_day: false, start_time: "08:00:00", end_time: "09:30:00" },
+      ],
+    });
+    expect((await submit(app)).status).toBe(201);
+  });
+
+  it("§3a change 2: a block-out at another venue doesn't stop the request", async () => {
+    const { app } = buildApp({ unavailability: [{ venue_id: 2, start_date: "2026-11-10" }] });
     expect((await submit(app)).status).toBe(201);
   });
 

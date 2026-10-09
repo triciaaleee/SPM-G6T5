@@ -38,6 +38,7 @@ import {
 import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "./bookingConflicts.js";
 import { fetchVenueBookingInfo, type VenueBookingInfo } from "./eventsClient.js";
 import { sendNotifications, type NewNotification } from "./notificationsClient.js";
+import { describePeriod, findClashingPeriod } from "./unavailability.js";
 import { withVenueLock } from "./venueLock.js";
 import { isAssignedToVenue } from "./venueStaff.js";
 
@@ -444,6 +445,22 @@ async function holdOrApprove(
   const ownWindow = occupiedWindow(event, venue);
   if (!ownWindow) {
     return { outcome: { status: "blocked", message: "This event has no date or time to book a venue for" } };
+  }
+
+  // §3a change 2: a venue marked unavailable over this window can't be held
+  // or approved for it — a pending booking keeps its status when a block-out
+  // lands on it, so the decision is where that is enforced.
+  const blockOut = await findClashingPeriod(supabase, venue.id, ownWindow);
+  if (blockOut.status === "error") return { outcome: { status: "error" } };
+  if (blockOut.period) {
+    return {
+      outcome: {
+        status: "blocked",
+        message:
+          `${venue.name} is unavailable ${describePeriod(blockOut.period)}: ${blockOut.period.reason}. ` +
+          `This booking can't be ${input.decision === "On Hold" ? "held" : "approved"} while it overlaps that period.`,
+      },
+    };
   }
 
   // AC5: the re-check, the write, the post-write verification and the
