@@ -3,7 +3,11 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEvent, fetchEventBookingInfo } from "../lib/eventsClient.js";
 import { sendNotifications } from "../lib/notificationsClient.js";
-import { validateEquipmentItems, type ValidatedEquipmentItem } from "../lib/validateEquipmentRequest.js";
+import {
+  validateEquipmentItems,
+  validateStatusUpdate,
+  type ValidatedEquipmentItem,
+} from "../lib/validateEquipmentRequest.js";
 
 /**
  * E5-1: an Event Coordinator records what equipment an event needs so
@@ -19,7 +23,9 @@ equipmentRequestsRouter.use(requireAuth);
 interface RequestRow {
   id: number;
   event_id: number;
+  coordinator_id?: string;
   status: string;
+  fulfillment_note?: string | null;
   created_at: string;
 }
 
@@ -45,6 +51,8 @@ function toRequest(row: RequestRow, items: ItemRow[]) {
     id: row.id,
     eventId: row.event_id,
     status: row.status,
+    // E5-3 AC2: what remains outstanding, set alongside "Partially Fulfilled".
+    fulfillmentNote: row.fulfillment_note ?? null,
     createdAt: row.created_at,
     items: items.filter((item) => item.request_id === row.id).map(toItem),
   };
@@ -113,7 +121,7 @@ equipmentRequestsRouter.post("/", async (req: AuthedRequest, res) => {
   const { data: requestRow, error: requestError } = await supabase
     .from("equipment_requests")
     .insert({ event_id: eventId, coordinator_id: user.id })
-    .select("id, event_id, status, created_at")
+    .select("id, event_id, status, fulfillment_note, created_at")
     .single();
 
   if (requestError || !requestRow) {
@@ -197,7 +205,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
 
     const { data: requests, error: requestsError } = await supabase
       .from("equipment_requests")
-      .select("id, event_id, status, created_at")
+      .select("id, event_id, status, fulfillment_note, created_at")
       .eq("event_id", eventId);
 
     if (requestsError || !requests) {
@@ -232,7 +240,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
 
   const { data: requests, error: requestsError } = await supabase
     .from("equipment_requests")
-    .select("id, event_id, status, created_at")
+    .select("id, event_id, status, fulfillment_note, created_at")
     .order("created_at", { ascending: false });
 
   if (requestsError || !requests) {
@@ -266,4 +274,91 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
       event: eventsById.get(r.event_id) ?? null,
     })),
   });
+});
+
+function statusNotificationBody(status: string, note: string | null, eventName: string): string {
+  if (status === "Partially Fulfilled") {
+    return `${eventName}'s equipment request is only partially fulfilled: ${note}`;
+  }
+  return `${eventName}'s equipment request is now ${status}.`;
+}
+
+/**
+ * E5-3: Technical Support update a request's status as arrangements are
+ * made (AC1) — including recording it as only partially fulfilled, with a
+ * note on what remains outstanding (AC2). The assigned coordinator (stored
+ * on the row since it was created, E5-1) is notified either way; the new
+ * status is visible to them via the GET endpoints above.
+ */
+equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  if (user.role !== "technical_support") {
+    res.status(403).json({ error: "Only Technical Support can update a request's status" });
+    return;
+  }
+
+  if (!isPositiveInteger(req.params.id)) {
+    res.status(400).json({ error: "A valid request id is required" });
+    return;
+  }
+  const requestId = Number(req.params.id);
+
+  const statusResult = validateStatusUpdate((req.body ?? {}) as { status?: unknown; note?: unknown });
+  if (!statusResult.valid) {
+    res.status(400).json({ error: "Validation failed", fields: statusResult.fields });
+    return;
+  }
+  const { status, note } = statusResult.value!;
+
+  const { data: requestRow, error: requestError } = await supabase
+    .from("equipment_requests")
+    .update({ status, fulfillment_note: note })
+    .eq("id", requestId)
+    .select("id, event_id, coordinator_id, status, fulfillment_note, created_at")
+    .maybeSingle();
+
+  if (requestError) {
+    res.status(500).json({ error: "Failed to update the equipment request" });
+    return;
+  }
+  if (!requestRow) {
+    res.status(404).json({ error: "Equipment request not found" });
+    return;
+  }
+
+  const { data: itemRows, error: itemsError } = await supabase
+    .from("equipment_request_items")
+    .select("id, request_id, equipment_type, quantity, technical_requirements")
+    .eq("request_id", requestId);
+
+  if (itemsError) {
+    res.status(500).json({ error: "Failed to load equipment items" });
+    return;
+  }
+
+  // Best-effort, same stance as E5-1's submission notice: a friendlier
+  // event name if events-service answers, "Event #n" if it doesn't.
+  const infoResult = await fetchEventBookingInfo([requestRow.event_id], req.headers.authorization!);
+  const eventName =
+    (infoResult.status === "ok" && infoResult.events[0]?.name) || `Event #${requestRow.event_id}`;
+
+  const notified = await sendNotifications(
+    [
+      {
+        recipientId: requestRow.coordinator_id as string,
+        type: "equipment_request_status_updated",
+        title: `Equipment request ${status.toLowerCase()}`,
+        body: statusNotificationBody(status, note, eventName),
+        link: `/events/${requestRow.event_id}`,
+      },
+    ],
+    req.headers.authorization!,
+  );
+
+  res.json({ equipmentRequest: toRequest(requestRow as RequestRow, itemRows as ItemRow[]), notified });
 });

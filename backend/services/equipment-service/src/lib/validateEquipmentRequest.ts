@@ -80,3 +80,44 @@ export function validateEquipmentItems(input: unknown): ValidationResult {
   }
   return { valid: true, fields: {}, value };
 }
+
+/** The real values equipment_requests.status can take on (migration 0020). */
+export const EQUIPMENT_REQUEST_STATUSES = ["Requested", "Arranged", "Partially Fulfilled"] as const;
+export type EquipmentRequestStatus = (typeof EQUIPMENT_REQUEST_STATUSES)[number];
+
+export interface StatusUpdateInput {
+  status?: unknown;
+  note?: unknown;
+}
+
+export interface StatusUpdateResult {
+  valid: boolean;
+  fields: Record<string, string>;
+  value?: { status: EquipmentRequestStatus; note: string | null };
+}
+
+/**
+ * Validation for PATCH /api/equipment-requests/:id. AC2: a note describing
+ * what remains outstanding is required when the status is "Partially
+ * Fulfilled"; the note is cleared for any other status so it can't go
+ * stale once arrangements move on.
+ */
+export function validateStatusUpdate(input: StatusUpdateInput): StatusUpdateResult {
+  const fields: Record<string, string> = {};
+
+  const status = typeof input.status === "string" ? input.status.trim() : "";
+  if (!(EQUIPMENT_REQUEST_STATUSES as readonly string[]).includes(status)) {
+    fields.status = `Status must be one of: ${EQUIPMENT_REQUEST_STATUSES.join(", ")}.`;
+  }
+
+  const note = typeof input.note === "string" ? input.note.trim() : "";
+  if (status === "Partially Fulfilled" && note === "") {
+    fields.note = "A note describing what remains outstanding is required.";
+  }
+
+  if (Object.keys(fields).length > 0) {
+    return { valid: false, fields };
+  }
+  const keptNote = status === "Partially Fulfilled" && note !== "" ? note : null;
+  return { valid: true, fields: {}, value: { status: status as EquipmentRequestStatus, note: keptNote } };
+}

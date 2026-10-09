@@ -115,6 +115,8 @@ function formatDate(value: string): string {
             <span class="badge badge-neutral">{{ r.status }}</span>
             <p class="body-small muted">Submitted {{ formatDate(r.createdAt) }}</p>
           </div>
+          <!-- E5-3 AC1/AC2: Technical Support's status updates, and what's left outstanding, as they happen -->
+          <p v-if="r.fulfillmentNote" class="body-small muted eq-outstanding">Outstanding: {{ r.fulfillmentNote }}</p>
           <ul class="eq-items">
             <li v-for="item in r.items" :key="item.id" class="body-small">
               <strong>{{ item.quantity }}&times; {{ item.equipmentType }}</strong>
@@ -250,6 +252,14 @@ function formatDate(value: string): string {
 .badge-neutral {
   background: var(--color-purple-100);
   color: var(--color-purple-800);
+}
+
+.eq-outstanding {
+  margin: 0 0 var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-8);
+  border-radius: var(--radius-xs);
+  background: var(--color-warning-100);
+  color: var(--color-warning-900);
 }
 
 .eq-items {

@@ -3,11 +3,11 @@
 --
 -- equipment_requests is the Event Coordinator's request, one row per
 -- submission for an event (an event may accumulate more than one, same as
--- venue_bookings allows several venues per event). status starts and stays
--- 'Requested' for this story; E5-3 (#50) will add the Technical Support
--- status-update workflow on top of this column, so it's plain text for now
--- rather than a Postgres enum invented ahead of that story defining its
--- real values.
+-- venue_bookings allows several venues per event). status stays 'Requested'
+-- until Technical Support update it (E5-3, #50) — "Requested", "Arranged"
+-- or "Partially Fulfilled" — kept as plain text rather than a Postgres enum
+-- since the API already validates it. fulfillment_note is E5-3 AC2's note
+-- on what remains outstanding when only partly fulfilled.
 --
 -- equipment_request_items is the list of items per request — equipment
 -- type, quantity and technical requirements, per AC1. quantity > 0 is
@@ -21,6 +21,7 @@ create table if not exists equipment_requests (
   event_id integer not null references events (id) on delete cascade,
   coordinator_id text not null references users (id),
   status text not null default 'Requested',
+  fulfillment_note text,
   created_at timestamptz not null default now()
 );
 
