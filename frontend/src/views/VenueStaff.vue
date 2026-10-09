@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
 import CalendarPicker, { type DayMarker } from "../components/venues/CalendarPicker.vue";
 import BlockOutPanel from "../components/venues/BlockOutPanel.vue";
@@ -32,11 +32,12 @@ Innovation Hub - 30 sep
  * or a request (blue dot), whichever tab is open.
  */
 
-type ScheduleTab = "bookings" | "requested";
+type ScheduleTab = "bookings" | "requested" | "held";
 
 const TABS: { key: ScheduleTab; label: string; status: VenueBooking["status"]; noun: string; empty: string }[] = [
   { key: "bookings", label: "Bookings", status: "Approved", noun: "booking", empty: "No confirmed bookings on this day." },
   { key: "requested", label: "Requests", status: "Requested", noun: "request", empty: "No booking requests on this day." },
+  { key: "held", label: "On Hold", status: "On Hold", noun: "hold", empty: "No venues held on this day." },
 ];
 
 function toKey(date: Date): string {
@@ -116,7 +117,7 @@ const dayBookings = computed(() => tabBookings.value.filter((b) => b.date === se
 
 /** Each tab's total for the selected day, shown beside its label. */
 const tabDayCounts = computed(() => {
-  const counts: Record<ScheduleTab, number> = { bookings: 0, requested: 0 };
+  const counts: Record<ScheduleTab, number> = { bookings: 0, requested: 0, held: 0 };
   for (const booking of bookings.value) {
     if (booking.date !== selectedDate.value) continue;
     const tab = TABS.find((t) => inTab(booking, t));
@@ -320,6 +321,8 @@ onMounted(async () => {
       <div>
         <h1 class="h2">Venue schedule</h1>
         <p class="subheading">Select a date and venue to see bookings and requests for that day</p>
+        <!-- E4-10: decisions are made in the queue, which orders by event date. -->
+        <RouterLink :to="{ name: 'venue-requests' }" class="queue-link">Go to booking requests</RouterLink>
       </div>
       <!-- E4-3: the page's one primary action. -->
       <button v-if="venueId !== null" type="button" class="btn-primary" @click="openBlockOut()">
@@ -552,6 +555,22 @@ onMounted(async () => {
   line-height: 2rem;
   color: var(--color-grey-900);
   margin: 0;
+}
+
+.queue-link {
+  color: var(--color-purple-600);
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.queue-link:hover {
+  text-decoration: underline;
+}
+
+.queue-link:focus-visible {
+  outline: 2px solid var(--color-purple-600);
+  outline-offset: 2px;
 }
 
 .subheading {

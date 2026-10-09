@@ -1,3 +1,12 @@
+<script lang="ts">
+/**
+ * What a day can be flagged as on the schedule: a confirmed booking, or a
+ * request still awaiting a decision. Each gets its own dot colour, and a
+ * day can carry both.
+ */
+export type DayMarker = "booking" | "request";
+</script>
+
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import VenueIcon from "./VenueIcon.vue";
@@ -15,12 +24,10 @@ import VenueIcon from "./VenueIcon.vue";
  * `partlyBlockedDates` (E4-3) stripe days a venue is unavailable all day /
  * for some hours (Style.md 3.5).
  */
-export type DayMarker = "booking" | "request";
-
 const props = defineProps<{
   modelValue: string | null;
   allowPast?: boolean;
-  /** Date key ("YYYY-MM-DD") → the kinds of booking on that day. */
+  /** Day key ("YYYY-MM-DD") to the kinds of thing happening that day. */
   markers?: Record<string, DayMarker[]>;
   blockedDates?: string[];
   partlyBlockedDates?: string[];
@@ -31,15 +38,10 @@ const emit = defineEmits<{
   "month-change": [value: { year: number; month: number }];
 }>();
 
-const MARKER_ORDER: DayMarker[] = ["booking", "request"];
-
-/** The day's markers in a fixed order, so dots never swap places. */
 function markersFor(key: string): DayMarker[] {
-  const kinds = props.markers?.[key] ?? [];
-  return MARKER_ORDER.filter((kind) => kinds.includes(kind));
+  return props.markers?.[key] ?? [];
 }
-
-/** ", has a booking", ", has a request" or ", has a booking and a request". */
+/** The day's markers in words, so the dots' meaning never rests on colour. */
 function markerLabel(key: string): string {
   const kinds = markersFor(key);
   return kinds.length === 0 ? "" : `, has ${kinds.map((kind) => `a ${kind}`).join(" and ")}`;
@@ -271,8 +273,52 @@ function shiftMonth(delta: number): void {
   background: var(--color-base-white);
 }
 
-.calendar__day--selected .calendar__dot--request {
-  background: var(--color-blue-300);
+/* E4-3, Style.md 3.5: pattern-unavailable (all day) / -partial (some hours) / -selected. */
+.calendar__day--blocked,
+.calendar__day--blocked:hover:not(:disabled) {
+  background: repeating-linear-gradient(135deg,
+      var(--color-grey-200) 0 var(--spacing-4),
+      var(--color-grey-50) var(--spacing-4) var(--spacing-8));
+  box-shadow: inset 0 0 0 1px var(--color-grey-300);
+  color: var(--color-grey-900);
+  font-weight: 700;
+}
+
+.calendar__day--partly-blocked,
+.calendar__day--partly-blocked:hover:not(:disabled) {
+  background:
+    repeating-linear-gradient(135deg,
+      var(--color-grey-200) 0 var(--spacing-4),
+      var(--color-grey-50) var(--spacing-4) var(--spacing-8)) bottom / 100% 50% no-repeat;
+  box-shadow: inset 0 0 0 1px var(--color-grey-300);
+  color: var(--color-grey-900);
+  font-weight: 700;
+}
+
+/* Today keeps its purple ring when it's blocked. */
+.calendar__day--today.calendar__day--blocked,
+.calendar__day--today.calendar__day--partly-blocked {
+  box-shadow: inset 0 0 0 1px var(--color-purple-300);
+}
+
+.calendar__day--blocked.calendar__day--selected,
+.calendar__day--blocked.calendar__day--selected:hover:not(:disabled),
+.calendar__day--partly-blocked.calendar__day--selected,
+.calendar__day--partly-blocked.calendar__day--selected:hover:not(:disabled) {
+  background: repeating-linear-gradient(135deg,
+      var(--color-purple-600) 0 var(--spacing-4),
+      var(--color-purple-700) var(--spacing-4) var(--spacing-8));
+  box-shadow: none;
+  color: var(--color-base-white);
+}
+
+.calendar__day--partly-blocked.calendar__day--selected,
+.calendar__day--partly-blocked.calendar__day--selected:hover:not(:disabled) {
+  background:
+    repeating-linear-gradient(135deg,
+      var(--color-purple-600) 0 var(--spacing-4),
+      var(--color-purple-700) var(--spacing-4) var(--spacing-8)) bottom / 100% 50% no-repeat,
+    var(--color-purple-600);
 }
 
 /* E4-3, Style.md 3.5: pattern-unavailable (all day) / -partial (some hours) / -selected. */

@@ -9,7 +9,7 @@
 -- (awaiting the Safety Officer's Operational Safety Check, Week 7 change 6)
 -- and "Cancelled" (the Organiser cancelled their own event).
 --
--- venue_status: new, backs a booking-approval workflow (a booking request
+-- venue_booking_status: new, backs a booking-approval workflow (a booking request
 -- for a venue gets approved/rejected — not the venue itself). The column
 -- was created live as venue_bookings."Status" (capitalized); this
 -- migration renames it to the lowercase `status` every other column in
@@ -47,8 +47,8 @@ alter table events alter column status set default 'Requested'::event_status;
 
 do $$
 begin
-  if not exists (select 1 from pg_type where typname = 'venue_status') then
-    create type venue_status as enum (
+  if not exists (select 1 from pg_type where typname = 'venue_booking_status') then
+    create type venue_booking_status as enum (
       'Requested',
       'On Hold',
       'Approved',
@@ -61,6 +61,11 @@ begin
 end
 $$;
 
+-- The dev project's enum was created by hand without 'On Hold' (Week 7
+-- change 4 arrived later), and every availability check filters on it, so
+-- add it to an existing type rather than assuming the list above.
+alter type venue_booking_status add value if not exists 'On Hold' before 'Approved';
+
 do $$
 begin
   if exists (
@@ -72,12 +77,12 @@ begin
     select 1 from information_schema.columns
     where table_name = 'venue_bookings' and column_name = 'status'
   ) then
-    alter table venue_bookings add column status venue_status not null default 'Requested';
+    alter table venue_bookings add column status venue_booking_status not null default 'Requested';
   end if;
 end
 $$;
 
-alter table venue_bookings alter column status set default 'Requested'::venue_status;
+alter table venue_bookings alter column status set default 'Requested'::venue_booking_status;
 
 do $$
 begin

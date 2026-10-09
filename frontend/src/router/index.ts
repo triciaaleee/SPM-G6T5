@@ -7,6 +7,7 @@ import SignupView from "../views/SignupView.vue";
 import VenueSearchView from "../views/VenueSearchView.vue";
 import VenueAvailabilityView from "../views/VenueAvailabilityView.vue";
 import VenueStaff from "../views/VenueStaff.vue";
+import VenueRequestQueue from "../views/VenueRequestQueue.vue";
 import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
 
@@ -48,7 +49,16 @@ export const router = createRouter({
       meta: { requiresAuth: true, roles: ["coordinator"] },
     },
     {
-      // Venue availability calendar: when a venue could realistically be requested.
+      // E4-10: venue staff's decision queue — every request still waiting
+      // on them, soonest event first.
+      path: "/venue-requests",
+      name: "venue-requests",
+      component: VenueRequestQueue,
+      meta: { requiresAuth: true, roles: ["venue_staff"] },
+    },
+    {
+      // E4-4: venue availability calendar — when a venue could realistically
+      // be requested.
       path: "/venue-availability",
       name: "venue-availability",
       component: VenueAvailabilityView,

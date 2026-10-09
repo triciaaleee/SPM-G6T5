@@ -4,9 +4,11 @@ import { useRoute } from "vue-router";
 import { fetchEventById, type EventSummary } from "../lib/eventsApi";
 import {
   clearCriterion,
+  describeBookingFailure,
   emptyVenueFilters,
   fetchVenueFilterOptions,
   searchVenues,
+  submitVenueBooking,
   timeWindowError,
   VenueSearchError,
   type CriterionKey,
@@ -58,6 +60,39 @@ function prefillFromEvent(event: EventSummary): void {
   }
   const attendance = Number(details.expectedAttendance);
   if (Number.isInteger(attendance) && attendance > 0) filters.value.capacityMin = attendance;
+}
+
+/**
+ * E4-8: a venue can only be requested for an event, so the action appears
+ * only when the search was opened from one (?eventId=) and that event is
+ * still in Planning — the only status a booking request may be made in
+ * (AGENTS.md §3a). The outcome stays on the card it came from: a refusal
+ * carries the clashing occupied window, which is the point of the message
+ * (AC4/AC6).
+ */
+const canRequest = computed(() => sourceEvent.value?.status === "Planning");
+
+const requestingVenueId = ref<number | null>(null);
+const requestedVenueIds = ref<Set<number>>(new Set());
+const requestErrorVenueId = ref<number | null>(null);
+const requestError = ref("");
+
+async function requestVenue(venueId: number): Promise<void> {
+  const event = sourceEvent.value;
+  if (!event) return;
+
+  requestingVenueId.value = venueId;
+  requestErrorVenueId.value = null;
+  requestError.value = "";
+  try {
+    await submitVenueBooking(event.id, venueId);
+    requestedVenueIds.value = new Set(requestedVenueIds.value).add(venueId);
+  } catch (err) {
+    requestErrorVenueId.value = venueId;
+    requestError.value = describeBookingFailure(err, "Failed to request this venue");
+  } finally {
+    requestingVenueId.value = null;
+  }
 }
 
 // Responses can land out of order when filters change quickly; only the
@@ -238,6 +273,19 @@ onMounted(async () => {
                     </dd>
                   </div>
                 </dl>
+
+                <template v-if="canRequest">
+                  <p v-if="requestedVenueIds.has(venue.id)" class="body-small requested-note" role="status">
+                    Requested — awaiting Venue Staff
+                  </p>
+                  <button v-else type="button" class="request-btn" :disabled="requestingVenueId === venue.id"
+                    @click="requestVenue(venue.id)">
+                    {{ requestingVenueId === venue.id ? "Requesting…" : "Request this venue" }}
+                  </button>
+                  <p v-if="requestErrorVenueId === venue.id" class="body-small error-text" role="alert">
+                    {{ requestError }}
+                  </p>
+                </template>
               </li>
             </ul>
           </template>
@@ -387,6 +435,39 @@ onMounted(async () => {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+/* Style.md 3.4 Button Hierarchy (primary) + 8.2 focus ring; radius-xs. */
+.request-btn {
+  margin-top: var(--spacing-16);
+  padding: var(--spacing-12) var(--spacing-16);
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: var(--color-purple-600);
+  color: var(--color-base-white);
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.request-btn:hover:not(:disabled) {
+  background: var(--color-purple-700);
+}
+
+.request-btn:focus-visible {
+  outline: 2px solid var(--color-purple-600);
+  outline-offset: 2px;
+}
+
+.request-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.requested-note {
+  margin-top: var(--spacing-16);
+  color: var(--color-success-700);
+  font-weight: 700;
 }
 
 .venue-card {

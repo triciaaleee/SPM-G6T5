@@ -84,7 +84,7 @@ function details(overrides: Record<string, unknown> = {}) {
 }
 
 /** venue_bookings only links a venue to an event; the schedule is the event's own. */
-type Booking = { venue_id: number; event_id: number; status: string; hold_expires_at: string | null };
+type Booking = { venue_id: number; event_id: number; status?: string; hold_expires_at?: string | null };
 type BookedEvent = { id: number; proposedDate: string; startTime: string; endTime: string };
 
 function buildApp(
@@ -96,8 +96,16 @@ function buildApp(
     bookingEvents?: Record<string, unknown>[];
   } = {},
 ) {
+  // Only "On Hold" (unexpired) and "Approved" bookings block a venue, so a
+  // fixture that means to block defaults to "Approved".
+  const bookingRows = (options.bookings ?? []).map((booking) => ({
+    id: booking.venue_id * 100 + booking.event_id,
+    status: "Approved",
+    hold_expires_at: null,
+    ...booking,
+  }));
   const bookingsQuery = {
-    in: vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null }),
+    in: vi.fn().mockResolvedValue({ data: bookingRows, error: null }),
   };
 
   const supabase = {

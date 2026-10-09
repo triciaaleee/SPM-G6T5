@@ -47,6 +47,13 @@ export async function fetchEvent(eventId: number, authorization: string): Promis
  */
 export interface VenueBookingInfo {
   id: number;
+  /**
+   * The event's lifecycle status. Here because a booking can only be held
+   * or approved while the event is in "Planning" (E4-10 AC2) and venue
+   * staff cannot call GET /api/events/:id, which is owner-or-coordinator
+   * only. Used for that check and never passed on to the browser.
+   */
+  status: string;
   name: string | null;
   proposedDate: string | null;
   startTime: string | null;

@@ -17,13 +17,46 @@
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import VenueIcon from "./VenueIcon.vue";
-import { fetchVenueRecommendations, type VenueRecommendations } from "../../lib/venuesApi";
+import {
+  describeBookingFailure,
+  fetchVenueRecommendations,
+  submitVenueBooking,
+  type VenueRecommendations,
+} from "../../lib/venuesApi";
 
 const props = defineProps<{
   eventId: number;
   /** The event's submitted details; recommendations refresh when they change. */
   details: unknown;
+  /** E4-8: a venue can only be requested while the event is in Planning. */
+  canRequest?: boolean;
 }>();
+
+const emit = defineEmits<{ requested: [venueId: number] }>();
+
+// E4-8: one request at a time, with the outcome shown on the card it came
+// from. A refused request keeps its message until another is attempted:
+// the clashing window is the whole point of the message (AC6).
+const requestingVenueId = ref<number | null>(null);
+const requestedVenueIds = ref<Set<number>>(new Set());
+const requestErrorVenueId = ref<number | null>(null);
+const requestError = ref("");
+
+async function requestVenue(venueId: number): Promise<void> {
+  requestingVenueId.value = venueId;
+  requestErrorVenueId.value = null;
+  requestError.value = "";
+  try {
+    await submitVenueBooking(props.eventId, venueId);
+    requestedVenueIds.value = new Set(requestedVenueIds.value).add(venueId);
+    emit("requested", venueId);
+  } catch (err) {
+    requestErrorVenueId.value = venueId;
+    requestError.value = describeBookingFailure(err, "Failed to request this venue");
+  } finally {
+    requestingVenueId.value = null;
+  }
+}
 
 const loading = ref(true);
 const errorMessage = ref("");
@@ -186,6 +219,18 @@ function matchedFeatures(venue: Venue): string[] {
                 {{ feature }}
               </span>
             </div>
+            <template v-if="canRequest && !clone">
+              <p v-if="requestedVenueIds.has(venue.id)" class="body-small requested-note" role="status">
+                Requested — awaiting Venue Staff
+              </p>
+              <button v-else type="button" class="request-btn" :disabled="requestingVenueId === venue.id"
+                @click="requestVenue(venue.id)">
+                {{ requestingVenueId === venue.id ? "Requesting…" : "Request this venue" }}
+              </button>
+              <p v-if="requestErrorVenueId === venue.id" class="body-small error-text" role="alert">
+                {{ requestError }}
+              </p>
+            </template>
           </li>
         </ul>
 
@@ -250,6 +295,39 @@ function matchedFeatures(venue: Venue): string[] {
   display: flex;
   flex-wrap: wrap;
   gap: var(--spacing-4);
+}
+
+/* Style.md 3.4 Button Hierarchy (primary) + 8.2 focus ring; radius-xs. */
+.request-btn {
+  margin-top: var(--spacing-8);
+  padding: var(--spacing-8) var(--spacing-12);
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: var(--color-purple-600);
+  color: var(--color-base-white);
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.request-btn:hover:not(:disabled) {
+  background: var(--color-purple-700);
+}
+
+.request-btn:focus-visible {
+  outline: 2px solid var(--color-purple-600);
+  outline-offset: 2px;
+}
+
+.request-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.requested-note {
+  margin-top: var(--spacing-8);
+  color: var(--color-success-700);
+  font-weight: 700;
 }
 
 /* Style.md 5: Small Text / Tag (12px / 700 / 16px), chip radius-xs. */

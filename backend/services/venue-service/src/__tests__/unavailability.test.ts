@@ -2,7 +2,8 @@ import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
-import { occupiedWindow, parsePeriodInput, periodBlocksSlot } from "../lib/unavailability.js";
+import { occupiedWindow, parsePeriodInput, periodBlocksSlot, periodOverlapsWindow } from "../lib/unavailability.js";
+import { occupiedWindow as bookingWindow } from "../lib/bookingConflicts.js";
 import { unavailabilityRouter } from "../routes/unavailability.js";
 
 vi.mock("../middleware/auth.js", async () => {
@@ -424,5 +425,46 @@ describe("DELETE /api/venues/unavailability/:id", () => {
     const { app } = buildApp({ deleted: [] });
     const res = await request(app).delete("/api/venues/unavailability/1");
     expect(res.status).toBe(404);
+  });
+});
+
+describe("periodOverlapsWindow", () => {
+  const padding = { setup_minutes: 30, turnaround_minutes: 45 };
+  /** 2026-11-10 10:00–12:00 at a 30/45 venue → 09:30–12:45. */
+  const window = bookingWindow({ proposedDate: "2026-11-10", startTime: "10:00", endTime: "12:00" }, padding)!;
+  const timed = (startTime: string, endTime: string, startDate = "2026-11-10", endDate = startDate) => ({
+    startDate,
+    endDate,
+    allDay: false,
+    startTime,
+    endTime,
+  });
+
+  it("clashes with an all-day block on the event's date", () => {
+    expect(
+      periodOverlapsWindow({ startDate: "2026-11-10", endDate: "2026-11-10", allDay: true, startTime: null, endTime: null }, window),
+    ).toBe(true);
+  });
+
+  it("counts a partial overlap with the setup or turnaround", () => {
+    expect(periodOverlapsWindow(timed("12:30", "17:00"), window)).toBe(true);
+    expect(periodOverlapsWindow(timed("08:00", "09:45"), window)).toBe(true);
+  });
+
+  it("is half-open, so a block ending as setup starts is free", () => {
+    expect(periodOverlapsWindow(timed("08:00", "09:30"), window)).toBe(false);
+    expect(periodOverlapsWindow(timed("12:45", "18:00"), window)).toBe(false);
+  });
+
+  it("applies a timed block to every day of a multi-day period", () => {
+    expect(periodOverlapsWindow(timed("11:00", "11:30", "2026-11-08", "2026-11-12"), window)).toBe(true);
+    expect(periodOverlapsWindow(timed("11:00", "11:30", "2026-11-11", "2026-11-12"), window)).toBe(false);
+  });
+
+  it("catches a block on the next day when turnaround runs past midnight", () => {
+    const late = bookingWindow({ proposedDate: "2026-11-10", startTime: "22:00", endTime: "23:45" }, padding)!;
+    expect(
+      periodOverlapsWindow({ startDate: "2026-11-11", endDate: "2026-11-11", allDay: false, startTime: "00:00", endTime: "06:00" }, late),
+    ).toBe(true);
   });
 });

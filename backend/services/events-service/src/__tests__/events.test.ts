@@ -1742,7 +1742,9 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
   }
 
   it("returns only the booking-relevant fields to venue staff", async () => {
-    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload, coordinator_id: "COORD-0001" }]);
+    const supabase = buildVenueInfoSupabase([
+      { id: 3, status: "Planning", submitted_details: validPayload, coordinator_id: "COORD-0001" },
+    ]);
     const app = buildApp(supabase, venueStaff);
 
     const res = await request(app).get("/api/events/venue-booking-info?ids=3");
@@ -1751,6 +1753,7 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(res.body.events).toEqual([
       {
         id: 3,
+        status: "Planning",
         coordinatorId: "COORD-0001",
         name: validPayload.name,
         proposedDate: validPayload.proposedDate,
@@ -1767,8 +1770,21 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(event).not.toHaveProperty("purpose");
     expect(event).not.toHaveProperty("description");
     expect(event).not.toHaveProperty("coordinator");
-    expect(event).not.toHaveProperty("status");
-    expect(supabase.select).toHaveBeenCalledWith("id, submitted_details, coordinator_id");
+    expect(supabase.select).toHaveBeenCalledWith("id, status, submitted_details, coordinator_id");
+  });
+
+  it("E4-10 AC2: carries the lifecycle status, which venue staff cannot read any other way", async () => {
+    // Without this, venue-service reads event.status as undefined and
+    // refuses every hold and approval with "This event is undefined".
+    // It was dropped once already in a merge — hence this test.
+    const supabase = buildVenueInfoSupabase([
+      { id: 3, status: "Planning", submitted_details: validPayload, coordinator_id: "COORD-0001" },
+    ]);
+    const app = buildApp(supabase, venueStaff);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.body.events[0].status).toBe("Planning");
   });
 
   it("never returns drafts and de-duplicates the ids", async () => {
