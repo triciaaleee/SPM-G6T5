@@ -3,7 +3,7 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { equipmentRequestsRouter } from "../routes/equipmentRequests.js";
-import { validateEquipmentItems } from "../lib/validateEquipmentRequest.js";
+import { validateEquipmentItems, validateStatusUpdate } from "../lib/validateEquipmentRequest.js";
 
 vi.mock("../middleware/auth.js", async () => {
   return {
@@ -23,6 +23,7 @@ function query(result: { data: unknown; error: unknown }) {
   const q: Record<string, any> = {};
   for (const method of ["select", "eq", "order", "in"]) q[method] = vi.fn(() => q);
   q.single = vi.fn().mockResolvedValue(result);
+  q.maybeSingle = vi.fn().mockResolvedValue(result);
   q.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
     Promise.resolve(result).then(resolve, reject);
   return q;
@@ -52,6 +53,8 @@ function buildApp(
     technicalSupportStaff?: { id: string }[];
     notificationsStatus?: number;
     bookingInfoEvents?: Record<string, unknown>[];
+    updatedRequest?: Record<string, unknown> | null;
+    updateRequestError?: boolean;
   } = {},
 ) {
   const requestInsert = vi.fn((row: Record<string, unknown>) =>
@@ -68,6 +71,22 @@ function buildApp(
       error: options.insertItemsError ? { message: "boom" } : null,
     }),
   );
+  const requestUpdate = vi.fn((patch: Record<string, unknown>) =>
+    query({
+      data: options.updateRequestError
+        ? null
+        : options.updatedRequest === undefined
+          ? {
+              id: 55,
+              event_id: 7,
+              coordinator_id: "COORD-0001",
+              created_at: "2026-01-01T00:00:00Z",
+              ...patch,
+            }
+          : options.updatedRequest,
+      error: options.updateRequestError ? { message: "boom" } : null,
+    }),
+  );
   const deleteQuery = query({ data: null, error: null });
   const requestsSelect = query({ data: options.requests ?? [], error: null });
   const itemsSelect = query({ data: options.items ?? [], error: null });
@@ -76,7 +95,12 @@ function buildApp(
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === "equipment_requests") {
-        return { insert: requestInsert, select: requestsSelect.select, delete: vi.fn(() => deleteQuery) };
+        return {
+          insert: requestInsert,
+          select: requestsSelect.select,
+          delete: vi.fn(() => deleteQuery),
+          update: requestUpdate,
+        };
       }
       if (table === "equipment_request_items") {
         return { insert: itemsInsert, select: itemsSelect.select };
@@ -109,7 +133,7 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/equipment-requests", equipmentRequestsRouter);
-  return { app, supabase, requestInsert, itemsInsert, deleteQuery, fetchMock };
+  return { app, supabase, requestInsert, itemsInsert, requestUpdate, deleteQuery, fetchMock };
 }
 
 afterEach(() => {
@@ -276,6 +300,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         id: 55,
         eventId: 7,
         status: "Requested",
+        fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
         items: [{ id: 1, equipmentType: "Projector", quantity: 2, technicalRequirements: "HDMI" }],
       },
@@ -302,10 +327,126 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         id: 55,
         eventId: 7,
         status: "Requested",
+        fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
         items: [{ id: 1, equipmentType: "Projector", quantity: 2, technicalRequirements: "" }],
         event: { id: 7, name: "Alumni Gala", proposedDate: "2026-02-01", equipment: "2 projectors" },
       },
     ]);
+  });
+});
+
+describe("validateStatusUpdate", () => {
+  it("accepts a plain status with no note", () => {
+    expect(validateStatusUpdate({ status: "Arranged" })).toEqual({
+      valid: true,
+      fields: {},
+      value: { status: "Arranged", note: null },
+    });
+  });
+
+  it("rejects a status outside the fixed set", () => {
+    const result = validateStatusUpdate({ status: "Done" });
+    expect(result.valid).toBe(false);
+    expect(result.fields.status).toBeDefined();
+  });
+
+  // AC2: a note describing what remains outstanding is required.
+  it("requires a note when partially fulfilled", () => {
+    const result = validateStatusUpdate({ status: "Partially Fulfilled" });
+    expect(result.valid).toBe(false);
+    expect(result.fields.note).toBeDefined();
+  });
+
+  it("accepts partially fulfilled with a note", () => {
+    expect(validateStatusUpdate({ status: "Partially Fulfilled", note: "2 of 3 mics arrived" })).toEqual({
+      valid: true,
+      fields: {},
+      value: { status: "Partially Fulfilled", note: "2 of 3 mics arrived" },
+    });
+  });
+
+  it("clears a stray note for any other status", () => {
+    const result = validateStatusUpdate({ status: "Arranged", note: "ignored" });
+    expect(result.valid && result.value?.note).toBeNull();
+  });
+});
+
+describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
+  it("rejects a non-technical-support caller", async () => {
+    const { app } = buildApp({ user: coordinator });
+    const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects an invalid id", async () => {
+    const { app } = buildApp({ user: technicalSupport });
+    const res = await request(app).patch("/api/equipment-requests/abc").send({ status: "Arranged" });
+    expect(res.status).toBe(400);
+  });
+
+  it("surfaces validation errors (AC2: note required for partial fulfilment)", async () => {
+    const { app } = buildApp({ user: technicalSupport });
+    const res = await request(app)
+      .patch("/api/equipment-requests/55")
+      .send({ status: "Partially Fulfilled" });
+    expect(res.status).toBe(400);
+    expect(res.body.fields.note).toBeDefined();
+  });
+
+  it("404s when the request doesn't exist", async () => {
+    const { app } = buildApp({ user: technicalSupport, updatedRequest: null });
+    const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+    expect(res.status).toBe(404);
+  });
+
+  // AC1: saving notifies the assigned coordinator and the new status is returned.
+  it("updates the status and notifies the assigned coordinator", async () => {
+    const { app, requestUpdate, fetchMock } = buildApp({
+      user: technicalSupport,
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, technical_requirements: null }],
+      bookingInfoEvents: [{ id: 7, name: "Alumni Gala" }],
+    });
+
+    const res = await request(app)
+      .patch("/api/equipment-requests/55")
+      .set("Authorization", "Bearer token123")
+      .send({ status: "Arranged" });
+
+    expect(res.status).toBe(200);
+    expect(requestUpdate).toHaveBeenCalledWith({ status: "Arranged", fulfillment_note: null });
+    expect(res.body.equipmentRequest).toMatchObject({ id: 55, status: "Arranged", fulfillmentNote: null });
+    expect(res.body.notified).toBe(true);
+
+    const notifyCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/notifications"));
+    const sentBody = JSON.parse((notifyCall![1] as RequestInit).body as string);
+    expect(sentBody.notifications[0]).toMatchObject({
+      recipientId: "COORD-0001",
+      type: "equipment_request_status_updated",
+    });
+    expect(sentBody.notifications[0].body).toContain("Alumni Gala");
+  });
+
+  // AC2: the coordinator is told what remains outstanding.
+  it("records a partial fulfilment with its note", async () => {
+    const { app, requestUpdate } = buildApp({ user: technicalSupport, items: [] });
+
+    const res = await request(app)
+      .patch("/api/equipment-requests/55")
+      .send({ status: "Partially Fulfilled", note: "2 of 3 mics arrived" });
+
+    expect(res.status).toBe(200);
+    expect(requestUpdate).toHaveBeenCalledWith({
+      status: "Partially Fulfilled",
+      fulfillment_note: "2 of 3 mics arrived",
+    });
+    expect(res.body.equipmentRequest.fulfillmentNote).toBe("2 of 3 mics arrived");
+  });
+
+  it("reports notified:false when notification-service fails, without failing the update", async () => {
+    const { app } = buildApp({ user: technicalSupport, items: [], notificationsStatus: 500 });
+    const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+    expect(res.status).toBe(200);
+    expect(res.body.notified).toBe(false);
   });
 });

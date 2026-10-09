@@ -8,10 +8,16 @@ export interface EquipmentItem {
   technicalRequirements: string;
 }
 
+/** E5-3: the real values status can take on, fixed by that story. */
+export const EQUIPMENT_REQUEST_STATUSES = ["Requested", "Arranged", "Partially Fulfilled"] as const;
+export type EquipmentRequestStatus = (typeof EQUIPMENT_REQUEST_STATUSES)[number];
+
 export interface EquipmentRequest {
   id: number;
   eventId: number;
   status: string;
+  /** E5-3 AC2: what remains outstanding, set alongside "Partially Fulfilled". */
+  fulfillmentNote: string | null;
   createdAt: string;
   items: EquipmentItem[];
 }
@@ -79,4 +85,32 @@ export async function fetchAllEquipmentRequests(): Promise<EquipmentRequestWithE
   if (!res.ok) throw new Error("Failed to load equipment requests");
   const body = await res.json();
   return body.equipmentRequests as EquipmentRequestWithEvent[];
+}
+
+/**
+ * E5-3 AC1/AC2: Technical Support update a request's status as arrangements
+ * are made, with a note on what remains outstanding when only partly
+ * fulfilled. The assigned coordinator is notified by the backend.
+ */
+export async function updateEquipmentRequestStatus(
+  requestId: number,
+  status: EquipmentRequestStatus,
+  note?: string,
+): Promise<{ equipmentRequest: EquipmentRequest; notified: boolean }> {
+  const res = await fetch(`${apiBase}/${requestId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeader() },
+    body: JSON.stringify({ status, note }),
+  });
+
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+
+  if (res.status === 400) {
+    throw new EquipmentValidationError(body.fields ?? {});
+  }
+  if (!res.ok) {
+    throw new EquipmentRequestError(body.error ?? "Failed to update the equipment request");
+  }
+  return body as { equipmentRequest: EquipmentRequest; notified: boolean };
 }
