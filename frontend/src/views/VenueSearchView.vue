@@ -3,8 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { fetchEventById, type EventSummary } from "../lib/eventsApi";
 import {
-  BookingConflictError,
   clearCriterion,
+  describeBookingFailure,
   emptyVenueFilters,
   fetchVenueFilterOptions,
   searchVenues,
@@ -89,11 +89,7 @@ async function requestVenue(venueId: number): Promise<void> {
     requestedVenueIds.value = new Set(requestedVenueIds.value).add(venueId);
   } catch (err) {
     requestErrorVenueId.value = venueId;
-    if (err instanceof BookingConflictError && err.conflict) {
-      requestError.value = `${err.message}. Booked ${err.conflict.window} (setup ${err.conflict.setupMinutes} min, turnaround ${err.conflict.turnaroundMinutes} min); this event needs ${err.conflict.requestedWindow}.`;
-    } else {
-      requestError.value = err instanceof Error ? err.message : "Failed to request this venue";
-    }
+    requestError.value = describeBookingFailure(err, "Failed to request this venue");
   } finally {
     requestingVenueId.value = null;
   }

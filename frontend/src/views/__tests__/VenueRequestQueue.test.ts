@@ -16,6 +16,7 @@ vi.mock("../../lib/venuesApi", async () => {
   const actual = await vi.importActual<typeof import("../../lib/venuesApi")>("../../lib/venuesApi");
   return {
     BookingConflictError: actual.BookingConflictError,
+    describeBookingFailure: actual.describeBookingFailure,
     fetchPendingRequests: vi.fn(),
     holdBooking: vi.fn(),
     approveBooking: vi.fn(),

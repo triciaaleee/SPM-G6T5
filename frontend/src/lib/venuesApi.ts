@@ -320,6 +320,25 @@ export interface BookingConflict {
   turnaroundMinutes: number;
 }
 
+/**
+ * E4-8 AC6 / E4-11: the one wording for a refused booking, used by the
+ * coordinator's search and recommendations and by the Venue Staff queue, so
+ * all three name the clashing window the same way. The padding is spelled
+ * out because the window is wider than the event's own times (§3a change 1)
+ * and that is otherwise baffling to read.
+ */
+export function describeBookingFailure(err: unknown, fallback = "That didn't work. Try again."): string {
+  if (err instanceof BookingConflictError && err.conflict) {
+    const { window, requestedWindow, setupMinutes, turnaroundMinutes } = err.conflict;
+    const padding =
+      setupMinutes > 0 || turnaroundMinutes > 0
+        ? ` (setup ${setupMinutes} min, turnaround ${turnaroundMinutes} min)`
+        : "";
+    return `${err.message}. Already booked ${window}${padding}; this event needs ${requestedWindow}.`;
+  }
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
 export class BookingConflictError extends Error {
   conflict: BookingConflict | null;
   constructor(message: string, conflict: BookingConflict | null = null) {

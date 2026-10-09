@@ -84,6 +84,8 @@ function bookedEvent(id: number, startTime = "10:00", endTime = "12:00", date = 
     equipment: "PA system",
     accessibility: "NA",
     technicalSupport: "None",
+    /** E4-11 AC4: who to notify when this booking is auto-rejected. */
+    coordinatorId: `COORD-000${id}`,
   };
 }
 
@@ -101,12 +103,30 @@ function buildApp(
     eventStatus?: string;
     eventHttpStatus?: number;
     updateReturnsNothing?: boolean;
+    /** AC5: apply writes to the fixtures, so a second decision sees the first. */
+    applyUpdates?: boolean;
+    /** AC5: a rival that only appears after the first write lands. */
+    appearsAfterUpdate?: BookingFixture;
+    /** AC4: notification-service's answer, separate from events-service's. */
+    notificationHttpStatus?: number;
   } = {},
 ) {
   const rows = options.bookings ?? [];
   const updates: { filters: Record<string, unknown>; ids?: number[]; patch: Record<string, unknown> }[] = [];
   /** Venue ids this staff member owns (venues.staff_id). */
   const assigned = options.assignedVenueIds ?? [1, 2];
+
+  /**
+   * AC5: a real database round-trip yields the event loop, which is what
+   * lets two concurrent decisions interleave. The in-memory double would
+   * otherwise settle in microtasks and serialise by accident, hiding the
+   * very race the venue lock exists to stop — so the tests that exercise
+   * concurrency make every read and write cross a macrotask.
+   */
+  function roundTrip(): Promise<void> {
+    if (!options.applyUpdates) return Promise.resolve();
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
 
   function bookingsQuery() {
     const filters: Record<string, unknown> = {};
@@ -119,11 +139,15 @@ function buildApp(
         filters[`${column}__in`] = values;
         return q;
       }),
-      maybeSingle: vi.fn(async () => ({ data: match(filters)[0] ?? null, error: null })),
+      maybeSingle: vi.fn(async () => {
+        await roundTrip();
+        return { data: match(filters)[0] ?? null, error: null };
+      }),
       then: undefined,
     };
     // Awaiting the builder itself resolves to the full list.
-    q.then = (resolve: (value: unknown) => unknown) => resolve({ data: match(filters), error: null });
+    q.then = (resolve: (value: unknown) => unknown) =>
+      roundTrip().then(() => resolve({ data: match(filters), error: null }));
     return q;
   }
 
@@ -154,17 +178,38 @@ function buildApp(
       }),
       select: vi.fn(() => q),
       maybeSingle: vi.fn(async () => {
+        await roundTrip();
         updates.push({ filters, ids, patch });
         if (options.updateReturnsNothing) return { data: null, error: null };
         const target = rows.find((row) => row.id === filters.id);
+        if (target && options.applyUpdates) Object.assign(target, patch);
+        applyLateRival();
         return { data: target ? { ...target, ...patch } : null, error: null };
       }),
     };
     q.then = (resolve: (value: unknown) => unknown) => {
       updates.push({ filters, ids, patch });
+      if (options.applyUpdates) {
+        for (const row of ids ? rows.filter((r) => ids!.includes(r.id)) : match(filters)) {
+          Object.assign(row, patch);
+        }
+      }
+      applyLateRival();
       return resolve({ data: null, error: null });
     };
     return q;
+  }
+
+  /**
+   * AC5: stand in for another venue-service instance that took the venue
+   * between this decision's conflict check and its write — the row shows
+   * up only once the first write has landed.
+   */
+  let lateRivalAdded = false;
+  function applyLateRival() {
+    if (!options.appearsAfterUpdate || lateRivalAdded) return;
+    lateRivalAdded = true;
+    rows.push(options.appearsAfterUpdate);
   }
 
   const supabase = {
@@ -199,7 +244,11 @@ function buildApp(
   };
 
   const eventHttpStatus = options.eventHttpStatus ?? 200;
-  const fetchMock = vi.fn(async (url: string) => {
+  const fetchMock = vi.fn(async (url: string, init?: { body?: string }) => {
+    if (String(url).includes("/api/notifications")) {
+      const status = options.notificationHttpStatus ?? 200;
+      return { ok: status >= 200 && status < 300, status, json: async () => ({}) };
+    }
     const events = (options.events ?? [bookedEvent(7)]).map((event) =>
       options.eventStatus && (event as { id: number }).id === 7
         ? { ...event, status: options.eventStatus }
@@ -402,6 +451,122 @@ describe("POST /bookings/:id/approve", () => {
     expect(autoReject?.patch).toMatchObject({ decision_reason: AUTO_REJECT_REASON, decided_by: null });
   });
 
+  it("E4-11 AC4: tells each auto-rejected booking's coordinator, and the winner's", async () => {
+    const { app, fetchMock } = buildApp({
+      bookings: [booking({ id: 10 }), booking({ id: 11, event_id: 21 })],
+      events: [bookedEvent(7), bookedEvent(21, "11:00", "13:00")],
+    });
+    const res = await act(app, "approve");
+
+    expect(res.status).toBe(200);
+    expect(res.body.coordinatorsNotified).toBe(2);
+    expect(res.body.notificationsFailed).toBe(false);
+
+    const send = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/notifications"));
+    expect(send).toBeDefined();
+    const sent = JSON.parse(send![1]!.body!).notifications as Record<string, string>[];
+
+    const loser = sent.find((n) => n.recipientId === "COORD-00021");
+    expect(loser).toMatchObject({ type: "venue_booking_auto_rejected", link: "/events/21" });
+    // The fixed reason, and what they can do about it (AC4).
+    expect(loser!.body).toContain(AUTO_REJECT_REASON);
+    expect(loser!.body).toMatch(/another venue or another time/i);
+
+    expect(sent.find((n) => n.recipientId === "COORD-0007")).toMatchObject({
+      type: "venue_booking_decided",
+      link: "/events/7",
+    });
+  });
+
+  it("AC4: a failed notification never undoes a decision that landed", async () => {
+    const { app, updates } = buildApp({
+      bookings: [booking({ id: 10 }), booking({ id: 11, event_id: 21 })],
+      events: [bookedEvent(7), bookedEvent(21, "11:00", "13:00")],
+      notificationHttpStatus: 503,
+    });
+    const res = await act(app, "approve");
+
+    // Telling people is best-effort: the approval and the auto-rejection
+    // stand, and the caller is told the sending failed.
+    expect(res.status).toBe(200);
+    expect(res.body.booking.status).toBe("Approved");
+    expect(res.body.autoRejectedBookingIds).toEqual([11]);
+    expect(res.body.notificationsFailed).toBe(true);
+    expect(res.body.coordinatorsNotified).toBe(0);
+    expect(updates.some((update) => update.ids?.includes(11))).toBe(true);
+  });
+
+  it("AC7: a decision at one venue never auto-rejects another venue's requests", async () => {
+    const { app, updates } = buildApp({
+      bookings: [booking({ id: 10 }), booking({ id: 13, event_id: 23, venue_id: 2 })],
+      events: [bookedEvent(7), bookedEvent(23)],
+    });
+    const res = await act(app, "approve");
+
+    expect(res.status).toBe(200);
+    expect(res.body.autoRejectedBookingIds).toEqual([]);
+    expect(updates.some((update) => update.ids?.includes(13))).toBe(false);
+  });
+
+  it("AC5: two overlapping holds at one venue are serialised — only the first succeeds", async () => {
+    const rows = [booking({ id: 10 }), booking({ id: 11, event_id: 21 })];
+    const { app } = buildApp({
+      bookings: rows,
+      applyUpdates: true,
+      // Both events want 2026-11-10 at venue 1, so their padded windows clash.
+      events: [bookedEvent(7), bookedEvent(21, "11:00", "13:00")],
+    });
+
+    // Fired together, without awaiting in between: the venue lock is what
+    // stops both from reading a free venue and both writing a hold.
+    const [first, second] = await Promise.all([act(app, "approve", 10), act(app, "approve", 11)]);
+
+    const codes = [first.status, second.status].sort();
+    expect(codes).toEqual([200, 409]);
+
+    // The invariant the story actually asks for: one booking holds the
+    // venue and the other does not, whichever order they landed in.
+    const blocking = rows.filter((row) => row.status === "Approved" || row.status === "On Hold");
+    expect(blocking).toHaveLength(1);
+    expect(rows.find((row) => row.id !== blocking[0].id)?.status).toBe("Rejected");
+  });
+
+  it("AC5: a decision that lost the race to another instance rolls itself back", async () => {
+    const { app, updates } = buildApp({
+      bookings: [booking({ id: 10 }), booking({ id: 11, event_id: 21 })],
+      applyUpdates: true,
+      events: [bookedEvent(7), bookedEvent(21, "11:00", "13:00")],
+      // Committed elsewhere just after our write, and decided earlier, so
+      // ours is the one that must give way.
+      appearsAfterUpdate: {
+        id: 50,
+        venue_id: 1,
+        event_id: 7,
+        status: "Approved",
+        hold_expires_at: null,
+        decision_reason: null,
+        decided_by: "VEN-0009",
+        decided_at: "2020-01-01T00:00:00.000Z",
+      },
+    });
+
+    const res = await act(app, "approve", 10);
+
+    expect(res.status).toBe(409);
+    expect(res.body.conflict).toMatchObject({ bookingId: 50, status: "Approved" });
+
+    // Undone with the system as the decider, not left Approved.
+    const rollback = updates.find((update) => update.filters.id === 10 && update.patch.status === "Rejected");
+    expect(rollback?.patch).toMatchObject({
+      decision_reason: AUTO_REJECT_REASON,
+      decided_by: null,
+      hold_expires_at: null,
+    });
+
+    // AC5: a booking that yielded must not drag the other requests down.
+    expect(updates.some((update) => update.ids?.includes(11))).toBe(false);
+  });
+
   it("409s when another decision landed first", async () => {
     const { app } = buildApp({ bookings: [booking({ id: 10 })], updateReturnsNothing: true });
     const res = await act(app, "approve");
@@ -437,11 +602,17 @@ describe("POST /bookings/:id/reject", () => {
     });
   });
 
-  it("doesn't ask events-service anything — a request can be refused whatever the event is doing", async () => {
-    const { app, fetchMock } = buildApp({ bookings: [booking({ id: 10 })] });
-    await act(app, "reject", 10, { reason: "Double-booked internally" });
+  it("doesn't depend on events-service — a request can be refused whatever the event is doing", async () => {
+    // The only reason a rejection looks an event up at all is to find the
+    // coordinator to notify, and that happens after the rejection is
+    // recorded — so events-service being down cannot block the decision.
+    const { app, updates } = buildApp({ bookings: [booking({ id: 10 })], eventHttpStatus: 500 });
+    const res = await act(app, "reject", 10, { reason: "Double-booked internally" });
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.body.booking.status).toBe("Rejected");
+    expect(updates[0].patch).toMatchObject({ status: "Rejected", decision_reason: "Double-booked internally" });
+    expect(res.body.coordinatorsNotified).toBe(0);
   });
 
   it("returns 404 for a booking that doesn't exist", async () => {

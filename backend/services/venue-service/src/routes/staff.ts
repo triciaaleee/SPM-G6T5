@@ -328,6 +328,10 @@ async function decide(req: AuthedRequest, res: Response, decision: Decision): Pr
         },
         // §3a/E4-11 AC4: the other requests this decision knocked out.
         autoRejectedBookingIds: result.autoRejectedIds,
+        // AC4: their coordinators, and this one, were told. Best-effort —
+        // a failed send never undoes a decision that already landed.
+        coordinatorsNotified: result.coordinatorsNotified,
+        notificationsFailed: result.notificationsFailed,
       });
   }
 }

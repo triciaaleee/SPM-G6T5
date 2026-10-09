@@ -18,8 +18,8 @@
 import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 import {
-  BookingConflictError,
   approveBooking,
+  describeBookingFailure,
   fetchPendingRequests,
   holdBooking,
   rejectBooking,
@@ -58,13 +58,6 @@ async function load(): Promise<void> {
 
 onMounted(load);
 
-function describeFailure(err: unknown): string {
-  if (err instanceof BookingConflictError && err.conflict) {
-    return `${err.message}. Already booked ${err.conflict.window}; this event needs ${err.conflict.requestedWindow}.`;
-  }
-  return err instanceof Error ? err.message : "That didn't work. Try again.";
-}
-
 /**
  * Every decision reloads the queue rather than patching the row: a hold or
  * an approval can auto-reject other requests in the same list (§3a), so
@@ -86,7 +79,7 @@ async function runDecision(request: PendingVenueRequest, decide: () => Promise<{
     rejectReason.value = "";
     await load();
   } catch (err) {
-    rowError.value = { id: request.id, message: describeFailure(err) };
+    rowError.value = { id: request.id, message: describeBookingFailure(err) };
   } finally {
     busyId.value = null;
   }

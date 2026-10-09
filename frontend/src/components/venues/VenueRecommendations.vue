@@ -18,7 +18,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import VenueIcon from "./VenueIcon.vue";
 import {
-  BookingConflictError,
+  describeBookingFailure,
   fetchVenueRecommendations,
   submitVenueBooking,
   type VenueRecommendations,
@@ -52,11 +52,7 @@ async function requestVenue(venueId: number): Promise<void> {
     emit("requested", venueId);
   } catch (err) {
     requestErrorVenueId.value = venueId;
-    if (err instanceof BookingConflictError && err.conflict) {
-      requestError.value = `${err.message}. Booked ${err.conflict.window} (setup ${err.conflict.setupMinutes} min, turnaround ${err.conflict.turnaroundMinutes} min); this event needs ${err.conflict.requestedWindow}.`;
-    } else {
-      requestError.value = err instanceof Error ? err.message : "Failed to request this venue";
-    }
+    requestError.value = describeBookingFailure(err, "Failed to request this venue");
   } finally {
     requestingVenueId.value = null;
   }
