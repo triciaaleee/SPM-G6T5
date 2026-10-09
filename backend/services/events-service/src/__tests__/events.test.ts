@@ -1812,7 +1812,6 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
   it.each([
     ["an organiser", { id: "user-1", role: "organiser" }],
     ["an attendee", { id: "ATT-0001", role: "attendee" }],
-    ["technical support", { id: "TS-0001", role: "technical_support" }],
   ])("rejects %s with 403 and records the attempt", async (_label, user) => {
     const supabase = buildVenueInfoSupabase([]);
     const app = buildApp(supabase, user);
@@ -1824,6 +1823,19 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(supabase.denialInsert).toHaveBeenCalledWith(
       expect.objectContaining({ user_id: user.id, reason: "venue_booking_info_role_not_allowed" }),
     );
+  });
+
+  // E5-1: equipment-service reuses this lookup for Technical Support's
+  // equipment request list (event name/date/time + the Organiser's
+  // original equipment note as reference text).
+  it("also serves technical support, who need the event's equipment note and schedule", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, { id: "TS-0001", role: "technical_support" });
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0]).toMatchObject({ id: 3, equipment: validPayload.equipment });
   });
 
   it("allows a coordinator too, for resolving booking timing during venue search", async () => {

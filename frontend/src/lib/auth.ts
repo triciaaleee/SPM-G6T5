@@ -107,7 +107,8 @@ const LANDING_ROUTE_BY_ROLE: Record<string, string> = {
   coordinator: "coordinator-workload",
   attendee: "events-list",
   venue_staff: "venue-schedule",
-  technical_support: "events-list",
+  // E5-1 AC1: Technical Support's own queue of equipment requests.
+  technical_support: "equipment-requests",
 };
 
 export function landingRouteForRole(role: string | undefined | null): string {
