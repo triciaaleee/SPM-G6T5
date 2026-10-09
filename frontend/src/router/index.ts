@@ -55,7 +55,10 @@ export const router = createRouter({
       name: "venue-requests",
       component: VenueRequestQueue,
       meta: { requiresAuth: true, roles: ["venue_staff"] },
-      // Venue availability calendar: when a venue could realistically be requested.
+    },
+    {
+      // E4-4: venue availability calendar — when a venue could realistically
+      // be requested.
       path: "/venue-availability",
       name: "venue-availability",
       component: VenueAvailabilityView,
