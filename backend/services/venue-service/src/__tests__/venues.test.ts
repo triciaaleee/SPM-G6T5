@@ -201,13 +201,13 @@ function buildApp(
     bookedEvents?: ReturnType<typeof bookedEvent>[];
     /** E4-3 block-out periods, read by findBlockedVenueIds. */
     unavailability?: Record<string, unknown>[];
-    /** The blocked venues' setup/turnaround minutes. */
-    buffers?: Record<string, unknown>[];
+    /** Setup/turnaround minutes by venue id, merged onto the venue rows. */
+    buffers?: Record<number, { setup_minutes?: number; turnaround_minutes?: number }>;
   } = {},
 ) {
-  // E4-3: block-out periods and the blocked venues' setup/turnaround.
+  // E4-3: block-out periods, read as select → lte(start_date) → gte(end_date).
   const unavailabilityGte = vi.fn().mockResolvedValue({ data: options.unavailability ?? [], error: null });
-  const venuesIn = vi.fn().mockResolvedValue({ data: options.buffers ?? [], error: null });
+  const unavailabilityLte = vi.fn().mockReturnValue({ gte: unavailabilityGte });
 
   // venue_bookings only links a venue to an event; its schedule comes from
   // events-service. Only "On Hold" (unexpired) and "Approved" bookings block a
@@ -233,13 +233,14 @@ function buildApp(
   });
   vi.stubGlobal("fetch", fetchMock);
 
-  const venuesEq = vi.fn().mockResolvedValue({ data: venues, error: null });
+  const venueRows = venues.map((venue) => ({ ...venue, ...options.buffers?.[venue.id] }));
+  const venuesEq = vi.fn().mockResolvedValue({ data: venueRows, error: null });
 
   const supabase = {
     from: vi.fn((table: string) => {
-      if (table === "venues") return { select: vi.fn().mockReturnValue({ eq: venuesEq, in: venuesIn }) };
+      if (table === "venues") return { select: vi.fn().mockReturnValue({ eq: venuesEq }) };
       if (table === "venue_bookings") return { select: vi.fn().mockReturnValue(bookingsQuery) };
-      if (table === "venue_unavailability") return { select: () => ({ lte: () => ({ gte: unavailabilityGte }) }) };
+      if (table === "venue_unavailability") return { select: () => ({ lte: unavailabilityLte }) };
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -250,7 +251,7 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/venues", venuesRouter);
-  return { app, supabase, bookingsQuery, fetchMock };
+  return { app, supabase, bookingsQuery, fetchMock, unavailabilityLte, unavailabilityGte };
 }
 
 describe("GET /api/venues", () => {
@@ -371,7 +372,7 @@ describe("GET /api/venues", () => {
         { id: 1, venue_id: 1, start_date: "2026-09-25", end_date: "2026-09-25", all_day: false,
           start_time: "16:00:00", end_time: "18:00:00", reason: "Maintenance" },
       ],
-      buffers: [{ id: 1, setup_minutes: 30, turnaround_minutes: 0 }],
+      buffers: { 1: { setup_minutes: 30, turnaround_minutes: 0 } },
     });
     const res = await request(app)
       .get("/api/venues")
