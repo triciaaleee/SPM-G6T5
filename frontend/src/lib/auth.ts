@@ -95,9 +95,9 @@ export function isAuthenticated(): boolean {
 }
 
 /**
- * AC1: where a user lands after signing in. Most roles resolve to the
- * events list — coordinators and organisers already see different data
- * there, since the backend scopes the query by role — while venue staff
+ * AC1: where a user lands after signing in. Organisers resolve to the
+ * events list (coordinators have their own workload view), attendees to the
+ * events they have registered for, while venue staff
  * land on their venue schedule (E1-5). Routing
  * through this map means adding a dedicated screen for, say, attendees is
  * a one-line change here rather than an edit to every call site.
@@ -105,7 +105,8 @@ export function isAuthenticated(): boolean {
 const LANDING_ROUTE_BY_ROLE: Record<string, string> = {
   organiser: "events-list",
   coordinator: "coordinator-workload",
-  attendee: "events-list",
+  // E6: attendees see the events they have registered for, not the organiser's list.
+  attendee: "attendee-events",
   venue_staff: "venue-schedule",
   // E5-1 AC1: Technical Support's own queue of equipment requests.
   technical_support: "equipment-requests",

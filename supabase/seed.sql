@@ -11,7 +11,7 @@
 --
 -- Manual test flow:
 --   1. Sign in as organiser-one@example.com / password123 in the frontend.
---   2. Confirm the events list shows only organiser-one's 4 events.
+--   2. Confirm the events list shows only organiser-one's 5 events.
 --   3. Navigate directly to /events/<one of organiser-two's event ids below>.
 --   4. Confirm the app shows "Access denied" and a row appears in
 --      access_denials (user_id = organiser-one's id, event_id = that id).
@@ -30,7 +30,10 @@ insert into users (id, name, email, password_hash, role) values
   ('ORG-0002', 'Organiser Two', 'organiser-two@example.com', crypt('password123', gen_salt('bf')), 'organiser'),
   ('COORD-0001', 'Coordinator One', 'coordinator-one@example.com', crypt('password123', gen_salt('bf')), 'coordinator'),
   ('VEN-0001', 'Venue Staff One', 'venue-staff-one@example.com', crypt('password123', gen_salt('bf')), 'venue_staff'),
-  ('TS-0001', 'Technical Support One', 'tech-support-one@example.com', crypt('password123', gen_salt('bf')), 'technical_support')
+  ('TS-0001', 'Technical Support One', 'tech-support-one@example.com', crypt('password123', gen_salt('bf')), 'technical_support'),
+  ('ATT-0001', 'Attendee One', 'attendee-one@example.com', crypt('password123', gen_salt('bf')), 'attendee'),
+  ('ATT-0002', 'Attendee Two', 'attendee-two@example.com', crypt('password123', gen_salt('bf')), 'attendee'),
+  ('ATT-0003', 'Attendee Three', 'attendee-three@example.com', crypt('password123', gen_salt('bf')), 'attendee')
 on conflict (id) do nothing;
 
 -- The IDs above are hand-picked, so move each role's ID sequence past
@@ -118,6 +121,21 @@ insert into events (
     null,
     null,
     now() - interval '2 days'
+  ),
+  -- organiser-one's Confirmed event: the one attendees can currently register
+  -- for (E6 — Confirmed, registrationNeeded, not yet ended). Seeded straight
+  -- to Confirmed for attendee-view testing, without the event_safety_reviews
+  -- row a real Safety Review approval would leave.
+  (
+    7,
+    'ORG-0001',
+    'Confirmed',
+    '{"name":"AI in Industry Talk","purpose":"Introduce students to applied AI careers","description":"A guest lecture and Q&A with engineers from partner companies.","proposedDate":"2027-03-15","startTime":"14:00","endTime":"16:00","expectedAttendance":100,"venue":"Lecture Theatre LT1","accessibility":"Hearing loop and step-free access.","equipment":"Projector, screen, microphones","technicalSupport":"AV technician","registrationNeeded":true}',
+    'COORD-0001',
+    'Approved',
+    now() - interval '14 days',
+    'COORD-0001',
+    now() - interval '15 days'
   )
 on conflict (id) do update set
   status = excluded.status,
@@ -130,8 +148,8 @@ on conflict (id) do update set
 -- new ones, without touching created_at/submitted_details/organiser_id.
 
 -- Keep the identity sequence ahead of these explicit ids so the next
--- app-created event doesn't collide with id 1-6 above.
-select setval(pg_get_serial_sequence('events', 'id'), 6);
+-- app-created event doesn't collide with id 1-7 above.
+select setval(pg_get_serial_sequence('events', 'id'), 7);
 
 -- Venues (0011) ---------------------------------------------------------
 --
@@ -218,6 +236,10 @@ select setval(pg_get_serial_sequence('venues', 'id'), 10);
 --            given) -> venue 10 (Multipurpose Hall, capacity 250),
 --            status Requested.
 --
+--   Event 7  AI in Industry Talk (Confirmed, 100 attendees) -> venue 3
+--            (Lecture Theatre LT1, capacity 120), status Approved — so
+--            attendees see a venue name on it (E6).
+--
 -- Events 3 (Rejected) and 4 (Requested, no coordinator yet) have no
 -- booking — neither has reached the point of a venue being locked in.
 delete from venue_bookings where venue_id between 1 and 10;
@@ -226,7 +248,8 @@ insert into venue_bookings (venue_id, event_id, status) values
   (6, 1, 'Approved'),
   (1, 2, 'Requested'),
   (5, 5, 'Approved'),
-  (10, 6, 'Requested');
+  (10, 6, 'Requested'),
+  (3, 7, 'Approved');
 
 -- equipment_catalog (0022): the fixed list Coordinators pick from on an
 -- equipment request, and Technical Support's current-stock table. Names
@@ -256,3 +279,31 @@ insert into equipment_catalog (name, total_stock, available_stock) values
 -- state Technical Support have already changed, not seed data to reset.
 on conflict (name) do update set
   total_stock = excluded.total_stock;
+
+-- registrations (0023): attendees signed up for the seed events above. Only
+-- events 1 (Freshman Orientation Fair), 2 (Career Networking Night) and 7 (AI
+-- in Industry Talk) have registrationNeeded = true, so those have sign-ups.
+--
+--   Event 1  ATT-0001 Registered (with additional_info), ATT-0002 Registered,
+--            ATT-0003 Withdrawn — exercises the "my registration status"
+--            states and shows a withdrawn attendee doesn't count.
+--   Event 2  ATT-0001 Registered, ATT-0003 Registered.
+--   Event 7  ATT-0002 Registered. It is the only event open for registration
+--            (Confirmed, future date), so ATT-0001 and ATT-0003 can register
+--            for it and withdraw.
+--
+-- Each attendee sees a different set. Nobody is registered for events 3-6:
+-- attendee-view access-denial testing can use any of them (e.g. ATT-0002
+-- opening event 2 while not registered — event 2 isn't open).
+-- do update (not do nothing): re-running this file resets these rows to the
+-- states above.
+insert into registrations (event_id, user_id, status, created_at, additional_info) values
+  (1, 'ATT-0001', 'Registered', now() - interval '5 days', '{"dietaryRequirements":"Vegetarian","needsAccessibleSeating":false}'),
+  (1, 'ATT-0002', 'Registered', now() - interval '4 days', null),
+  (1, 'ATT-0003', 'Withdrawn', now() - interval '6 days', '{"dietaryRequirements":"None"}'),
+  (2, 'ATT-0001', 'Registered', now() - interval '2 days', null),
+  (2, 'ATT-0003', 'Registered', now() - interval '1 day', '{"needsAccessibleSeating":true}'),
+  (7, 'ATT-0002', 'Registered', now() - interval '1 day', null)
+on conflict (event_id, user_id) do update set
+  status = excluded.status,
+  additional_info = excluded.additional_info;

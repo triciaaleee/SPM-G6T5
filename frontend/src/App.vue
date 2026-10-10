@@ -17,6 +17,7 @@ const user = computed(() => {
 
 /** Top tabs per role. Roles with a single screen get none. */
 const NAV_TABS: Record<string, { name: string; label: string }[]> = {
+  attendee: [{ name: "attendee-events", label: "My events" }],
   coordinator: [
     { name: "coordinator-workload", label: "Events" },
     { name: "venue-availability", label: "Venue Availability" },
@@ -24,6 +25,13 @@ const NAV_TABS: Record<string, { name: string; label: string }[]> = {
 };
 
 const navTabs = computed(() => (user.value ? NAV_TABS[user.value.role] ?? [] : []));
+
+/** Style.md 3.6: each role has its own chip colour; an unknown role gets the Attendee colours. */
+const ROLE_CHIP_CLASSES = ["attendee", "organiser", "coordinator", "venue_staff", "technical_support"];
+
+function roleChipClass(role: string): string {
+  return `role-pill--${ROLE_CHIP_CLASSES.includes(role) ? role : "attendee"}`;
+}
 
 async function handleLogout() {
   // AC4: drop the token, then send the user to login. `replace` keeps the
@@ -48,7 +56,7 @@ async function handleLogout() {
       <!-- E7-1: coordinators (E4-3) and, since E5-1, technical support are the notification recipients so far. -->
       <NotificationBell v-if="user.role === 'coordinator' || user.role === 'technical_support'" :key="user.id" />
       <span class="account-name">{{ user.name }}</span>
-      <span class="role-pill">{{ formatRole(user.role) }}</span>
+      <span class="role-pill" :class="roleChipClass(user.role)">{{ formatRole(user.role) }}</span>
       <button type="button" class="btn-logout" @click="handleLogout">Log out</button>
     </div>
   </header>
@@ -157,10 +165,40 @@ async function handleLogout() {
 .role-pill {
   font-size: 0.75rem;
   font-weight: 700;
-  color: var(--color-purple-700);
-  background: var(--color-purple-100);
+  border: 1px solid transparent;
   border-radius: var(--radius-full);
   padding: var(--spacing-4) var(--spacing-12);
+}
+
+/* Role chip colours: Style.md 3.6. */
+.role-pill--attendee {
+  background: var(--color-purple-50);
+  border-color: var(--color-purple-200);
+  color: var(--color-purple-800);
+}
+
+.role-pill--organiser {
+  background: var(--color-blue-100);
+  border-color: var(--color-blue-300);
+  color: var(--color-blue-800);
+}
+
+.role-pill--coordinator {
+  background: var(--color-success-200);
+  border-color: var(--color-success-300);
+  color: var(--color-success-700);
+}
+
+.role-pill--venue_staff {
+  background: var(--color-warning-100);
+  border-color: var(--color-warning-300);
+  color: var(--color-warning-900);
+}
+
+.role-pill--technical_support {
+  background: var(--color-orchid-50);
+  border-color: var(--color-orchid-200);
+  color: var(--color-orchid-800);
 }
 
 .btn-logout {

@@ -90,6 +90,10 @@ eventsRouter.post("/", async (req: AuthedRequest, res) => {
     res.status(401).json({ error: "Unauthenticated" });
     return;
   }
+  if (user.role === "attendee") {
+    res.status(403).json({ error: "Attendees cannot manage events" });
+    return;
+  }
 
   const result = validateEventRequest(req.body ?? {});
   if (!result.valid) {
@@ -127,6 +131,10 @@ eventsRouter.post("/draft", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
   if (!supabase || !user) {
     res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+  if (user.role === "attendee") {
+    res.status(403).json({ error: "Attendees cannot manage events" });
     return;
   }
 
@@ -270,6 +278,10 @@ eventsRouter.get("/", async (req: AuthedRequest, res) => {
     res.status(401).json({ error: "Unauthenticated" });
     return;
   }
+  if (user.role === "attendee") {
+    res.status(403).json({ error: "Attendees cannot manage events" });
+    return;
+  }
 
   let query = supabase.from("events").select(EVENT_COLUMNS);
 
@@ -386,6 +398,152 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
     for (const field of VENUE_BOOKING_INFO_FIELDS) info[field] = details[field] ?? null;
     return info;
   });
+
+  res.json({ events });
+});
+
+/**
+ * E6: the only fields an Attendee may see about an event — what is safe to
+ * show someone who is not part of the planning. Built as a whitelist, never
+ * by filtering a fuller object, so a field added to submitted_details later
+ * stays private until it is listed here. No organiser, coordinator, purpose,
+ * equipment, accessibility, review outcome, history or clarifications.
+ */
+const ATTENDEE_INFO_FIELDS = ["name", "description", "proposedDate", "startTime", "endTime"] as const;
+
+/** Whole-field answers that mean "nothing to note" (same list venue-service uses for requirements). */
+const NO_ACCESSIBILITY_INFO_PATTERN =
+  /^(n\/?a|nil|none|no|nope|-+|not applicable|no preference|no requirements?|not required|not needed)\.?$/i;
+
+/**
+ * The organiser's accessibility note, as written, for attendees. Blank or a
+ * "NA"/"None" style answer is no note at all, so the card shows nothing
+ * rather than "None".
+ */
+function attendeeAccessibility(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return text === "" || NO_ACCESSIBILITY_INFO_PATTERN.test(text) ? null : text;
+}
+
+const MAX_ATTENDEE_INFO_IDS = 100;
+
+/**
+ * "Open for registration": the event is Confirmed (safety-approved, so it
+ * will go ahead), the organiser asked for registration, and it hasn't
+ * ended yet. Lives here, with the event data, so registration-service
+ * doesn't re-derive it. Date/time are the event's local wall-clock values.
+ */
+function isOpenForRegistration(status: string, details: Record<string, unknown>, now: Date = new Date()): boolean {
+  if (status !== "Confirmed" || details.registrationNeeded !== true) return false;
+
+  const date = typeof details.proposedDate === "string" ? details.proposedDate : null;
+  const endTime = typeof details.endTime === "string" ? details.endTime : "23:59";
+  if (!date) return false;
+
+  const endsAt = new Date(`${date}T${endTime}`);
+  return Number.isNaN(endsAt.getTime()) ? false : endsAt.getTime() > now.getTime();
+}
+
+/**
+ * E6: attendee-facing info for a batch of events, called by
+ * registration-service with the caller's own token. Attendees only — other
+ * roles have fuller routes. Declared before GET /:id so "attendee-info"
+ * isn't read as an event id. Drafts are never returned.
+ *
+ * An event is returned whether or not it is open: registration-service
+ * decides whether *this* attendee may see it (registered, or open), using
+ * the `open` flag computed here. Ids that don't exist are simply absent.
+ */
+eventsRouter.get("/attendee-info", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const rawIds = typeof req.query.ids === "string" ? req.query.ids : "";
+
+  if (user.role !== "attendee") {
+    await recordAccessDenial(supabase, user.id, rawIds, "attendee_info_role_not_allowed");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const idStrings = rawIds.split(",").map((id) => id.trim());
+  if (rawIds === "" || !idStrings.every(isPositiveInteger) || idStrings.length > MAX_ATTENDEE_INFO_IDS) {
+    res.status(400).json({ error: `ids must be 1–${MAX_ATTENDEE_INFO_IDS} comma-separated event ids` });
+    return;
+  }
+  const ids = [...new Set(idStrings.map(Number))];
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, status, submitted_details")
+    .in("id", ids)
+    .neq("status", "Draft");
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load events" });
+    return;
+  }
+
+  const events = (data ?? []).map((row) => {
+    const details = (row.submitted_details ?? {}) as Record<string, unknown>;
+    const info: Record<string, unknown> = {
+      id: row.id,
+      registrationNeeded: details.registrationNeeded === true,
+      open: isOpenForRegistration(row.status, details),
+      accessibility: attendeeAccessibility(details.accessibility),
+    };
+    for (const field of ATTENDEE_INFO_FIELDS) info[field] = details[field] ?? null;
+    return info;
+  });
+
+  res.json({ events });
+});
+
+/**
+ * E6: Confirmed events currently open for registration, so an attendee can
+ * find something to register for. Same whitelist as GET /attendee-info.
+ * Declared before GET /:id.
+ */
+eventsRouter.get("/open-for-registration", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  if (user.role !== "attendee") {
+    await recordAccessDenial(supabase, user.id, "", "open_for_registration_role_not_allowed");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, status, submitted_details")
+    .eq("status", "Confirmed");
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load events" });
+    return;
+  }
+
+  const events = (data ?? [])
+    .map((row) => ({ row, details: (row.submitted_details ?? {}) as Record<string, unknown> }))
+    .filter(({ row, details }) => isOpenForRegistration(row.status, details))
+    .map(({ row, details }) => {
+      const info: Record<string, unknown> = {
+        id: row.id,
+        registrationNeeded: true,
+        open: true,
+        accessibility: attendeeAccessibility(details.accessibility),
+      };
+      for (const field of ATTENDEE_INFO_FIELDS) info[field] = details[field] ?? null;
+      return info;
+    });
 
   res.json({ events });
 });

@@ -21,8 +21,10 @@ import VenueIcon from "./VenueIcon.vue";
  * purple dot for a booking, a blue dot for a request, both side by side
  * when a day has each. The day's label says the same in words, so the
  * meaning never rests on colour alone. `blockedDates` /
- * `partlyBlockedDates` (E4-3) stripe days a venue is unavailable all day /
- * for some hours (Style.md 3.5).
+ * `partlyBlockedDates` (E4-3) flag days a venue is unavailable all day (grey
+ * circle with a lock) / for some hours (orange bar under the date), flat, no
+ * stripes (Style.md 3.5). `roomy` gives each day a larger 48x52 target for
+ * views that lean on the markers (the venue schedule).
  */
 const props = defineProps<{
   modelValue: string | null;
@@ -31,6 +33,7 @@ const props = defineProps<{
   markers?: Record<string, DayMarker[]>;
   blockedDates?: string[];
   partlyBlockedDates?: string[];
+  roomy?: boolean;
 }>();
 const emit = defineEmits<{
   "update:modelValue": [value: string];
@@ -129,7 +132,7 @@ function shiftMonth(delta: number): void {
       </button>
     </div>
 
-    <div class="calendar__grid" role="grid">
+    <div class="calendar__grid" :class="{ 'calendar__grid--roomy': roomy }" role="grid">
       <span v-for="weekday in WEEKDAYS" :key="weekday" class="calendar__weekday">{{ weekday }}</span>
       <template v-for="(cell, i) in cells" :key="cell?.key ?? `pad-${i}`">
         <span v-if="!cell" />
@@ -143,8 +146,11 @@ function shiftMonth(delta: number): void {
           :aria-label="fromKey(cell.key).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + markerLabel(cell.key) + availabilityLabel(cell.key)"
           @click="emit('update:modelValue', cell.key)">
           {{ cell.day }}
-          <span v-if="markersFor(cell.key).length > 0" class="calendar__dots" aria-hidden="true">
+          <span v-if="markersFor(cell.key).length > 0 || blocked.has(cell.key) || partlyBlocked.has(cell.key)"
+            class="calendar__dots" aria-hidden="true">
             <span v-for="kind in markersFor(cell.key)" :key="kind" class="calendar__dot" :class="`calendar__dot--${kind}`" />
+            <span v-if="!blocked.has(cell.key) && partlyBlocked.has(cell.key)" class="calendar__bar" />
+            <VenueIcon v-if="blocked.has(cell.key)" name="lock" :size="10" class="calendar__lock" />
           </span>
         </button>
       </template>
@@ -273,99 +279,62 @@ function shiftMonth(delta: number): void {
   background: var(--color-base-white);
 }
 
-/* E4-3, Style.md 3.5: pattern-unavailable (all day) / -partial (some hours) / -selected. */
+/* E4-3, Style.md 3.5: unavailable all day = flat grey circle + lock; some hours = orange bar under the date. */
 .calendar__day--blocked,
 .calendar__day--blocked:hover:not(:disabled) {
-  background: repeating-linear-gradient(135deg,
-      var(--color-grey-200) 0 var(--spacing-4),
-      var(--color-grey-50) var(--spacing-4) var(--spacing-8));
-  box-shadow: inset 0 0 0 1px var(--color-grey-300);
-  color: var(--color-grey-900);
-  font-weight: 700;
+  background: var(--color-grey-100);
+  color: var(--color-grey-700);
 }
 
-.calendar__day--partly-blocked,
-.calendar__day--partly-blocked:hover:not(:disabled) {
-  background:
-    repeating-linear-gradient(135deg,
-      var(--color-grey-200) 0 var(--spacing-4),
-      var(--color-grey-50) var(--spacing-4) var(--spacing-8)) bottom / 100% 50% no-repeat;
-  box-shadow: inset 0 0 0 1px var(--color-grey-300);
-  color: var(--color-grey-900);
-  font-weight: 700;
+.calendar__bar {
+  width: var(--spacing-16);
+  height: var(--spacing-2);
+  border-radius: var(--radius-xs);
+  background: var(--color-warning-800);
+}
+
+.calendar__lock {
+  color: var(--color-grey-600);
 }
 
 /* Today keeps its purple ring when it's blocked. */
-.calendar__day--today.calendar__day--blocked,
-.calendar__day--today.calendar__day--partly-blocked {
+.calendar__day--today.calendar__day--blocked {
   box-shadow: inset 0 0 0 1px var(--color-purple-300);
 }
 
+/* Selected: markers turn white so they stay visible on the purple fill. */
+.calendar__day--selected .calendar__bar {
+  background: var(--color-base-white);
+}
+
+.calendar__day--selected .calendar__lock {
+  color: var(--color-base-white);
+}
+
 .calendar__day--blocked.calendar__day--selected,
-.calendar__day--blocked.calendar__day--selected:hover:not(:disabled),
-.calendar__day--partly-blocked.calendar__day--selected,
-.calendar__day--partly-blocked.calendar__day--selected:hover:not(:disabled) {
-  background: repeating-linear-gradient(135deg,
-      var(--color-purple-600) 0 var(--spacing-4),
-      var(--color-purple-700) var(--spacing-4) var(--spacing-8));
+.calendar__day--blocked.calendar__day--selected:hover:not(:disabled) {
+  background: var(--color-purple-600);
   box-shadow: none;
   color: var(--color-base-white);
 }
 
-.calendar__day--partly-blocked.calendar__day--selected,
-.calendar__day--partly-blocked.calendar__day--selected:hover:not(:disabled) {
-  background:
-    repeating-linear-gradient(135deg,
-      var(--color-purple-600) 0 var(--spacing-4),
-      var(--color-purple-700) var(--spacing-4) var(--spacing-8)) bottom / 100% 50% no-repeat,
-    var(--color-purple-600);
+/* roomy: 48x52 round days, centred in their column. */
+.calendar__grid--roomy {
+  grid-auto-rows: 52px;
+  row-gap: var(--spacing-4);
 }
 
-/* E4-3, Style.md 3.5: pattern-unavailable (all day) / -partial (some hours) / -selected. */
-.calendar__day--blocked,
-.calendar__day--blocked:hover:not(:disabled) {
-  background: repeating-linear-gradient(135deg,
-      var(--color-grey-200) 0 var(--spacing-4),
-      var(--color-grey-50) var(--spacing-4) var(--spacing-8));
-  box-shadow: inset 0 0 0 1px var(--color-grey-300);
-  color: var(--color-grey-900);
-  font-weight: 700;
+.calendar__grid--roomy .calendar__day {
+  width: 48px;
+  justify-self: center;
 }
 
-.calendar__day--partly-blocked,
-.calendar__day--partly-blocked:hover:not(:disabled) {
-  background:
-    repeating-linear-gradient(135deg,
-      var(--color-grey-200) 0 var(--spacing-4),
-      var(--color-grey-50) var(--spacing-4) var(--spacing-8)) bottom / 100% 50% no-repeat;
-  box-shadow: inset 0 0 0 1px var(--color-grey-300);
-  color: var(--color-grey-900);
-  font-weight: 700;
+.calendar__grid--roomy .calendar__weekday {
+  grid-row: auto;
 }
 
-/* Today keeps its purple ring when it's blocked. */
-.calendar__day--today.calendar__day--blocked,
-.calendar__day--today.calendar__day--partly-blocked {
-  box-shadow: inset 0 0 0 1px var(--color-purple-300);
-}
-
-.calendar__day--blocked.calendar__day--selected,
-.calendar__day--blocked.calendar__day--selected:hover:not(:disabled),
-.calendar__day--partly-blocked.calendar__day--selected,
-.calendar__day--partly-blocked.calendar__day--selected:hover:not(:disabled) {
-  background: repeating-linear-gradient(135deg,
-      var(--color-purple-600) 0 var(--spacing-4),
-      var(--color-purple-700) var(--spacing-4) var(--spacing-8));
-  box-shadow: none;
-  color: var(--color-base-white);
-}
-
-.calendar__day--partly-blocked.calendar__day--selected,
-.calendar__day--partly-blocked.calendar__day--selected:hover:not(:disabled) {
-  background:
-    repeating-linear-gradient(135deg,
-      var(--color-purple-600) 0 var(--spacing-4),
-      var(--color-purple-700) var(--spacing-4) var(--spacing-8)) bottom / 100% 50% no-repeat,
-    var(--color-purple-600);
+.calendar__grid--roomy .calendar__dots {
+  bottom: var(--spacing-6);
+  align-items: center;
 }
 </style>

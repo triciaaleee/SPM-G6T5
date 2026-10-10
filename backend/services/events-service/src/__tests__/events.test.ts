@@ -1985,3 +1985,169 @@ describe("GET /api/events — E3-2 coordinator workload view", () => {
     expect(eq).not.toHaveBeenCalledWith("coordinator_id", expect.anything());
   });
 });
+
+describe("attendee access (E6)", () => {
+  const attendee = { id: "ATT-0001", role: "attendee" };
+
+  const confirmedDetails = {
+    ...validPayload,
+    description: "Campus tour and icebreakers",
+    proposedDate: "2099-01-01",
+    endTime: "11:00",
+    registrationNeeded: true,
+    purpose: "INTERNAL purpose",
+    equipment: "INTERNAL equipment",
+  };
+
+  /** .from("events").select(...).in("id", ids).neq("status", "Draft") */
+  function buildAttendeeInfoSupabase(rows: Record<string, unknown>[]) {
+    const neq = vi.fn().mockResolvedValue({ data: rows, error: null });
+    const inFilter = vi.fn().mockReturnValue({ neq });
+    const select = vi.fn().mockReturnValue({ in: inFilter });
+    const denialInsert = vi.fn().mockResolvedValue({ error: null });
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert: denialInsert };
+      return { select };
+    });
+    return { from, select, inFilter, neq, denialInsert };
+  }
+
+  it("blocks attendees from creating events, drafts and listing events", async () => {
+    const supabase = buildAttendeeInfoSupabase([]);
+    const app = buildApp(supabase, attendee);
+
+    expect((await request(app).post("/api/events").send(validPayload)).status).toBe(403);
+    expect((await request(app).post("/api/events/draft").send({})).status).toBe(403);
+    expect((await request(app).get("/api/events")).status).toBe(403);
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  describe("GET /api/events/attendee-info", () => {
+    it("returns only the whitelisted attendee-facing fields", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", submitted_details: confirmedDetails },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1");
+
+      expect(res.status).toBe(200);
+      expect(res.body.events).toEqual([
+        {
+          id: 1,
+          registrationNeeded: true,
+          open: true,
+          accessibility: validPayload.accessibility,
+          name: validPayload.name,
+          description: "Campus tour and icebreakers",
+          proposedDate: "2099-01-01",
+          startTime: validPayload.startTime,
+          endTime: "11:00",
+        },
+      ]);
+      expect(JSON.stringify(res.body)).not.toContain("INTERNAL");
+      expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
+    });
+
+    it("returns the accessibility note trimmed, and null for blank or NA/None answers", async () => {
+      const withNote = (accessibility: unknown) => ({ ...confirmedDetails, accessibility });
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", submitted_details: withNote("  Step-free entry and a hearing loop.  ") },
+        { id: 2, status: "Confirmed", submitted_details: withNote("   ") },
+        { id: 3, status: "Confirmed", submitted_details: withNote("NA") },
+        { id: 4, status: "Confirmed", submitted_details: withNote("None.") },
+        { id: 5, status: "Confirmed", submitted_details: withNote(undefined) },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1,2,3,4,5");
+
+      expect(res.body.events.map((e: { accessibility: string | null }) => e.accessibility)).toEqual([
+        "Step-free entry and a hearing loop.",
+        null,
+        null,
+        null,
+        null,
+      ]);
+    });
+
+    it("marks an event not open unless Confirmed, registration is needed, and it has not ended", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Planning", submitted_details: confirmedDetails },
+        { id: 2, status: "Confirmed", submitted_details: { ...confirmedDetails, registrationNeeded: false } },
+        { id: 3, status: "Confirmed", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
+        { id: 4, status: "Confirmed", submitted_details: confirmedDetails },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1,2,3,4");
+
+      expect(res.body.events.map((e: { id: number; open: boolean }) => [e.id, e.open])).toEqual([
+        [1, false],
+        [2, false],
+        [3, false],
+        [4, true],
+      ]);
+    });
+
+    it("refuses every other role and records the denial", async () => {
+      const supabase = buildAttendeeInfoSupabase([]);
+      const app = buildApp(supabase, coordinator);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1");
+
+      expect(res.status).toBe(403);
+      expect(supabase.denialInsert).toHaveBeenCalled();
+    });
+
+    it("rejects missing or malformed ids", async () => {
+      const app = buildApp(buildAttendeeInfoSupabase([]), attendee);
+
+      expect((await request(app).get("/api/events/attendee-info")).status).toBe(400);
+      expect((await request(app).get("/api/events/attendee-info?ids=abc")).status).toBe(400);
+    });
+  });
+
+  describe("GET /api/events/open-for-registration", () => {
+    function buildOpenSupabase(rows: Record<string, unknown>[]) {
+      const eq = vi.fn().mockResolvedValue({ data: rows, error: null });
+      const select = vi.fn().mockReturnValue({ eq });
+      const denialInsert = vi.fn().mockResolvedValue({ error: null });
+      const from = vi.fn().mockImplementation((table: string) =>
+        table === "access_denials" ? { insert: denialInsert } : { select },
+      );
+      return { from, eq };
+    }
+
+    it("includes the accessibility note on open events", async () => {
+      const supabase = buildOpenSupabase([{ id: 1, status: "Confirmed", submitted_details: confirmedDetails }]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.body.events[0].accessibility).toBe(validPayload.accessibility);
+    });
+
+    it("lists only open events, with the whitelisted fields", async () => {
+      const supabase = buildOpenSupabase([
+        { id: 1, status: "Confirmed", submitted_details: confirmedDetails },
+        { id: 2, status: "Confirmed", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
+        { id: 3, status: "Confirmed", submitted_details: { ...confirmedDetails, registrationNeeded: false } },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.status).toBe(200);
+      expect(res.body.events.map((e: { id: number }) => e.id)).toEqual([1]);
+      expect(JSON.stringify(res.body)).not.toContain("INTERNAL");
+      expect(supabase.eq).toHaveBeenCalledWith("status", "Confirmed");
+    });
+
+    it("refuses non-attendees", async () => {
+      const app = buildApp(buildOpenSupabase([]), coordinator);
+
+      expect((await request(app).get("/api/events/open-for-registration")).status).toBe(403);
+    });
+  });
+});

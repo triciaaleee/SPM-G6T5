@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 import EventsListView from "../views/EventsListView.vue";
+import AttendeeEventsView from "../views/AttendeeEventsView.vue";
+import AttendeeEventDetailView from "../views/AttendeeEventDetailView.vue";
 import EventDetailView from "../views/EventDetailView.vue";
 import NewEventRequestView from "../views/NewEventRequestView.vue";
 import LoginView from "../views/LoginView.vue";
@@ -17,25 +19,44 @@ export const router = createRouter({
   routes: [
     { path: "/login", name: "login", component: LoginView },
     { path: "/signup", name: "signup", component: SignupView },
-    { path: "/", name: "events-list", component: EventsListView, meta: { requiresAuth: true } },
+    {
+      path: "/",
+      name: "events-list",
+      component: EventsListView,
+      meta: { requiresAuth: true, roles: ["organiser", "coordinator", "venue_staff", "technical_support"] },
+    },
+    {
+      // E6: the attendee homepage — events the attendee has registered for.
+      path: "/attendee/events",
+      name: "attendee-events",
+      component: AttendeeEventsView,
+      meta: { requiresAuth: true, roles: ["attendee"] },
+    },
+    {
+      // E6: one event as an attendee sees it (attendee-facing fields only).
+      path: "/attendee/events/:id",
+      name: "attendee-event-detail",
+      component: AttendeeEventDetailView,
+      meta: { requiresAuth: true, roles: ["attendee"] },
+    },
     {
       path: "/events/new",
       name: "new-event-request",
       component: NewEventRequestView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, roles: ["organiser", "coordinator"] },
     },
     {
       // E2-4 AC2: resume editing a saved draft, reusing the same form.
       path: "/events/:id/edit",
       name: "edit-draft",
       component: NewEventRequestView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, roles: ["organiser", "coordinator"] },
     },
     {
       path: "/events/:id",
       name: "event-detail",
       component: EventDetailView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, roles: ["organiser", "coordinator"] },
     },
     {
       path: "/coordinator",

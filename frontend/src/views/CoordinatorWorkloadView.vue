@@ -15,17 +15,23 @@ interface StatusGroup {
   key: string;
   label: string;
   statuses: string[];
-  needsAction: boolean;
 }
 
 const STATUS_GROUPS: StatusGroup[] = [
-  { key: "needs-review",  label: "Needs Review",            statuses: ["Requested", "Unassigned"],    needsAction: true  },
-  { key: "clarification", label: "Clarification Requested", statuses: ["Clarification Requested"],    needsAction: false },
-  { key: "planning",      label: "Planning",                statuses: ["Planning"],                   needsAction: false },
-  { key: "confirmed",     label: "Confirmed",               statuses: ["Confirmed"],                  needsAction: false },
-  { key: "completed",     label: "Completed",               statuses: ["Completed"],                  needsAction: false },
-  { key: "rejected",      label: "Rejected",                statuses: ["Rejected"],                   needsAction: false },
+  { key: "needs-review",  label: "Needs Review",            statuses: ["Requested", "Unassigned"] },
+  { key: "clarification", label: "Clarification Requested", statuses: ["Clarification Requested"] },
+  { key: "planning",      label: "Planning",                statuses: ["Planning"] },
+  { key: "confirmed",     label: "Confirmed",               statuses: ["Confirmed"] },
+  { key: "completed",     label: "Completed",               statuses: ["Completed"] },
+  { key: "rejected",      label: "Rejected",                statuses: ["Rejected"] },
 ];
+
+// Statuses that wait on the coordinator (Requested, Unassigned): flagged with an accent bar.
+const NEEDS_ACTION_STATUSES = ["Requested", "Unassigned"];
+
+function needsAction(event: EventSummary): boolean {
+  return NEEDS_ACTION_STATUSES.includes(event.status);
+}
 
 function eventProposedDate(event: EventSummary): string {
   return ((event.submitted_details as Record<string, unknown>)?.proposedDate as string) ?? event.created_at;
@@ -69,6 +75,26 @@ const groupedEvents = computed(() =>
   })).filter((g) => g.events.length > 0),
 );
 
+// Status tabs: "all" shows every event in one flat list (status-priority order, then date);
+// a group key shows only that bucket.
+// A tab whose bucket empties (e.g. after switching My/All) falls back to "all".
+const activeTab = ref<string>("all");
+
+const tabs = computed(() => [
+  { key: "all", label: "All", count: visibleEvents.value.length },
+  ...groupedEvents.value.map((g) => ({ key: g.key, label: g.label, count: g.events.length })),
+]);
+
+const currentTab = computed(() =>
+  tabs.value.some((t) => t.key === activeTab.value) ? activeTab.value : "all",
+);
+
+const shownEvents = computed(() =>
+  groupedEvents.value
+    .filter((g) => currentTab.value === "all" || g.key === currentTab.value)
+    .flatMap((g) => g.events),
+);
+
 onMounted(async () => {
   try {
     const [eventsData, user] = await Promise.all([fetchMyEvents(), getCurrentUser()]);
@@ -88,6 +114,7 @@ onMounted(async () => {
     Desktop (12-col): outer container col 1-12, grid-desktop-margin 80px; content col 1-12, full width.
     Tablet (6-col):   content col 1-6, full width, grid-tablet-margin 32px.
     Mobile (4-col):   content col 1-4, full width, grid-mobile-margin 6px.
+    Status tabs: tab row spans the full content width (12 / 6 / 4 cols) and wraps onto a second line on small screens.
     Nested grid: card list uses a local 8-col grid (desktop), 6-col (tablet), 4-col (mobile).
   -->
   <div class="page">
@@ -97,7 +124,7 @@ onMounted(async () => {
         <div>
           <h1 class="h2">{{ viewMode === "mine" ? "My workload" : "All events" }}</h1>
           <p class="subheading">
-            {{ viewMode === "mine" ? "Your assigned events, grouped by status." : "Every event in the system." }}
+            {{ viewMode === "mine" ? "Your assigned events. Use the tabs to filter by status." : "Every event in the system." }}
           </p>
         </div>
 
@@ -128,21 +155,32 @@ onMounted(async () => {
       </p>
 
       <template v-else>
-        <section v-for="group in groupedEvents" :key="group.key" class="status-group">
-          <div class="group-header">
-            <span class="group-label" :class="{ 'group-label--action': group.needsAction }">
-              {{ group.label }}
-            </span>
-            <span class="group-count">{{ group.events.length }}</span>
-          </div>
+        <div class="tabs" role="tablist" aria-label="Filter events by status">
+          <button
+            v-for="tab in tabs"
+            :id="`coordinator-tab-${tab.key}`"
+            :key="tab.key"
+            type="button"
+            role="tab"
+            class="tab"
+            :class="{ 'tab--active': currentTab === tab.key }"
+            :aria-selected="currentTab === tab.key"
+            aria-controls="coordinator-panel"
+            @click="activeTab = tab.key"
+          >
+            {{ tab.label }}
+            <span class="tab__count">{{ tab.count }}</span>
+          </button>
+        </div>
 
+        <div id="coordinator-panel" role="tabpanel" :aria-labelledby="`coordinator-tab-${currentTab}`">
           <div class="card-grid">
             <RouterLink
-              v-for="event in group.events"
+              v-for="event in shownEvents"
               :key="event.id"
               :to="{ name: 'event-detail', params: { id: event.id } }"
               class="event-card"
-              :class="{ 'event-card--action': group.needsAction }"
+              :class="{ 'event-card--needs-action': needsAction(event) }"
             >
               <div class="card-header">
                 <span class="badge badge-dot" :class="statusBadgeClass(event.status)">
@@ -179,7 +217,7 @@ onMounted(async () => {
               </div>
             </RouterLink>
           </div>
-        </section>
+        </div>
       </template>
 
     </div>
@@ -299,39 +337,49 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
-/* Status group */
+/* Status tabs (same pattern as AttendeeEventsView) */
 
-.status-group {
-  margin-top: var(--spacing-40);
-}
-
-.status-group:first-of-type {
-  margin-top: var(--spacing-32);
-}
-
-.group-header {
+.tabs {
   display: flex;
+  gap: var(--spacing-32);
+  margin-top: var(--spacing-32);
+  border-bottom: 1px solid var(--color-grey-100);
+  flex-wrap: wrap;
+}
+
+.tab {
+  appearance: none;
+  display: inline-flex;
   align-items: center;
   gap: var(--spacing-8);
-  margin-bottom: var(--spacing-16);
-  border-bottom: 1px solid var(--color-grey-100);
-  padding-bottom: var(--spacing-12);
-}
-
-.group-label {
-  font-size: 0.75rem;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: var(--spacing-12) var(--spacing-4);
+  font-family: var(--font-family-lato);
+  font-size: 1rem;
   font-weight: 700;
-  line-height: 1rem;
-  letter-spacing: 0.375em;
-  text-transform: uppercase;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
+  cursor: pointer;
 }
 
-.group-label--action {
-  color: var(--color-warning-700);
+.tab:hover {
+  color: var(--color-grey-900);
 }
 
-.group-count {
+.tab:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.tab--active {
+  color: var(--color-purple-600);
+  border-bottom-color: var(--color-purple-600);
+}
+
+.tab__count {
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
@@ -346,6 +394,7 @@ onMounted(async () => {
 /* Card grid */
 
 .card-grid {
+  margin-top: var(--spacing-32);
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   gap: var(--grid-desktop-gutter);
@@ -381,14 +430,19 @@ onMounted(async () => {
   border-color: var(--color-grey-200);
 }
 
-.event-card--action {
-  background: var(--color-warning-100);
-  border-color: var(--color-warning-300);
+/* Needs the coordinator's action: same card, plus a flat warning strip along the left edge, clipped to the rounded corners. */
+.event-card--needs-action {
+  overflow: hidden; /* clips the strip to the card's rounded corners */
 }
 
-.event-card--action:hover {
-  background: var(--color-warning-200);
-  border-color: var(--color-warning-300);
+.event-card--needs-action::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--spacing-4);
+  background: var(--color-warning-300);
 }
 
 @media (max-width: 640px) {
@@ -437,13 +491,14 @@ onMounted(async () => {
 
 /* These status colours match EventsListView.vue */
 .status-success {
-  background: #e5eee5;
+  background: var(--color-success-200);
   color: var(--color-success-700);
 }
 
 .status-warning {
-  background: #FEF5E7;
-  color: var(--color-warning-600);
+  background: var(--color-warning-200);
+  border: 1px solid var(--color-warning-300);
+  color: var(--color-warning-900);
 }
 
 .status-error {
@@ -452,8 +507,9 @@ onMounted(async () => {
 }
 
 .status-info {
-  background: var(--color-warning-200);
-  color: var(--color-warning-700);
+  background: var(--color-blue-200);
+  border: 1px solid var(--color-blue-300);
+  color: var(--color-blue-800);
 }
 
 .card-divider {

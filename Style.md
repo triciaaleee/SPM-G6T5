@@ -159,6 +159,7 @@ Use Grey Alpha tokens to create hierarchy, separation, and contrast without intr
 
 | Token | Hex | Semantic Role |
 |-------|-----|---------------|
+| `Colors/Purple Primary/50` | `#F9F4FE` | Very subtle tint (Attendee role chip fill, Section 3.6) |
 | `Colors/Purple Primary/100` | `#F3EAFC` | Tinted background (selected row, tag bg) |
 | `Colors/Purple Primary/200` | `#E5D3F7` | Hover state background |
 | `Colors/Purple Primary/300` | `#CEABF1` | Stroke colour, secondary button hover |
@@ -250,6 +251,19 @@ Treat this the way a secondary colour is meant to work: a minority presence that
 **AVOID:** Reaching for Secondary Blue as the *default* outline/secondary button colour. It is a minority accent, not a second brand colour — see Section 3.4.
 
 
+### 2.9 Orchid (Role Accent)
+
+A pinkish purple used for exactly one thing: the Technical Support role chip in the app header (Section 3.6). It exists so that role can have a colour of its own without borrowing a status colour.
+
+| Token | Hex | Contrast | Semantic Role |
+|-------|-----|----------|---------------|
+| `Colors/Orchid/50` | `#FAF1FA` | 1.1:1 vs white | Role chip fill |
+| `Colors/Orchid/200` | `#EBC9E6` | 1.4:1 vs white | Role chip border |
+| `Colors/Orchid/800` | `#7A1470` | 8.8:1 on Orchid/50 | Role chip text |
+
+**USE:** Only as the fill, border and text of the Technical Support role chip.  
+**AVOID:** Using it for status, actions, links or anything other than that chip.
+
 ## 3. Colour Semantic Mapping
 
 ### 3.1 UI State Colours
@@ -294,9 +308,9 @@ Patterns for venue availability (E4-3) and in-app notifications (E7-1). Built on
 
 | Pattern | Treatment | Use |
 |---------|-----------|-----|
-| `pattern-unavailable` | Diagonal stripes at 135°: `Colors/Grey/200` for `spacing-4`, then `Colors/Grey/50` for `spacing-4`, repeating. Border `Colors/Grey/300`. Text `Colors/Grey/900`, icon `Colors/Grey/700`. | A venue blocked out (unavailable) — calendar days and block-out cards. Stripes read as "closed" at a glance without borrowing a semantic colour. |
-| `pattern-unavailable-selected` | Same stripes using `Colors/Purple Primary/600` and `Colors/Purple Primary/700`, text `Colors/Base/White`. | A blocked calendar day that is also the selected day, so the block stays visible when selected. |
-| `pattern-unavailable-partial` | `pattern-unavailable` on the bottom half of the element only. | A day blocked for some hours, not the whole day. |
+| `pattern-unavailable` | Flat, no stripes. Calendar day: `Colors/Grey/100` circle with a lock icon (10px) (`Colors/Grey/600`), text `Colors/Grey/700`. Block-out card: `Colors/Base/White` fill, 1px solid `Colors/Orange Warning/400` border, `radius-lg`, lock icon `Colors/Grey/700`, reason in `Colors/Grey/900`, hours in a `Colors/Orange Warning/200` pill with `/900` text, Edit in `Purple Primary/600` and Remove in `Red Error/600` as text buttons. | A venue blocked out (unavailable) — calendar days and block-out cards. The lock and the orange outline say "closed" without borrowing a semantic colour, and without relying on colour alone. |
+| `pattern-unavailable-selected` | `Colors/Purple Primary/600` circle like any selected day, with the lock (or partial bar) drawn in `Colors/Base/White`. | A blocked calendar day that is also the selected day, so the block marker stays visible when selected. |
+| `pattern-unavailable-partial` | A `spacing-16` by `spacing-2` bar in `Colors/Orange Warning/800` under the date number (white when selected). | A venue unavailable for some hours of that day. |
 | Replacement Required badge | Background `Colors/Orange Warning/200`, border `Colors/Orange Warning/300`, text `Colors/Orange Warning/900`, Small Text / Tag style, `radius-full`. | A booking caught by a block-out that needs a new venue — the Warning set's "on-hold" role. |
 | Unread notification badge | Background `Colors/Red Error/400`, text `Colors/Base/White`, Small Text / Tag style, `radius-full`. | Count of unread notifications on the bell — the `Red Error/400` "New" tag role (Section 2.5). |
 | Unread notification row | Background `Colors/Purple Primary/100`. Read rows use `Colors/Base/White`. | Distinguishes unread items in the notification dropdown. |
@@ -304,7 +318,7 @@ Patterns for venue availability (E4-3) and in-app notifications (E7-1). Built on
 | Drawer scrim | `Grey/40% Dark #454545` behind a side drawer or modal. | Dims the page while a drawer (e.g. Block out time) is open. |
 | `booking-approved` | Fill `Colors/Purple Primary/100` across the padded window (setup → turnaround), `Colors/Purple Primary/200` across the advertised event time. Border 1px solid `Colors/Purple Primary/300`, `spacing-4` left bar `Colors/Purple Primary/600`. Text `Colors/Purple Primary/800`, `radius-xs`. | An Approved venue booking on the coordinator's availability calendar — confirmed, so solid. |
 | `booking-on-hold` | Fill `Colors/Orange Warning/100` across the padded window, `Colors/Orange Warning/200` across the event time. Border 1px **dashed** `Colors/Orange Warning/300`, `spacing-4` left bar `Colors/Orange Warning/500`. Text `Colors/Orange Warning/900`, `radius-xs`. | An On Hold booking — the Warning set's "on-hold" role (Section 2.6). The dashed border says "tentative" without relying on colour alone. |
-| `pattern-closed` | Solid `Colors/Grey/75` fill, no border. Text `Colors/Grey/500`. | Time outside a venue's operating hours. Plain grey, distinct from the striped `pattern-unavailable` used for recorded block-outs. |
+| `pattern-closed` | Solid `Colors/Grey/75` fill, no border. Text `Colors/Grey/500`. | Time outside a venue's operating hours. Plain grey, distinct from the lock-marked `pattern-unavailable` used for recorded block-outs. |
 | `slot-available` | Fill `Colors/Green Success/100`, border 1px dashed `Colors/Green Success/300`, text `Colors/Green Success/600`, `radius-xs`. | A free slot inside the coordinator's target date and time range — highlighted so it stands out from everything unavailable. |
 
 **USE:** `pattern-unavailable` only for genuinely unavailable time — never as decoration.  
@@ -335,6 +349,20 @@ Colour choice on the *non-solid* buttons follows the same logic as Section 2.8: 
 **AVOID:** Defaulting to a hollow/outline Secondary Blue button as if it were the standard secondary-button treatment — that treats a 10%-presence accent colour like a second primary, which is the mistake this section exists to prevent.
 
 ---
+
+### 3.6 Role Chip Colours
+
+The role chip in the app header gives each role its own colour so a signed-in user can tell at a glance which account they are in. Very light fill, dark text, and a 1px border a couple of shades darker than the fill; unknown roles fall back to the Attendee colours.
+
+| Role | Fill | Border | Text | Contrast |
+|------|------|--------|------|----------|
+| Attendee | `Colors/Purple Primary/50` | `Colors/Purple Primary/200` | `Colors/Purple Primary/800` | 12.9:1 |
+| Event Organiser | `Colors/Secondary Blue/100` | `Colors/Secondary Blue/300` | `Colors/Secondary Blue/800` | 12.5:1 |
+| Event Coordinator | `Colors/Green Success/200` | `Colors/Green Success/300` | `Colors/Green Success/700` | 5.2:1 |
+| Venue Staff | `Colors/Orange Warning/100` | `Colors/Orange Warning/300` | `Colors/Orange Warning/900` | 6.1:1 |
+| Technical Support | `Colors/Orchid/50` | `Colors/Orchid/200` | `Colors/Orchid/800` | 8.8:1 |
+
+**AVOID:** Reusing these pairings as status badges. Green and orange here are role colours, not success and warning.
 
 ## 4. Typography Tokens
 
