@@ -10,9 +10,11 @@
 -- on what remains outstanding when only partly fulfilled.
 --
 -- equipment_request_items is the list of items per request — equipment
--- type, quantity and technical requirements, per AC1. quantity > 0 is
--- enforced here too (AC3), not just in the API, since the backend uses the
--- service-role key and nothing else stands between a bad row and the table.
+-- type and quantity, per AC1. quantity > 0 is enforced here too (AC3), not
+-- just in the API, since the backend uses the service-role key and nothing
+-- else stands between a bad row and the table. (The Coordinator's form no
+-- longer collects technical requirements; a database that still carries
+-- that column from before has a harmless, unused one — nothing reads it.)
 --
 -- Guarded so this is safe to re-run.
 
@@ -30,7 +32,6 @@ create table if not exists equipment_request_items (
   request_id bigint not null references equipment_requests (id) on delete cascade,
   equipment_type text not null,
   quantity integer not null check (quantity > 0),
-  technical_requirements text,
   created_at timestamptz not null default now()
 );
 

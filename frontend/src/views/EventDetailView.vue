@@ -24,6 +24,7 @@ import VenueRecommendations from "../components/venues/VenueRecommendations.vue"
 import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel.vue";
 import VenueRequestsPanel from "../components/venues/VenueRequestsPanel.vue";
 import { fetchEventVenueBookings, type EventVenueBooking } from "../lib/venuesApi";
+import { fetchEquipmentRequestsForEvent, type EquipmentRequest } from "../lib/equipmentApi";
 
 
 interface SubmittedEventDetails {
@@ -307,6 +308,15 @@ const venueBookings = ref<EventVenueBooking[] | undefined>(undefined);
 const venueBookingsError = ref<string | null>(null);
 const venueBookingsLoading = ref(false);
 
+/**
+ * E3-1 AC3: this event's equipment requests, owned here (not inside
+ * EquipmentRequestPanel) so the outstanding-arrangements line can read it
+ * too — the organiser has no form to submit a request and never mounts
+ * that panel, but still needs real arrangement status, same as they
+ * already get for venueBookings above.
+ */
+const equipmentRequests = ref<EquipmentRequest[] | undefined>(undefined);
+
 async function loadVenueBookings(): Promise<void> {
   if (!event.value) return;
   venueBookingsLoading.value = true;
@@ -319,6 +329,15 @@ async function loadVenueBookings(): Promise<void> {
       err instanceof Error ? err.message : "Failed to load this event's venue requests";
   } finally {
     venueBookingsLoading.value = false;
+  }
+}
+
+async function loadEquipmentRequests(): Promise<void> {
+  if (!event.value) return;
+  try {
+    equipmentRequests.value = await fetchEquipmentRequestsForEvent(event.value.id);
+  } catch {
+    equipmentRequests.value = [];
   }
 }
 
@@ -353,7 +372,7 @@ onMounted(async () => {
     currentUser.value = user;
     await loadHistory();
     // Only an event in Planning shows arrangements or a requests panel.
-    if (eventData.status === "Planning") await loadVenueBookings();
+    if (eventData.status === "Planning") await Promise.all([loadVenueBookings(), loadEquipmentRequests()]);
   } catch (err) {
     if (err instanceof AccessDeniedError) {
       accessDenied.value = true;
@@ -628,7 +647,7 @@ onMounted(async () => {
 
 <EventStatusTracker v-if="event.status === 'Planning'" :status="event.status"
   :last-changed-at="statusLastChangedAt(event)" :review-outcome="event.review_outcome" title="Outstanding Arrangements"
-  :show-timeline="false" :venue-bookings="venueBookings" />
+  :show-timeline="false" :venue-bookings="venueBookings" :equipment-requests="equipmentRequests" />
 </template>
 
 <template v-else>
@@ -757,8 +776,9 @@ onMounted(async () => {
 
 <!-- E5-1: equipment requirements, recorded by the assigned coordinator while Planning -->
 <div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card">
-  <EquipmentRequestPanel :event-id="event.id" :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null"
-    :can-submit="canCoordinatorEdit" />
+  <EquipmentRequestPanel :event-id="event.id"
+    :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null" :can-submit="canCoordinatorEdit"
+    @submitted="loadEquipmentRequests" />
 </div>
 
 <!-- E4-8 AC5: this event's venue requests and the state each one is in -->

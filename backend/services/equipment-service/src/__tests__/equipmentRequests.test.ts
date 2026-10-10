@@ -29,7 +29,8 @@ function query(result: { data: unknown; error: unknown }) {
   return q;
 }
 
-const validItems = [{ equipmentType: "Projector", quantity: 2, technicalRequirements: "HDMI input" }];
+const validItems = [{ equipmentCatalogId: 1, quantity: 2 }];
+const defaultCatalogRows = [{ id: 1, name: "Projector" }];
 
 function eventRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -46,6 +47,7 @@ function buildApp(
     user?: { id: string; role: string };
     eventStatus?: number;
     event?: Record<string, unknown> | null;
+    catalogRows?: Record<string, unknown>[];
     insertRequestError?: boolean;
     insertItemsError?: boolean;
     requests?: Record<string, unknown>[];
@@ -54,7 +56,7 @@ function buildApp(
     notificationsStatus?: number;
     bookingInfoEvents?: Record<string, unknown>[];
     updatedRequest?: Record<string, unknown> | null;
-    updateRequestError?: boolean;
+    applyError?: { message: string } | null;
   } = {},
 ) {
   const requestInsert = vi.fn((row: Record<string, unknown>) =>
@@ -71,26 +73,23 @@ function buildApp(
       error: options.insertItemsError ? { message: "boom" } : null,
     }),
   );
-  const requestUpdate = vi.fn((patch: Record<string, unknown>) =>
-    query({
-      data: options.updateRequestError
-        ? null
-        : options.updatedRequest === undefined
-          ? {
-              id: 55,
-              event_id: 7,
-              coordinator_id: "COORD-0001",
-              created_at: "2026-01-01T00:00:00Z",
-              ...patch,
-            }
-          : options.updatedRequest,
-      error: options.updateRequestError ? { message: "boom" } : null,
-    }),
-  );
   const deleteQuery = query({ data: null, error: null });
-  const requestsSelect = query({ data: options.requests ?? [], error: null });
   const itemsSelect = query({ data: options.items ?? [], error: null });
   const usersSelect = query({ data: options.technicalSupportStaff ?? [], error: null });
+  const catalogSelect = query({ data: options.catalogRows ?? defaultCatalogRows, error: null });
+
+  // PATCH re-selects the request row (not an update) once apply_equipment_request_status
+  // succeeds; GET's list endpoints select an array instead — tests pick whichever shape
+  // they need via `updatedRequest` or `requests`.
+  const requestSelectResult =
+    options.updatedRequest !== undefined
+      ? options.updatedRequest
+      : options.requests !== undefined
+        ? options.requests
+        : { id: 55, event_id: 7, coordinator_id: "COORD-0001", status: "Arranged", fulfillment_note: null, created_at: "2026-01-01T00:00:00Z" };
+  const requestsSelect = query({ data: requestSelectResult, error: null });
+
+  const rpcMock = vi.fn(async () => ({ data: null, error: options.applyError ?? null }));
 
   const supabase = {
     from: vi.fn((table: string) => {
@@ -99,17 +98,20 @@ function buildApp(
           insert: requestInsert,
           select: requestsSelect.select,
           delete: vi.fn(() => deleteQuery),
-          update: requestUpdate,
         };
       }
       if (table === "equipment_request_items") {
         return { insert: itemsInsert, select: itemsSelect.select };
+      }
+      if (table === "equipment_catalog") {
+        return { select: catalogSelect.select };
       }
       if (table === "users") {
         return { select: usersSelect.select };
       }
       throw new Error(`unexpected table ${table}`);
     }),
+    rpc: rpcMock,
   };
 
   const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
@@ -133,7 +135,7 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/equipment-requests", equipmentRequestsRouter);
-  return { app, supabase, requestInsert, itemsInsert, requestUpdate, deleteQuery, fetchMock };
+  return { app, supabase, requestInsert, itemsInsert, deleteQuery, rpcMock, fetchMock };
 }
 
 afterEach(() => {
@@ -146,7 +148,7 @@ describe("validateEquipmentItems", () => {
     expect(result).toEqual({
       valid: true,
       fields: {},
-      value: [{ equipmentType: "Projector", quantity: 2, technicalRequirements: "HDMI input" }],
+      value: [{ equipmentCatalogId: 1, quantity: 2 }],
     });
   });
 
@@ -157,32 +159,27 @@ describe("validateEquipmentItems", () => {
 
   // AC3: a quantity of zero or less blocks submission.
   it.each([0, -1, -5])("rejects a quantity of %i", (quantity) => {
-    const result = validateEquipmentItems([{ equipmentType: "Mic", quantity }]);
+    const result = validateEquipmentItems([{ equipmentCatalogId: 1, quantity }]);
     expect(result.valid).toBe(false);
     expect(result.fields["items[0].quantity"]).toMatch(/greater than zero/);
   });
 
   it("rejects a non-integer quantity", () => {
-    const result = validateEquipmentItems([{ equipmentType: "Mic", quantity: 1.5 }]);
+    const result = validateEquipmentItems([{ equipmentCatalogId: 1, quantity: 1.5 }]);
     expect(result.valid).toBe(false);
     expect(result.fields["items[0].quantity"]).toMatch(/whole number/);
   });
 
-  it("requires equipmentType", () => {
+  it("requires equipmentCatalogId", () => {
     const result = validateEquipmentItems([{ quantity: 1 }]);
     expect(result.valid).toBe(false);
-    expect(result.fields["items[0].equipmentType"]).toBeDefined();
-  });
-
-  it("defaults technicalRequirements to an empty string when omitted", () => {
-    const result = validateEquipmentItems([{ equipmentType: "Mic", quantity: 1 }]);
-    expect(result.valid && result.value?.[0].technicalRequirements).toBe("");
+    expect(result.fields["items[0].equipmentCatalogId"]).toBeDefined();
   });
 
   it("collects every item's errors in one pass", () => {
-    const result = validateEquipmentItems([{ quantity: 0 }, { equipmentType: "Mic", quantity: -1 }]);
+    const result = validateEquipmentItems([{ quantity: 0 }, { equipmentCatalogId: 1, quantity: -1 }]);
     expect(!result.valid && Object.keys(result.fields).sort()).toEqual([
-      "items[0].equipmentType",
+      "items[0].equipmentCatalogId",
       "items[0].quantity",
       "items[1].quantity",
     ]);
@@ -206,9 +203,16 @@ describe("POST /api/equipment-requests (E5-1)", () => {
     const { app } = buildApp();
     const res = await request(app)
       .post("/api/equipment-requests")
-      .send({ eventId: 7, items: [{ equipmentType: "Mic", quantity: 0 }] });
+      .send({ eventId: 7, items: [{ equipmentCatalogId: 1, quantity: 0 }] });
     expect(res.status).toBe(400);
     expect(res.body.fields["items[0].quantity"]).toBeDefined();
+  });
+
+  it("rejects an equipmentCatalogId that doesn't exist in the catalog", async () => {
+    const { app } = buildApp({ catalogRows: [] });
+    const res = await request(app).post("/api/equipment-requests").send({ eventId: 7, items: validItems });
+    expect(res.status).toBe(400);
+    expect(res.body.fields["items[0].equipmentCatalogId"]).toBeDefined();
   });
 
   it("404s when the event doesn't exist", async () => {
@@ -230,7 +234,7 @@ describe("POST /api/equipment-requests (E5-1)", () => {
     expect(res.status).toBe(409);
   });
 
-  it("records the request and items, and notifies every Technical Support user", async () => {
+  it("records the request and items against their catalog entry, and notifies every Technical Support user", async () => {
     const { app, requestInsert, itemsInsert, fetchMock } = buildApp({
       technicalSupportStaff: [{ id: "TS-0001" }, { id: "TS-0002" }],
     });
@@ -243,13 +247,13 @@ describe("POST /api/equipment-requests (E5-1)", () => {
     expect(res.status).toBe(201);
     expect(requestInsert).toHaveBeenCalledWith({ event_id: 7, coordinator_id: "COORD-0001" });
     expect(itemsInsert).toHaveBeenCalledWith([
-      { request_id: 55, equipment_type: "Projector", quantity: 2, technical_requirements: "HDMI input" },
+      { request_id: 55, equipment_catalog_id: 1, equipment_type: "Projector", quantity: 2 },
     ]);
     expect(res.body.equipmentRequest).toMatchObject({
       id: 55,
       eventId: 7,
       status: "Requested",
-      items: [{ equipmentType: "Projector", quantity: 2, technicalRequirements: "HDMI input" }],
+      items: [{ equipmentType: "Projector", quantity: 2 }],
     });
     expect(res.body.notified).toBe(true);
 
@@ -291,7 +295,15 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
   it("returns one event's requests with their items for a coordinator", async () => {
     const { app } = buildApp({
       requests: [{ id: 55, event_id: 7, status: "Requested", created_at: "2026-01-01T00:00:00Z" }],
-      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, technical_requirements: "HDMI" }],
+      items: [
+        {
+          id: 1,
+          request_id: 55,
+          equipment_type: "Projector",
+          quantity: 2,
+          quantity_fulfilled: 0,
+        },
+      ],
     });
     const res = await request(app).get("/api/equipment-requests?eventId=7");
     expect(res.status).toBe(200);
@@ -302,9 +314,37 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Requested",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentType: "Projector", quantity: 2, technicalRequirements: "HDMI" }],
+        items: [{ id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0 }],
       },
     ]);
+  });
+
+  // The owning organiser has no form to submit a request, but still needs to
+  // see arrangement status (E3-1 AC3's "Outstanding Arrangements" line).
+  it("allows the owning organiser to view one event's requests", async () => {
+    const { app } = buildApp({
+      user: { id: "ORG-0001", role: "organiser" },
+      requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2 }],
+    });
+    const res = await request(app).get("/api/equipment-requests?eventId=7");
+    expect(res.status).toBe(200);
+    expect(res.body.equipmentRequests).toEqual([
+      {
+        id: 55,
+        eventId: 7,
+        status: "Arranged",
+        fulfillmentNote: null,
+        createdAt: "2026-01-01T00:00:00Z",
+        items: [{ id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 2 }],
+      },
+    ]);
+  });
+
+  it("404s an organiser when the event isn't theirs to see", async () => {
+    const { app } = buildApp({ user: { id: "ORG-0001", role: "organiser" }, eventStatus: 404 });
+    const res = await request(app).get("/api/equipment-requests?eventId=7");
+    expect(res.status).toBe(404);
   });
 
   it("rejects a role that is neither coordinator nor technical support", async () => {
@@ -317,7 +357,9 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
     const { app } = buildApp({
       user: technicalSupport,
       requests: [{ id: 55, event_id: 7, status: "Requested", created_at: "2026-01-01T00:00:00Z" }],
-      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, technical_requirements: null }],
+      items: [
+        { id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0 },
+      ],
       bookingInfoEvents: [{ id: 7, name: "Alumni Gala", proposedDate: "2026-02-01", equipment: "2 projectors" }],
     });
     const res = await request(app).get("/api/equipment-requests");
@@ -329,7 +371,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Requested",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentType: "Projector", quantity: 2, technicalRequirements: "" }],
+        items: [{ id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0 }],
         event: { id: 7, name: "Alumni Gala", proposedDate: "2026-02-01", equipment: "2 projectors" },
       },
     ]);
@@ -337,42 +379,67 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
 });
 
 describe("validateStatusUpdate", () => {
-  it("accepts a plain status with no note", () => {
-    expect(validateStatusUpdate({ status: "Arranged" })).toEqual({
+  it("accepts a plain status with no note, outside Partially Fulfilled", () => {
+    expect(validateStatusUpdate({ status: "Arranged" }, [])).toEqual({
       valid: true,
       fields: {},
-      value: { status: "Arranged", note: null },
+      value: { status: "Arranged", note: null, fulfillments: [] },
     });
   });
 
   it("rejects a status outside the fixed set", () => {
-    const result = validateStatusUpdate({ status: "Done" });
+    const result = validateStatusUpdate({ status: "Done" }, []);
     expect(result.valid).toBe(false);
     expect(result.fields.status).toBeDefined();
   });
 
   // AC2: a note describing what remains outstanding is required.
   it("requires a note when partially fulfilled", () => {
-    const result = validateStatusUpdate({ status: "Partially Fulfilled" });
+    const result = validateStatusUpdate({ status: "Partially Fulfilled" }, []);
     expect(result.valid).toBe(false);
     expect(result.fields.note).toBeDefined();
   });
 
-  it("accepts partially fulfilled with a note", () => {
-    expect(validateStatusUpdate({ status: "Partially Fulfilled", note: "2 of 3 mics arrived" })).toEqual({
+  it("requires a fulfilled quantity per item when partially fulfilled", () => {
+    const result = validateStatusUpdate(
+      { status: "Partially Fulfilled", note: "2 of 3 mics arrived" },
+      [{ id: 1, quantity: 3 }],
+    );
+    expect(result.valid).toBe(false);
+    expect(result.fields["fulfillments[1]"]).toBeDefined();
+  });
+
+  it("rejects a fulfilled quantity greater than what was requested", () => {
+    const result = validateStatusUpdate(
+      { status: "Partially Fulfilled", note: "note", fulfillments: [{ itemId: 1, fulfilledQuantity: 5 }] },
+      [{ id: 1, quantity: 3 }],
+    );
+    expect(result.valid).toBe(false);
+    expect(result.fields["fulfillments[1]"]).toBeDefined();
+  });
+
+  it("accepts partially fulfilled with a note and a fulfilled quantity per item", () => {
+    expect(
+      validateStatusUpdate(
+        { status: "Partially Fulfilled", note: "2 of 3 mics arrived", fulfillments: [{ itemId: 1, fulfilledQuantity: 2 }] },
+        [{ id: 1, quantity: 3 }],
+      ),
+    ).toEqual({
       valid: true,
       fields: {},
-      value: { status: "Partially Fulfilled", note: "2 of 3 mics arrived" },
+      value: { status: "Partially Fulfilled", note: "2 of 3 mics arrived", fulfillments: [{ itemId: 1, fulfilledQuantity: 2 }] },
     });
   });
 
   it("clears a stray note for any other status", () => {
-    const result = validateStatusUpdate({ status: "Arranged", note: "ignored" });
+    const result = validateStatusUpdate({ status: "Arranged", note: "ignored" }, []);
     expect(result.valid && result.value?.note).toBeNull();
   });
 });
 
 describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
+  const oneItem = [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0 }];
+
   it("rejects a non-technical-support caller", async () => {
     const { app } = buildApp({ user: coordinator });
     const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
@@ -385,8 +452,14 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("404s when the request doesn't exist (no items)", async () => {
+    const { app } = buildApp({ user: technicalSupport, items: [] });
+    const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+    expect(res.status).toBe(404);
+  });
+
   it("surfaces validation errors (AC2: note required for partial fulfilment)", async () => {
-    const { app } = buildApp({ user: technicalSupport });
+    const { app } = buildApp({ user: technicalSupport, items: oneItem });
     const res = await request(app)
       .patch("/api/equipment-requests/55")
       .send({ status: "Partially Fulfilled" });
@@ -394,17 +467,19 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
     expect(res.body.fields.note).toBeDefined();
   });
 
-  it("404s when the request doesn't exist", async () => {
-    const { app } = buildApp({ user: technicalSupport, updatedRequest: null });
-    const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
-    expect(res.status).toBe(404);
-  });
-
   // AC1: saving notifies the assigned coordinator and the new status is returned.
-  it("updates the status and notifies the assigned coordinator", async () => {
-    const { app, requestUpdate, fetchMock } = buildApp({
+  it("updates the status via the atomic RPC and notifies the assigned coordinator", async () => {
+    const { app, rpcMock, fetchMock } = buildApp({
       user: technicalSupport,
-      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, technical_requirements: null }],
+      items: oneItem,
+      updatedRequest: {
+        id: 55,
+        event_id: 7,
+        coordinator_id: "COORD-0001",
+        status: "Arranged",
+        fulfillment_note: null,
+        created_at: "2026-01-01T00:00:00Z",
+      },
       bookingInfoEvents: [{ id: 7, name: "Alumni Gala" }],
     });
 
@@ -414,7 +489,12 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
       .send({ status: "Arranged" });
 
     expect(res.status).toBe(200);
-    expect(requestUpdate).toHaveBeenCalledWith({ status: "Arranged", fulfillment_note: null });
+    expect(rpcMock).toHaveBeenCalledWith("apply_equipment_request_status", {
+      p_request_id: 55,
+      p_status: "Arranged",
+      p_note: null,
+      p_fulfillments: [],
+    });
     expect(res.body.equipmentRequest).toMatchObject({ id: 55, status: "Arranged", fulfillmentNote: null });
     expect(res.body.notified).toBe(true);
 
@@ -427,24 +507,50 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
     expect(sentBody.notifications[0].body).toContain("Alumni Gala");
   });
 
-  // AC2: the coordinator is told what remains outstanding.
-  it("records a partial fulfilment with its note", async () => {
-    const { app, requestUpdate } = buildApp({ user: technicalSupport, items: [] });
+  // AC2: the coordinator is told what remains outstanding, and the RPC gets the exact
+  // per-item fulfilled quantities that move stock.
+  it("records a partial fulfilment with its note and per-item fulfilled quantities", async () => {
+    const { app, rpcMock } = buildApp({
+      user: technicalSupport,
+      items: oneItem,
+      updatedRequest: {
+        id: 55,
+        event_id: 7,
+        coordinator_id: "COORD-0001",
+        status: "Partially Fulfilled",
+        fulfillment_note: "1 of 2 projectors arrived",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    });
 
     const res = await request(app)
       .patch("/api/equipment-requests/55")
-      .send({ status: "Partially Fulfilled", note: "2 of 3 mics arrived" });
+      .send({ status: "Partially Fulfilled", note: "1 of 2 projectors arrived", fulfillments: [{ itemId: 1, fulfilledQuantity: 1 }] });
 
     expect(res.status).toBe(200);
-    expect(requestUpdate).toHaveBeenCalledWith({
-      status: "Partially Fulfilled",
-      fulfillment_note: "2 of 3 mics arrived",
+    expect(rpcMock).toHaveBeenCalledWith("apply_equipment_request_status", {
+      p_request_id: 55,
+      p_status: "Partially Fulfilled",
+      p_note: "1 of 2 projectors arrived",
+      p_fulfillments: [{ itemId: 1, fulfilledQuantity: 1 }],
     });
-    expect(res.body.equipmentRequest.fulfillmentNote).toBe("2 of 3 mics arrived");
+    expect(res.body.equipmentRequest.fulfillmentNote).toBe("1 of 2 projectors arrived");
+  });
+
+  // Stock ran out between the stock table loading and Technical Support saving.
+  it("maps the RPC's insufficient-stock error to a 409", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      items: oneItem,
+      applyError: { message: "Not enough stock available for item 1" },
+    });
+
+    const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+    expect(res.status).toBe(409);
   });
 
   it("reports notified:false when notification-service fails, without failing the update", async () => {
-    const { app } = buildApp({ user: technicalSupport, items: [], notificationsStatus: 500 });
+    const { app } = buildApp({ user: technicalSupport, items: oneItem, notificationsStatus: 500 });
     const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
     expect(res.status).toBe(200);
     expect(res.body.notified).toBe(false);

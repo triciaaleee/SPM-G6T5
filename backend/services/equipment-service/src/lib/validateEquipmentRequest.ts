@@ -1,17 +1,19 @@
 // E5-1: validation for POST /api/equipment-requests, driven by the
 // story's acceptance criteria — equipment type, quantity and technical
 // requirements per item (AC1), quantity of zero or less blocked (AC3).
+//
+// equipmentCatalogId (not a free-text equipmentType) ties every item to a
+// row in equipment_catalog (migration 0022) so stock can be tracked; the
+// route resolves it to a name/id pair and 400s if it doesn't exist.
 
 export interface EquipmentItemInput {
-  equipmentType?: unknown;
+  equipmentCatalogId?: unknown;
   quantity?: unknown;
-  technicalRequirements?: unknown;
 }
 
 export interface ValidatedEquipmentItem {
-  equipmentType: string;
+  equipmentCatalogId: number;
   quantity: number;
-  technicalRequirements: string;
 }
 
 export interface ValidationResult {
@@ -25,6 +27,11 @@ const MAX_ITEMS = 50;
 
 function isBlank(value: unknown): boolean {
   return value === undefined || value === null || (typeof value === "string" && value.trim() === "");
+}
+
+function isPositiveInteger(value: unknown): boolean {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && Number.isInteger(numericValue) && numericValue > 0;
 }
 
 /**
@@ -47,8 +54,8 @@ export function validateEquipmentItems(input: unknown): ValidationResult {
   input.forEach((raw, index) => {
     const item = (raw && typeof raw === "object" ? raw : {}) as EquipmentItemInput;
 
-    if (isBlank(item.equipmentType)) {
-      fields[`items[${index}].equipmentType`] = "Equipment type is required.";
+    if (!isPositiveInteger(item.equipmentCatalogId)) {
+      fields[`items[${index}].equipmentCatalogId`] = "Select an equipment type.";
     }
 
     let quantity: number | undefined;
@@ -66,11 +73,10 @@ export function validateEquipmentItems(input: unknown): ValidationResult {
       }
     }
 
-    if (!fields[`items[${index}].equipmentType`] && quantity !== undefined) {
+    if (!fields[`items[${index}].equipmentCatalogId`] && quantity !== undefined) {
       value.push({
-        equipmentType: String(item.equipmentType).trim(),
+        equipmentCatalogId: Number(item.equipmentCatalogId),
         quantity,
-        technicalRequirements: isBlank(item.technicalRequirements) ? "" : String(item.technicalRequirements).trim(),
       });
     }
   });
@@ -85,15 +91,32 @@ export function validateEquipmentItems(input: unknown): ValidationResult {
 export const EQUIPMENT_REQUEST_STATUSES = ["Requested", "Arranged", "Partially Fulfilled"] as const;
 export type EquipmentRequestStatus = (typeof EQUIPMENT_REQUEST_STATUSES)[number];
 
+export interface FulfillmentInput {
+  itemId?: unknown;
+  fulfilledQuantity?: unknown;
+}
+
 export interface StatusUpdateInput {
   status?: unknown;
   note?: unknown;
+  fulfillments?: unknown;
+}
+
+/** The current request's items, as needed to validate fulfillments against. */
+export interface StatusUpdateItem {
+  id: number;
+  quantity: number;
+}
+
+export interface ValidatedFulfillment {
+  itemId: number;
+  fulfilledQuantity: number;
 }
 
 export interface StatusUpdateResult {
   valid: boolean;
   fields: Record<string, string>;
-  value?: { status: EquipmentRequestStatus; note: string | null };
+  value?: { status: EquipmentRequestStatus; note: string | null; fulfillments: ValidatedFulfillment[] };
 }
 
 /**
@@ -101,8 +124,14 @@ export interface StatusUpdateResult {
  * what remains outstanding is required when the status is "Partially
  * Fulfilled"; the note is cleared for any other status so it can't go
  * stale once arrangements move on.
+ *
+ * Partially Fulfilled also requires a fulfilled quantity per item (0..that
+ * item's requested quantity) so the stock taken off the shelf is exact —
+ * see apply_equipment_request_status() (migration 0022). `items` is the
+ * request's own items, passed in by the caller so every one of them (and
+ * nothing else) must appear in `fulfillments`.
  */
-export function validateStatusUpdate(input: StatusUpdateInput): StatusUpdateResult {
+export function validateStatusUpdate(input: StatusUpdateInput, items: StatusUpdateItem[]): StatusUpdateResult {
   const fields: Record<string, string> = {};
 
   const status = typeof input.status === "string" ? input.status.trim() : "";
@@ -115,9 +144,32 @@ export function validateStatusUpdate(input: StatusUpdateInput): StatusUpdateResu
     fields.note = "A note describing what remains outstanding is required.";
   }
 
+  const fulfillments: ValidatedFulfillment[] = [];
+  if (status === "Partially Fulfilled" && !fields.status) {
+    const rawFulfillments = Array.isArray(input.fulfillments) ? input.fulfillments : [];
+    const byItemId = new Map(
+      rawFulfillments.map((raw) => {
+        const f = (raw && typeof raw === "object" ? raw : {}) as FulfillmentInput;
+        return [Number(f.itemId), f.fulfilledQuantity] as const;
+      }),
+    );
+
+    for (const item of items) {
+      const raw = byItemId.get(item.id);
+      const numericValue = Number(raw);
+      if (raw === undefined || !Number.isFinite(numericValue) || !Number.isInteger(numericValue)) {
+        fields[`fulfillments[${item.id}]`] = "Enter how many of this item were fulfilled.";
+      } else if (numericValue < 0 || numericValue > item.quantity) {
+        fields[`fulfillments[${item.id}]`] = `Enter a number between 0 and ${item.quantity}.`;
+      } else {
+        fulfillments.push({ itemId: item.id, fulfilledQuantity: numericValue });
+      }
+    }
+  }
+
   if (Object.keys(fields).length > 0) {
     return { valid: false, fields };
   }
   const keptNote = status === "Partially Fulfilled" && note !== "" ? note : null;
-  return { valid: true, fields: {}, value: { status: status as EquipmentRequestStatus, note: keptNote } };
+  return { valid: true, fields: {}, value: { status: status as EquipmentRequestStatus, note: keptNote, fulfillments } };
 }

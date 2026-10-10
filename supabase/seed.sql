@@ -227,3 +227,32 @@ insert into venue_bookings (venue_id, event_id, status) values
   (1, 2, 'Requested'),
   (5, 5, 'Approved'),
   (10, 6, 'Requested');
+
+-- equipment_catalog (0022): the fixed list Coordinators pick from on an
+-- equipment request, and Technical Support's current-stock table. Names
+-- overlap with venues.facilities above where the item is the same thing
+-- (e.g. "PA system") — total_stock is a starting assumption for local
+-- testing, not a real inventory count. available_stock starts equal to
+-- total_stock; it only drops once Technical Support arrange or partially
+-- fulfil a request (migration 0022).
+insert into equipment_catalog (name, total_stock, available_stock) values
+  ('Projector', 20, 20),
+  ('Screen', 15, 15),
+  ('PA system', 10, 10),
+  ('Microphones', 40, 40),
+  ('Livestream equipment', 8, 8),
+  ('Video conferencing', 6, 6),
+  ('Stage', 4, 4),
+  ('Lighting rig', 6, 6),
+  ('Folding table', 100, 100),
+  ('Round table', 50, 50),
+  ('Chairs', 300, 300),
+  ('Gazebo tent', 25, 25),
+  ('Registration desk', 10, 10),
+  ('Name badge printer', 5, 5),
+  ('Extension cords', 50, 50)
+-- do update (not do nothing): re-running this file refreshes total_stock
+-- for a seeded catalog, but never touches available_stock — that's live
+-- state Technical Support have already changed, not seed data to reset.
+on conflict (name) do update set
+  total_stock = excluded.total_stock;
