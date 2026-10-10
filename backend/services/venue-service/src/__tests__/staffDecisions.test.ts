@@ -813,6 +813,28 @@ describe("GET /api/venues/staff/requests", () => {
     expect(updates[0]).toMatchObject({ ids: [10], patch: { status: "Expired", decided_by: null } });
   });
 
+  it("E4-12: expiring a hold does not revive a booking it auto-rejected when placed", async () => {
+    const { app, updates } = buildApp({
+      bookings: [
+        booking({ id: 10, status: "On Hold", hold_expires_at: "2020-01-01T00:00:00.000Z" }),
+        booking({
+          id: 11,
+          event_id: 21,
+          status: "Rejected",
+          decision_reason: AUTO_REJECT_REASON,
+          decided_by: null,
+        }),
+      ],
+    });
+    const res = await queue(app);
+
+    expect(res.body.requests).toEqual([]);
+    // The sweep only ever touches rows still On Hold — booking 11 is never
+    // targeted, let alone moved off Rejected.
+    expect(updates[0]).toMatchObject({ ids: [10], patch: { status: "Expired" } });
+    expect(updates.some((update) => update.ids?.includes(11))).toBe(false);
+  });
+
   it("AC7: only covers the venues this staff member is assigned to", async () => {
     const { app } = buildApp({
       assignedVenueIds: [2],
