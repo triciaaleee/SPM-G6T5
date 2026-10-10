@@ -201,13 +201,13 @@ function buildApp(
     bookedEvents?: ReturnType<typeof bookedEvent>[];
     /** E4-3 block-out periods, read by findBlockedVenueIds. */
     unavailability?: Record<string, unknown>[];
-    /** The blocked venues' setup/turnaround minutes. */
-    buffers?: Record<string, unknown>[];
+    /** Setup/turnaround minutes by venue id, merged onto the venue rows. */
+    buffers?: Record<number, { setup_minutes?: number; turnaround_minutes?: number }>;
   } = {},
 ) {
-  // E4-3: block-out periods and the blocked venues' setup/turnaround.
+  // E4-3: block-out periods, read as select → lte(start_date) → gte(end_date).
   const unavailabilityGte = vi.fn().mockResolvedValue({ data: options.unavailability ?? [], error: null });
-  const venuesIn = vi.fn().mockResolvedValue({ data: options.buffers ?? [], error: null });
+  const unavailabilityLte = vi.fn().mockReturnValue({ gte: unavailabilityGte });
 
   // venue_bookings only links a venue to an event; its schedule comes from
   // events-service. Only "On Hold" (unexpired) and "Approved" bookings block a
@@ -233,13 +233,14 @@ function buildApp(
   });
   vi.stubGlobal("fetch", fetchMock);
 
-  const venuesEq = vi.fn().mockResolvedValue({ data: venues, error: null });
+  const venueRows = venues.map((venue) => ({ ...venue, ...options.buffers?.[venue.id] }));
+  const venuesEq = vi.fn().mockResolvedValue({ data: venueRows, error: null });
 
   const supabase = {
     from: vi.fn((table: string) => {
-      if (table === "venues") return { select: vi.fn().mockReturnValue({ eq: venuesEq, in: venuesIn }) };
+      if (table === "venues") return { select: vi.fn().mockReturnValue({ eq: venuesEq }) };
       if (table === "venue_bookings") return { select: vi.fn().mockReturnValue(bookingsQuery) };
-      if (table === "venue_unavailability") return { select: () => ({ lte: () => ({ gte: unavailabilityGte }) }) };
+      if (table === "venue_unavailability") return { select: () => ({ lte: unavailabilityLte }) };
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -250,7 +251,7 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/venues", venuesRouter);
-  return { app, supabase, bookingsQuery, fetchMock };
+  return { app, supabase, bookingsQuery, fetchMock, unavailabilityLte, unavailabilityGte };
 }
 
 describe("GET /api/venues", () => {
@@ -371,7 +372,7 @@ describe("GET /api/venues", () => {
         { id: 1, venue_id: 1, start_date: "2026-09-25", end_date: "2026-09-25", all_day: false,
           start_time: "16:00:00", end_time: "18:00:00", reason: "Maintenance" },
       ],
-      buffers: [{ id: 1, setup_minutes: 30, turnaround_minutes: 0 }],
+      buffers: { 1: { setup_minutes: 30, turnaround_minutes: 0 } },
     });
     const res = await request(app)
       .get("/api/venues")
@@ -379,6 +380,116 @@ describe("GET /api/venues", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.venues.map((v: VenueRow) => v.id)).not.toContain(1);
+  });
+
+  describe("E4-16: setup and turnaround in search", () => {
+    const search = (app: express.Express, startTime: string, endTime: string, date = "2026-09-25") =>
+      request(app).get("/api/venues").query({ date, startTime, endTime }).set("Authorization", "Bearer t");
+    const idsOf = (res: { body: { venues: VenueRow[] } }) => res.body.venues.map((v) => v.id);
+
+    it("AC1: excludes a venue when the padded windows overlap, though the bare times don't", async () => {
+      // Venue 1 (30 setup, 45 turnaround): booking 09:00–11:00 occupies 08:30–11:45;
+      // a 12:00–14:00 request needs 11:30–14:45. Venue 2 has no buffers.
+      const { app } = buildApp({
+        buffers: { 1: { setup_minutes: 30, turnaround_minutes: 45 } },
+        bookings: [
+          { venue_id: 1, event_id: 11 },
+          { venue_id: 2, event_id: 12 },
+        ],
+        bookedEvents: [bookedEvent(11, "2026-09-25", "09:00", "11:00"), bookedEvent(12, "2026-09-25", "09:00", "11:00")],
+      });
+      const res = await search(app, "12:00", "14:00");
+
+      expect(res.status).toBe(200);
+      expect(idsOf(res)).not.toContain(1);
+      // AC2: with no setup/turnaround configured, only the bookings' own times count.
+      expect(idsOf(res)).toContain(2);
+    });
+
+    it("AC1: an On Hold booking's padded window excludes the venue too", async () => {
+      // Booking 14:00–16:00 with 30 setup starts at 13:30; the 11:00–13:00 request ends at 13:45 with turnaround.
+      const { app } = buildApp({
+        buffers: { 1: { setup_minutes: 30, turnaround_minutes: 45 } },
+        bookings: [{ venue_id: 1, event_id: 11, status: "On Hold", hold_expires_at: "2999-01-01T00:00:00Z" }],
+        bookedEvents: [bookedEvent(11, "2026-09-25", "14:00", "16:00")],
+      });
+      expect(idsOf(await search(app, "11:00", "13:00"))).not.toContain(1);
+    });
+
+    it("AC2: with no setup or turnaround, back-to-back bookings don't conflict", async () => {
+      const { app } = buildApp({
+        bookings: [{ venue_id: 2, event_id: 12 }],
+        bookedEvents: [bookedEvent(12, "2026-09-25", "09:00", "11:00")],
+      });
+      expect(idsOf(await search(app, "11:00", "13:00"))).toContain(2);
+      expect(idsOf(await search(app, "10:59", "13:00"))).not.toContain(2);
+    });
+
+    it("AC3: includes the venue when start minus setup equals the booking's padded end; one minute earlier excludes it", async () => {
+      // Booking 09:00–11:00 + 45 turnaround ends at 11:45. 12:15 − 30 setup = 11:45.
+      const { app } = buildApp({
+        buffers: { 1: { setup_minutes: 30, turnaround_minutes: 45 } },
+        bookings: [{ venue_id: 1, event_id: 11 }],
+        bookedEvents: [bookedEvent(11, "2026-09-25", "09:00", "11:00")],
+      });
+      expect(idsOf(await search(app, "12:15", "14:00"))).toContain(1);
+      expect(idsOf(await search(app, "12:14", "14:00"))).not.toContain(1);
+    });
+
+    it("AC3 (mirror): includes the venue when end plus turnaround equals the booking's padded start", async () => {
+      // Booking 14:00–16:00 − 30 setup starts at 13:30. 12:45 + 45 turnaround = 13:30.
+      const { app } = buildApp({
+        buffers: { 1: { setup_minutes: 30, turnaround_minutes: 45 } },
+        bookings: [{ venue_id: 1, event_id: 11 }],
+        bookedEvents: [bookedEvent(11, "2026-09-25", "14:00", "16:00")],
+      });
+      expect(idsOf(await search(app, "11:00", "12:45"))).toContain(1);
+      expect(idsOf(await search(app, "11:00", "12:46"))).not.toContain(1);
+    });
+
+    it("looks up booked events in batches of 100, so a busy venue list doesn't fail the search", async () => {
+      // 150 booked events at venue 3; only the last one, in the second batch, clashes.
+      const eventIds = Array.from({ length: 150 }, (_, i) => 1001 + i);
+      const clash = bookedEvent(1150, "2026-09-25", "18:00", "20:00");
+      const { app, fetchMock } = buildApp({ bookings: eventIds.map((id) => ({ venue_id: 3, event_id: id })) });
+      fetchMock.mockImplementation(async (url: string) => {
+        const ids = new URL(url).searchParams.get("ids")!.split(",").map(Number);
+        return { ok: true, status: 200, json: async () => ({ events: ids.includes(1150) ? [clash] : [] }) };
+      });
+      const res = await search(app, "19:00", "21:00");
+
+      expect(res.status).toBe(200);
+      const batchSizes = fetchMock.mock.calls.map(([url]) => new URL(url as string).searchParams.get("ids")!.split(",").length);
+      expect(batchSizes).toEqual([100, 50]);
+      expect(idsOf(res)).not.toContain(3);
+    });
+
+    it("fails the search if any batch of booked events can't be loaded", async () => {
+      const eventIds = Array.from({ length: 150 }, (_, i) => 1001 + i);
+      const { app, fetchMock } = buildApp({ bookings: eventIds.map((id) => ({ venue_id: 3, event_id: id })) });
+      fetchMock
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ events: [] }) })
+        .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+
+      expect((await search(app, "19:00", "21:00")).status).toBe(500);
+    });
+
+    it("AC1: pads the requested window against a block-out, including across midnight", async () => {
+      // 00:15 − 30 setup = 23:45 the day before, inside a 23:00–23:59 block-out.
+      const { app, unavailabilityLte, unavailabilityGte } = buildApp({
+        buffers: { 1: { setup_minutes: 30, turnaround_minutes: 0 } },
+        unavailability: [
+          { id: 1, venue_id: 1, start_date: "2026-09-24", end_date: "2026-09-24", all_day: false,
+            start_time: "23:00:00", end_time: "23:59:00", reason: "Late maintenance" },
+        ],
+      });
+      const res = await search(app, "00:15", "02:00");
+
+      expect(res.status).toBe(200);
+      expect(unavailabilityLte).toHaveBeenCalledWith("start_date", "2026-09-25");
+      expect(unavailabilityGte).toHaveBeenCalledWith("end_date", "2026-09-24");
+      expect(idsOf(res)).not.toContain(1);
+    });
   });
 
   it("skips the bookings lookup when no date is given", async () => {
