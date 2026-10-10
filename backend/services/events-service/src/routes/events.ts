@@ -9,6 +9,13 @@ import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/dif
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
 import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
+import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
+import {
+  describeOutstanding,
+  findOutstandingArrangements,
+  hasOutstanding,
+  parseSafetyNotes,
+} from "../lib/safetyReview.js";
 
 /**
  * Week 7 change 5: the Event Coordinator Lead oversees incoming requests,
@@ -910,6 +917,80 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
   }
 
   res.json({ event: data });
+});
+
+/**
+ * E3-4: the assigned coordinator submits a Planning event for the Safety
+ * Officer's Operational Safety Check (Planning → Safety Review, AGENTS.md §3).
+ * Checked in order: the caller is the assigned coordinator (AC7, in
+ * authorizeCoordinatorReview), the event is in Planning (AC6), the safety
+ * notes are all given (AC5), and the venue and equipment arrangements are
+ * settled (AC1–AC4) — read from venue-service and equipment-service. The
+ * status change and the notes are then written together by
+ * submit_event_for_safety_review (migration 0026). A resubmission after the
+ * Safety Officer rejects or requests changes takes the same path, since
+ * both return the event to Planning (AC8), and gets a fresh submission row.
+ * Notifying the Safety Officer and Organiser is deferred to E7 (AC9).
+ */
+eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeCoordinatorReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.Planning) {
+    res.status(409).json({ error: "Only an event in Planning can be submitted for safety review" });
+    return;
+  }
+
+  const parsed = parseSafetyNotes(req.body);
+  if (!parsed.valid) {
+    res.status(400).json({ error: "Safety notes are required", fields: parsed.fields });
+    return;
+  }
+
+  const authorization = req.headers.authorization!;
+  const [bookings, equipment] = await Promise.all([
+    fetchEventVenueBookings(event.id, authorization),
+    fetchEventEquipmentRequests(event.id, authorization),
+  ]);
+  if (bookings.status === "error" || equipment.status === "error") {
+    res.status(502).json({ error: "Couldn't check this event's venue and equipment arrangements. Please try again." });
+    return;
+  }
+
+  const outstanding = findOutstandingArrangements(bookings.value, equipment.value);
+  if (hasOutstanding(outstanding)) {
+    res.status(409).json({ error: describeOutstanding(outstanding), outstanding });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { notes } = parsed;
+  const { data: submissionId, error: submitError } = await supabase.rpc("submit_event_for_safety_review", {
+    p_event_id: event.id,
+    p_submitted_by: user.id,
+    p_equipment_placement: notes.equipmentPlacement,
+    p_crowd_movement: notes.crowdMovement,
+    p_emergency_access: notes.emergencyAccess,
+    p_venue_restrictions: notes.venueRestrictions,
+  });
+  if (submitError) {
+    res.status(500).json({ error: "Failed to submit the event for safety review" });
+    return;
+  }
+  if (submissionId === null) {
+    // Moved on, or reassigned, since the checks above.
+    res.status(409).json({ error: "This event is no longer in Planning or no longer assigned to you" });
+    return;
+  }
+
+  const { data, error } = await supabase.from("events").select(EVENT_COLUMNS).eq("id", event.id).single();
+  if (error) {
+    res.status(500).json({ error: "Submitted for safety review, but failed to reload the event" });
+    return;
+  }
+
+  res.json({ event: data, submissionId });
 });
 
 /**
