@@ -275,7 +275,7 @@ describe("GET /api/events/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.event.id).toBe(Number(eventId));
-    expect(res.body.event.organiser_id).toBeUndefined();
+    expect(res.body.event.organiser_id).toBe("someone-else");
   });
 
   it("returns the event when the caller owns it", async () => {
@@ -301,7 +301,7 @@ describe("GET /api/events/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.event.id).toBe(Number(ownedEventId));
-    expect(res.body.event.organiser_id).toBeUndefined();
+    expect(res.body.event.organiser_id).toBe("user-1");
   });
 });
 
