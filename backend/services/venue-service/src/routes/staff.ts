@@ -3,7 +3,13 @@ import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { blocksVenue, type BookingStatus } from "../lib/bookingStatus.js";
-import { BOOKING_COLUMNS, decideBooking, type BookingRow as DecisionBookingRow, type Decision } from "../lib/bookingDecisions.js";
+import {
+  BOOKING_COLUMNS,
+  decideBooking,
+  expireLapsedHolds,
+  type BookingRow as DecisionBookingRow,
+  type Decision,
+} from "../lib/bookingDecisions.js";
 import { assignedVenueIds, NOT_ASSIGNED_MESSAGE } from "../lib/venueStaff.js";
 import { fetchVenueBookingInfo } from "../lib/eventsClient.js";
 import { extractLayoutAndFacilities } from "../lib/venueRecommendation.js";
@@ -194,20 +200,6 @@ staffRouter.get("/requests", async (req: AuthedRequest, res) => {
   }
   const pendingRows = (bookingData ?? []) as DecisionBookingRow[];
 
-  const now = new Date();
-  const lapsed = pendingRows.filter((booking) => booking.status === "On Hold" && !blocksVenue(booking, now));
-  if (lapsed.length > 0) {
-    await supabase
-      .from("venue_bookings")
-      .update({ status: "Expired", decided_at: now.toISOString(), decided_by: null })
-      .in(
-        "id",
-        lapsed.map((booking) => booking.id),
-      )
-      .eq("status", "On Hold");
-  }
-  const pending = pendingRows.filter((booking) => !lapsed.some((expired) => expired.id === booking.id));
-
   const { data: venueData, error: venuesError } = await supabase
     .from("venues")
     .select("id, name, location, capacity, accessibility, layouts, facilities, setup_minutes, turnaround_minutes")
@@ -217,6 +209,11 @@ staffRouter.get("/requests", async (req: AuthedRequest, res) => {
     return;
   }
   const venuesById = new Map(((venueData ?? []) as VenueRow[]).map((venue) => [venue.id, venue]));
+
+  const now = new Date();
+  const lapsed = pendingRows.filter((booking) => booking.status === "On Hold" && !blocksVenue(booking, now));
+  await expireLapsedHolds(supabase, lapsed, venuesById, req.headers.authorization!);
+  const pending = pendingRows.filter((booking) => !lapsed.some((expired) => expired.id === booking.id));
 
   const queueInfo = await fetchVenueBookingInfo(
     [...new Set(pending.map((booking) => booking.event_id))],

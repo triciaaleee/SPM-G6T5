@@ -515,6 +515,24 @@ describe("POST /bookings/:id/approve", () => {
     expect(updates[0].patch).toMatchObject({ status: "Expired", decided_by: null });
   });
 
+  it("E4-12 change 4: tells the coordinator when their hold expires", async () => {
+    const { app, fetchMock } = buildApp({
+      bookings: [booking({ id: 10, status: "On Hold", hold_expires_at: "2020-01-01T00:00:00.000Z" })],
+    });
+    await act(app, "approve");
+
+    const send = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/notifications"));
+    expect(send).toBeDefined();
+    const sent = JSON.parse(send![1]!.body!).notifications as Record<string, string>[];
+    expect(sent).toEqual([
+      expect.objectContaining({
+        recipientId: "COORD-0007",
+        type: "venue_booking_expired",
+        link: "/events/7",
+      }),
+    ]);
+  });
+
   it.each(["Rejected", "Expired", "Withdrawn", "Approved"])("refuses a %s booking", async (status) => {
     const { app, updates } = buildApp({ bookings: [booking({ id: 10, status, decision_reason: "x" })] });
     const res = await act(app, "approve");
@@ -811,6 +829,18 @@ describe("GET /api/venues/staff/requests", () => {
 
     expect(res.body.requests).toEqual([]);
     expect(updates[0]).toMatchObject({ ids: [10], patch: { status: "Expired", decided_by: null } });
+  });
+
+  it("E4-12 change 4: tells the coordinator when the queue's own sweep expires their hold", async () => {
+    const { app, fetchMock } = buildApp({
+      bookings: [booking({ id: 10, status: "On Hold", hold_expires_at: "2020-01-01T00:00:00.000Z" })],
+    });
+    await queue(app);
+
+    const send = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/notifications"));
+    expect(send).toBeDefined();
+    const sent = JSON.parse(send![1]!.body!).notifications as Record<string, string>[];
+    expect(sent).toEqual([expect.objectContaining({ recipientId: "COORD-0007", type: "venue_booking_expired" })]);
   });
 
   it("E4-12: expiring a hold does not revive a booking it auto-rejected when placed", async () => {
