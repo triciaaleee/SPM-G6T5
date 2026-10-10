@@ -436,6 +436,44 @@ describe("GET /api/venues", () => {
       expect(idsOf(await search(app, "12:14", "14:00"))).not.toContain(1);
     });
 
+    it("AC3 (mirror): includes the venue when end plus turnaround equals the booking's padded start", async () => {
+      // Booking 14:00–16:00 − 30 setup starts at 13:30. 12:45 + 45 turnaround = 13:30.
+      const { app } = buildApp({
+        buffers: { 1: { setup_minutes: 30, turnaround_minutes: 45 } },
+        bookings: [{ venue_id: 1, event_id: 11 }],
+        bookedEvents: [bookedEvent(11, "2026-09-25", "14:00", "16:00")],
+      });
+      expect(idsOf(await search(app, "11:00", "12:45"))).toContain(1);
+      expect(idsOf(await search(app, "11:00", "12:46"))).not.toContain(1);
+    });
+
+    it("looks up booked events in batches of 100, so a busy venue list doesn't fail the search", async () => {
+      // 150 booked events at venue 3; only the last one, in the second batch, clashes.
+      const eventIds = Array.from({ length: 150 }, (_, i) => 1001 + i);
+      const clash = bookedEvent(1150, "2026-09-25", "18:00", "20:00");
+      const { app, fetchMock } = buildApp({ bookings: eventIds.map((id) => ({ venue_id: 3, event_id: id })) });
+      fetchMock.mockImplementation(async (url: string) => {
+        const ids = new URL(url).searchParams.get("ids")!.split(",").map(Number);
+        return { ok: true, status: 200, json: async () => ({ events: ids.includes(1150) ? [clash] : [] }) };
+      });
+      const res = await search(app, "19:00", "21:00");
+
+      expect(res.status).toBe(200);
+      const batchSizes = fetchMock.mock.calls.map(([url]) => new URL(url as string).searchParams.get("ids")!.split(",").length);
+      expect(batchSizes).toEqual([100, 50]);
+      expect(idsOf(res)).not.toContain(3);
+    });
+
+    it("fails the search if any batch of booked events can't be loaded", async () => {
+      const eventIds = Array.from({ length: 150 }, (_, i) => 1001 + i);
+      const { app, fetchMock } = buildApp({ bookings: eventIds.map((id) => ({ venue_id: 3, event_id: id })) });
+      fetchMock
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ events: [] }) })
+        .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+
+      expect((await search(app, "19:00", "21:00")).status).toBe(500);
+    });
+
     it("AC1: pads the requested window against a block-out, including across midnight", async () => {
       // 00:15 − 30 setup = 23:45 the day before, inside a 23:00–23:59 block-out.
       const { app, unavailabilityLte, unavailabilityGte } = buildApp({
