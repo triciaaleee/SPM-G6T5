@@ -11,21 +11,27 @@
  * that read:
  *
  *  1. `withVenueLock` (lib/venueLock.ts) serialises every decision for one
- *     venue, so the conflict re-check, the status write and the
- *     auto-rejection of the losers run as one uninterrupted sequence.
- *     Different venues stay fully parallel (AC7).
- *  2. The check is re-run *after* the write. If a rival booking blocks the
- *     same window by then, this decision lost a race the lock could not
- *     see, and it rolls itself back to `Rejected` rather than leave the
- *     venue promised twice. The tie-break is deterministic (earliest
- *     decision, then lowest id), so of two rivals exactly one yields.
+ *     venue within this process, so the conflict re-check, the status
+ *     write and the auto-rejection of the losers run as one uninterrupted
+ *     sequence. Different venues stay fully parallel (AC7).
+ *  2. `withVenueBookingLock` (lib/venueBookingLock.ts) is the same
+ *     serialisation enforced in the database via venue_booking_locks, so
+ *     it also holds across several service instances — guard 1 alone only
+ *     covers one process.
+ *  3. The check is re-run *after* the write, belt-and-braces against
+ *     anything guards 1-2 missed. If a rival booking blocks the same
+ *     window by then, this decision lost a race, and it rolls itself back
+ *     to `Rejected` rather than leave the venue promised twice. The
+ *     tie-break is deterministic (earliest decision, then lowest id), so
+ *     of two rivals exactly one yields.
  *
- * The lock's scope is one service process, which is the project's
- * deployment; guard 2 is what covers several instances. This is not the
- * single database transaction the story's wording asks for — a deliberate
- * project decision, since venue_bookings stores no timing at all (the
- * dates and times live in events-service, AGENTS.md §3a), so Postgres
- * cannot express a booking's window to compare in SQL.
+ * This is still not the single database transaction the story's wording
+ * suggests — a deliberate project decision, since venue_bookings stores no
+ * timing at all (the dates and times live in events-service, AGENTS.md
+ * §3a), so a Postgres transaction here could not read what it needs to
+ * compare in SQL. venue_booking_locks is the piece that still makes the
+ * *outcome* ("only the first succeeds") hold across processes, without
+ * requiring that timing data to move into this database.
  */
 import type { AuthedRequest } from "../middleware/auth.js";
 import {
@@ -40,6 +46,7 @@ import { fetchVenueBookingInfo, type VenueBookingInfo } from "./eventsClient.js"
 import { sendNotifications, type NewNotification } from "./notificationsClient.js";
 import { describePeriod, findClashingPeriod } from "./unavailability.js";
 import { withVenueLock } from "./venueLock.js";
+import { isLockBusy, withVenueBookingLock } from "./venueBookingLock.js";
 import { isAssignedToVenue } from "./venueStaff.js";
 
 type Supabase = NonNullable<AuthedRequest["supabase"]>;
@@ -465,84 +472,101 @@ async function holdOrApprove(
 
   // AC5: the re-check, the write, the post-write verification and the
   // auto-rejection are one sequence per venue — no other decision for this
-  // venue can interleave with them.
+  // venue can interleave with them, in this process (withVenueLock) or any
+  // other (withVenueBookingLock).
   return withVenueLock(booking.venue_id, async (): Promise<GuardedResult> => {
-    const blocking = await blockingWindows(supabase, venue, input.authorization, booking.id);
-    if (!blocking) return { outcome: { status: "error" } };
-    const clash = blocking.find((candidate) => overlaps(candidate.window, ownWindow));
-    if (clash) return { outcome: conflictResult(clash, ownWindow, venue) };
-
-    const { data: updatedData, error: updateError } = await supabase
-      .from("venue_bookings")
-      .update({
-        status: input.decision,
-        decided_at: now.toISOString(),
-        decided_by: input.staffId,
-        hold_expires_at: input.decision === "On Hold" ? holdExpiryFrom(now) : null,
-      })
-      .eq("id", booking.id)
-      // Nothing else may have moved this booking in the meantime.
-      .eq("status", booking.status)
-      .select(BOOKING_COLUMNS)
-      .maybeSingle();
-    if (updateError) return { outcome: { status: "error" } };
-    if (!updatedData) {
+    const locked = await withVenueBookingLock(supabase, booking.venue_id, () =>
+      decideUnderLock(supabase, booking, venue, input, now, event, ownWindow),
+    );
+    if (isLockBusy(locked)) {
       return {
-        outcome: { status: "blocked", message: "This booking was decided by someone else — reload the queue" },
+        outcome: {
+          status: "blocked",
+          message: "Another decision for this venue is still being processed — please try again.",
+        },
       };
     }
-    const updated = updatedData as BookingRow;
-
-    // AC5, second guard: another instance may have taken the venue between
-    // the check above and this write. Re-read, and if a rival now blocks
-    // the same window and this booking is the one that must give way, undo
-    // it instead of leaving the venue promised twice.
-    const after = await blockingWindows(supabase, venue, input.authorization, booking.id);
-    if (!after) return { outcome: { status: "error" } };
-    const rival = after.find((candidate) => overlaps(candidate.window, ownWindow));
-    if (rival && yieldsTo(rival.booking, updated)) {
-      const { error: rollbackError } = await supabase
-        .from("venue_bookings")
-        .update({
-          status: "Rejected",
-          decision_reason: AUTO_REJECT_REASON,
-          decided_by: null,
-          decided_at: now.toISOString(),
-          hold_expires_at: null,
-        })
-        .eq("id", booking.id)
-        .eq("status", input.decision);
-      if (rollbackError) return { outcome: { status: "error" } };
-      return { outcome: conflictResult(rival, ownWindow, venue) };
-    }
-
-    // Only a decision that kept the venue rejects the requests that lost
-    // it — one that yielded above must not drag them down with it.
-    const autoRejected = await autoRejectOverlapping(
-      supabase,
-      venue,
-      ownWindow,
-      input.authorization,
-      booking.id,
-      now,
-    );
-    if (!autoRejected) return { outcome: { status: "error" } };
-
-    const notifications = [
-      decidedNotification(venue, booking, event, input.decision, ""),
-      ...autoRejected.losers.map((loser) => autoRejectedNotification(venue, loser)),
-    ].filter((n): n is NewNotification => n !== null);
-
-    return {
-      outcome: {
-        status: "ok",
-        booking: updated,
-        venue,
-        autoRejectedIds: autoRejected.ids,
-        coordinatorsNotified: 0,
-        notificationsFailed: false,
-      },
-      notifications,
-    };
+    return locked;
   });
+}
+
+async function decideUnderLock(
+  supabase: Supabase,
+  booking: BookingRow,
+  venue: VenueRow,
+  input: DecisionInput,
+  now: Date,
+  event: VenueBookingInfo,
+  ownWindow: OccupiedWindow,
+): Promise<GuardedResult> {
+  const blocking = await blockingWindows(supabase, venue, input.authorization, booking.id);
+  if (!blocking) return { outcome: { status: "error" } };
+  const clash = blocking.find((candidate) => overlaps(candidate.window, ownWindow));
+  if (clash) return { outcome: conflictResult(clash, ownWindow, venue) };
+
+  const { data: updatedData, error: updateError } = await supabase
+    .from("venue_bookings")
+    .update({
+      status: input.decision,
+      decided_at: now.toISOString(),
+      decided_by: input.staffId,
+      hold_expires_at: input.decision === "On Hold" ? holdExpiryFrom(now) : null,
+    })
+    .eq("id", booking.id)
+    // Nothing else may have moved this booking in the meantime.
+    .eq("status", booking.status)
+    .select(BOOKING_COLUMNS)
+    .maybeSingle();
+  if (updateError) return { outcome: { status: "error" } };
+  if (!updatedData) {
+    return {
+      outcome: { status: "blocked", message: "This booking was decided by someone else — reload the queue" },
+    };
+  }
+  const updated = updatedData as BookingRow;
+
+  // AC5, second guard: belt-and-braces in case anything above missed a
+  // rival. Re-read, and if one now blocks the same window and this
+  // booking is the one that must give way, undo it instead of leaving the
+  // venue promised twice.
+  const after = await blockingWindows(supabase, venue, input.authorization, booking.id);
+  if (!after) return { outcome: { status: "error" } };
+  const rival = after.find((candidate) => overlaps(candidate.window, ownWindow));
+  if (rival && yieldsTo(rival.booking, updated)) {
+    const { error: rollbackError } = await supabase
+      .from("venue_bookings")
+      .update({
+        status: "Rejected",
+        decision_reason: AUTO_REJECT_REASON,
+        decided_by: null,
+        decided_at: now.toISOString(),
+        hold_expires_at: null,
+      })
+      .eq("id", booking.id)
+      .eq("status", input.decision);
+    if (rollbackError) return { outcome: { status: "error" } };
+    return { outcome: conflictResult(rival, ownWindow, venue) };
+  }
+
+  // Only a decision that kept the venue rejects the requests that lost
+  // it — one that yielded above must not drag them down with it.
+  const autoRejected = await autoRejectOverlapping(supabase, venue, ownWindow, input.authorization, booking.id, now);
+  if (!autoRejected) return { outcome: { status: "error" } };
+
+  const notifications = [
+    decidedNotification(venue, booking, event, input.decision, ""),
+    ...autoRejected.losers.map((loser) => autoRejectedNotification(venue, loser)),
+  ].filter((n): n is NewNotification => n !== null);
+
+  return {
+    outcome: {
+      status: "ok",
+      booking: updated,
+      venue,
+      autoRejectedIds: autoRejected.ids,
+      coordinatorsNotified: 0,
+      notificationsFailed: false,
+    },
+    notifications,
+  };
 }
