@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import { equipmentRequestsRouter } from "./routes/equipmentRequests.js";
 import { equipmentCatalogRouter } from "./routes/equipmentCatalog.js";
+import { equipmentAvailabilityRouter } from "./routes/equipmentAvailability.js";
 
 /**
  * Fail loudly at boot instead of at the first login. A missing JWT_SECRET
@@ -27,6 +28,7 @@ app.use(express.json());
 
 app.use("/api/equipment-requests", equipmentRequestsRouter);
 app.use("/api/equipment-catalog", equipmentCatalogRouter);
+app.use("/api/equipment-availability", equipmentAvailabilityRouter);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });

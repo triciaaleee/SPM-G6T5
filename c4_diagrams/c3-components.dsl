@@ -109,7 +109,7 @@ workspace "ConnectSphere - C3 Components" "Level 3 of the C4 model. Component vi
 
                 venuesController = component "Venues controller" "Venue records with setup and turnaround times and operating hours, search and filters, recommendations, availability calendar, and booking requests for one or more venues per event (E4-1, E4-4, E4-6, E4-7, E4-8, E4-16)." "src/routes/venues.ts"
 
-                staffController = component "Venue staff controller" "A staff member's own venues, their schedule and request queue ordered by event date, and the hold, approve and reject actions (E4-5, E4-10)." "src/routes/staff.ts"
+                staffController = component "Venue staff controller" "A staff member's own venues, creating and updating venue records (notifying coordinators when a capacity cut or setup/turnaround change affects their bookings), their schedule and request queue ordered by event date, and the hold, approve and reject actions (E4-1, E4-5, E4-10)." "src/routes/staff.ts"
 
                 eventBookingsController = component "Event bookings controller" "Every booking of one event; withdraw a request or hold, release an approved booking, request a replacement venue (E4-9, E4-15)." "src/routes/eventBookings.ts"
 

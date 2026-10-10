@@ -19,10 +19,13 @@ import {
   EQUIPMENT_REQUEST_STATUSES,
   EquipmentRequestError,
   EquipmentValidationError,
+  checkEquipmentAvailability,
   fetchAllEquipmentRequests,
   fetchEquipmentCatalog,
   updateEquipmentRequestStatus,
+  type EquipmentAvailability,
   type EquipmentCatalogItem,
+  type EquipmentItem,
   type EquipmentRequestStatus,
   type EquipmentRequestWithEvent,
 } from "../lib/equipmentApi";
@@ -52,9 +55,6 @@ const visibleRequests = computed(() => requestsByTab.value[activeTab.value]);
 interface EditState {
   expanded: boolean;
   status: EquipmentRequestStatus;
-  note: string;
-  /** itemId -> fulfilled quantity, as a text input value (Partially Fulfilled only). */
-  fulfilled: Record<number, string>;
   saving: boolean;
   error: string | null;
   fieldErrors: Record<string, string>;
@@ -63,23 +63,11 @@ interface EditState {
 
 const edits = reactive<Record<number, EditState>>({});
 
-function defaultFulfilled(r: EquipmentRequestWithEvent): Record<number, string> {
-  const out: Record<number, string> = {};
-  for (const item of r.items) {
-    // Already partly recorded -> keep it; otherwise assume the full amount
-    // and let Technical Support lower whichever items came up short.
-    out[item.id] = String(r.status === "Partially Fulfilled" ? item.quantityFulfilled : item.quantity);
-  }
-  return out;
-}
-
 function editFor(r: EquipmentRequestWithEvent): EditState {
   if (!edits[r.id]) {
     edits[r.id] = {
       expanded: false,
       status: (r.status as EquipmentRequestStatus) || "Requested",
-      note: r.fulfillmentNote ?? "",
-      fulfilled: defaultFulfilled(r),
       saving: false,
       error: null,
       fieldErrors: {},
@@ -93,8 +81,6 @@ function editFor(r: EquipmentRequestWithEvent): EditState {
 function openEditor(r: EquipmentRequestWithEvent): void {
   const edit = editFor(r);
   edit.status = (r.status as EquipmentRequestStatus) || "Requested";
-  edit.note = r.fulfillmentNote ?? "";
-  edit.fulfilled = defaultFulfilled(r);
   edit.error = null;
   edit.fieldErrors = {};
   edit.expanded = true;
@@ -112,6 +98,74 @@ async function refreshCatalog(): Promise<void> {
   }
 }
 
+/**
+ * E5-4: "check whether enough suitable equipment is free for a date and
+ * time so I do not over-commit" — run per item, against the request's own
+ * event, before deciding how to arrange it.
+ */
+interface AvailabilityCheckState {
+  loading: boolean;
+  error: string | null;
+  result: EquipmentAvailability | null;
+}
+
+const availabilityChecks = reactive<Record<number, AvailabilityCheckState>>({});
+
+function availabilityFor(item: EquipmentItem): AvailabilityCheckState {
+  if (!availabilityChecks[item.id]) {
+    availabilityChecks[item.id] = { loading: false, error: null, result: null };
+  }
+  return availabilityChecks[item.id];
+}
+
+async function checkAvailability(r: EquipmentRequestWithEvent, item: EquipmentItem): Promise<void> {
+  const state = availabilityFor(item);
+  state.loading = true;
+  state.error = null;
+  try {
+    state.result = await checkEquipmentAvailability(r.eventId, item.equipmentType, item.quantity);
+  } catch (err) {
+    state.error = err instanceof EquipmentRequestError ? err.message : "Couldn't check availability.";
+  } finally {
+    state.loading = false;
+  }
+}
+
+/**
+ * Only meaningful before Technical Support has acted: once a request is
+ * Arranged or Partially Fulfilled, the decision is already made, so the
+ * check no longer applies. Runs every Requested item in parallel.
+ */
+async function checkAllAvailability(targetRequests: EquipmentRequestWithEvent[]): Promise<void> {
+  const requested = targetRequests.filter((r) => r.status === "Requested");
+  await Promise.all(requested.flatMap((r) => r.items.map((item) => checkAvailability(r, item))));
+}
+
+/**
+ * Auto-generates what remains outstanding from the fulfilled-quantity
+ * inputs, rather than asking Technical Support to type it out separately —
+ * the per-item numbers already say exactly what's short.
+ */
+/**
+ * No manual entry at all: fulfilled = however much is actually free right
+ * now (equipment_catalog.available_stock, the same number the stock table
+ * on the left shows), capped at what was requested.
+ */
+function fulfilledQuantityFor(item: EquipmentItem): number {
+  const available = catalog.value.find((c) => c.name === item.equipmentType)?.availableStock ?? 0;
+  return Math.min(item.quantity, Math.max(0, available));
+}
+
+function outstandingSummary(r: EquipmentRequestWithEvent): string {
+  const parts = r.items
+    .map((item) => {
+      const remaining = item.quantity - fulfilledQuantityFor(item);
+      return remaining > 0 ? `${remaining} ${item.equipmentType}` : null;
+    })
+    .filter((part): part is string => part !== null);
+  return parts.length > 0 ? `${parts.join(", ")} outstanding` : "All requested items have been fulfilled";
+}
+
 async function saveStatus(r: EquipmentRequestWithEvent): Promise<void> {
   const edit = editFor(r);
   edit.saving = true;
@@ -121,11 +175,11 @@ async function saveStatus(r: EquipmentRequestWithEvent): Promise<void> {
   try {
     const fulfillments =
       edit.status === "Partially Fulfilled"
-        ? r.items.map((item) => ({ itemId: item.id, fulfilledQuantity: edit.fulfilled[item.id] }))
+        ? r.items.map((item) => ({ itemId: item.id, fulfilledQuantity: fulfilledQuantityFor(item) }))
         : undefined;
-    const { equipmentRequest, notified } = await updateEquipmentRequestStatus(r.id, edit.status, edit.note, fulfillments);
+    const note = edit.status === "Partially Fulfilled" ? outstandingSummary(r) : undefined;
+    const { equipmentRequest, notified } = await updateEquipmentRequestStatus(r.id, edit.status, note, fulfillments);
     Object.assign(r, equipmentRequest);
-    edit.note = equipmentRequest.fulfillmentNote ?? "";
     edit.expanded = false;
     edit.notice = notified
       ? { text: "Status updated. The coordinator has been notified.", warning: false }
@@ -134,6 +188,18 @@ async function saveStatus(r: EquipmentRequestWithEvent): Promise<void> {
     // items off the shelf, moving away from either returns them) — refresh
     // so the stock table on the left never shows a stale count.
     await refreshCatalog();
+    if (r.status === "Requested") {
+      void checkAllAvailability([r]);
+    } else {
+      // The decision is made — clear any stale check so it can't reappear
+      // (e.g. re-opening the editor) once the request has moved on.
+      for (const item of r.items) {
+        const state = availabilityFor(item);
+        state.loading = false;
+        state.error = null;
+        state.result = null;
+      }
+    }
   } catch (err) {
     if (err instanceof EquipmentValidationError) {
       edit.fieldErrors = err.fields;
@@ -160,6 +226,9 @@ onMounted(async () => {
     const [loadedRequests, loadedCatalog] = await Promise.all([fetchAllEquipmentRequests(), fetchEquipmentCatalog()]);
     requests.value = loadedRequests;
     catalog.value = loadedCatalog;
+    // Progressive: the list renders first, each item's availability fills
+    // in as its own check resolves rather than blocking the whole page.
+    void checkAllAvailability(loadedRequests);
   } catch {
     errorMessage.value = "We couldn't load equipment requests. Please try again.";
   } finally {
@@ -252,11 +321,28 @@ function formatSubmitted(value: string): string {
 
             <ul class="item-list">
               <li v-for="item in r.items" :key="item.id" class="body-default item-row">
-                <strong>
-                  <template v-if="r.status === 'Partially Fulfilled'">{{ item.quantityFulfilled }} of {{ item.quantity }}</template>
-                  <template v-else>{{ item.quantity }}&times;</template>
-                  {{ item.equipmentType }}
-                </strong>
+                <div class="item-row__main">
+                  <strong>
+                    <template v-if="r.status === 'Partially Fulfilled'">{{ item.quantityFulfilled }} of {{ item.quantity }}</template>
+                    <template v-else>{{ item.quantity }}&times;</template>
+                    {{ item.equipmentType }}
+                  </strong>
+                </div>
+
+                <!-- E5-4: checked automatically against the event's own date/time —
+                     green when enough is free, red with the shortfall otherwise. Only
+                     meaningful before a decision has been made on the request. -->
+                <template v-if="r.status === 'Requested'">
+                  <p v-if="availabilityFor(item).loading" class="body-small muted">Checking availability…</p>
+                  <p v-else-if="availabilityFor(item).error" class="body-small error-text">{{ availabilityFor(item).error }}</p>
+                  <p v-else-if="availabilityFor(item).result" class="body-small availability-result"
+                    :class="{ 'availability-result--short': availabilityFor(item).result!.shortfall > 0 }">
+                    <template v-if="availabilityFor(item).result!.shortfall > 0">
+                      Unavailable — need {{ availabilityFor(item).result!.shortfall }} more
+                    </template>
+                    <template v-else>Available</template>
+                  </p>
+                </template>
               </li>
             </ul>
 
@@ -291,29 +377,12 @@ function formatSubmitted(value: string): string {
                   </button>
                 </div>
 
-                <!-- AC2: exactly how much of each item was handed out — drives both the
-                     note's premise and the stock released back to the shelf. -->
+                <!-- AC2: what remains outstanding, computed automatically from current
+                     stock (equipment_catalog.available_stock) — nothing to type. -->
                 <div v-if="editFor(r).status === 'Partially Fulfilled'" class="fulfilled-items">
-                  <div v-for="item in r.items" :key="item.id" class="fulfilled-item">
-                    <label :for="`fulfilled-${r.id}-${item.id}`" class="body-small muted">
-                      {{ item.equipmentType }} (requested {{ item.quantity }})
-                    </label>
-                    <input
-                      :id="`fulfilled-${r.id}-${item.id}`"
-                      v-model="editFor(r).fulfilled[item.id]"
-                      type="number"
-                      min="0"
-                      :max="item.quantity"
-                      class="fulfilled-input"
-                    />
-                    <p v-if="editFor(r).fieldErrors[`fulfillments[${item.id}]`]" class="body-small error-text">
-                      {{ editFor(r).fieldErrors[`fulfillments[${item.id}]`] }}
-                    </p>
-                  </div>
-
                   <div class="field">
-                    <label :for="`note-${r.id}`" class="body-small muted mb-1">What remains outstanding</label>
-                    <textarea :id="`note-${r.id}`" v-model="editFor(r).note" class="status-note" rows="2"></textarea>
+                    <p class="body-small muted mb-1">Outstanding</p>
+                    <p class="body-small outstanding-preview">{{ outstandingSummary(r) }}</p>
                   </div>
                 </div>
 
@@ -605,6 +674,22 @@ function formatSubmitted(value: string): string {
 
 .item-row {
   color: var(--color-grey-900);
+  padding: var(--spacing-4) 0;
+}
+
+.item-row__main {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+}
+
+.availability-result {
+  margin: var(--spacing-4) 0 0;
+  color: var(--color-success-700);
+}
+
+.availability-result--short {
+  color: var(--color-error-600);
 }
 
 .request-card__note {
@@ -670,34 +755,15 @@ function formatSubmitted(value: string): string {
   border-radius: var(--radius-xs);
 }
 
-.fulfilled-item {
-  display: grid;
-  grid-template-columns: 1fr 100px;
-  align-items: center;
-  gap: var(--spacing-8);
-}
-
-.fulfilled-input {
+.outstanding-preview {
   font-family: var(--font-family-lato);
-  font-size: 0.875rem;
   color: var(--color-grey-900);
   background: var(--color-base-white);
   border: 1px solid var(--color-grey-200);
   border-radius: var(--radius-xs);
   padding: var(--spacing-8) var(--spacing-12);
+  margin: 0;
   width: 100%;
-}
-
-.status-note {
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  color: var(--color-grey-900);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-8) var(--spacing-12);
-  width: 100%;
-  resize: vertical;
 }
 
 .field {

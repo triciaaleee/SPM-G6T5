@@ -264,3 +264,30 @@ insert into equipment_catalog (name, total_stock, available_stock) values
 -- state Technical Support have already changed, not seed data to reset.
 on conflict (name) do update set
   total_stock = excluded.total_stock;
+
+-- equipment (0025): one row per physical unit, mirroring equipment_catalog's
+-- total_stock above — the same vocabulary coordinators already pick from
+-- in equipment_requests, not a separate inventory. Re-running this file
+-- reseeds every unit; equipment_booking has no reservation workflow yet
+-- (E5-6), so deleting and recreating the units loses nothing meaningful.
+delete from equipment_booking where equipment_id in (select id from equipment where type in (select name from equipment_catalog));
+delete from equipment where type in (select name from equipment_catalog);
+
+insert into equipment (type, status)
+select ec.name, 'Available'
+from equipment_catalog ec
+cross join generate_series(1, ec.total_stock);
+
+-- A couple of units out of service, so AC2 (excluded from usable
+-- inventory) has something real to exclude.
+update equipment set status = 'Damaged'
+where id = (select min(id) from equipment where type = 'Projector');
+
+update equipment set status = 'Under Maintenance'
+where id in (select id from equipment where type = 'Microphones' order by id limit 2);
+
+-- A couple of Projectors already booked to Design Club Showcase (event 5,
+-- 22 Sep) — AC1's exclusion has a real reservation to read. None of the
+-- other seeded events share that date, so this isn't a conflict for them.
+insert into equipment_booking (equipment_id, event_id)
+select id, 5 from equipment where type = 'Projector' and status = 'Available' order by id limit 2;
