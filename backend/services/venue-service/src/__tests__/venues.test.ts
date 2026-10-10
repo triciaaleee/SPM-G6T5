@@ -382,6 +382,78 @@ describe("GET /api/venues", () => {
     expect(res.body.venues.map((v: VenueRow) => v.id)).not.toContain(1);
   });
 
+  describe("E4-16: setup and turnaround in search", () => {
+    const search = (app: express.Express, startTime: string, endTime: string, date = "2026-09-25") =>
+      request(app).get("/api/venues").query({ date, startTime, endTime }).set("Authorization", "Bearer t");
+    const idsOf = (res: { body: { venues: VenueRow[] } }) => res.body.venues.map((v) => v.id);
+
+    it("AC1: excludes a venue when the padded windows overlap, though the bare times don't", async () => {
+      // Venue 1 (30 setup, 45 turnaround): booking 09:00–11:00 occupies 08:30–11:45;
+      // a 12:00–14:00 request needs 11:30–14:45. Venue 2 has no buffers.
+      const { app } = buildApp({
+        buffers: { 1: { setup_minutes: 30, turnaround_minutes: 45 } },
+        bookings: [
+          { venue_id: 1, event_id: 11 },
+          { venue_id: 2, event_id: 12 },
+        ],
+        bookedEvents: [bookedEvent(11, "2026-09-25", "09:00", "11:00"), bookedEvent(12, "2026-09-25", "09:00", "11:00")],
+      });
+      const res = await search(app, "12:00", "14:00");
+
+      expect(res.status).toBe(200);
+      expect(idsOf(res)).not.toContain(1);
+      // AC2: with no setup/turnaround configured, only the bookings' own times count.
+      expect(idsOf(res)).toContain(2);
+    });
+
+    it("AC1: an On Hold booking's padded window excludes the venue too", async () => {
+      // Booking 14:00–16:00 with 30 setup starts at 13:30; the 11:00–13:00 request ends at 13:45 with turnaround.
+      const { app } = buildApp({
+        buffers: { 1: { setup_minutes: 30, turnaround_minutes: 45 } },
+        bookings: [{ venue_id: 1, event_id: 11, status: "On Hold", hold_expires_at: "2999-01-01T00:00:00Z" }],
+        bookedEvents: [bookedEvent(11, "2026-09-25", "14:00", "16:00")],
+      });
+      expect(idsOf(await search(app, "11:00", "13:00"))).not.toContain(1);
+    });
+
+    it("AC2: with no setup or turnaround, back-to-back bookings don't conflict", async () => {
+      const { app } = buildApp({
+        bookings: [{ venue_id: 2, event_id: 12 }],
+        bookedEvents: [bookedEvent(12, "2026-09-25", "09:00", "11:00")],
+      });
+      expect(idsOf(await search(app, "11:00", "13:00"))).toContain(2);
+      expect(idsOf(await search(app, "10:59", "13:00"))).not.toContain(2);
+    });
+
+    it("AC3: includes the venue when start minus setup equals the booking's padded end; one minute earlier excludes it", async () => {
+      // Booking 09:00–11:00 + 45 turnaround ends at 11:45. 12:15 − 30 setup = 11:45.
+      const { app } = buildApp({
+        buffers: { 1: { setup_minutes: 30, turnaround_minutes: 45 } },
+        bookings: [{ venue_id: 1, event_id: 11 }],
+        bookedEvents: [bookedEvent(11, "2026-09-25", "09:00", "11:00")],
+      });
+      expect(idsOf(await search(app, "12:15", "14:00"))).toContain(1);
+      expect(idsOf(await search(app, "12:14", "14:00"))).not.toContain(1);
+    });
+
+    it("AC1: pads the requested window against a block-out, including across midnight", async () => {
+      // 00:15 − 30 setup = 23:45 the day before, inside a 23:00–23:59 block-out.
+      const { app, unavailabilityLte, unavailabilityGte } = buildApp({
+        buffers: { 1: { setup_minutes: 30, turnaround_minutes: 0 } },
+        unavailability: [
+          { id: 1, venue_id: 1, start_date: "2026-09-24", end_date: "2026-09-24", all_day: false,
+            start_time: "23:00:00", end_time: "23:59:00", reason: "Late maintenance" },
+        ],
+      });
+      const res = await search(app, "00:15", "02:00");
+
+      expect(res.status).toBe(200);
+      expect(unavailabilityLte).toHaveBeenCalledWith("start_date", "2026-09-25");
+      expect(unavailabilityGte).toHaveBeenCalledWith("end_date", "2026-09-24");
+      expect(idsOf(res)).not.toContain(1);
+    });
+  });
+
   it("skips the bookings lookup when no date is given", async () => {
     const { app, supabase } = buildApp();
     const res = await request(app).get("/api/venues").query({ attendance: "100" });
