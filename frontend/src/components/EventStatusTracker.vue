@@ -62,13 +62,19 @@ const venueArrangement = computed<{ done: boolean; label: string }>(() => {
   if (!bookings) return { done: false, label: "Venue — checking…" };
 
   const approved = bookings.filter((booking) => booking.status === "Approved");
-  const pending = bookings.filter((booking) => booking.status === "Requested" || booking.status === "On Hold");
+  // Matches what blocks submitting for safety review (E3-4 AC2).
+  const pending = bookings.filter(
+    (booking) =>
+      booking.status === "Requested" || booking.status === "On Hold" || booking.status === "Replacement Required",
+  );
 
   if (approved.length > 0 && pending.length === 0) {
     const names = approved.map((booking) => booking.venue?.name).filter(Boolean);
     return { done: true, label: `Venue — ${names.length > 0 ? names.join(", ") : `${approved.length} booked`}` };
   }
   if (pending.length > 0) {
+    const replacements = pending.filter((booking) => booking.status === "Replacement Required").length;
+    if (replacements > 0) return { done: false, label: `Venue — ${replacements} needs a replacement` };
     const held = pending.filter((booking) => booking.status === "On Hold").length;
     const detail = held > 0 ? `${held} on hold` : `${pending.length} awaiting Venue Staff`;
     return { done: false, label: `Venue — ${detail}` };
@@ -97,12 +103,16 @@ const equipmentArrangement = computed<{ done: boolean; label: string }>(() => {
 
 type StepVariant = "neutral" | "success" | "info" | "error";
 
+// E3-4: Safety Review sits between Planning and Confirmed, so it shares
+// stage 2's slot (labelled for it) rather than adding a step that every
+// event before it would show as pending.
 const STATUS_STEP_INDEX: Record<string, number> = {
   Requested: 0,
   Unassigned: 0,
   Planning: 1,
   Rejected: 1,
   "Clarification Requested": 1,
+  "Safety Review": 1,
   Confirmed: 2,
   Completed: 3,
 };
@@ -111,6 +121,7 @@ const STAGE_TWO_VARIANT: Record<string, StepVariant> = {
   Planning: "success",
   Rejected: "error",
   "Clarification Requested": "info",
+  "Safety Review": "info",
 };
 
 const currentIndex = computed(() => STATUS_STEP_INDEX[props.status] ?? 0);
@@ -118,6 +129,7 @@ const currentIndex = computed(() => STATUS_STEP_INDEX[props.status] ?? 0);
 const stage2Label = computed(() => {
   if (props.status === "Rejected") return "Rejected";
   if (props.status === "Clarification Requested") return "Clarification Requested";
+  if (props.status === "Safety Review") return "Safety Review";
   return "Planning";
 });
 
@@ -176,6 +188,9 @@ function stepState(index: number): "complete" | "current" | "pending" {
       </p>
       <p v-else-if="status === 'Rejected'" class="body-small status-note status-note--error">
         This request was rejected{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
+      </p>
+      <p v-else-if="status === 'Safety Review'" class="body-small muted pt-8">
+        Submitted for the Safety Officer's Operational Safety Check. The event can't be edited while it's under review.
       </p>
     </template>
 
