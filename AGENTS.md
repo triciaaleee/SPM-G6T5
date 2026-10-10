@@ -151,7 +151,7 @@ The event status machine is **fixed**. Use exactly these status values (exact ca
 | `Clarification Requested` | `Requested` | Organiser responds (when `status_before_clarification = 'Requested'`). |
 | `Planning` | `Clarification Requested` | Set `status_before_clarification = 'Planning'`. |
 | `Clarification Requested` | `Planning` | Organiser responds (when `status_before_clarification = 'Planning'`). |
-| `Planning` | `Safety Review` | Assigned coordinator submits for safety review once all venue bookings are confirmed and all requested equipment is reserved (E3-4; blocked and the outstanding arrangements named otherwise). Appears in the Safety Officer's queue (E1-10). |
+| `Planning` | `Safety Review` | Assigned coordinator submits for safety review once all venue bookings are confirmed and all requested equipment is reserved (E3-4; blocked and the outstanding arrangements named otherwise). Safety notes (equipment placement, crowd movement, emergency access, venue restrictions) are required and stored per submission in `event_safety_submissions` (migration `0026`). Appears in the Safety Officer's queue (E1-10). |
 | `Safety Review` | `Confirmed` | Safety Officer **approves**; the assigned coordinator and Organiser are notified (E3-12). |
 | `Safety Review` | `Planning` | Safety Officer **rejects** the safety arrangement with a required reason; the coordinator is notified (E3-13). |
 | `Safety Review` | `Planning` | Safety Officer **requests changes**, recording what must change; the affected venue/equipment arrangements are flagged for re-review (E3-14). *(E3-14 says "relevant earlier planning stage" — treated as `Planning`.)* |
