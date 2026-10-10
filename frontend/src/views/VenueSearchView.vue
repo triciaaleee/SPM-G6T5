@@ -6,18 +6,23 @@ import {
   clearCriterion,
   describeBookingFailure,
   emptyVenueFilters,
+  fetchVenueAvailability,
   fetchVenueFilterOptions,
   searchVenues,
   submitVenueBooking,
   timeWindowError,
   VenueSearchError,
+  type AvailabilityTarget,
   type CriterionKey,
   type RelaxOption,
   type Venue,
+  type VenueAvailability,
   type VenueFilterOptions,
 } from "../lib/venuesApi";
+import { fromKey } from "../lib/availabilityCalendar";
 import VenueFilterBar from "../components/venues/VenueFilterBar.vue";
 import VenueIcon from "../components/venues/VenueIcon.vue";
+import VenueTimeSlotGrid from "../components/venues/VenueTimeSlotGrid.vue";
 
 interface EventScheduleDetails {
   name?: string;
@@ -159,6 +164,73 @@ const resultSummary = computed(() => {
   return `${n} venue${n === 1 ? "" : "s"} ${sourceEvent.value ? "available for this event" : "match your filters"}`;
 });
 
+// ---- AC "Available time slots" tab -----------------------------------
+
+const resultsTab = ref<"browse" | "timeslots">("browse");
+const availabilityByVenue = ref<Map<number, VenueAvailability>>(new Map());
+const availabilityLoading = ref(false);
+const availabilityError = ref<string | null>(null);
+const selectedVenueId = ref<number | null>(null);
+let availabilityCacheKey = "";
+
+const eventWindow = computed(() => {
+  const { startTime, endTime } = filters.value;
+  return startTime && endTime ? { start: startTime, end: endTime } : null;
+});
+
+const dateLabel = computed(() => {
+  if (!filters.value.date) return "";
+  return fromKey(filters.value.date).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+});
+
+async function loadAvailability(): Promise<void> {
+  const date = filters.value.date;
+  if (resultsTab.value !== "timeslots" || !date || venues.value.length === 0) return;
+
+  const key = `${date}|${venues.value.map((v) => v.id).join(",")}`;
+  if (key === availabilityCacheKey) return;
+  availabilityCacheKey = key;
+
+  const target: AvailabilityTarget = {
+    fromDate: date,
+    toDate: date,
+    startTime: filters.value.startTime || null,
+    endTime: filters.value.endTime || null,
+  };
+
+  availabilityLoading.value = true;
+  availabilityError.value = null;
+  try {
+    const results = await Promise.allSettled(
+      venues.value.map((venue) => fetchVenueAvailability(venue.id, date, date, target)),
+    );
+    const next = new Map<number, VenueAvailability>();
+    let anyOk = false;
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") {
+        next.set(venues.value[i].id, result.value);
+        anyOk = true;
+      }
+    });
+    availabilityByVenue.value = next;
+    if (!anyOk && venues.value.length > 0) availabilityError.value = "We couldn't load venue availability. Please try again.";
+  } finally {
+    availabilityLoading.value = false;
+  }
+}
+
+watch([resultsTab, () => filters.value.date, venues], () => {
+  if (resultsTab.value === "timeslots") void loadAvailability();
+});
+
+const selectedVenue = computed(() => venues.value.find((v) => v.id === selectedVenueId.value) ?? null);
+const selectedSlot = ref<{ start: string; end: string } | null>(null);
+
+function selectSlot(venueId: number, start: string, end: string): void {
+  selectedVenueId.value = venueId;
+  selectedSlot.value = { start, end };
+}
+
 onMounted(async () => {
   const eventId = typeof route.query.eventId === "string" ? route.query.eventId : null;
 
@@ -214,7 +286,60 @@ onMounted(async () => {
 
       <VenueFilterBar v-model="filters" :options="options" />
 
-      <section class="results" aria-live="polite" :aria-busy="loading">
+      <div class="tabs" role="tablist" aria-label="Results view">
+        <button type="button" class="tab" :class="{ 'tab--active': resultsTab === 'browse' }"
+          role="tab" :aria-selected="resultsTab === 'browse'" @click="resultsTab = 'browse'">
+          Browse venues
+        </button>
+        <button type="button" class="tab" :class="{ 'tab--active': resultsTab === 'timeslots' }"
+          role="tab" :aria-selected="resultsTab === 'timeslots'" @click="resultsTab = 'timeslots'">
+          Available time slots
+        </button>
+      </div>
+
+      <section v-if="resultsTab === 'timeslots'" class="timeslots" aria-live="polite">
+        <div v-if="!filters.date" class="empty-state">
+          <p class="empty-state__title">Pick a date</p>
+          <p class="body-default muted">Set a date filter to see venue availability for that day.</p>
+        </div>
+
+        <template v-else>
+          <div class="timeslots__toolbar">
+            <p class="body-small muted">
+              Showing {{ venues.length }} venue{{ venues.length === 1 ? "" : "s" }}
+              <template v-if="eventWindow"> · all available for your event, {{ eventWindow.start }}–{{ eventWindow.end }}</template>
+            </p>
+          </div>
+
+          <p v-if="availabilityError" class="body-default error-text">{{ availabilityError }}</p>
+          <p v-else-if="availabilityLoading && availabilityByVenue.size === 0" class="body-default muted">Loading availability…</p>
+          <VenueTimeSlotGrid v-else :venues="venues" :date="filters.date" :availability="availabilityByVenue"
+            :event-window="eventWindow" :selected-venue-id="selectedVenueId" @select="selectSlot" />
+
+          <div v-if="selectedVenue" class="selection-bar">
+            <div>
+              <p class="selection-bar__venue">{{ selectedVenue.name }}</p>
+              <p class="body-small muted">
+                {{ dateLabel }} · {{ selectedSlot?.start }}–{{ selectedSlot?.end }} · Capacity {{ selectedVenue.capacity }}
+              </p>
+            </div>
+            <template v-if="canRequest">
+              <p v-if="requestedVenueIds.has(selectedVenue.id)" class="body-small requested-note" role="status">
+                Requested — awaiting Venue Staff
+              </p>
+              <button v-else type="button" class="request-btn" :disabled="requestingVenueId === selectedVenue.id"
+                @click="requestVenue(selectedVenue.id)">
+                {{ requestingVenueId === selectedVenue.id ? "Requesting…" : "Request this venue" }}
+              </button>
+            </template>
+          </div>
+          <p v-if="requestErrorVenueId === selectedVenueId" class="body-small error-text" role="alert">
+            {{ requestError }}
+          </p>
+        </template>
+      </section>
+
+      <section v-else class="results" aria-live="polite" :aria-busy="loading">
         <p v-if="errorMessage" class="body-default error-text">{{ errorMessage }}</p>
 
         <template v-else-if="!loading || venues.length > 0">
@@ -411,6 +536,70 @@ onMounted(async () => {
   background: var(--color-warning-100);
   border-color: var(--color-warning-200);
   color: var(--color-warning-900);
+}
+
+.tabs {
+  display: flex;
+  gap: var(--spacing-4);
+  margin-top: var(--spacing-24);
+  border-bottom: 1px solid var(--color-grey-100);
+}
+
+.tab {
+  padding: var(--spacing-12) var(--spacing-4);
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-grey-500);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tab + .tab {
+  margin-left: var(--spacing-16);
+}
+
+.tab--active {
+  color: var(--color-purple-700);
+  border-bottom-color: var(--color-purple-600);
+}
+
+.timeslots {
+  margin-top: var(--spacing-24);
+}
+
+.timeslots__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-12);
+  margin-bottom: var(--spacing-16);
+}
+
+.selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-16);
+  margin-top: var(--spacing-16);
+  padding: var(--spacing-16) var(--spacing-24);
+  background: var(--color-grey-50);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-lg);
+  position: sticky;
+  bottom: var(--spacing-16);
+}
+
+.selection-bar__venue {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
 }
 
 .results {
