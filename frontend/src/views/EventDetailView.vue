@@ -26,6 +26,7 @@ import ClarificationPanel from "../components/ClarificationPanel.vue";
 import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
 import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel.vue";
 import VenueRequestsPanel from "../components/venues/VenueRequestsPanel.vue";
+import SafetyReviewPanel from "../components/SafetyReviewPanel.vue";
 import { fetchEventVenueBookings, type EventVenueBooking } from "../lib/venuesApi";
 import { fetchEquipmentRequestsForEvent, type EquipmentRequest } from "../lib/equipmentApi";
 import { fetchCoordinators, type CoordinatorOption } from "../lib/usersApi";
@@ -935,6 +936,11 @@ onMounted(async () => {
 <!-- E4-8 AC5: this event's venue requests and the state each one is in -->
 <VenueRequestsPanel v-if="isCoordinator && event.status !== 'Rejected'" :bookings="venueBookings"
   :loading="venueBookingsLoading" :load-error="venueBookingsError" />
+
+<!-- E3-4: the assigned coordinator submits a Planning event for the Safety Officer's check -->
+<div v-if="isAssignedCoordinator && event.status === 'Planning'" class="details-card">
+  <SafetyReviewPanel :event-id="event.id" @submitted="(updated) => (event = updated)" />
+</div>
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
   :current-user-id="currentUser.id" :read-only="isLead" />
