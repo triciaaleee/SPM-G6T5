@@ -386,6 +386,43 @@ describe("GET /api/venues", () => {
     const search = (app: express.Express, startTime: string, endTime: string, date = "2026-09-25") =>
       request(app).get("/api/venues").query({ date, startTime, endTime }).set("Authorization", "Bearer t");
     const idsOf = (res: { body: { venues: VenueRow[] } }) => res.body.venues.map((v) => v.id);
+    const searchDay = (app: express.Express, date = "2026-09-25") =>
+      request(app).get("/api/venues").query({ date }).set("Authorization", "Bearer t");
+
+    it("date-only search: any block-out on that day excludes the venue, one on another day doesn't", async () => {
+      const { app } = buildApp({
+        unavailability: [
+          { id: 1, venue_id: 2, start_date: "2026-09-25", end_date: "2026-09-25", all_day: false,
+            start_time: "14:00:00", end_time: "16:00:00", reason: "Maintenance" },
+          { id: 2, venue_id: 3, start_date: "2026-09-26", end_date: "2026-09-26", all_day: true,
+            start_time: null, end_time: null, reason: "Private hire" },
+        ],
+      });
+      const res = await searchDay(app);
+
+      expect(res.status).toBe(200);
+      expect(idsOf(res)).not.toContain(2);
+      expect(idsOf(res)).toContain(3);
+    });
+
+    it("date-only search: the whole day is padded by setup, so a block-out late the night before can exclude it", async () => {
+      // Venue 1 needs 60 min setup, so its day starts at 23:00 the night before,
+      // inside a 23:30–23:59 block-out. Venue 3 has no setup and isn't affected.
+      const { app } = buildApp({
+        buffers: { 1: { setup_minutes: 60, turnaround_minutes: 0 } },
+        unavailability: [
+          { id: 1, venue_id: 1, start_date: "2026-09-24", end_date: "2026-09-24", all_day: false,
+            start_time: "23:30:00", end_time: "23:59:00", reason: "Late maintenance" },
+          { id: 2, venue_id: 3, start_date: "2026-09-24", end_date: "2026-09-24", all_day: false,
+            start_time: "23:30:00", end_time: "23:59:00", reason: "Late maintenance" },
+        ],
+      });
+      const res = await searchDay(app);
+
+      expect(res.status).toBe(200);
+      expect(idsOf(res)).not.toContain(1);
+      expect(idsOf(res)).toContain(3);
+    });
 
     it("AC1: excludes a venue when the padded windows overlap, though the bare times don't", async () => {
       // Venue 1 (30 setup, 45 turnaround): booking 09:00–11:00 occupies 08:30–11:45;
