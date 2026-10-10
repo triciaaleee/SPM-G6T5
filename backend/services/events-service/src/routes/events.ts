@@ -6,6 +6,16 @@ import { normaliseDraftEventRequest, validateEventRequest } from "../lib/validat
 import { isPositiveInteger } from "../lib/validation.js";
 import { assignCoordinator } from "../lib/coordinatorAssignment.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
+import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
+import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
+import { fetchCoordinators } from "../lib/usersClient.js";
+
+/**
+ * Week 7 change 5: the Event Coordinator Lead oversees incoming requests,
+ * assigns them (E2-13) and reassigns them (E2-12). Read-only on the event
+ * itself: the Lead never edits, approves or rejects (E1-8 AC2).
+ */
+const COORDINATOR_LEAD_ROLE = "coordinator_lead";
 
 async function recordAccessDenial(
   supabase: NonNullable<AuthedRequest["supabase"]>,
@@ -80,9 +90,8 @@ const EVENT_COLUMNS =
  * right as the request reaches "Requested" — not later, whenever a
  * coordinator happens to open it (see lib/coordinatorAssignment.ts). If
  * no coordinators exist yet, the request is flagged "Unassigned" instead
- * and stays visible to all coordinators (they already see every event
- * regardless of assignment, per E1-4.1) until one self-assigns by acting
- * on it.
+ * and waits in the Event Coordinator Lead's unassigned queue (E1-8) until
+ * the Lead assigns it (E2-13). E2-14 replaces the auto-assignment itself.
  */
 eventsRouter.post("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -259,10 +268,12 @@ eventsRouter.delete("/:id/draft", async (req: AuthedRequest, res) => {
 /**
  * List events. Coordinators get full pipeline visibility (all events) but
  * never see drafts — a draft hasn't been submitted, so it's not yet part
- * of the review pipeline (E2-5.1 AC2). Everyone else sees only events they
- * organised, drafts included (E2-5.1 AC1 relies on the Organiser's own
- * list containing both). Since the service-role client bypasses RLS, this
- * filter is the actual enforcement, not just defense-in-depth.
+ * of the review pipeline (E2-5.1 AC2). The Event Coordinator Lead sees the
+ * same set: change 5 has the Lead view every coordinator assignment and
+ * active event. Everyone else sees only events they organised, drafts
+ * included (E2-5.1 AC1 relies on the Organiser's own list containing
+ * both). Since the service-role client bypasses RLS, this filter is the
+ * actual enforcement, not just defense-in-depth.
  */
 eventsRouter.get("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -273,7 +284,7 @@ eventsRouter.get("/", async (req: AuthedRequest, res) => {
 
   let query = supabase.from("events").select(EVENT_COLUMNS);
 
-  if (user.role !== "coordinator") {
+  if (user.role !== "coordinator" && user.role !== COORDINATOR_LEAD_ROLE) {
     query = query.eq("organiser_id", user.id);
   } else {
     query = query.neq("status", "Draft");
@@ -391,10 +402,50 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
 });
 
 /**
+ * E1-8 AC1/AC3: the Event Coordinator Lead's unassigned queue — every
+ * submitted request still waiting for a coordinator, oldest submission
+ * first so the longest-waiting request is allocated first. Lead only; any
+ * other role is denied and the attempt recorded, same as a direct-URL
+ * attempt on someone else's event. Declared before GET /:id so
+ * "unassigned" isn't read as an event id.
+ */
+eventsRouter.get("/unassigned", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  if (user.role !== COORDINATOR_LEAD_ROLE) {
+    await recordAccessDenial(supabase, user.id, "unassigned_queue", "unassigned_queue_role_not_allowed");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .select(EVENT_COLUMNS)
+    .eq("status", EVENT_STATUS.Unassigned)
+    .is("coordinator_id", null)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load the unassigned queue" });
+    return;
+  }
+
+  res.json({ events: data ?? [] });
+});
+
+/**
  * Fetch a single event by id. The service-role client returns any row
  * regardless of ownership, so ownership/role is checked explicitly here;
  * a non-owner (and non-coordinator) request is treated the same as
  * "not found" and the attempt is recorded for audit purposes.
+ *
+ * E1-8 AC2: the Event Coordinator Lead may open any submitted event (not a
+ * draft — a draft hasn't entered the process). Read-only: every write
+ * route below rejects the Lead's role.
  */
 eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -424,8 +475,9 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
 
   const isOwner = data?.organiser_id === user.id;
   const isCoordinator = user.role === "coordinator";
+  const isLead = user.role === COORDINATOR_LEAD_ROLE && data?.status !== EVENT_STATUS.Draft;
 
-  if (!data || (!isOwner && !isCoordinator)) {
+  if (!data || (!isOwner && !isCoordinator && !isLead)) {
     await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
     res.status(403).json({ error: "Access denied" });
     return;
@@ -547,7 +599,7 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // change request" flow built yet, so this is a block + message, not a
   // real alternate workflow.
   const isClarificationResponse = existing.status === "Clarification Requested";
-  const isDirectEdit = PENDING_REVIEW_STATUSES.has(existing.status) || existing.status === "Planning";
+  const isDirectEdit = ORGANISER_DIRECT_EDIT_STATUSES.has(existing.status);
   // E2-4 AC3: editing a draft here means submitting it — same E2-1
   // validation as a fresh request, and the same auto-assignment as POST /.
   const isDraftSubmit = existing.status === "Draft";
@@ -658,14 +710,25 @@ eventsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
 });
 
 /**
- * "Unassigned" (E2-6: no coordinator existed at submission time) is
- * treated everywhere below as equivalent to "Requested" — the event is
- * still pending review, just without an owner yet; whoever acts on it
- * self-assigns via authorizeCoordinatorReview's existing null-coordinator
- * branch.
+ * E2-7 AC1 / AGENTS.md §3 edit table: the owning organiser edits directly
+ * while the request waits in the unassigned queue, waits on its
+ * coordinator's review, or is in Planning.
  */
-const PENDING_REVIEW_STATUSES = new Set(["Requested", "Unassigned"]);
-const REJECTABLE_STATUSES = new Set(["Requested", "Unassigned", "Clarification Requested"]);
+const ORGANISER_DIRECT_EDIT_STATUSES = new Set<string>([
+  EVENT_STATUS.Unassigned,
+  EVENT_STATUS.Requested,
+  EVENT_STATUS.Planning,
+]);
+
+/**
+ * E2-13: only the Event Coordinator Lead moves an event out of
+ * "Unassigned", so "Unassigned" is deliberately absent from every
+ * coordinator decision set below — there is no Unassigned → Planning or
+ * Unassigned → Rejected (§3). A coordinator reviews once assigned, i.e.
+ * from "Requested".
+ */
+const COORDINATOR_REVIEW_STATUSES = new Set<string>([EVENT_STATUS.Requested]);
+const REJECTABLE_STATUSES = new Set<string>([EVENT_STATUS.Requested, EVENT_STATUS.ClarificationRequested]);
 
 /**
  * E3-7 AC1: fields the assigned coordinator cannot change through the
@@ -683,11 +746,14 @@ interface ReviewEventRow {
 /**
  * Shared entry checks for every coordinator decision route (approve/
  * reject/request-clarification): role, id format, existence, the AC5
- * "Rejected is terminal" rule, and the assign-on-first-action ownership
- * rule — any coordinator may act on an unassigned event; once assigned,
- * only that coordinator may act on it again. Sends the appropriate error
- * response and returns null if any check fails, otherwise returns the
- * event row for the caller to apply its own status-transition check to.
+ * "Rejected is terminal" rule, and ownership — only the event's assigned
+ * coordinator may act on it. E2-13 retired E2-6's assign-on-first-action
+ * rule: an event with no coordinator is the Lead's to assign, not for any
+ * coordinator to claim by acting on it, and E2-12 AC6 relies on the same
+ * check to block a previous coordinator after a reassignment. Sends the
+ * appropriate error response and returns null if any check fails,
+ * otherwise returns the event row for the caller to apply its own
+ * status-transition check to.
  */
 async function authorizeCoordinatorReview(
   req: AuthedRequest,
@@ -726,7 +792,15 @@ async function authorizeCoordinatorReview(
     return null;
   }
 
-  if (data.coordinator_id && data.coordinator_id !== user.id) {
+  if (!data.coordinator_id) {
+    await recordAccessDenial(supabase, user.id, eventId, "coordinator_not_assigned");
+    res.status(403).json({
+      error: "This request hasn't been assigned to a coordinator yet. The Event Coordinator Lead assigns it.",
+    });
+    return null;
+  }
+
+  if (data.coordinator_id !== user.id) {
     await recordAccessDenial(supabase, user.id, eventId, "coordinator_mismatch");
     res.status(403).json({ error: "This request is assigned to another coordinator" });
     return null;
@@ -744,15 +818,14 @@ async function authorizeCoordinatorReview(
  * E1-4.2 AC1 / E2-3: approve — from "Requested", or from "Clarification
  * Requested" once every top-level question raised on this event has been
  * marked resolved (an event already decided is blocked upstream in
- * authorizeCoordinatorReview). Sets status to "Planning", self-assigning
- * the caller as coordinator if the event had none yet.
+ * authorizeCoordinatorReview). Sets status to "Planning".
  */
 eventsRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
   const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
-  if (!PENDING_REVIEW_STATUSES.has(event.status)) {
+  if (!COORDINATOR_REVIEW_STATUSES.has(event.status)) {
     if (event.status !== "Clarification Requested") {
       res.status(409).json({ error: "This request cannot be approved from its current status" });
       return;
@@ -781,7 +854,6 @@ eventsRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
     .from("events")
     .update({
       status: "Planning",
-      coordinator_id: user.id,
       decided_at: new Date().toISOString(),
       decided_by: user.id,
     })
@@ -824,7 +896,6 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
     .from("events")
     .update({
       status: "Rejected",
-      coordinator_id: user.id,
       review_outcome: reason,
       decided_at: new Date().toISOString(),
       decided_by: user.id,
@@ -842,14 +913,14 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
 });
 
 /**
- * Statuses a coordinator can request clarification from: the normal
- * pending-review states, plus "Planning" — a coordinator may realise they
- * need more information after already approving an event. Either way the
- * event's current status is captured into status_before_clarification so
- * the organiser's response (PATCH /:id) knows whether to restore it to
- * "Requested" or back to "Planning".
+ * Statuses a coordinator can request clarification from: "Requested",
+ * plus "Planning" — a coordinator may realise they need more information
+ * after already approving an event. Either way the event's current status
+ * is captured into status_before_clarification so the organiser's
+ * response (PATCH /:id) knows whether to restore it to "Requested" or back
+ * to "Planning".
  */
-const CLARIFICATION_REQUESTABLE_STATUSES = new Set([...PENDING_REVIEW_STATUSES, "Planning"]);
+const CLARIFICATION_REQUESTABLE_STATUSES = new Set<string>([...COORDINATOR_REVIEW_STATUSES, EVENT_STATUS.Planning]);
 
 /**
  * Request clarification/amendment from the Organiser — from a
@@ -880,7 +951,6 @@ eventsRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) 
     .update({
       status: "Clarification Requested",
       status_before_clarification: event.status,
-      coordinator_id: user.id,
       review_outcome: message,
       decided_at: new Date().toISOString(),
       decided_by: user.id,
@@ -921,10 +991,12 @@ interface ClarificationRow {
 const CLARIFICATION_COLUMNS = "id, parent_id, author_id, author_role, message, resolved, created_at";
 
 /**
- * Shared visibility check for the clarification thread routes: same rule
- * as GET /:id (owning organiser, or any coordinator), but returns the
- * fields those routes need (organiser_id/coordinator_id/status) rather
- * than the full event payload.
+ * Shared visibility check for the clarification thread and history routes:
+ * same rule as GET /:id (owning organiser, any coordinator, or the Event
+ * Coordinator Lead for a submitted event — E2-12 AC2 has the Lead read a
+ * reassignment back from the history), but returns the fields those routes
+ * need (organiser_id/coordinator_id/status) rather than the full event
+ * payload. Write routes apply their own, narrower check on top.
  */
 async function loadEventForClarification(
   req: AuthedRequest,
@@ -955,8 +1027,9 @@ async function loadEventForClarification(
 
   const isOwner = data?.organiser_id === user.id;
   const isCoordinator = user.role === "coordinator";
+  const isLead = user.role === COORDINATOR_LEAD_ROLE && data?.status !== EVENT_STATUS.Draft;
 
-  if (!data || (!isOwner && !isCoordinator)) {
+  if (!data || (!isOwner && !isCoordinator && !isLead)) {
     await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
     res.status(403).json({ error: "Access denied" });
     return null;
@@ -1033,7 +1106,7 @@ eventsRouter.post("/:id/clarifications/:questionId/replies", async (req: AuthedR
   const { user, supabase } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
   const isOwner = event.organiser_id === user.id;
   const isAssignedCoordinator =
-    user.role === "coordinator" && (event.coordinator_id === null || event.coordinator_id === user.id);
+    user.role === "coordinator" && event.coordinator_id === user.id;
 
   if (!isOwner && !isAssignedCoordinator) {
     res.status(403).json({ error: "Access denied" });
@@ -1143,4 +1216,272 @@ eventsRouter.post("/:id/clarifications/:questionId/resolve", async (req: AuthedR
   }
 
   res.json({ clarification: data as ClarificationRow });
+});
+
+interface AssignmentEventRow {
+  id: number;
+  status: string;
+  organiser_id: string;
+  coordinator_id: string | null;
+  coordinator: { name: string } | null;
+  submitted_details: Record<string, unknown> | null;
+}
+
+/**
+ * Shared entry checks for assign (E2-13) and reassign (E2-12): Lead role
+ * (AC "including directly via the API"), id format, existence, a
+ * coordinatorId in the body, and that it names an active coordinator.
+ * Status rules differ between the two and are left to the caller. Sends
+ * the error response and returns null if any check fails.
+ */
+async function authorizeLeadAssignment(
+  req: AuthedRequest,
+  res: Response,
+  eventId: string,
+): Promise<{ event: AssignmentEventRow; coordinator: { id: string; name: string } } | null> {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return null;
+  }
+
+  if (user.role !== COORDINATOR_LEAD_ROLE) {
+    await recordAccessDenial(supabase, user.id, eventId, "assignment_role_not_allowed");
+    res.status(403).json({ error: "Only the Event Coordinator Lead can assign or reassign coordinators" });
+    return null;
+  }
+
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return null;
+  }
+
+  const coordinatorId = typeof req.body?.coordinatorId === "string" ? req.body.coordinatorId.trim() : "";
+  if (!coordinatorId) {
+    res.status(400).json({ error: "Choose a coordinator" });
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, status, organiser_id, coordinator_id, coordinator:coordinator_id(name), submitted_details")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load event" });
+    return null;
+  }
+
+  if (!data || data.status === EVENT_STATUS.Draft) {
+    res.status(404).json({ error: "Event not found" });
+    return null;
+  }
+
+  const coordinators = await fetchCoordinators(req.headers.authorization!);
+  if (coordinators.status === "error") {
+    res.status(502).json({ error: "Failed to load the list of coordinators" });
+    return null;
+  }
+
+  const coordinator = coordinators.coordinators.find((c) => c.id === coordinatorId);
+  if (!coordinator) {
+    res.status(400).json({ error: "That user is not an active Event Coordinator" });
+    return null;
+  }
+
+  return { event: data as unknown as AssignmentEventRow, coordinator };
+}
+
+function eventDisplayName(event: AssignmentEventRow): string {
+  const name = event.submitted_details?.name;
+  return typeof name === "string" && name.trim() ? name.trim() : `Event #${event.id}`;
+}
+
+/**
+ * E2-13: the Event Coordinator Lead assigns a request from the unassigned
+ * queue. AC1: the coordinator becomes the event's single point of contact
+ * and the status moves Unassigned → Requested (§3); both the coordinator
+ * and the Organiser are notified. AC2: an event that already has a
+ * coordinator is blocked — that is a reassignment (E2-12). AC3: with no
+ * active coordinator there is nobody valid to name, so the request stays
+ * Unassigned. AC4: Lead only.
+ *
+ * The update only matches while the event is still Unassigned with no
+ * coordinator, so if two Leads assign the same request at once exactly one
+ * wins and the other gets a 409 — an event never ends up with two.
+ *
+ * Notifications are best-effort and sent after the write lands, so a slow
+ * or failing notification-service never undoes an assignment.
+ */
+eventsRouter.post("/:id/assign", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const authorized = await authorizeLeadAssignment(req, res, eventId);
+  if (!authorized) return;
+  const { event, coordinator } = authorized;
+
+  if (event.coordinator_id) {
+    res.status(409).json({
+      error: "This event already has a coordinator. An event has at most one — use reassignment instead.",
+    });
+    return;
+  }
+
+  if (event.status !== EVENT_STATUS.Unassigned) {
+    res.status(409).json({ error: "Only a request in the unassigned queue can be assigned" });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data, error } = await supabase
+    .from("events")
+    .update({ status: EVENT_STATUS.Requested, coordinator_id: coordinator.id })
+    .eq("id", event.id)
+    .eq("status", EVENT_STATUS.Unassigned)
+    .is("coordinator_id", null)
+    .select(EVENT_COLUMNS)
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to assign the coordinator" });
+    return;
+  }
+
+  if (!data) {
+    res.status(409).json({ error: "This request was assigned by someone else just now. Refresh to see who." });
+    return;
+  }
+
+  await recordEventHistory(
+    supabase,
+    event.id,
+    [
+      { field: "Coordinator", oldValue: null, newValue: coordinator.name },
+      { field: "Status", oldValue: EVENT_STATUS.Unassigned, newValue: EVENT_STATUS.Requested },
+    ],
+    user.id,
+  );
+
+  const eventName = eventDisplayName(event);
+  const link = `/events/${event.id}`;
+  const notified = await sendNotifications(
+    [
+      {
+        recipientId: coordinator.id,
+        type: "event_assigned",
+        title: "New event assigned to you",
+        body: `"${eventName}" has been assigned to you. You are now its coordinator.`,
+        link,
+      },
+      {
+        recipientId: event.organiser_id,
+        type: "event_coordinator_assigned",
+        title: "Your event has a coordinator",
+        body: `${coordinator.name} is now the coordinator for "${eventName}".`,
+        link,
+      },
+    ],
+    req.headers.authorization!,
+  );
+
+  res.json({ event: data, notificationsFailed: !notified });
+});
+
+/**
+ * E2-12: the Event Coordinator Lead hands an assigned event to a different
+ * active coordinator. AC1: the new coordinator becomes the only one and the
+ * previous assignment ends; the status does not change (§3 lists this as
+ * Requested → Requested, and it applies in any open status). AC2: recorded
+ * in the event history — previous coordinator, new coordinator, when, and
+ * by whom (changed_by). AC3: blocked once the event is Rejected, Cancelled
+ * or Completed. AC4: an event without a coordinator is assigned (E2-13),
+ * not reassigned. AC5: Lead only. AC6 needs nothing here: every
+ * coordinator action checks events.coordinator_id live, so the previous
+ * coordinator is blocked and the new one can act the moment this commits.
+ * AC7: the Organiser and both coordinators are notified.
+ *
+ * The update only matches while the previous coordinator is still the
+ * assigned one, so two simultaneous reassignments can't both apply.
+ */
+eventsRouter.post("/:id/reassign", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const authorized = await authorizeLeadAssignment(req, res, eventId);
+  if (!authorized) return;
+  const { event, coordinator } = authorized;
+
+  if (CLOSED_EVENT_STATUSES.has(event.status)) {
+    res.status(409).json({ error: `This event is ${event.status}. Closed events cannot be reassigned.` });
+    return;
+  }
+
+  if (!event.coordinator_id) {
+    res.status(409).json({
+      error: "This event has no coordinator yet. Assign one from the unassigned queue instead.",
+    });
+    return;
+  }
+
+  if (event.coordinator_id === coordinator.id) {
+    res.status(400).json({ error: "Choose a different coordinator from the one already assigned" });
+    return;
+  }
+
+  const previousCoordinatorId = event.coordinator_id;
+  const previousCoordinatorName = event.coordinator?.name ?? previousCoordinatorId;
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data, error } = await supabase
+    .from("events")
+    .update({ coordinator_id: coordinator.id })
+    .eq("id", event.id)
+    .eq("coordinator_id", previousCoordinatorId)
+    .eq("status", event.status)
+    .select(EVENT_COLUMNS)
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to reassign the coordinator" });
+    return;
+  }
+
+  if (!data) {
+    res.status(409).json({ error: "This event changed while you were reassigning it. Refresh and try again." });
+    return;
+  }
+
+  await recordEventHistory(
+    supabase,
+    event.id,
+    [{ field: "Coordinator", oldValue: previousCoordinatorName, newValue: coordinator.name }],
+    user.id,
+  );
+
+  const eventName = eventDisplayName(event);
+  const link = `/events/${event.id}`;
+  const notifications: NewNotification[] = [
+    {
+      recipientId: event.organiser_id,
+      type: "event_coordinator_reassigned",
+      title: "Your event has a new coordinator",
+      body: `${coordinator.name} is now the coordinator for "${eventName}", taking over from ${previousCoordinatorName}.`,
+      link,
+    },
+    {
+      recipientId: previousCoordinatorId,
+      type: "event_reassigned_away",
+      title: "Event reassigned",
+      body: `"${eventName}" has been reassigned to ${coordinator.name}. You can still view it, but you can no longer act on it.`,
+      link,
+    },
+    {
+      recipientId: coordinator.id,
+      type: "event_assigned",
+      title: "Event reassigned to you",
+      body: `"${eventName}" has been reassigned to you from ${previousCoordinatorName}. You are now its coordinator.`,
+      link,
+    },
+  ];
+  const notified = await sendNotifications(notifications, req.headers.authorization!);
+
+  res.json({ event: data, notificationsFailed: !notified });
 });

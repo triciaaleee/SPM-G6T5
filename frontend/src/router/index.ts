@@ -10,6 +10,7 @@ import VenueStaff from "../views/VenueStaff.vue";
 import VenueRequestQueue from "../views/VenueRequestQueue.vue";
 import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
 import TechnicalSupportView from "../views/TechnicalSupportView.vue";
+import LeadDashboardView from "../views/LeadDashboardView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
 
 export const router = createRouter({
@@ -80,6 +81,16 @@ export const router = createRouter({
       component: TechnicalSupportView,
       meta: { requiresAuth: true, roles: ["technical_support"] },
     },
+    {
+      // E1-8: the Event Coordinator Lead's unassigned queue, plus every
+      // active event and its coordinator (Week 7 change 5) as the way in
+      // to a reassignment (E2-12). AC3: other roles are turned away here
+      // and by the backend.
+      path: "/lead",
+      name: "lead-dashboard",
+      component: LeadDashboardView,
+      meta: { requiresAuth: true, roles: ["coordinator_lead"] },
+    },
   ],
 });
 
@@ -128,6 +139,11 @@ router.beforeEach((to) => {
   // away from the organiser-oriented events list.
   if (authed && to.name === "events-list" && getStoredUser()?.role === "coordinator") {
     return { name: "coordinator-workload" };
+  }
+
+  // E1-8: the Lead organises no events — their screen is the queue.
+  if (authed && to.name === "events-list" && getStoredUser()?.role === "coordinator_lead") {
+    return { name: "lead-dashboard" };
   }
 
   return true;

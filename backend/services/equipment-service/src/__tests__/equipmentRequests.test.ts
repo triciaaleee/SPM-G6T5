@@ -507,6 +507,34 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
     expect(sentBody.notifications[0].body).toContain("Alumni Gala");
   });
 
+  // E2-12 AC6: after a reassignment the new coordinator owns the event's
+  // pending requests, so the update reaches them, not whoever made the request.
+  it("notifies the event's current coordinator after a reassignment", async () => {
+    const { app, fetchMock } = buildApp({
+      user: technicalSupport,
+      items: oneItem,
+      updatedRequest: {
+        id: 55,
+        event_id: 7,
+        coordinator_id: "COORD-0001",
+        status: "Arranged",
+        fulfillment_note: null,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      bookingInfoEvents: [{ id: 7, name: "Alumni Gala", coordinatorId: "COORD-0002" }],
+    });
+
+    const res = await request(app)
+      .patch("/api/equipment-requests/55")
+      .set("Authorization", "Bearer token123")
+      .send({ status: "Arranged" });
+
+    expect(res.status).toBe(200);
+    const notifyCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/notifications"));
+    const sentBody = JSON.parse((notifyCall![1] as RequestInit).body as string);
+    expect(sentBody.notifications[0].recipientId).toBe("COORD-0002");
+  });
+
   // AC2: the coordinator is told what remains outstanding, and the RPC gets the exact
   // per-item fulfilled quantities that move stock.
   it("records a partial fulfilment with its note and per-item fulfilled quantities", async () => {

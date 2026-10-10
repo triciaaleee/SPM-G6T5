@@ -55,6 +55,12 @@ export interface EquipmentBookingInfo {
   startTime: string | null;
   endTime: string | null;
   equipment: string | null;
+  /**
+   * The event's current coordinator. E2-12: a reassignment hands the event's
+   * pending equipment requests to the new coordinator, so notifications go
+   * here rather than to whoever was recorded on the request when it was made.
+   */
+  coordinatorId?: string | null;
 }
 
 export type FetchBookingInfoResult = { status: "ok"; events: EquipmentBookingInfo[] } | { status: "error" };

@@ -94,7 +94,7 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     expect(cards).toHaveLength(1);
   });
 
-  it("includes Unassigned events so the coordinator can self-assign them", async () => {
+  it("leaves Unassigned events out — only events assigned to me (E1-8 AC4)", async () => {
     const events = [
       makeEvent({ id: 1, coordinator_id: "COORD-0001" }),
       makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
@@ -102,7 +102,7 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     const wrapper = await mountView(events, "COORD-0001");
 
     const cards = wrapper.findAll(".event-card");
-    expect(cards).toHaveLength(2);
+    expect(cards).toHaveLength(1);
   });
 
   it("excludes events assigned to a different coordinator", async () => {
@@ -136,16 +136,19 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     expect(labels).toContain("Planning");
   });
 
-  it("puts Requested and Unassigned in the same Needs Review group", async () => {
+  it("shows Unassigned events under All events in their own group, not Needs Review", async () => {
     const events = [
       makeEvent({ id: 1, status: "Requested" }),
       makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
     ];
     const wrapper = await mountView(events);
+    await wrapper.findAll(".toggle-btn")[1].trigger("click");
 
-    const needsReviewSection = wrapper.find(".status-group");
-    expect(needsReviewSection.text()).toContain("Needs Review");
-    expect(needsReviewSection.findAll(".event-card")).toHaveLength(2);
+    const sections = wrapper.findAll(".status-group");
+    expect(sections[0].text()).toContain("Needs Review");
+    expect(sections[0].findAll(".event-card")).toHaveLength(1);
+    expect(sections[1].text()).toContain("Unassigned");
+    expect(sections[1].findAll(".event-card--action")).toHaveLength(0);
   });
 
   it("sorts events within a group by proposedDate ascending", async () => {
@@ -160,10 +163,9 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     expect(cards[1].text()).toContain("Late Event");
   });
 
-  it("applies the action highlight class to Requested and Unassigned cards", async () => {
+  it("applies the action highlight class to Requested cards only", async () => {
     const events = [
       makeEvent({ id: 1, status: "Requested" }),
-      makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
       makeEvent({ id: 3, status: "Planning" }),
     ];
     const wrapper = await mountView(events);
@@ -171,7 +173,7 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     const actionCards = wrapper.findAll(".event-card--action");
     const normalCards = wrapper.findAll(".event-card:not(.event-card--action)");
 
-    expect(actionCards).toHaveLength(2);
+    expect(actionCards).toHaveLength(1);
     expect(normalCards).toHaveLength(1);
   });
 

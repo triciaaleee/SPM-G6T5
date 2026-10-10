@@ -29,6 +29,10 @@ insert into users (id, name, email, password_hash, role) values
   ('ORG-0001', 'Organiser One', 'organiser-one@example.com', crypt('password123', gen_salt('bf')), 'organiser'),
   ('ORG-0002', 'Organiser Two', 'organiser-two@example.com', crypt('password123', gen_salt('bf')), 'organiser'),
   ('COORD-0001', 'Coordinator One', 'coordinator-one@example.com', crypt('password123', gen_salt('bf')), 'coordinator'),
+  -- A second coordinator so the Lead has someone to reassign to (E2-12).
+  ('COORD-0002', 'Coordinator Two', 'coordinator-two@example.com', crypt('password123', gen_salt('bf')), 'coordinator'),
+  -- Week 7 change 5: the Event Coordinator Lead (E1-8, E2-13, E2-12).
+  ('LEAD-0001', 'Coordinator Lead', 'coordinator-lead@example.com', crypt('password123', gen_salt('bf')), 'coordinator_lead'),
   ('VEN-0001', 'Venue Staff One', 'venue-staff-one@example.com', crypt('password123', gen_salt('bf')), 'venue_staff'),
   ('TS-0001', 'Technical Support One', 'tech-support-one@example.com', crypt('password123', gen_salt('bf')), 'technical_support')
 on conflict (id) do nothing;
@@ -85,10 +89,12 @@ insert into events (
     'COORD-0001',
     now() - interval '20 days'
   ),
+  -- Waiting in the Event Coordinator Lead's unassigned queue (E1-8):
+  -- a request with no coordinator is Unassigned, never Requested (§3).
   (
     4,
     'ORG-0001',
-    'Requested',
+    'Unassigned',
     '{"name":"Alumni Homecoming Mixer","purpose":"Reconnect alumni with current students and staff","description":"A homecoming social with games, food, and a keynote from a notable alum.","proposedDate":"2026-10-05","startTime":"17:00","endTime":"20:00","expectedAttendance":500}',
     null,
     null,
@@ -113,7 +119,9 @@ insert into events (
     'ORG-0002',
     'Requested',
     '{"name":"Robotics Demo Day","purpose":"Demonstrate student robotics projects","description":"Robotics club teams demo their builds and compete in mini-challenges.","proposedDate":"2026-09-28","startTime":"10:00","endTime":"13:00","expectedAttendance":200}',
-    null,
+    -- Requested means a coordinator has been assigned (§3); Coordinator
+    -- Two, so the Lead can reassign it to Coordinator One (E2-12).
+    'COORD-0002',
     null,
     null,
     null,
@@ -218,7 +226,7 @@ select setval(pg_get_serial_sequence('venues', 'id'), 10);
 --            given) -> venue 10 (Multipurpose Hall, capacity 250),
 --            status Requested.
 --
--- Events 3 (Rejected) and 4 (Requested, no coordinator yet) have no
+-- Events 3 (Rejected) and 4 (Unassigned, no coordinator yet) have no
 -- booking — neither has reached the point of a venue being locked in.
 delete from venue_bookings where venue_id between 1 and 10;
 

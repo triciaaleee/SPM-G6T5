@@ -38,8 +38,10 @@ NOTIFICATION_SERVICE_PORT=4004
 
 # Where venue-service reaches events-service (defaults to localhost:EVENTS_SERVICE_PORT)
 EVENTS_SERVICE_URL=http://localhost:4001
-# Where venue-service reaches notification-service (defaults to localhost:NOTIFICATION_SERVICE_PORT)
+# Where venue-service and events-service reach notification-service (defaults to localhost:NOTIFICATION_SERVICE_PORT)
 NOTIFICATION_SERVICE_URL=http://localhost:4004
+# Where events-service reaches user-service for the coordinator list (defaults to localhost:USER_SERVICE_PORT)
+USER_SERVICE_URL=http://localhost:4002
 ```
 
 Apply the SQL migrations in `supabase/migrations/` (in numeric order) against your Supabase project, then `supabase/seed.sql` for test data.
@@ -47,7 +49,7 @@ Apply the SQL migrations in `supabase/migrations/` (in numeric order) against yo
 ### Accounts
 
 - **Attendees and Event Organisers** sign up themselves at `/signup` (role defaults to Attendee). Passwords need at least 8 characters with at least one letter and one number.
-- **Coordinator, Venue Staff and Technical Support** are internal staff roles with no signup path — insert them directly into `users`. `seed.sql` creates one of each (`coordinator-one@`, `venue-staff-one@`, `tech-support-one@example.com`, password `password123`) alongside two organisers.
+- **Coordinator, Event Coordinator Lead, Venue Staff and Technical Support** are internal staff roles with no signup path — insert them directly into `users`. `seed.sql` creates `coordinator-one@`, `coordinator-two@`, `coordinator-lead@`, `venue-staff-one@` and `tech-support-one@example.com` (password `password123`) alongside two organisers.
 - After inserting users with hand-picked IDs, run `select sync_user_id_sequences();` so signups don't reuse those IDs (migration `0013`).
 
 ## Running

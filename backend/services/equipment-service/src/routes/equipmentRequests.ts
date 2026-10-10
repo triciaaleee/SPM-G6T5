@@ -412,13 +412,17 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // Best-effort, same stance as E5-1's submission notice: a friendlier
   // event name if events-service answers, "Event #n" if it doesn't.
   const infoResult = await fetchEventBookingInfo([requestRow.event_id], req.headers.authorization!);
-  const eventName =
-    (infoResult.status === "ok" && infoResult.events[0]?.name) || `Event #${requestRow.event_id}`;
+  const eventInfo = infoResult.status === "ok" ? infoResult.events[0] : undefined;
+  const eventName = eventInfo?.name || `Event #${requestRow.event_id}`;
+  // E2-12: the event's current coordinator, who takes over its pending
+  // requests on a reassignment; the coordinator recorded on the request is
+  // only the fallback when events-service doesn't answer.
+  const recipientId = eventInfo?.coordinatorId || (requestRow.coordinator_id as string);
 
   const notified = await sendNotifications(
     [
       {
-        recipientId: requestRow.coordinator_id as string,
+        recipientId,
         type: "equipment_request_status_updated",
         title: `Equipment request ${status.toLowerCase()}`,
         body: statusNotificationBody(status, note, eventName),
