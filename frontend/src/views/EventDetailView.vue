@@ -71,8 +71,12 @@ const isOtherCoordinatorEvent = computed(
 const isLead = computed(() => currentUser.value.role === "coordinator_lead");
 
 /** The owning organiser: GET /:id only answers an organiser for their own
- * event, so anyone who isn't internal staff and loaded it is the owner. */
-const isOwnerView = computed(() => !isCoordinator.value && !isLead.value);
+ * event, so anyone who isn't internal staff and loaded it is the owner. The
+ * Safety Officer can load an event in Safety Review (E1-10) but isn't its
+ * owner — their view of it is the read-only safety check. */
+const isOwnerView = computed(
+  () => !isCoordinator.value && !isLead.value && currentUser.value.role !== "safety_officer",
+);
 
 /** Only the assigned coordinator may act — mirrors the backend's
  * authorizeCoordinatorReview. An event with no coordinator is the Lead's

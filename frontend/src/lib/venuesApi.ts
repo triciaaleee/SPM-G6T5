@@ -433,7 +433,14 @@ export interface EventVenueBooking {
   /** E4-10 AC4: why Venue Staff refused it, or the automatic reason. */
   decisionReason: string | null;
   createdAt: string;
-  venue: { id: number; name: string; location: string } | null;
+  venue: {
+    id: number;
+    name: string;
+    location: string;
+    /** E1-10: what the Safety Officer checks attendance and layout against. */
+    capacity?: number;
+    layouts?: string[];
+  } | null;
 }
 
 /**

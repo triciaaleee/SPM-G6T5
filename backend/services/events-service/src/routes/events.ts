@@ -17,6 +17,14 @@ import { fetchCoordinators } from "../lib/usersClient.js";
  */
 const COORDINATOR_LEAD_ROLE = "coordinator_lead";
 
+/**
+ * Week 7 change 6: the Safety Officer runs the Operational Safety Check on
+ * events in "Safety Review" (E1-10). Read-only on the event, its venues and
+ * its equipment; the only decisions are approve / reject / request changes
+ * (E3-12, E3-13, E3-14).
+ */
+const SAFETY_OFFICER_ROLE = "safety_officer";
+
 async function recordAccessDenial(
   supabase: NonNullable<AuthedRequest["supabase"]>,
   userId: string,
@@ -437,6 +445,109 @@ eventsRouter.get("/unassigned", async (req: AuthedRequest, res) => {
   res.json({ events: data ?? [] });
 });
 
+const SAFETY_SUBMISSION_COLUMNS =
+  "id, event_id, equipment_placement, crowd_movement, emergency_access, venue_restrictions, submitted_at, submitted_by_user:submitted_by(name)";
+
+interface SafetySubmissionRow {
+  id: number;
+  event_id: number;
+  equipment_placement: string;
+  crowd_movement: string;
+  emergency_access: string;
+  venue_restrictions: string;
+  submitted_at: string;
+  submitted_by_user: { name: string } | { name: string }[] | null;
+}
+
+/** The coordinator's safety notes as the Safety Officer reads them. */
+function toSafetyNotes(row: SafetySubmissionRow) {
+  const submitter = Array.isArray(row.submitted_by_user) ? row.submitted_by_user[0] : row.submitted_by_user;
+  return {
+    id: row.id,
+    equipmentPlacement: row.equipment_placement,
+    crowdMovement: row.crowd_movement,
+    emergencyAccess: row.emergency_access,
+    venueRestrictions: row.venue_restrictions,
+    submittedAt: row.submitted_at,
+    submittedBy: submitter?.name ?? null,
+  };
+}
+
+/**
+ * Denies anyone but the Safety Officer, recording the attempt the same way
+ * a direct-URL attempt on someone else's event is recorded (E1-10 AC5).
+ */
+async function requireSafetyOfficer(req: AuthedRequest, res: Response, target: string): Promise<boolean> {
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  if (user.role === SAFETY_OFFICER_ROLE) return true;
+  await recordAccessDenial(supabase, user.id, target, "safety_check_role_not_allowed");
+  res.status(403).json({ error: "Access denied" });
+  return false;
+}
+
+/**
+ * E1-10 AC1/AC3: the Safety Officer's review queue — every event in
+ * "Safety Review" and nothing else, soonest event first, since that is the
+ * order the checks fall due. Each carries when its arrangements were
+ * submitted for review. Declared before GET /:id so "safety-queue" isn't
+ * read as an event id.
+ */
+eventsRouter.get("/safety-queue", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  if (!(await requireSafetyOfficer(req, res, "safety_queue"))) return;
+
+  const { data, error } = await supabase
+    .from("events")
+    .select(EVENT_COLUMNS)
+    .eq("status", EVENT_STATUS.SafetyReview);
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load the safety review queue" });
+    return;
+  }
+
+  const events = (data ?? []) as unknown as { id: number; submitted_details: Record<string, unknown> | null }[];
+
+  const submittedAt = new Map<number, string>();
+  if (events.length > 0) {
+    const { data: submissions, error: submissionsError } = await supabase
+      .from("event_safety_submissions")
+      .select("event_id, submitted_at")
+      .in(
+        "event_id",
+        events.map((e) => e.id),
+      )
+      .order("submitted_at", { ascending: false });
+
+    if (submissionsError) {
+      res.status(500).json({ error: "Failed to load the safety review queue" });
+      return;
+    }
+
+    // Newest first, so the first row seen per event is its latest submission.
+    for (const row of (submissions ?? []) as { event_id: number; submitted_at: string }[]) {
+      if (!submittedAt.has(row.event_id)) submittedAt.set(row.event_id, row.submitted_at);
+    }
+  }
+
+  const eventDate = (e: (typeof events)[number]) => {
+    const date = e.submitted_details?.proposedDate;
+    const time = e.submitted_details?.startTime;
+    return `${typeof date === "string" ? date : "9999-12-31"}T${typeof time === "string" ? time : "99:99"}`;
+  };
+
+  res.json({
+    events: [...events]
+      .sort((a, b) => eventDate(a).localeCompare(eventDate(b)) || a.id - b.id)
+      .map((e) => ({ ...e, safety_submitted_at: submittedAt.get(e.id) ?? null })),
+  });
+});
+
 /**
  * Fetch a single event by id. The service-role client returns any row
  * regardless of ownership, so ownership/role is checked explicitly here;
@@ -446,6 +557,12 @@ eventsRouter.get("/unassigned", async (req: AuthedRequest, res) => {
  * E1-8 AC2: the Event Coordinator Lead may open any submitted event (not a
  * draft — a draft hasn't entered the process). Read-only: every write
  * route below rejects the Lead's role.
+ *
+ * E1-10 AC2: the Safety Officer may open an event awaiting their
+ * Operational Safety Check — and only then. venue-service and
+ * equipment-service forward the caller's token here to decide who may see
+ * an event's bookings and equipment, so this is also what lets the Safety
+ * Officer read those (AC2), read-only (AC4).
  */
 eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -476,8 +593,9 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   const isOwner = data?.organiser_id === user.id;
   const isCoordinator = user.role === "coordinator";
   const isLead = user.role === COORDINATOR_LEAD_ROLE && data?.status !== EVENT_STATUS.Draft;
+  const isSafetyOfficer = user.role === SAFETY_OFFICER_ROLE && data?.status === EVENT_STATUS.SafetyReview;
 
-  if (!data || (!isOwner && !isCoordinator && !isLead)) {
+  if (!data || (!isOwner && !isCoordinator && !isLead && !isSafetyOfficer)) {
     await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
     res.status(403).json({ error: "Access denied" });
     return;
@@ -488,6 +606,75 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   // requests from. Not a privacy boundary — the organiser's name is
   // already embedded in EVENT_COLUMNS for any coordinator viewing this.
   res.json({ event: data });
+});
+
+/**
+ * E1-10 AC2: the Operational Safety Check view's own data — the event
+ * (expected attendance and accessibility requirements are in
+ * submitted_details) and the coordinator's latest safety notes: equipment
+ * placement, crowd movement, emergency access and known restrictions, as
+ * entered when the event was submitted for review (E3-4, migration 0026).
+ * Venue bookings and equipment come from venue-service and
+ * equipment-service, which own them.
+ *
+ * AC5: Safety Officer only — anyone else is denied and the attempt
+ * recorded, even a coordinator who could otherwise see the event. The view
+ * exists only while the event is awaiting the check.
+ */
+eventsRouter.get("/:id/safety-check", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+
+  if (!(await requireSafetyOfficer(req, res, eventId))) return;
+
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const { data: event, error } = await supabase
+    .from("events")
+    .select(EVENT_COLUMNS)
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+
+  if (!event) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  if ((event as unknown as { status: string }).status !== EVENT_STATUS.SafetyReview) {
+    res.status(409).json({ error: "This event isn't awaiting an Operational Safety Check" });
+    return;
+  }
+
+  const { data: submission, error: submissionError } = await supabase
+    .from("event_safety_submissions")
+    .select(SAFETY_SUBMISSION_COLUMNS)
+    .eq("event_id", Number(eventId))
+    .order("submitted_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (submissionError) {
+    res.status(500).json({ error: "Failed to load the safety notes" });
+    return;
+  }
+
+  res.json({
+    event,
+    safetyNotes: submission ? toSafetyNotes(submission as unknown as SafetySubmissionRow) : null,
+  });
 });
 
 /**

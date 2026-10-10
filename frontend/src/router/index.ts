@@ -11,6 +11,8 @@ import VenueRequestQueue from "../views/VenueRequestQueue.vue";
 import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
 import TechnicalSupportView from "../views/TechnicalSupportView.vue";
 import LeadDashboardView from "../views/LeadDashboardView.vue";
+import SafetyQueueView from "../views/SafetyQueueView.vue";
+import SafetyCheckView from "../views/SafetyCheckView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
 
 export const router = createRouter({
@@ -91,6 +93,21 @@ export const router = createRouter({
       component: LeadDashboardView,
       meta: { requiresAuth: true, roles: ["coordinator_lead"] },
     },
+    {
+      // E1-10 AC1: the Safety Officer's queue of events in Safety Review.
+      path: "/safety-reviews",
+      name: "safety-queue",
+      component: SafetyQueueView,
+      meta: { requiresAuth: true, roles: ["safety_officer"] },
+    },
+    {
+      // E1-10 AC2/AC4: the read-only Operational Safety Check view. AC5:
+      // other roles are turned away here and by the backend.
+      path: "/safety-reviews/:id",
+      name: "safety-check",
+      component: SafetyCheckView,
+      meta: { requiresAuth: true, roles: ["safety_officer"] },
+    },
   ],
 });
 
@@ -144,6 +161,11 @@ router.beforeEach((to) => {
   // E1-8: the Lead organises no events — their screen is the queue.
   if (authed && to.name === "events-list" && getStoredUser()?.role === "coordinator_lead") {
     return { name: "lead-dashboard" };
+  }
+
+  // E1-10: the Safety Officer organises no events — their screen is the queue.
+  if (authed && to.name === "events-list" && getStoredUser()?.role === "safety_officer") {
+    return { name: "safety-queue" };
   }
 
   return true;

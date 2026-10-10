@@ -280,6 +280,8 @@ describe("POST /api/venues/bookings access", () => {
   it.each([
     ["an organiser", { id: "ORG-0001", role: "organiser" }],
     ["venue staff", { id: "VEN-0001", role: "venue_staff" }],
+    // E1-10 AC4: the Safety Officer reads venue arrangements, never makes them.
+    ["the Safety Officer", { id: "SAF-0001", role: "safety_officer" }],
   ])("rejects %s with 403", async (_label, user) => {
     const { app, supabase } = buildApp({ user });
     const res = await submit(app);
@@ -560,9 +562,10 @@ describe("GET /api/venues/events/:eventId/bookings", () => {
   function buildReadApp(rows: Record<string, unknown>[], options: { eventHttpStatus?: number } = {}) {
     const order = vi.fn().mockResolvedValue({ data: rows, error: null });
     const eq = vi.fn().mockReturnValue({ order });
+    const select = vi.fn().mockReturnValue({ eq });
     const supabase = {
       from: vi.fn((table: string) => {
-        if (table === "venue_bookings") return { select: vi.fn().mockReturnValue({ eq }) };
+        if (table === "venue_bookings") return { select };
         throw new Error(`unexpected table ${table}`);
       }),
     };
@@ -585,7 +588,7 @@ describe("GET /api/venues/events/:eventId/bookings", () => {
     // Its own router, outside the coordinator-only venuesRouter: the owning
     // organiser must be able to see where their event's venue stands (E3-1).
     app.use("/api/venues/events", eventBookingsRouter);
-    return { app, eq };
+    return { app, eq, select };
   }
 
   it("AC5: lists the event's requests with their pending state", async () => {
@@ -651,6 +654,20 @@ describe("GET /api/venues/events/:eventId/bookings", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.bookings[0].status).toBe("Approved");
+  });
+
+  it("E1-10: gives the Safety Officer each venue's capacity and layouts", async () => {
+    const venue = { id: 9, name: "Black Box Studio", location: "South Campus", capacity: 200, layouts: ["Theatre", "Open floor"] };
+    const { app, select } = buildReadApp([
+      { id: 902, status: "Approved", hold_expires_at: null, decision_reason: null, created_at: "2026-10-07T00:00:00.000Z", venues: venue },
+    ]);
+    (globalThis as any).__mockUser = { id: "SAF-0001", role: "safety_officer" };
+
+    const res = await request(app).get("/api/venues/events/7/bookings").set("Authorization", "Bearer test-token");
+
+    expect(res.status).toBe(200);
+    expect(select).toHaveBeenCalledWith(expect.stringContaining("venues (id, name, location, capacity, layouts)"));
+    expect(res.body.bookings[0].venue).toEqual(venue);
   });
 
   it("returns 400 for a non-numeric event id", async () => {

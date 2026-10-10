@@ -313,6 +313,54 @@ export function reassignCoordinator(id: number, coordinatorId: string): Promise<
   return postAssignment(id, "reassign", coordinatorId);
 }
 
+/** E1-10: a queue entry, plus when its arrangements were submitted for review. */
+export interface SafetyQueueEvent extends EventSummary {
+  safety_submitted_at: string | null;
+}
+
+/**
+ * E1-10 AC1/AC3: the Safety Officer's review queue — every event in
+ * "Safety Review", soonest event first. Any other role gets a 403 (AC5).
+ */
+export async function fetchSafetyQueue(): Promise<SafetyQueueEvent[]> {
+  const res = await fetch(`${apiBase}/safety-queue`, { headers: await authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (res.status === 403) throw new AccessDeniedError("Only the Safety Officer can view the safety review queue");
+  if (!res.ok) throw new Error("Failed to load the safety review queue");
+  const body = await res.json();
+  return body.events as SafetyQueueEvent[];
+}
+
+/** The coordinator's safety notes, entered on submitting for review (E3-4 AC5). */
+export interface SafetyNotes {
+  id: number;
+  equipmentPlacement: string;
+  crowdMovement: string;
+  emergencyAccess: string;
+  venueRestrictions: string;
+  submittedAt: string;
+  submittedBy: string | null;
+}
+
+/** Thrown when the event isn't (or is no longer) awaiting the check. */
+export class NotAwaitingSafetyCheckError extends Error {}
+
+/**
+ * E1-10 AC2: the event and the coordinator's latest safety notes for the
+ * Operational Safety Check view. Venue bookings and equipment come from
+ * venuesApi/equipmentApi. 403 for anyone but the Safety Officer (AC5).
+ */
+export async function fetchSafetyCheck(id: string): Promise<{ event: EventSummary; safetyNotes: SafetyNotes | null }> {
+  const res = await fetch(`${apiBase}/${id}/safety-check`, { headers: await authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (res.status === 403) throw new AccessDeniedError("Only the Safety Officer can open the Operational Safety Check");
+  if (res.status === 404) throw new NotFoundError("Event not found");
+  const body = await res.json();
+  if (res.status === 409) throw new NotAwaitingSafetyCheckError(body.error ?? "This event isn't awaiting a safety check");
+  if (!res.ok) throw new Error("Failed to load the Operational Safety Check");
+  return { event: body.event as EventSummary, safetyNotes: (body.safetyNotes ?? null) as SafetyNotes | null };
+}
+
 export interface ClarificationMessage {
   id: number;
   parent_id: number | null;

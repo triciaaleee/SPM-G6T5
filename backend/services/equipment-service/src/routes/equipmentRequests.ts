@@ -207,6 +207,11 @@ equipmentRequestsRouter.post("/", async (req: AuthedRequest, res) => {
  * status — E3-1 AC3's "Outstanding Arrangements" line reads this). `?eventId=`
  * scopes to one event (used by the event detail page); without it, only
  * Technical Support may list every outstanding request.
+ *
+ * E1-10 AC2: the Safety Officer reads the equipment reserved for an event
+ * under review the same way, one event at a time; events-service only lets
+ * them see an event while it is in "Safety Review". Read-only (AC4): POST
+ * is coordinator-only and PATCH Technical Support-only.
  */
 equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -217,7 +222,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
 
   const rawEventId = typeof req.query.eventId === "string" ? req.query.eventId : undefined;
 
-  if (user.role === "coordinator" || user.role === "organiser") {
+  if (user.role === "coordinator" || user.role === "organiser" || user.role === "safety_officer") {
     if (!rawEventId || !isPositiveInteger(rawEventId)) {
       res.status(400).json({ error: "A valid eventId is required" });
       return;

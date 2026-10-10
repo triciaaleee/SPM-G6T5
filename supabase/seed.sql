@@ -33,6 +33,8 @@ insert into users (id, name, email, password_hash, role) values
   ('COORD-0002', 'Coordinator Two', 'coordinator-two@example.com', crypt('password123', gen_salt('bf')), 'coordinator'),
   -- Week 7 change 5: the Event Coordinator Lead (E1-8, E2-13, E2-12).
   ('LEAD-0001', 'Coordinator Lead', 'coordinator-lead@example.com', crypt('password123', gen_salt('bf')), 'coordinator_lead'),
+  -- Week 7 change 6: the Safety Officer (E1-10, E3-12/13/14).
+  ('SAF-0001', 'Safety Officer One', 'safety-officer@example.com', crypt('password123', gen_salt('bf')), 'safety_officer'),
   ('VEN-0001', 'Venue Staff One', 'venue-staff-one@example.com', crypt('password123', gen_salt('bf')), 'venue_staff'),
   ('TS-0001', 'Technical Support One', 'tech-support-one@example.com', crypt('password123', gen_salt('bf')), 'technical_support')
 on conflict (id) do nothing;
@@ -126,6 +128,20 @@ insert into events (
     null,
     null,
     now() - interval '2 days'
+  ),
+  -- Awaiting the Safety Officer's Operational Safety Check (E1-10): its
+  -- venue booking is Approved (below) and it requested no equipment, so
+  -- E3-4 would let it through; its safety notes are seeded further down.
+  (
+    7,
+    'ORG-0001',
+    'Safety Review',
+    '{"name":"Robotics Showcase Night","purpose":"Public showcase of student robotics builds","description":"Live robot demos on a central stage with standing viewing areas around it.","proposedDate":"2026-11-14","startTime":"18:00","endTime":"21:00","expectedAttendance":180,"venue":"Black Box Studio","accessibility":"Two wheelchair users attending; step-free route to a reserved viewing area.","equipment":"","technicalSupport":"Lighting technician for the stage","registrationNeeded":true}',
+    'COORD-0001',
+    'Approved',
+    now() - interval '5 days',
+    'COORD-0001',
+    now() - interval '9 days'
   )
 on conflict (id) do update set
   status = excluded.status,
@@ -138,8 +154,9 @@ on conflict (id) do update set
 -- new ones, without touching created_at/submitted_details/organiser_id.
 
 -- Keep the identity sequence ahead of these explicit ids so the next
--- app-created event doesn't collide with id 1-6 above.
-select setval(pg_get_serial_sequence('events', 'id'), 6);
+-- app-created event doesn't collide with id 1-7 above — and never move it
+-- backwards on a database that already has later events.
+select setval(pg_get_serial_sequence('events', 'id'), greatest(7, (select max(id) from events)));
 
 -- Venues (0011) ---------------------------------------------------------
 --
@@ -225,6 +242,9 @@ select setval(pg_get_serial_sequence('venues', 'id'), 10);
 --   Event 6  Robotics Demo Day (Requested, 200 attendees, no venue field
 --            given) -> venue 10 (Multipurpose Hall, capacity 250),
 --            status Requested.
+--   Event 7  Robotics Showcase Night (Safety Review, 180 attendees) ->
+--            venue 9 (Black Box Studio, capacity 200), status Approved —
+--            confirmed before it went to the Safety Officer (E3-4).
 --
 -- Events 3 (Rejected) and 4 (Unassigned, no coordinator yet) have no
 -- booking — neither has reached the point of a venue being locked in.
@@ -234,7 +254,8 @@ insert into venue_bookings (venue_id, event_id, status) values
   (6, 1, 'Approved'),
   (1, 2, 'Requested'),
   (5, 5, 'Approved'),
-  (10, 6, 'Requested');
+  (10, 6, 'Requested'),
+  (9, 7, 'Approved');
 
 -- equipment_catalog (0022): the fixed list Coordinators pick from on an
 -- equipment request, and Technical Support's current-stock table. Names
@@ -291,3 +312,21 @@ where id in (select id from equipment where type = 'Microphones' order by id lim
 -- other seeded events share that date, so this isn't a conflict for them.
 insert into equipment_booking (equipment_id, event_id)
 select id, 5 from equipment where type = 'Projector' and status = 'Available' order by id limit 2;
+
+-- event_safety_submissions (0026): the coordinator's safety notes for event
+-- 7, as E3-4 records them on submitting it for review — what the Safety
+-- Officer reads on the Operational Safety Check (E1-10). Deleted first so
+-- re-running this file doesn't stack submissions.
+delete from event_safety_submissions where event_id = 7;
+
+insert into event_safety_submissions (
+  event_id, submitted_by, equipment_placement, crowd_movement, emergency_access, venue_restrictions, submitted_at
+) values (
+  7,
+  'COORD-0001',
+  'Demo stage in the centre; lighting rig on the fixed grid only. All cables run along the walls under cable covers, none across walkways.',
+  'Audience enters by the foyer doors and stands behind a barrier 2 m from the stage. Stewards hold a clear aisle around the barrier; exit is through the same doors.',
+  'Both fire exits on the east wall stay unobstructed and lit. One steward per exit. Step-free route from the foyer to the reserved wheelchair area kept clear.',
+  'Retractable seating stays retracted for standing capacity. No haze or smoke machines (detectors are not isolated).',
+  now() - interval '2 days'
+);

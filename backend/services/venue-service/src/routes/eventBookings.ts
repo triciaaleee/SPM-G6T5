@@ -14,7 +14,9 @@ import { fetchEvent } from "../lib/eventsClient.js";
  * being decided here: the caller's own token is forwarded to
  * GET /api/events/:id, which admits the owning organiser or a coordinator
  * and refuses everyone else. Whoever may see the event may see where its
- * venue stands.
+ * venue stands. That includes the Safety Officer while the event awaits
+ * its Operational Safety Check (E1-10 AC2), who also needs each venue's
+ * capacity and layouts — hence those two on the venue.
  */
 export const eventBookingsRouter = Router();
 
@@ -24,6 +26,9 @@ interface VenueSummary {
   id: number;
   name: string;
   location: string;
+  capacity: number;
+  /** The seating/room layouts the venue supports. */
+  layouts: string[];
 }
 
 // supabase-js types an embedded table as an array even for a to-one
@@ -59,7 +64,7 @@ eventBookingsRouter.get("/:eventId/bookings", async (req: AuthedRequest, res) =>
 
   const { data, error } = await supabase
     .from("venue_bookings")
-    .select("id, status, hold_expires_at, decision_reason, created_at, venues (id, name, location)")
+    .select("id, status, hold_expires_at, decision_reason, created_at, venues (id, name, location, capacity, layouts)")
     .eq("event_id", eventId)
     .order("created_at");
   if (error) {

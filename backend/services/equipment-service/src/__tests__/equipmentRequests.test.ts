@@ -341,6 +341,39 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
     ]);
   });
 
+  // E1-10 AC2: the reserved equipment, for the Operational Safety Check.
+  it("allows the Safety Officer to view one event's requests", async () => {
+    const { app } = buildApp({
+      user: { id: "SAF-0001", role: "safety_officer" },
+      requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2 }],
+    });
+    const res = await request(app).get("/api/equipment-requests?eventId=7");
+    expect(res.status).toBe(200);
+    expect(res.body.equipmentRequests[0].items).toEqual([
+      { id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 2 },
+    ]);
+  });
+
+  it("404s the Safety Officer for an event events-service won't show them (not in Safety Review)", async () => {
+    const { app } = buildApp({ user: { id: "SAF-0001", role: "safety_officer" }, eventStatus: 404 });
+    const res = await request(app).get("/api/equipment-requests?eventId=7");
+    expect(res.status).toBe(404);
+  });
+
+  it("doesn't let the Safety Officer list every request", async () => {
+    const { app } = buildApp({ user: { id: "SAF-0001", role: "safety_officer" } });
+    const res = await request(app).get("/api/equipment-requests");
+    expect(res.status).toBe(400);
+  });
+
+  // E1-10 AC4: read-only — no recording or updating equipment arrangements.
+  it("blocks the Safety Officer from changing a request's status", async () => {
+    const { app } = buildApp({ user: { id: "SAF-0001", role: "safety_officer" } });
+    const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+    expect(res.status).toBe(403);
+  });
+
   it("404s an organiser when the event isn't theirs to see", async () => {
     const { app } = buildApp({ user: { id: "ORG-0001", role: "organiser" }, eventStatus: 404 });
     const res = await request(app).get("/api/equipment-requests?eventId=7");
