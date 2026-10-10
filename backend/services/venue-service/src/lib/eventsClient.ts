@@ -71,9 +71,14 @@ export interface VenueBookingInfo {
 
 export type FetchVenueBookingInfoResult = { status: "ok"; events: VenueBookingInfo[] } | { status: "error" };
 
+/** events-service accepts at most this many ids per venue-booking-info call. */
+export const VENUE_BOOKING_INFO_BATCH = 100;
+
 /**
- * Booking info for several events in one call. Events that don't come back
- * (deleted, or still a draft) are simply missing from the list.
+ * Booking info for any number of events, fetched in batches the
+ * events-service limit allows. Events that don't come back (deleted, or
+ * still a draft) are simply missing from the list. If any batch fails the
+ * whole lookup fails, so callers never act on a partial picture.
  */
 export async function fetchVenueBookingInfo(
   eventIds: number[],
@@ -81,6 +86,19 @@ export async function fetchVenueBookingInfo(
 ): Promise<FetchVenueBookingInfoResult> {
   if (eventIds.length === 0) return { status: "ok", events: [] };
 
+  const batches: number[][] = [];
+  for (let i = 0; i < eventIds.length; i += VENUE_BOOKING_INFO_BATCH) {
+    batches.push(eventIds.slice(i, i + VENUE_BOOKING_INFO_BATCH));
+  }
+  const results = await Promise.all(batches.map((batch) => fetchVenueBookingInfoBatch(batch, authorization)));
+  if (results.some((result) => result.status === "error")) return { status: "error" };
+  return { status: "ok", events: results.flatMap((result) => (result.status === "ok" ? result.events : [])) };
+}
+
+async function fetchVenueBookingInfoBatch(
+  eventIds: number[],
+  authorization: string,
+): Promise<FetchVenueBookingInfoResult> {
   let res: Response;
   try {
     res = await fetch(`${eventsServiceUrl()}/api/events/venue-booking-info?ids=${eventIds.join(",")}`, {
