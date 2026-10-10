@@ -13,8 +13,10 @@ import { onMounted, reactive, ref } from "vue";
 import {
   EquipmentRequestError,
   EquipmentValidationError,
+  fetchEquipmentCatalog,
   fetchEquipmentRequestsForEvent,
   submitEquipmentRequest,
+  type EquipmentCatalogItem,
   type EquipmentItemInput,
   type EquipmentRequest,
 } from "../../lib/equipmentApi";
@@ -27,13 +29,23 @@ const props = defineProps<{
   canSubmit: boolean;
 }>();
 
+/** E3-1 AC3: lets EventDetailView refresh its own copy of this event's
+ * requests (used by the outstanding-arrangements line) once a new one lands. */
+const emit = defineEmits<{ submitted: [] }>();
+
 const requests = ref<EquipmentRequest[]>([]);
 const loading = ref(true);
+const catalog = ref<EquipmentCatalogItem[]>([]);
 
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    requests.value = await fetchEquipmentRequestsForEvent(props.eventId);
+    const [loadedRequests, loadedCatalog] = await Promise.all([
+      fetchEquipmentRequestsForEvent(props.eventId),
+      fetchEquipmentCatalog(),
+    ]);
+    requests.value = loadedRequests;
+    catalog.value = loadedCatalog;
   } catch {
     requests.value = [];
   } finally {
@@ -44,7 +56,7 @@ async function load(): Promise<void> {
 onMounted(load);
 
 function blankItem(): EquipmentItemInput {
-  return { equipmentType: "", quantity: "1", technicalRequirements: "" };
+  return { equipmentCatalogId: "", quantity: "1" };
 }
 
 const formOpen = ref(false);
@@ -81,6 +93,7 @@ async function submit(): Promise<void> {
   try {
     const { equipmentRequest, notified } = await submitEquipmentRequest(props.eventId, formItems);
     requests.value = [equipmentRequest, ...requests.value];
+    emit("submitted");
     formOpen.value = false;
     notice.value = notified
       ? { text: "Equipment request submitted. Technical Support has been notified.", warning: false }
@@ -100,6 +113,13 @@ function formatDate(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
 }
+
+/** Colour-codes the status badge so "Arranged" reads as resolved at a glance — same convention as TechnicalSupportView.vue. */
+function statusBadgeClass(status: string): string {
+  if (status === "Arranged") return "status-success";
+  if (status === "Partially Fulfilled") return "status-warning";
+  return "status-neutral"; // Requested
+}
 </script>
 
 <template>
@@ -112,7 +132,7 @@ function formatDate(value: string): string {
       <ul v-if="requests.length > 0" class="eq-list">
         <li v-for="r in requests" :key="r.id" class="eq-request">
           <div class="eq-request__header">
-            <span class="badge badge-neutral">{{ r.status }}</span>
+            <span class="badge" :class="statusBadgeClass(r.status)">{{ r.status }}</span>
             <p class="body-small muted">Submitted {{ formatDate(r.createdAt) }}</p>
           </div>
           <!-- E5-3 AC1/AC2: Technical Support's status updates, and what's left outstanding, as they happen -->
@@ -120,7 +140,6 @@ function formatDate(value: string): string {
           <ul class="eq-items">
             <li v-for="item in r.items" :key="item.id" class="body-small">
               <strong>{{ item.quantity }}&times; {{ item.equipmentType }}</strong>
-              <span v-if="item.technicalRequirements" class="muted"> — {{ item.technicalRequirements }}</span>
             </li>
           </ul>
         </li>
@@ -142,9 +161,14 @@ function formatDate(value: string): string {
           <div v-for="(item, index) in formItems" :key="index" class="eq-item-row">
             <div class="field">
               <label :for="`eq-type-${index}`" class="body-small muted mb-1">Equipment type</label>
-              <input :id="`eq-type-${index}`" v-model="item.equipmentType" type="text" class="eq-input" />
-              <p v-if="fieldErrors[`items[${index}].equipmentType`]" class="body-small error-text">
-                {{ fieldErrors[`items[${index}].equipmentType`] }}
+              <select :id="`eq-type-${index}`" v-model="item.equipmentCatalogId" class="eq-input">
+                <option value="" disabled>Select…</option>
+                <option v-for="catalogItem in catalog" :key="catalogItem.id" :value="catalogItem.id">
+                  {{ catalogItem.name }}
+                </option>
+              </select>
+              <p v-if="fieldErrors[`items[${index}].equipmentCatalogId`]" class="body-small error-text">
+                {{ fieldErrors[`items[${index}].equipmentCatalogId`] }}
               </p>
             </div>
             <div class="field eq-field-qty">
@@ -153,10 +177,6 @@ function formatDate(value: string): string {
               <p v-if="fieldErrors[`items[${index}].quantity`]" class="body-small error-text">
                 {{ fieldErrors[`items[${index}].quantity`] }}
               </p>
-            </div>
-            <div class="field">
-              <label :for="`eq-req-${index}`" class="body-small muted mb-1">Technical requirements</label>
-              <input :id="`eq-req-${index}`" v-model="item.technicalRequirements" type="text" class="eq-input" />
             </div>
             <button
               type="button"
@@ -249,9 +269,19 @@ function formatDate(value: string): string {
   border-radius: var(--radius-xs);
 }
 
-.badge-neutral {
+.status-neutral {
   background: var(--color-purple-100);
   color: var(--color-purple-800);
+}
+
+.status-success {
+  background: #e5eee5;
+  color: var(--color-success-700);
+}
+
+.status-warning {
+  background: #fef5e7;
+  color: var(--color-warning-600);
 }
 
 .eq-outstanding {
@@ -294,7 +324,7 @@ function formatDate(value: string): string {
 
 .eq-item-row {
   display: grid;
-  grid-template-columns: 1fr 100px 1fr auto;
+  grid-template-columns: 1fr 100px auto;
   gap: var(--spacing-8);
   align-items: start;
 }

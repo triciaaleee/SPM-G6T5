@@ -16,6 +16,7 @@
 import { computed } from "vue";
 import { formatEventDate, statusBadgeClass } from "../lib/eventStatus";
 import type { EventVenueBooking } from "../lib/venuesApi";
+import type { EquipmentRequest } from "../lib/equipmentApi";
 
 const props = withDefaults(
   defineProps<{
@@ -33,12 +34,19 @@ const props = withDefaults(
      * way to read them.
      */
     venueBookings?: EventVenueBooking[];
+    /**
+     * This event's equipment requests, so AC3's equipment line says what is
+     * actually true. Undefined while they are still loading, or when the
+     * caller has no way to read them.
+     */
+    equipmentRequests?: EquipmentRequest[];
   }>(),
   {
     title: "Event Status",
     showTimeline: true,
     showOutstanding: true,
     venueBookings: undefined,
+    equipmentRequests: undefined,
   },
 );
 
@@ -66,6 +74,25 @@ const venueArrangement = computed<{ done: boolean; label: string }>(() => {
     return { done: false, label: `Venue — ${detail}` };
   }
   return { done: false, label: "Venue — not yet booked" };
+});
+
+/**
+ * E3-1 AC3, equipment half. An event may accumulate more than one equipment
+ * request (E5-1, same as venue_bookings allowing several venues); it counts
+ * as arranged only once every request on it is "Arranged" — one still sat
+ * at "Requested" or "Partially Fulfilled" keeps this outstanding even if
+ * another request for the same event is already fully arranged.
+ */
+const equipmentArrangement = computed<{ done: boolean; label: string }>(() => {
+  const requests = props.equipmentRequests;
+  if (!requests) return { done: false, label: "Equipment — checking…" };
+  if (requests.length === 0) return { done: false, label: "Equipment — not yet requested" };
+
+  const outstanding = requests.filter((r) => r.status !== "Arranged");
+  if (outstanding.length === 0) {
+    return { done: true, label: "Equipment — arranged" };
+  }
+  return { done: false, label: `Equipment — ${outstanding.length} awaiting Technical Support` };
 });
 
 type StepVariant = "neutral" | "success" | "info" | "error";
@@ -159,11 +186,9 @@ function stepState(index: number): "complete" | "current" | "pending" {
           <span class="outstanding__dot" :class="{ 'outstanding__dot--done': venueArrangement.done }" />
           {{ venueArrangement.label }}
         </li>
-        <!-- Equipment has no service yet (epic E5), so there is nothing to
-             read: this line stays a placeholder until E5-1 lands. -->
-        <li class="outstanding__item">
+        <li v-if="!equipmentArrangement.done" class="outstanding__item">
           <span class="outstanding__dot" />
-          Equipment — not yet arranged
+          {{ equipmentArrangement.label }}
         </li>
       </ul>
     </div>

@@ -13,7 +13,25 @@ import {
 import { assignedVenueIds, NOT_ASSIGNED_MESSAGE } from "../lib/venueStaff.js";
 import { fetchVenueBookingInfo } from "../lib/eventsClient.js";
 import { extractLayoutAndFacilities } from "../lib/venueRecommendation.js";
-import { isRealDate, type VenueRow } from "../lib/venueSearch.js";
+import { buildFilterOptions, isRealDate, type VenueRow } from "../lib/venueSearch.js";
+import {
+  VENUE_RECORD_COLUMNS,
+  invalidVenueMessage,
+  parseVenueInput,
+  toVenueColumns,
+  toVenueRecord,
+  type VenueRecordRow,
+} from "../lib/venueRecord.js";
+import {
+  findBufferOverlaps,
+  findCapacityShortfalls,
+  impactNotifications,
+  loadLiveBookings,
+  localDateKey,
+  toPublicImpact,
+  type VenueChangeImpact,
+} from "../lib/venueChanges.js";
+import { sendNotifications } from "../lib/notificationsClient.js";
 
 /**
  * E1-5: venue staff's view of what's booked at a venue. Staff see enough
@@ -67,6 +85,168 @@ staffRouter.get("/venues", async (req: AuthedRequest, res) => {
   }
 
   res.json({ venues: data ?? [] });
+});
+
+/**
+ * Option lists for the add-venue form: the standard catalogue plus any
+ * extra values existing venues use, so a new venue is described with the
+ * same words coordinators filter by.
+ */
+staffRouter.get("/venue-options", async (req: AuthedRequest, res) => {
+  const { data, error } = await req.supabase!.from("venues").select("location, capacity, accessibility, layouts, facilities");
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load venue options" });
+    return;
+  }
+
+  const { locations, accessibility, layouts, facilities } = buildFilterOptions((data ?? []) as VenueRow[]);
+  res.json({ locations, accessibility, layouts, facilities });
+});
+
+/** E4-1: the venues this staff member looks after, in full, for the edit form. */
+staffRouter.get("/my-venues", async (req: AuthedRequest, res) => {
+  const { data, error } = await req
+    .supabase!.from("venues")
+    .select(VENUE_RECORD_COLUMNS)
+    .eq("staff_id", req.user!.id)
+    .order("name");
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load your venues" });
+    return;
+  }
+
+  res.json({ venues: ((data ?? []) as VenueRecordRow[]).map(toVenueRecord) });
+});
+
+/**
+ * E4-1: add a venue record. The staff member who adds it looks after it
+ * (`staff_id`, migration 0015), so its booking requests land in their
+ * queue straight away. New venues start Available, so they show up in
+ * coordinators' searches immediately (AC1).
+ */
+staffRouter.post("/venues", async (req: AuthedRequest, res) => {
+  const parsed = parseVenueInput(req.body);
+  if (!parsed.valid) {
+    // AC2: blocked, naming what's missing.
+    res.status(400).json({ error: invalidVenueMessage(parsed.missing), fields: parsed.fields, missing: parsed.missing });
+    return;
+  }
+
+  const { data, error } = await req.supabase!
+    .from("venues")
+    .insert({ ...toVenueColumns(parsed.venue), status: "Available", active: true, staff_id: req.user!.id })
+    .select(VENUE_RECORD_COLUMNS)
+    .single();
+
+  if (error || !data) {
+    res.status(500).json({ error: "Failed to add the venue" });
+    return;
+  }
+
+  res.status(201).json({ venue: toVenueRecord(data as VenueRecordRow) });
+});
+
+/**
+ * Shared by preview and save: validate, check the caller looks after the
+ * venue, load it and work out what the change does to its bookings.
+ * Sends the error response itself and resolves null when it can't go on.
+ */
+async function prepareVenueUpdate(req: AuthedRequest, res: Response) {
+  const supabase = req.supabase!;
+  const rawId = Array.isArray(req.params.venueId) ? req.params.venueId[0] : req.params.venueId;
+  if (!VENUE_ID_PATTERN.test(rawId)) {
+    res.status(400).json({ error: "Invalid venue id" });
+    return null;
+  }
+
+  const parsed = parseVenueInput(req.body);
+  if (!parsed.valid) {
+    res.status(400).json({ error: invalidVenueMessage(parsed.missing), fields: parsed.fields, missing: parsed.missing });
+    return null;
+  }
+
+  const { data: current, error } = await supabase
+    .from("venues")
+    .select(`${VENUE_RECORD_COLUMNS}, staff_id`)
+    .eq("id", Number(rawId))
+    .maybeSingle();
+  if (error) {
+    res.status(500).json({ error: "Failed to load the venue" });
+    return null;
+  }
+  if (!current) {
+    res.status(404).json({ error: "Venue not found" });
+    return null;
+  }
+  const venue = current as VenueRecordRow & { staff_id: string | null };
+  // Same rule as booking decisions (E4-10 AC7): staff change their own venues only.
+  if (venue.staff_id !== req.user!.id) {
+    res.status(403).json({ error: NOT_ASSIGNED_MESSAGE });
+    return null;
+  }
+
+  const now = new Date();
+  const bookings = await loadLiveBookings(supabase, venue.id, req.headers.authorization!, now);
+  if (!bookings) {
+    res.status(502).json({ error: "Failed to check this venue's bookings" });
+    return null;
+  }
+
+  const today = localDateKey(now);
+  const next = parsed.venue;
+  const impact: VenueChangeImpact = {
+    capacityShortfalls: findCapacityShortfalls(bookings, venue.capacity, next.capacity, today),
+    bufferOverlaps: findBufferOverlaps(
+      bookings,
+      venue,
+      { setup_minutes: next.setupMinutes, turnaround_minutes: next.turnaroundMinutes },
+      today,
+    ),
+  };
+  return { venue, next, impact };
+}
+
+/** What saving this edit would do to existing bookings, before anything is written. */
+staffRouter.post("/venues/:venueId/preview", async (req: AuthedRequest, res) => {
+  const prepared = await prepareVenueUpdate(req, res);
+  if (!prepared) return;
+  res.json(toPublicImpact(prepared.impact));
+});
+
+/**
+ * E4-1: update a venue record. Search, availability and conflict checks all
+ * read the venues row live, so the change applies to them immediately (AC1,
+ * AC3). Bookings are never removed by an edit: AC6 capacity shortfalls and
+ * §3a setup/turnaround overlaps are reported and their coordinators told,
+ * best-effort and after the write lands.
+ */
+staffRouter.patch("/venues/:venueId", async (req: AuthedRequest, res) => {
+  const prepared = await prepareVenueUpdate(req, res);
+  if (!prepared) return;
+  const { venue, next, impact } = prepared;
+
+  const { data, error } = await req
+    .supabase!.from("venues")
+    .update(toVenueColumns(next))
+    .eq("id", venue.id)
+    .select(VENUE_RECORD_COLUMNS)
+    .single();
+  if (error || !data) {
+    res.status(500).json({ error: "Failed to update the venue" });
+    return;
+  }
+
+  const notifications = impactNotifications(next.name, impact, next.capacity);
+  const sent = await sendNotifications(notifications, req.headers.authorization!);
+
+  res.json({
+    venue: toVenueRecord(data as VenueRecordRow),
+    ...toPublicImpact(impact),
+    coordinatorsNotified: sent ? new Set(notifications.map((n) => n.recipientId)).size : 0,
+    notificationsFailed: !sent,
+  });
 });
 
 /**

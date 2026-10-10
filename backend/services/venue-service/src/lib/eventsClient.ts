@@ -9,6 +9,8 @@ export interface EventForVenues {
   id: number;
   status: string;
   submitted_details: Record<string, unknown>;
+  /** E2-12 AC6: only the event's current coordinator may request a venue for it. */
+  coordinator_id?: string | null;
 }
 
 export type FetchEventResult =

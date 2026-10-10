@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
 import CalendarPicker, { type DayMarker } from "../components/venues/CalendarPicker.vue";
 import BlockOutPanel from "../components/venues/BlockOutPanel.vue";
 import UnavailabilityCard from "../components/venues/UnavailabilityCard.vue";
-import { fetchStaffVenues, fetchVenueBookings, type StaffVenueOption, type VenueBooking } from "../lib/venuesApi";
+import VenueFormPanel from "../components/venues/VenueFormPanel.vue";
+import {
+  fetchMyVenues,
+  fetchStaffVenues,
+  fetchVenueBookings,
+  type StaffVenueOption,
+  type VenueBooking,
+  type VenueRecord,
+  type VenueUpdateResult,
+} from "../lib/venuesApi";
 import {
   deleteUnavailability,
   fetchUnavailability,
@@ -285,6 +294,99 @@ async function removePeriod(period: UnavailabilityPeriod): Promise<void> {
   }
 }
 
+// ---- E4-1: adding and editing venue records ----------------------------------
+
+const venueFormOpen = ref(false);
+/** The venue being edited in the drawer; null while adding a new one. */
+const editingVenue = ref<VenueRecord | null>(null);
+/** Venues this staff member looks after — the only ones they may edit. */
+const myVenues = ref<VenueRecord[]>([]);
+const myVenuesError = ref(false);
+const editMenuOpen = ref(false);
+const editMenu = ref<HTMLElement | null>(null);
+
+async function loadMyVenues(): Promise<void> {
+  try {
+    myVenues.value = await fetchMyVenues();
+    myVenuesError.value = false;
+  } catch {
+    myVenuesError.value = true;
+  }
+}
+
+function openAddVenue(): void {
+  editingVenue.value = null;
+  venueFormOpen.value = true;
+}
+
+function openEditVenue(venue: VenueRecord): void {
+  editMenuOpen.value = false;
+  editingVenue.value = venue;
+  venueFormOpen.value = true;
+}
+
+function closeVenueForm(): void {
+  venueFormOpen.value = false;
+  editingVenue.value = null;
+}
+
+/** The menu closes on Escape or a click anywhere outside it. */
+function onDocumentPointer(event: Event): void {
+  if (editMenuOpen.value && editMenu.value && !editMenu.value.contains(event.target as Node)) editMenuOpen.value = false;
+}
+
+function onMenuKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") editMenuOpen.value = false;
+}
+
+/** Reload both venue lists, then show `id`'s schedule with a notice. */
+async function afterVenueSaved(id: number, text: string, warning = false): Promise<void> {
+  closeVenueForm();
+  await Promise.all([
+    loadMyVenues(),
+    fetchStaffVenues()
+      .then((list) => {
+        venues.value = list;
+        venuesError.value = null;
+      })
+      .catch(() => undefined),
+  ]);
+  // Only Available venues are in the picker; a venue that isn't stays where it was.
+  if (venues.value.some((venue) => venue.id === id)) venueId.value = id;
+  // After the venue switch, which clears the notice.
+  await nextTick();
+  notice.value = { text, warning };
+}
+
+function onVenueCreated(venue: VenueRecord): void {
+  void afterVenueSaved(venue.id, `${venue.name} added. Coordinators can find and book it straight away.`);
+}
+
+function onVenueUpdated(result: VenueUpdateResult): void {
+  const shortfalls = result.capacityShortfalls.length;
+  const overlaps = result.bufferOverlaps.length;
+  const parts = [];
+  if (shortfalls > 0) parts.push(`${shortfalls} confirmed event${shortfalls === 1 ? "" : "s"} no longer fit the capacity`);
+  if (overlaps > 0) parts.push(`${overlaps} pair${overlaps === 1 ? "" : "s"} of bookings now overlap`);
+  let text = `${result.venue.name} updated.`;
+  if (parts.length > 0) {
+    const notified = result.notificationsFailed
+      ? "but we couldn't notify the coordinators — please let them know directly."
+      : `${result.coordinatorsNotified} coordinator${result.coordinatorsNotified === 1 ? "" : "s"} notified.`;
+    text += ` ${parts.join("; ")}; ${notified}`;
+  }
+  void afterVenueSaved(result.venue.id, text, result.notificationsFailed);
+  // The schedule's bookings carry layouts/facilities derived from the venue.
+  void loadBookings();
+}
+
+onMounted(() => {
+  void loadMyVenues();
+  document.addEventListener("pointerdown", onDocumentPointer);
+});
+
+onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPointer));
+
 // replace, not push: picking a date shouldn't add a history entry.
 watch([venueId, selectedDate, activeTab], ([venue, date, tab]) => {
   if (venue === null) return;
@@ -307,9 +409,11 @@ onMounted(async () => {
 <template>
   <!--
     Column mapping — Venue Schedule
-    Desktop (12-col, grid-desktop-margin 80px): header col 1-12 (title left, "Block out time" right); sidebar
-      (venue picker above calendar card + key) col 1-4; schedule col 5-12, block-out cards above the tabs.
-      The Block out time panel is an overlay drawer outside this grid (mapping in BlockOutPanel.vue).
+    Desktop (12-col, grid-desktop-margin 80px): header col 1-12 (title left; on the right, "Add new venue" and
+      "Edit venue" side by side above a full-width "Block out time"); sidebar (venue picker above calendar card + key) col 1-4; schedule col 5-12,
+      block-out cards above the tabs.
+      The Block out time and Add new venue panels are overlay drawers outside this grid (mappings in
+      BlockOutPanel.vue and VenueFormPanel.vue).
       Nested grid: each booking card's detail rows use a local 8-col grid (the schedule's span);
       time and attendance span 4 each, layout and facilities span 8.
     Tablet (6-col, grid-tablet-margin 32px): header, sidebar and schedule each col 1-6, stacked.
@@ -324,10 +428,43 @@ onMounted(async () => {
         <!-- E4-10: decisions are made in the queue, which orders by event date. -->
         <RouterLink :to="{ name: 'venue-requests' }" class="queue-link">Go to booking requests</RouterLink>
       </div>
-      <!-- E4-3: the page's one primary action. -->
-      <button v-if="venueId !== null" type="button" class="btn-primary" @click="openBlockOut()">
-        Block out time
-      </button>
+      <!-- Block out time stays the page's one solid action (Style.md 3.4); adding a venue is the outline one. -->
+      <div class="header-actions">
+        <div class="venue-actions">
+        <button type="button" class="btn-outline" @click="openAddVenue">Add new venue</button>
+        <!--
+          E4-1: opens on hover (pointer devices) and on click/Enter (touch and keyboard), listing only the
+          venues this staff member looks after.
+        -->
+        <div ref="editMenu" class="edit-menu" @mouseenter="editMenuOpen = true" @mouseleave="editMenuOpen = false"
+          @keydown="onMenuKeydown">
+          <button type="button" class="btn-outline edit-menu__trigger" aria-haspopup="true"
+            :aria-expanded="editMenuOpen" aria-controls="edit-venue-menu" @click="editMenuOpen = true">
+            Edit venue
+            <ChevronDownIcon class="edit-menu__chevron" aria-hidden="true" />
+          </button>
+          <div v-if="editMenuOpen" id="edit-venue-menu" class="edit-menu__popover">
+            <p class="edit-menu__heading">Your venues</p>
+            <p v-if="myVenuesError" class="edit-menu__empty">We couldn't load your venues.</p>
+            <p v-else-if="myVenues.length === 0" class="edit-menu__empty">
+              You don't look after any venues yet. Add one, or ask an admin to assign you.
+            </p>
+            <ul v-else class="edit-menu__list">
+              <li v-for="venue in myVenues" :key="venue.id">
+                <button type="button" class="edit-menu__item" @click="openEditVenue(venue)">
+                  <span class="edit-menu__name">{{ venue.name }}</span>
+                  <span class="edit-menu__meta">{{ venue.location }} · {{ venue.capacity }} people</span>
+                </button>
+              </li>
+            </ul>
+          </div>
+        </div>
+        </div>
+        <!-- E4-3 -->
+        <button v-if="venueId !== null" type="button" class="btn-primary" @click="openBlockOut()">
+          Block out time
+        </button>
+      </div>
     </div>
 
     <p v-if="venuesError" class="body-default error-text full-row">{{ venuesError }}</p>
@@ -441,6 +578,9 @@ onMounted(async () => {
     <BlockOutPanel v-if="panelOpen && venueId !== null" :key="editingPeriod?.id ?? 'new'" :venue-id="venueId"
       :venue-name="selectedVenueName" :initial-date="selectedDate" :period="editingPeriod"
       @close="closeBlockOut" @saved="onBlockOutSaved" />
+
+    <VenueFormPanel v-if="venueFormOpen" :key="editingVenue?.id ?? 'new'" :venue="editingVenue"
+      @close="closeVenueForm" @created="onVenueCreated" @updated="onVenueUpdated" />
   </div>
 </template>
 
@@ -862,9 +1002,143 @@ onMounted(async () => {
   background: var(--color-purple-500);
 }
 
-.btn-primary:focus-visible {
+.btn-primary:focus-visible,
+.btn-outline:focus-visible {
   outline: 2px solid var(--ring-brand);
   outline-offset: 2px;
+}
+
+/* "Add new venue" and "Edit venue" side by side, with "Block out time" full width beneath them. */
+.header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--spacing-8);
+}
+
+.venue-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-8);
+}
+
+.btn-outline {
+  height: 40px;
+  padding: 0 var(--spacing-16);
+  border: 1px solid var(--color-purple-300);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-purple-600);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  cursor: pointer;
+}
+
+.btn-outline:hover {
+  background: var(--color-purple-100);
+}
+
+/* E4-1: "Edit venue" menu of the staff member's own venues. */
+.edit-menu {
+  position: relative;
+}
+
+.edit-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-4);
+  width: 100%;
+}
+
+.edit-menu__chevron {
+  width: var(--spacing-16);
+  height: var(--spacing-16);
+}
+
+/* Sits flush under the trigger (padding-top bridges the gap) so moving the pointer into it keeps it open. */
+.edit-menu__popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 30;
+  width: 280px;
+  max-width: calc(100vw - 2 * var(--grid-mobile-margin));
+  padding-top: var(--spacing-4);
+}
+
+.edit-menu__heading,
+.edit-menu__empty,
+.edit-menu__list {
+  margin: 0;
+  background: var(--color-base-white);
+  border-left: 1px solid var(--color-grey-100);
+  border-right: 1px solid var(--color-grey-100);
+}
+
+.edit-menu__heading {
+  padding: var(--spacing-12) var(--spacing-16) var(--spacing-4);
+  border-top: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+  color: var(--color-grey-500);
+}
+
+.edit-menu__empty,
+.edit-menu__list {
+  border-bottom: 1px solid var(--color-grey-100);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  box-shadow: var(--shadow-popover);
+}
+
+.edit-menu__empty {
+  padding: var(--spacing-8) var(--spacing-16) var(--spacing-12);
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-500);
+}
+
+.edit-menu__list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--spacing-4) 0 var(--spacing-8);
+  list-style: none;
+}
+
+.edit-menu__item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: var(--spacing-8) var(--spacing-16);
+  border: none;
+  background: transparent;
+  font-family: var(--font-family-lato);
+  text-align: left;
+  cursor: pointer;
+}
+
+.edit-menu__item:hover,
+.edit-menu__item:focus-visible {
+  background: var(--color-grey-75);
+  outline: none;
+}
+
+.edit-menu__name {
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  color: var(--color-grey-900);
+}
+
+.edit-menu__meta {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--color-grey-500);
 }
 
 /* Four keys no longer fit on one line in the sidebar. */

@@ -359,9 +359,23 @@ onMounted(async () => {
   color: inherit;
 }
 
+/* An odd number of cards leaves the last one alone in its row — span the
+   full grid instead of leaving the other half empty on the right. */
+.event-card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .event-card:hover {
   background: var(--color-grey-75);
   border-color: var(--color-grey-200);
+}
+
+@media (max-width: 1024px) {
+  /* 6 columns / span 3 = 2 per row, matching desktop's 8/4 split instead
+     of the mismatched span 4 leaving a gap on every row at this width. */
+  .event-card {
+    grid-column: span 3;
+  }
 }
 
 @media (max-width: 640px) {

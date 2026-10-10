@@ -3,10 +3,13 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import {
   AccessDeniedError,
+  AssignmentError,
   NotFoundError,
   ReviewActionError,
   ValidationError,
   approveEvent,
+  assignCoordinator,
+  reassignCoordinator,
   fetchEventById,
   fetchEventHistory,
   getCurrentUser,
@@ -24,6 +27,8 @@ import VenueRecommendations from "../components/venues/VenueRecommendations.vue"
 import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel.vue";
 import VenueRequestsPanel from "../components/venues/VenueRequestsPanel.vue";
 import { fetchEventVenueBookings, type EventVenueBooking } from "../lib/venuesApi";
+import { fetchEquipmentRequestsForEvent, type EquipmentRequest } from "../lib/equipmentApi";
+import { fetchCoordinators, type CoordinatorOption } from "../lib/usersApi";
 
 
 interface SubmittedEventDetails {
@@ -61,9 +66,18 @@ const isOtherCoordinatorEvent = computed(
     event.value?.coordinator_id !== currentUser.value.id,
 );
 
-/** Any coordinator may act while unassigned; once assigned, only that
- * coordinator may act again — mirrors the backend's authorizeCoordinatorReview. */
-const canReview = computed(() => isCoordinator.value && !isOtherCoordinatorEvent.value);
+/** E1-8: the Event Coordinator Lead sees the request read-only; their only
+ * actions are assign (E2-13) and reassign (E2-12). */
+const isLead = computed(() => currentUser.value.role === "coordinator_lead");
+
+/** The owning organiser: GET /:id only answers an organiser for their own
+ * event, so anyone who isn't internal staff and loaded it is the owner. */
+const isOwnerView = computed(() => !isCoordinator.value && !isLead.value);
+
+/** Only the assigned coordinator may act — mirrors the backend's
+ * authorizeCoordinatorReview. An event with no coordinator is the Lead's
+ * to assign (E2-13), not for any coordinator to claim by acting on it. */
+const canReview = computed(() => isAssignedCoordinator.value);
 
 // E2-3: clarification thread — visible to both parties as soon as one
 // exists, but only the reviewing coordinator can add a fresh top-level
@@ -174,7 +188,7 @@ function asSubmittedDetails(value: EventSummary["submitted_details"]): Submitted
  * there's no separate "is owner" id comparison to make here.
  */
 const canRespondToClarification = computed(
-  () => !isCoordinator.value && event.value?.status === "Clarification Requested",
+  () => isOwnerView.value && event.value?.status === "Clarification Requested",
 );
 /** E2-7 AC1: the owning organiser can edit directly while still pending
  * review or still in Planning — per AGENTS.md §3 the lifecycle only truly
@@ -182,7 +196,7 @@ const canRespondToClarification = computed(
  * see it, they're the owner" reasoning as canRespondToClarification above. */
 const canEditDirectly = computed(
   () =>
-    !isCoordinator.value &&
+    isOwnerView.value &&
     (event.value?.status === "Requested" ||
       event.value?.status === "Unassigned" ||
       event.value?.status === "Planning"),
@@ -191,7 +205,7 @@ const canEditDirectly = computed(
  * clarification), editing is blocked — shown as a message rather than a
  * real "change request" flow, which doesn't exist yet. */
 const editBlockedMessage = computed(() => {
-  if (isCoordinator.value || !event.value) return null;
+  if (!isOwnerView.value || !event.value) return null;
   const status = event.value.status;
   if (
     status === "Requested" ||
@@ -307,6 +321,15 @@ const venueBookings = ref<EventVenueBooking[] | undefined>(undefined);
 const venueBookingsError = ref<string | null>(null);
 const venueBookingsLoading = ref(false);
 
+/**
+ * E3-1 AC3: this event's equipment requests, owned here (not inside
+ * EquipmentRequestPanel) so the outstanding-arrangements line can read it
+ * too — the organiser has no form to submit a request and never mounts
+ * that panel, but still needs real arrangement status, same as they
+ * already get for venueBookings above.
+ */
+const equipmentRequests = ref<EquipmentRequest[] | undefined>(undefined);
+
 async function loadVenueBookings(): Promise<void> {
   if (!event.value) return;
   venueBookingsLoading.value = true;
@@ -319,6 +342,15 @@ async function loadVenueBookings(): Promise<void> {
       err instanceof Error ? err.message : "Failed to load this event's venue requests";
   } finally {
     venueBookingsLoading.value = false;
+  }
+}
+
+async function loadEquipmentRequests(): Promise<void> {
+  if (!event.value) return;
+  try {
+    equipmentRequests.value = await fetchEquipmentRequestsForEvent(event.value.id);
+  } catch {
+    equipmentRequests.value = [];
   }
 }
 
@@ -345,6 +377,87 @@ function formatDate(value: string | undefined | null): string {
   return date.toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" });
 }
 
+/** §3: no transitions out of these, so no reassignment either (E2-12 AC3). */
+const CLOSED_STATUSES = new Set(["Rejected", "Cancelled", "Completed"]);
+
+const coordinators = ref<CoordinatorOption[]>([]);
+const coordinatorsLoading = ref(false);
+const coordinatorsError = ref<string | null>(null);
+const selectedCoordinatorId = ref("");
+const confirmingReassign = ref(false);
+const assigning = ref(false);
+const assignmentError = ref<string | null>(null);
+const assignmentNotice = ref<string | null>(null);
+
+/** E2-13: only a request still in the unassigned queue can be assigned. */
+const canAssign = computed(
+  () => isLead.value && event.value?.status === "Unassigned" && !event.value?.coordinator_id,
+);
+/** E2-12: an assigned event that isn't closed can be reassigned (AC3/AC4). */
+const canReassign = computed(
+  () => isLead.value && !!event.value?.coordinator_id && !CLOSED_STATUSES.has(event.value.status),
+);
+/** E2-12 AC1: the choice must be a *different* active coordinator. */
+const coordinatorChoices = computed(() =>
+  coordinators.value.filter((c) => c.id !== event.value?.coordinator_id),
+);
+const selectedCoordinatorName = computed(
+  () => coordinators.value.find((c) => c.id === selectedCoordinatorId.value)?.name ?? "",
+);
+
+async function loadCoordinators(): Promise<void> {
+  coordinatorsLoading.value = true;
+  coordinatorsError.value = null;
+  try {
+    coordinators.value = await fetchCoordinators();
+  } catch {
+    coordinatorsError.value = "We couldn't load the list of coordinators. Please try again.";
+  } finally {
+    coordinatorsLoading.value = false;
+  }
+}
+
+function startReassign(): void {
+  assignmentError.value = null;
+  if (!selectedCoordinatorId.value) {
+    assignmentError.value = "Choose a coordinator.";
+    return;
+  }
+  confirmingReassign.value = true;
+}
+
+async function submitAssignment(): Promise<void> {
+  if (!event.value) return;
+  if (!selectedCoordinatorId.value) {
+    assignmentError.value = "Choose a coordinator.";
+    return;
+  }
+
+  const reassigning = canReassign.value;
+  const name = selectedCoordinatorName.value;
+  assigning.value = true;
+  assignmentError.value = null;
+  assignmentNotice.value = null;
+  try {
+    const result = reassigning
+      ? await reassignCoordinator(event.value.id, selectedCoordinatorId.value)
+      : await assignCoordinator(event.value.id, selectedCoordinatorId.value);
+    event.value = result.event;
+    selectedCoordinatorId.value = "";
+    confirmingReassign.value = false;
+    assignmentNotice.value =
+      `${reassigning ? "Reassigned" : "Assigned"} to ${name}.` +
+      (result.notificationsFailed ? " The change is saved, but not everyone could be notified." : "");
+    await loadHistory();
+  } catch (err) {
+    assignmentError.value =
+      err instanceof AssignmentError ? err.message : "We couldn't save that change. Please try again.";
+    confirmingReassign.value = false;
+  } finally {
+    assigning.value = false;
+  }
+}
+
 onMounted(async () => {
   const id = route.params.id as string;
   try {
@@ -352,8 +465,9 @@ onMounted(async () => {
     event.value = eventData;
     currentUser.value = user;
     await loadHistory();
+    if (user.role === "coordinator_lead") await loadCoordinators();
     // Only an event in Planning shows arrangements or a requests panel.
-    if (eventData.status === "Planning") await loadVenueBookings();
+    if (eventData.status === "Planning") await Promise.all([loadVenueBookings(), loadEquipmentRequests()]);
   } catch (err) {
     if (err instanceof AccessDeniedError) {
       accessDenied.value = true;
@@ -628,7 +742,7 @@ onMounted(async () => {
 
 <EventStatusTracker v-if="event.status === 'Planning'" :status="event.status"
   :last-changed-at="statusLastChangedAt(event)" :review-outcome="event.review_outcome" title="Outstanding Arrangements"
-  :show-timeline="false" :venue-bookings="venueBookings" />
+  :show-timeline="false" :venue-bookings="venueBookings" :equipment-requests="equipmentRequests" />
 </template>
 
 <template v-else>
@@ -678,6 +792,62 @@ onMounted(async () => {
       <p class="body-small muted mb-1">Coordinator</p>
       <p class="font-semibold !text-lg field-value">{{ event.coordinator?.name ?? "Not yet assigned" }}</p>
     </div>
+    <!-- E2-13 / E2-12: the Event Coordinator Lead assigns or reassigns. -->
+    <div v-if="isLead" class="lead-panel">
+      <p v-if="assignmentNotice" class="body-small lead-panel__notice" role="status">{{ assignmentNotice }}</p>
+
+      <template v-if="canAssign || canReassign">
+        <h3 class="lead-panel__title">{{ canAssign ? "Assign a coordinator" : "Reassign coordinator" }}</h3>
+        <p v-if="coordinatorsLoading" class="body-small muted">Loading coordinators…</p>
+        <p v-else-if="coordinatorsError" class="body-small error-text">{{ coordinatorsError }}</p>
+        <!-- E2-13 AC3: with no active coordinator there is nobody to pick. -->
+        <p v-else-if="coordinatorChoices.length === 0" class="body-small muted">
+          {{
+            canAssign
+              ? "There are no active coordinators to assign. This request stays in the unassigned queue."
+              : "There is no other active coordinator to reassign this event to."
+          }}
+        </p>
+        <template v-else>
+          <label for="coordinator-select" class="body-small muted mb-1">Coordinator</label>
+          <select id="coordinator-select" v-model="selectedCoordinatorId" class="lead-panel__select"
+            :disabled="assigning || confirmingReassign">
+            <option value="" disabled>Choose a coordinator</option>
+            <option v-for="c in coordinatorChoices" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+
+          <p v-if="assignmentError" class="body-small error-text" role="alert">{{ assignmentError }}</p>
+
+          <!-- E2-12 AC1: reassignment is confirmed before it takes effect. -->
+          <div v-if="confirmingReassign" class="lead-panel__confirm">
+            <p class="body-small field-value">
+              Reassign to {{ selectedCoordinatorName }}? {{ event.coordinator?.name ?? "The current coordinator" }}
+              will keep read access but can no longer act on this event.
+            </p>
+            <div class="lead-panel__buttons">
+              <button type="button" class="btn btn-assign" :disabled="assigning" @click="submitAssignment">
+                {{ assigning ? "Reassigning…" : "Confirm reassignment" }}
+              </button>
+              <button type="button" class="btn btn-lead-cancel" :disabled="assigning"
+                @click="confirmingReassign = false">
+                Cancel
+              </button>
+            </div>
+          </div>
+          <button v-else-if="canAssign" type="button" class="btn btn-assign" :disabled="assigning"
+            @click="submitAssignment">
+            {{ assigning ? "Assigning…" : "Assign coordinator" }}
+          </button>
+          <button v-else type="button" class="btn btn-assign" :disabled="assigning" @click="startReassign">
+            Reassign
+          </button>
+        </template>
+      </template>
+      <!-- E2-12 AC3 -->
+      <p v-else-if="CLOSED_STATUSES.has(event.status)" class="body-small muted">
+        This event is {{ event.status }}. Closed events cannot be reassigned.
+      </p>
+    </div>
     <!-- E1-4.2: coordinator review actions -->
     <div v-if="isCoordinator">
       <h3 class="text-lg font-semibold text-[--color-grey-900]">Coordinator actions</h3>
@@ -685,7 +855,7 @@ onMounted(async () => {
         <p v-if="event.status === 'Rejected'" class="body-small muted">
           This request has been rejected and cannot be moved forward.
         </p>
-        <p v-else-if="isOtherCoordinatorEvent" class="body-small muted">
+        <p v-else-if="!isAssignedCoordinator" class="body-small muted">
           Only the assigned coordinator can review this request.
         </p>
         <template v-else-if="showReviewActions">
@@ -749,7 +919,7 @@ onMounted(async () => {
 <div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
   <h2 class="section-title">Venue Recommendations</h2>
   <VenueRecommendations :event-id="event.id" :details="event.submitted_details"
-    :can-request="event.status === 'Planning'" @requested="loadVenueBookings()" />
+    :can-request="isAssignedCoordinator && event.status === 'Planning'" @requested="loadVenueBookings()" />
   <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
     Find venues
   </RouterLink>
@@ -757,8 +927,9 @@ onMounted(async () => {
 
 <!-- E5-1: equipment requirements, recorded by the assigned coordinator while Planning -->
 <div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card">
-  <EquipmentRequestPanel :event-id="event.id" :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null"
-    :can-submit="canCoordinatorEdit" />
+  <EquipmentRequestPanel :event-id="event.id"
+    :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null" :can-submit="canCoordinatorEdit"
+    @submitted="loadEquipmentRequests" />
 </div>
 
 <!-- E4-8 AC5: this event's venue requests and the state each one is in -->
@@ -766,7 +937,7 @@ onMounted(async () => {
   :loading="venueBookingsLoading" :load-error="venueBookingsError" />
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
-  :current-user-id="currentUser.id" />
+  :current-user-id="currentUser.id" :read-only="isLead" />
 </div>
 </div>
 </div>
@@ -1100,6 +1271,101 @@ onMounted(async () => {
 
 .coordinator-panel--unassigned .coordinator-panel__text {
   color: var(--color-grey-500);
+}
+
+/* E2-13 / E2-12: Event Coordinator Lead assignment panel */
+.lead-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+}
+
+/* Body Default, bold */
+.lead-panel__title {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  color: var(--color-grey-900);
+  margin: 0 0 var(--spacing-4);
+}
+
+/* Style.md 8.2: inputs and selects get the two-layer focus ring. */
+.lead-panel__select {
+  width: 100%;
+  font-family: var(--font-family-lato);
+  font-size: 1rem;
+  line-height: 1.25rem;
+  color: var(--color-grey-900);
+  background: var(--color-base-white);
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-8) var(--spacing-12);
+}
+
+.lead-panel__select:focus {
+  outline: none;
+  border-color: var(--ring-brand);
+  box-shadow: 0 0 0 4px var(--ring-light);
+}
+
+.lead-panel__select:disabled {
+  background: var(--color-grey-25);
+  border-color: var(--color-grey-100);
+  color: var(--color-grey-300);
+}
+
+.lead-panel__notice {
+  background: var(--color-success-200);
+  border: 1px solid var(--color-success-300);
+  color: var(--color-success-700);
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-12) var(--spacing-16);
+  margin: 0 0 var(--spacing-8);
+}
+
+.lead-panel__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-12);
+  background: var(--color-warning-100);
+  border: 1px solid var(--color-warning-300);
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-12) var(--spacing-16);
+}
+
+.lead-panel__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+}
+
+/* Style.md 3.4: the one solid action in the Lead's panel. */
+.btn-assign {
+  width: 100%;
+  background: var(--color-purple-600);
+  color: var(--color-base-white);
+}
+
+.btn-assign:not(:disabled):hover {
+  background: var(--color-purple-500);
+}
+
+/* Style.md 3.4: outline Purple Primary for the secondary action. */
+.btn-lead-cancel {
+  width: 100%;
+  background: transparent;
+  color: var(--color-purple-600);
+  border-color: var(--color-purple-300);
+}
+
+.btn-lead-cancel:not(:disabled):hover {
+  background: var(--color-purple-100);
+}
+
+.btn-assign:focus-visible,
+.btn-lead-cancel:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
 }
 
 /* E1-4.2: coordinator review actions */

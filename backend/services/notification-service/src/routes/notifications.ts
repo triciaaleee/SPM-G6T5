@@ -14,9 +14,10 @@ notificationsRouter.use(requireAuth);
 
 /**
  * Roles whose actions can notify someone else. Attendees never trigger a
- * notification for another user.
+ * notification for another user. The Event Coordinator Lead's assignments
+ * and reassignments notify the coordinators and Organiser (E2-13, E2-12).
  */
-const SENDER_ROLES = new Set(["venue_staff", "coordinator", "organiser", "technical_support"]);
+const SENDER_ROLES = new Set(["venue_staff", "coordinator", "organiser", "technical_support", "coordinator_lead"]);
 
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 50;

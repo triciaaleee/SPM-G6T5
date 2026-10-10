@@ -6,6 +6,7 @@ import { sendNotifications } from "../lib/notificationsClient.js";
 import {
   validateEquipmentItems,
   validateStatusUpdate,
+  type StatusUpdateItem,
   type ValidatedEquipmentItem,
 } from "../lib/validateEquipmentRequest.js";
 
@@ -34,15 +35,19 @@ interface ItemRow {
   request_id: number;
   equipment_type: string;
   quantity: number;
-  technical_requirements: string | null;
+  quantity_fulfilled?: number;
 }
+
+const ITEM_COLUMNS = "id, request_id, equipment_type, quantity, quantity_fulfilled";
 
 function toItem(row: ItemRow) {
   return {
     id: row.id,
     equipmentType: row.equipment_type,
     quantity: row.quantity,
-    technicalRequirements: row.technical_requirements ?? "",
+    // E5-3: how much of this item has actually been taken off the shelf
+    // under the request's current status (migration 0022).
+    quantityFulfilled: row.quantity_fulfilled ?? 0,
   };
 }
 
@@ -95,6 +100,32 @@ equipmentRequestsRouter.post("/", async (req: AuthedRequest, res) => {
   }
   const items = itemsResult.value as ValidatedEquipmentItem[];
 
+  // Resolve each item's catalog id to the stock row it'll draw from
+  // (migration 0022) — equipment_type is stored denormalised from the
+  // catalog's name at submission time, same as event name snapshots
+  // elsewhere, so a later rename doesn't rewrite history.
+  const catalogIds = [...new Set(items.map((item) => item.equipmentCatalogId))];
+  const { data: catalogRows, error: catalogError } = await supabase
+    .from("equipment_catalog")
+    .select("id, name")
+    .in("id", catalogIds);
+
+  if (catalogError) {
+    res.status(500).json({ error: "Failed to validate the equipment items" });
+    return;
+  }
+  const catalogNameById = new Map((catalogRows ?? []).map((row) => [row.id as number, row.name as string]));
+  const catalogFields: Record<string, string> = {};
+  items.forEach((item, index) => {
+    if (!catalogNameById.has(item.equipmentCatalogId)) {
+      catalogFields[`items[${index}].equipmentCatalogId`] = "Select a valid equipment type.";
+    }
+  });
+  if (Object.keys(catalogFields).length > 0) {
+    res.status(400).json({ error: "Validation failed", fields: catalogFields });
+    return;
+  }
+
   const eventResult = await fetchEvent(eventId, req.headers.authorization!);
   if (eventResult.status === "not_found") {
     res.status(404).json({ error: "Event not found" });
@@ -134,12 +165,12 @@ equipmentRequestsRouter.post("/", async (req: AuthedRequest, res) => {
     .insert(
       items.map((item) => ({
         request_id: requestRow.id,
-        equipment_type: item.equipmentType,
+        equipment_catalog_id: item.equipmentCatalogId,
+        equipment_type: catalogNameById.get(item.equipmentCatalogId)!,
         quantity: item.quantity,
-        technical_requirements: item.technicalRequirements || null,
       })),
     )
-    .select("id, request_id, equipment_type, quantity, technical_requirements");
+    .select(ITEM_COLUMNS);
 
   if (itemsError || !itemRows) {
     // Best-effort cleanup so a failed item insert doesn't leave an empty,
@@ -170,9 +201,11 @@ equipmentRequestsRouter.post("/", async (req: AuthedRequest, res) => {
 });
 
 /**
- * AC1: Technical Support Staff view incoming requests; a coordinator views
- * the requests they've already recorded for one event. `?eventId=` scopes
- * to one event (used by the event detail page); without it, only
+ * AC1: Technical Support Staff view incoming requests; a coordinator or the
+ * owning organiser views the requests already recorded for one event (the
+ * organiser has no form to submit one, but still needs to see arrangement
+ * status — E3-1 AC3's "Outstanding Arrangements" line reads this). `?eventId=`
+ * scopes to one event (used by the event detail page); without it, only
  * Technical Support may list every outstanding request.
  */
 equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
@@ -184,7 +217,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
 
   const rawEventId = typeof req.query.eventId === "string" ? req.query.eventId : undefined;
 
-  if (user.role === "coordinator") {
+  if (user.role === "coordinator" || user.role === "organiser") {
     if (!rawEventId || !isPositiveInteger(rawEventId)) {
       res.status(400).json({ error: "A valid eventId is required" });
       return;
@@ -219,7 +252,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
         ? { data: [] as ItemRow[], error: null }
         : await supabase
             .from("equipment_request_items")
-            .select("id, request_id, equipment_type, quantity, technical_requirements")
+            .select(ITEM_COLUMNS)
             .in("request_id", requestIds);
 
     if (itemRowsError) {
@@ -254,7 +287,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
       ? { data: [] as ItemRow[], error: null }
       : await supabase
           .from("equipment_request_items")
-          .select("id, request_id, equipment_type, quantity, technical_requirements")
+          .select(ITEM_COLUMNS)
           .in("request_id", requestIds);
 
   if (itemRowsError) {
@@ -308,32 +341,67 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   }
   const requestId = Number(req.params.id);
 
-  const statusResult = validateStatusUpdate((req.body ?? {}) as { status?: unknown; note?: unknown });
+  // Needed up front: Partially Fulfilled validates a fulfilled quantity
+  // per item (0..its requested quantity), and a request with no items
+  // never exists (POST always inserts at least one alongside it).
+  const { data: existingItems, error: existingItemsError } = await supabase
+    .from("equipment_request_items")
+    .select("id, quantity")
+    .eq("request_id", requestId);
+
+  if (existingItemsError) {
+    res.status(500).json({ error: "Failed to load equipment items" });
+    return;
+  }
+  if (!existingItems || existingItems.length === 0) {
+    res.status(404).json({ error: "Equipment request not found" });
+    return;
+  }
+
+  const statusResult = validateStatusUpdate(
+    (req.body ?? {}) as { status?: unknown; note?: unknown; fulfillments?: unknown },
+    existingItems as StatusUpdateItem[],
+  );
   if (!statusResult.valid) {
     res.status(400).json({ error: "Validation failed", fields: statusResult.fields });
     return;
   }
-  const { status, note } = statusResult.value!;
+  const { status, note, fulfillments } = statusResult.value!;
 
-  const { data: requestRow, error: requestError } = await supabase
-    .from("equipment_requests")
-    .update({ status, fulfillment_note: note })
-    .eq("id", requestId)
-    .select("id, event_id, coordinator_id, status, fulfillment_note, created_at")
-    .maybeSingle();
+  // Atomic: recomputes every item's quantity_fulfilled for the target
+  // status and applies only the delta to equipment_catalog.available_stock
+  // (migration 0022) — a single DB round trip so a request's status and
+  // the stock it holds can never drift apart.
+  const { error: applyError } = await supabase.rpc("apply_equipment_request_status", {
+    p_request_id: requestId,
+    p_status: status,
+    p_note: note,
+    p_fulfillments: fulfillments,
+  });
 
-  if (requestError) {
+  if (applyError) {
+    if ((applyError.message ?? "").includes("Not enough stock")) {
+      res.status(409).json({ error: "Not enough stock available to make this change." });
+      return;
+    }
     res.status(500).json({ error: "Failed to update the equipment request" });
     return;
   }
-  if (!requestRow) {
-    res.status(404).json({ error: "Equipment request not found" });
+
+  const { data: requestRow, error: requestError } = await supabase
+    .from("equipment_requests")
+    .select("id, event_id, coordinator_id, status, fulfillment_note, created_at")
+    .eq("id", requestId)
+    .maybeSingle();
+
+  if (requestError || !requestRow) {
+    res.status(500).json({ error: "Failed to load the updated equipment request" });
     return;
   }
 
   const { data: itemRows, error: itemsError } = await supabase
     .from("equipment_request_items")
-    .select("id, request_id, equipment_type, quantity, technical_requirements")
+    .select(ITEM_COLUMNS)
     .eq("request_id", requestId);
 
   if (itemsError) {
@@ -344,13 +412,17 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // Best-effort, same stance as E5-1's submission notice: a friendlier
   // event name if events-service answers, "Event #n" if it doesn't.
   const infoResult = await fetchEventBookingInfo([requestRow.event_id], req.headers.authorization!);
-  const eventName =
-    (infoResult.status === "ok" && infoResult.events[0]?.name) || `Event #${requestRow.event_id}`;
+  const eventInfo = infoResult.status === "ok" ? infoResult.events[0] : undefined;
+  const eventName = eventInfo?.name || `Event #${requestRow.event_id}`;
+  // E2-12: the event's current coordinator, who takes over its pending
+  // requests on a reassignment; the coordinator recorded on the request is
+  // only the fallback when events-service doesn't answer.
+  const recipientId = eventInfo?.coordinatorId || (requestRow.coordinator_id as string);
 
   const notified = await sendNotifications(
     [
       {
-        recipientId: requestRow.coordinator_id as string,
+        recipientId,
         type: "equipment_request_status_updated",
         title: `Equipment request ${status.toLowerCase()}`,
         body: statusNotificationBody(status, note, eventName),

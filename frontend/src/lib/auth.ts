@@ -109,6 +109,8 @@ const LANDING_ROUTE_BY_ROLE: Record<string, string> = {
   venue_staff: "venue-schedule",
   // E5-1 AC1: Technical Support's own queue of equipment requests.
   technical_support: "equipment-requests",
+  // E1-8: the Event Coordinator Lead lands on the unassigned queue.
+  coordinator_lead: "lead-dashboard",
 };
 
 export function landingRouteForRole(role: string | undefined | null): string {

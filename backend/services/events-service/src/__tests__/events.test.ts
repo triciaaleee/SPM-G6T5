@@ -275,7 +275,7 @@ describe("GET /api/events/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.event.id).toBe(Number(eventId));
-    expect(res.body.event.organiser_id).toBeUndefined();
+    expect(res.body.event.organiser_id).toBe("someone-else");
   });
 
   it("returns the event when the caller owns it", async () => {
@@ -301,7 +301,7 @@ describe("GET /api/events/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.event.id).toBe(Number(ownedEventId));
-    expect(res.body.event.organiser_id).toBeUndefined();
+    expect(res.body.event.organiser_id).toBe("user-1");
   });
 });
 
@@ -612,9 +612,9 @@ describe("POST /api/events/:id/approve", () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: "Planning" }));
   });
 
-  it("approves a Requested event, self-assigning an unassigned coordinator", async () => {
+  it("approves a Requested event as its assigned coordinator", async () => {
     const { from, update, updateEq } = buildReviewSupabase({
-      event: { id: 1, status: "Requested", coordinator_id: null },
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
       updatedEvent: { id: 1, status: "Planning", coordinator_id: coordinator.id },
     });
     const app = buildApp({ from }, coordinator);
@@ -624,29 +624,43 @@ describe("POST /api/events/:id/approve", () => {
     expect(res.status).toBe(200);
     expect(res.body.event.status).toBe("Planning");
     expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "Planning", coordinator_id: coordinator.id, decided_by: coordinator.id }),
+      expect.objectContaining({ status: "Planning", decided_by: coordinator.id }),
     );
     expect(updateEq).toHaveBeenCalledWith("id", 1);
   });
 
-  it("approves an Unassigned event, treating it like Requested (E2-6)", async () => {
-    const { from, update } = buildReviewSupabase({
+  it("blocks and audits approval of an event with no coordinator — the Lead assigns it (E2-13)", async () => {
+    const { from, update, denialInsert } = buildReviewSupabase({
       event: { id: 2, status: "Unassigned", coordinator_id: null },
-      updatedEvent: { id: 2, status: "Planning", coordinator_id: coordinator.id },
     });
     const app = buildApp({ from }, coordinator);
 
     const res = await request(app).post("/api/events/2/approve");
 
-    expect(res.status).toBe(200);
-    expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: "Planning" }));
+    expect(res.status).toBe(403);
+    expect(update).not.toHaveBeenCalled();
+    expect(denialInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: coordinator.id, event_id: "2", reason: "coordinator_not_assigned" }),
+    );
+  });
+
+  it("does not let a coordinator claim an unassigned event by rejecting it", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 2, status: "Unassigned", coordinator_id: null },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/2/reject").send({ reason: "Not a fit" });
+
+    expect(res.status).toBe(403);
+    expect(update).not.toHaveBeenCalled();
   });
 });
 
 describe("POST /api/events/:id/reject", () => {
   it("requires a reason", async () => {
     const { from } = buildReviewSupabase({
-      event: { id: 1, status: "Requested", coordinator_id: null },
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
     });
     const app = buildApp({ from }, coordinator);
 
@@ -698,7 +712,7 @@ describe("POST /api/events/:id/reject", () => {
 describe("POST /api/events/:id/request-clarification", () => {
   it("requires a message", async () => {
     const { from } = buildReviewSupabase({
-      event: { id: 1, status: "Requested", coordinator_id: null },
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
     });
     const app = buildApp({ from }, coordinator);
 
@@ -722,7 +736,7 @@ describe("POST /api/events/:id/request-clarification", () => {
 
   it("sets status to Clarification Requested with the message as the review outcome", async () => {
     const { from, update, clarificationInsert } = buildReviewSupabase({
-      event: { id: 1, status: "Requested", coordinator_id: null },
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
       updatedEvent: { id: 1, status: "Clarification Requested" },
     });
     const app = buildApp({ from }, coordinator);
@@ -736,7 +750,6 @@ describe("POST /api/events/:id/request-clarification", () => {
       expect.objectContaining({
         status: "Clarification Requested",
         review_outcome: "What time will setup start?",
-        coordinator_id: coordinator.id,
       }),
     );
     // AC3: this first ask seeds the thread the clarification popup renders.

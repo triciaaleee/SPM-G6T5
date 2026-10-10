@@ -2,6 +2,7 @@ import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import EventStatusTracker from "../EventStatusTracker.vue";
 import type { EventVenueBooking } from "../../lib/venuesApi";
+import type { EquipmentRequest } from "../../lib/equipmentApi";
 
 function booking(overrides: Partial<EventVenueBooking> = {}): EventVenueBooking {
   return {
@@ -15,7 +16,19 @@ function booking(overrides: Partial<EventVenueBooking> = {}): EventVenueBooking 
   };
 }
 
-function mountTracker(venueBookings?: EventVenueBooking[]) {
+function equipmentRequest(overrides: Partial<EquipmentRequest> = {}): EquipmentRequest {
+  return {
+    id: 500,
+    eventId: 7,
+    status: "Requested",
+    fulfillmentNote: null,
+    createdAt: "2026-10-07T02:00:00.000Z",
+    items: [],
+    ...overrides,
+  };
+}
+
+function mountTracker(venueBookings?: EventVenueBooking[], equipmentRequests?: EquipmentRequest[]) {
   return mount(EventStatusTracker, {
     props: {
       status: "Planning",
@@ -23,6 +36,7 @@ function mountTracker(venueBookings?: EventVenueBooking[]) {
       reviewOutcome: null,
       showTimeline: false,
       venueBookings,
+      equipmentRequests,
     },
   });
 }
@@ -30,6 +44,11 @@ function mountTracker(venueBookings?: EventVenueBooking[]) {
 /** The venue line is the first of the two outstanding items. */
 function venueLine(wrapper: ReturnType<typeof mountTracker>) {
   return wrapper.findAll(".outstanding__item")[0];
+}
+
+/** The equipment line is the second of the two outstanding items. */
+function equipmentLine(wrapper: ReturnType<typeof mountTracker>) {
+  return wrapper.findAll(".outstanding__item")[1];
 }
 
 describe("EventStatusTracker — outstanding arrangements (E3-1 AC3)", () => {
@@ -79,8 +98,42 @@ describe("EventStatusTracker — outstanding arrangements (E3-1 AC3)", () => {
     expect(venueLine(mountTracker(undefined)).text()).toBe("Venue — checking…");
   });
 
-  it("leaves equipment as a placeholder — epic E5 has no service to read", () => {
-    const wrapper = mountTracker([booking({ status: "Approved" })]);
-    expect(wrapper.findAll(".outstanding__item")[1].text()).toBe("Equipment — not yet arranged");
+  it("doesn't claim equipment is missing before the requests have loaded", () => {
+    const wrapper = mountTracker([], undefined);
+    expect(equipmentLine(wrapper).text()).toBe("Equipment — checking…");
+  });
+
+  it("says nothing is requested when the event has no equipment requests", () => {
+    const wrapper = mountTracker([], []);
+    expect(equipmentLine(wrapper).text()).toBe("Equipment — not yet requested");
+  });
+
+  it("stays outstanding while a request is still awaiting Technical Support", () => {
+    const wrapper = mountTracker([], [equipmentRequest({ status: "Requested" })]);
+    expect(equipmentLine(wrapper).text()).toBe("Equipment — 1 awaiting Technical Support");
+    expect(equipmentLine(wrapper).classes()).not.toContain("outstanding__item--done");
+  });
+
+  it("stays outstanding while a request is only partially fulfilled", () => {
+    const wrapper = mountTracker([], [equipmentRequest({ status: "Partially Fulfilled" })]);
+    expect(equipmentLine(wrapper).text()).toBe("Equipment — 1 awaiting Technical Support");
+  });
+
+  it("drops the equipment line entirely once every request is Arranged", () => {
+    const wrapper = mountTracker(
+      [],
+      [equipmentRequest({ id: 500, status: "Arranged" }), equipmentRequest({ id: 501, status: "Arranged" })],
+    );
+    expect(wrapper.findAll(".outstanding__item")).toHaveLength(1);
+    expect(wrapper.text()).not.toContain("Equipment");
+  });
+
+  it("stays outstanding when one of several requests isn't Arranged yet", () => {
+    const wrapper = mountTracker(
+      [],
+      [equipmentRequest({ id: 500, status: "Arranged" }), equipmentRequest({ id: 501, status: "Requested" })],
+    );
+    expect(equipmentLine(wrapper).text()).toBe("Equipment — 1 awaiting Technical Support");
+    expect(equipmentLine(wrapper).classes()).not.toContain("outstanding__item--done");
   });
 });

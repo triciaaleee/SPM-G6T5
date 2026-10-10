@@ -18,8 +18,11 @@ interface StatusGroup {
   needsAction: boolean;
 }
 
+// "Unassigned" isn't a coordinator's to act on — the Lead assigns it
+// (E2-13) — so it's its own, unhighlighted group, seen only under "All events".
 const STATUS_GROUPS: StatusGroup[] = [
-  { key: "needs-review",  label: "Needs Review",            statuses: ["Requested", "Unassigned"],    needsAction: true  },
+  { key: "needs-review",  label: "Needs Review",            statuses: ["Requested"],                  needsAction: true  },
+  { key: "unassigned",    label: "Unassigned",              statuses: ["Unassigned"],                 needsAction: false },
   { key: "clarification", label: "Clarification Requested", statuses: ["Clarification Requested"],    needsAction: false },
   { key: "planning",      label: "Planning",                statuses: ["Planning"],                   needsAction: false },
   { key: "confirmed",     label: "Confirmed",               statuses: ["Confirmed"],                  needsAction: false },
@@ -47,11 +50,10 @@ function coordinatorInitial(event: EventSummary): string {
   return event.coordinator?.name?.charAt(0).toUpperCase() ?? "";
 }
 
+/** E1-8 AC4: "My events" is only what's assigned to this coordinator. */
 const visibleEvents = computed(() => {
   if (viewMode.value === "mine") {
-    return events.value.filter(
-      (e) => e.coordinator_id === userId.value || e.status === "Unassigned",
-    );
+    return events.value.filter((e) => e.coordinator_id === userId.value);
   }
   return events.value;
 });

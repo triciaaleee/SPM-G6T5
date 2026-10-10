@@ -544,7 +544,7 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
   }
 
   // events-service is asked with the coordinator's own token, so its access
-  // rules decide whether this event is theirs to plan.
+  // rules decide whether this event is theirs to see.
   const eventResult = await fetchEvent(eventId, req.headers.authorization!);
   if (eventResult.status === "not_found") {
     res.status(404).json({ error: "Event not found" });
@@ -552,6 +552,13 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
   }
   if (eventResult.status === "error") {
     res.status(502).json({ error: "Failed to load the event" });
+    return;
+  }
+  // Every coordinator can see every event, but only the assigned one plans
+  // it — so a coordinator an event was reassigned away from (E2-12 AC6), or
+  // one it was never assigned to, can't request venues for it.
+  if (eventResult.event.coordinator_id !== req.user!.id) {
+    res.status(403).json({ error: "Only the event's assigned coordinator can request a venue for it" });
     return;
   }
   // §3a: — → `Requested` happens while venue arrangements are being made.

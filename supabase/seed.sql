@@ -29,6 +29,10 @@ insert into users (id, name, email, password_hash, role) values
   ('ORG-0001', 'Organiser One', 'organiser-one@example.com', crypt('password123', gen_salt('bf')), 'organiser'),
   ('ORG-0002', 'Organiser Two', 'organiser-two@example.com', crypt('password123', gen_salt('bf')), 'organiser'),
   ('COORD-0001', 'Coordinator One', 'coordinator-one@example.com', crypt('password123', gen_salt('bf')), 'coordinator'),
+  -- A second coordinator so the Lead has someone to reassign to (E2-12).
+  ('COORD-0002', 'Coordinator Two', 'coordinator-two@example.com', crypt('password123', gen_salt('bf')), 'coordinator'),
+  -- Week 7 change 5: the Event Coordinator Lead (E1-8, E2-13, E2-12).
+  ('LEAD-0001', 'Coordinator Lead', 'coordinator-lead@example.com', crypt('password123', gen_salt('bf')), 'coordinator_lead'),
   ('VEN-0001', 'Venue Staff One', 'venue-staff-one@example.com', crypt('password123', gen_salt('bf')), 'venue_staff'),
   ('TS-0001', 'Technical Support One', 'tech-support-one@example.com', crypt('password123', gen_salt('bf')), 'technical_support')
 on conflict (id) do nothing;
@@ -85,10 +89,12 @@ insert into events (
     'COORD-0001',
     now() - interval '20 days'
   ),
+  -- Waiting in the Event Coordinator Lead's unassigned queue (E1-8):
+  -- a request with no coordinator is Unassigned, never Requested (§3).
   (
     4,
     'ORG-0001',
-    'Requested',
+    'Unassigned',
     '{"name":"Alumni Homecoming Mixer","purpose":"Reconnect alumni with current students and staff","description":"A homecoming social with games, food, and a keynote from a notable alum.","proposedDate":"2026-10-05","startTime":"17:00","endTime":"20:00","expectedAttendance":500}',
     null,
     null,
@@ -113,7 +119,9 @@ insert into events (
     'ORG-0002',
     'Requested',
     '{"name":"Robotics Demo Day","purpose":"Demonstrate student robotics projects","description":"Robotics club teams demo their builds and compete in mini-challenges.","proposedDate":"2026-09-28","startTime":"10:00","endTime":"13:00","expectedAttendance":200}',
-    null,
+    -- Requested means a coordinator has been assigned (§3); Coordinator
+    -- Two, so the Lead can reassign it to Coordinator One (E2-12).
+    'COORD-0002',
     null,
     null,
     null,
@@ -218,7 +226,7 @@ select setval(pg_get_serial_sequence('venues', 'id'), 10);
 --            given) -> venue 10 (Multipurpose Hall, capacity 250),
 --            status Requested.
 --
--- Events 3 (Rejected) and 4 (Requested, no coordinator yet) have no
+-- Events 3 (Rejected) and 4 (Unassigned, no coordinator yet) have no
 -- booking — neither has reached the point of a venue being locked in.
 delete from venue_bookings where venue_id between 1 and 10;
 
@@ -227,3 +235,59 @@ insert into venue_bookings (venue_id, event_id, status) values
   (1, 2, 'Requested'),
   (5, 5, 'Approved'),
   (10, 6, 'Requested');
+
+-- equipment_catalog (0022): the fixed list Coordinators pick from on an
+-- equipment request, and Technical Support's current-stock table. Names
+-- overlap with venues.facilities above where the item is the same thing
+-- (e.g. "PA system") — total_stock is a starting assumption for local
+-- testing, not a real inventory count. available_stock starts equal to
+-- total_stock; it only drops once Technical Support arrange or partially
+-- fulfil a request (migration 0022).
+insert into equipment_catalog (name, total_stock, available_stock) values
+  ('Projector', 20, 20),
+  ('Screen', 15, 15),
+  ('PA system', 10, 10),
+  ('Microphones', 40, 40),
+  ('Livestream equipment', 8, 8),
+  ('Video conferencing', 6, 6),
+  ('Stage', 4, 4),
+  ('Lighting rig', 6, 6),
+  ('Folding table', 100, 100),
+  ('Round table', 50, 50),
+  ('Chairs', 300, 300),
+  ('Gazebo tent', 25, 25),
+  ('Registration desk', 10, 10),
+  ('Name badge printer', 5, 5),
+  ('Extension cords', 50, 50)
+-- do update (not do nothing): re-running this file refreshes total_stock
+-- for a seeded catalog, but never touches available_stock — that's live
+-- state Technical Support have already changed, not seed data to reset.
+on conflict (name) do update set
+  total_stock = excluded.total_stock;
+
+-- equipment (0025): one row per physical unit, mirroring equipment_catalog's
+-- total_stock above — the same vocabulary coordinators already pick from
+-- in equipment_requests, not a separate inventory. Re-running this file
+-- reseeds every unit; equipment_booking has no reservation workflow yet
+-- (E5-6), so deleting and recreating the units loses nothing meaningful.
+delete from equipment_booking where equipment_id in (select id from equipment where type in (select name from equipment_catalog));
+delete from equipment where type in (select name from equipment_catalog);
+
+insert into equipment (type, status)
+select ec.name, 'Available'
+from equipment_catalog ec
+cross join generate_series(1, ec.total_stock);
+
+-- A couple of units out of service, so AC2 (excluded from usable
+-- inventory) has something real to exclude.
+update equipment set status = 'Damaged'
+where id = (select min(id) from equipment where type = 'Projector');
+
+update equipment set status = 'Under Maintenance'
+where id in (select id from equipment where type = 'Microphones' order by id limit 2);
+
+-- A couple of Projectors already booked to Design Club Showcase (event 5,
+-- 22 Sep) — AC1's exclusion has a real reservation to read. None of the
+-- other seeded events share that date, so this isn't a conflict for them.
+insert into equipment_booking (equipment_id, event_id)
+select id, 5 from equipment where type = 'Projector' and status = 'Available' order by id limit 2;
