@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { formatRole, getStoredUser, logout } from "./lib/auth";
 import NotificationBell from "./components/notifications/NotificationBell.vue";
+import ChatDrawer from "./components/chat/ChatDrawer.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -45,11 +46,18 @@ async function handleLogout() {
       </RouterLink>
     </nav>
     <div class="account">
-      <!-- E7-1: coordinators (E4-3) and, since E5-1, technical support are the notification recipients so far. -->
-      <NotificationBell v-if="user.role === 'coordinator' || user.role === 'technical_support'" :key="user.id" />
+      <!-- E7-1: coordinators (E4-3), technical support (E5-1) and, since
+           E2-15's chat, organisers are notification recipients. -->
+      <NotificationBell
+        v-if="user.role === 'coordinator' || user.role === 'technical_support' || user.role === 'organiser'"
+        :key="user.id"
+      />
       <span class="account-name">{{ user.name }}</span>
       <span class="role-pill">{{ formatRole(user.role) }}</span>
       <button type="button" class="btn-logout" @click="handleLogout">Log out</button>
+      <!-- E2-15: a live chat drawer, persistent on every page — only an
+           Organiser or Coordinator has one. -->
+      <ChatDrawer v-if="user.role === 'organiser' || user.role === 'coordinator'" :key="`chat-${user.id}`" />
     </div>
   </header>
 

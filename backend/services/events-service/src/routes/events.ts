@@ -431,8 +431,11 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const { organiser_id, ...event } = data;
-  res.json({ event });
+  // organiser_id rides along (E2-15): chat-service needs it to know who a
+  // coordinator's message should notify, and who to accept history/send
+  // requests from. Not a privacy boundary — the organiser's name is
+  // already embedded in EVENT_COLUMNS for any coordinator viewing this.
+  res.json({ event: data });
 });
 
 /**
