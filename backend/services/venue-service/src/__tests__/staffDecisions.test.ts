@@ -171,6 +171,52 @@ function buildApp(
     return new Promise((resolve) => setTimeout(resolve, 0));
   }
 
+  /**
+   * venue_booking_locks (lib/venueBookingLock.ts): a row's existence is
+   * the lock, keyed on venue_id. Mirrors the real table's primary-key
+   * behaviour — a second insert for a venue_id already held errors — so
+   * the fake exercises the same "insert fails ⇒ busy" logic as Postgres.
+   */
+  const locks = new Map<number, string>();
+  function locksTable() {
+    return {
+      delete: vi.fn(() => {
+        const filters: Record<string, unknown> = {};
+        let before: string | undefined;
+        const dq: any = {
+          eq: vi.fn((column: string, value: unknown) => {
+            filters[column] = value;
+            return dq;
+          }),
+          lt: vi.fn((_column: string, value: string) => {
+            before = value;
+            return dq;
+          }),
+        };
+        dq.then = (resolve: (value: unknown) => unknown) => {
+          const venueId = filters.venue_id as number | undefined;
+          if (venueId !== undefined) {
+            const lockedAt = locks.get(venueId);
+            if (lockedAt !== undefined && (before === undefined || lockedAt < before)) locks.delete(venueId);
+          }
+          return resolve({ data: null, error: null });
+        };
+        return dq;
+      }),
+      insert: vi.fn((row: { venue_id: number }) => {
+        const iq: any = {};
+        iq.then = (resolve: (value: unknown) => unknown) => {
+          if (locks.has(row.venue_id)) {
+            return resolve({ data: null, error: { code: "23505", message: "duplicate key" } });
+          }
+          locks.set(row.venue_id, new Date().toISOString());
+          return resolve({ data: { venue_id: row.venue_id }, error: null });
+        };
+        return iq;
+      }),
+    };
+  }
+
   function bookingsQuery() {
     const filters: Record<string, unknown> = {};
     const q: any = {
@@ -283,6 +329,7 @@ function buildApp(
         return { select: vi.fn(() => q) };
       }
       if (table === "venue_unavailability") return unavailabilityTable(options.unavailability ?? []);
+      if (table === "venue_booking_locks") return locksTable();
       throw new Error(`unexpected table ${table}`);
     }),
   };
