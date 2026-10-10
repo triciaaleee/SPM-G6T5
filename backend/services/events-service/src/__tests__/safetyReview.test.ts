@@ -53,7 +53,9 @@ function buildApp(
     bookings?: ArrangementBooking[];
     equipmentRequests?: ArrangementEquipmentRequest[];
     venueServiceFails?: boolean;
+    equipmentServiceFails?: boolean;
     submissionId?: number | null;
+    rpcError?: { message: string } | null;
   } = {},
 ) {
   const event = options.event === undefined ? { id: 7, status: "Planning", coordinator_id: coordinator.id } : options.event;
@@ -69,8 +71,8 @@ function buildApp(
   }));
   const denialInsert = vi.fn().mockResolvedValue({ error: null });
   const rpc = vi.fn().mockResolvedValue({
-    data: options.submissionId === undefined ? 501 : options.submissionId,
-    error: null,
+    data: options.rpcError ? null : options.submissionId === undefined ? 501 : options.submissionId,
+    error: options.rpcError ?? null,
   });
 
   (globalThis as any).__mockSupabase = {
@@ -85,6 +87,7 @@ function buildApp(
       return { ok: true, status: 200, json: async () => ({ bookings: options.bookings ?? [booking(1, "Approved")] }) };
     }
     if (url.includes("/api/equipment-requests")) {
+      if (options.equipmentServiceFails) return { ok: false, status: 500, json: async () => ({}) };
       return { ok: true, status: 200, json: async () => ({ equipmentRequests: options.equipmentRequests ?? [] }) };
     }
     throw new Error(`unexpected fetch ${url}`);
@@ -192,7 +195,7 @@ describe("POST /api/events/:id/submit-safety-review (E3-4)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each(["Requested", "Clarification Requested", "Safety Review", "Confirmed", "Completed", "Cancelled"])(
+  it.each(["Unassigned", "Requested", "Clarification Requested", "Rejected", "Safety Review", "Confirmed", "Completed", "Cancelled"])(
     "AC6: blocks an event in %s",
     async (status) => {
       const { app, rpc } = buildApp({ event: { id: 7, status, coordinator_id: coordinator.id } });
@@ -209,6 +212,27 @@ describe("POST /api/events/:id/submit-safety-review (E3-4)", () => {
 
     expect(res.status).toBe(403);
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("AC7: blocks when no coordinator is assigned yet", async () => {
+    const { app, rpc } = buildApp({ event: { id: 7, status: "Planning", coordinator_id: null } });
+    expect((await submit(app)).status).toBe(403);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("AC2: names a booking whose venue can't be loaded by its booking number", async () => {
+    const { app } = buildApp({ bookings: [booking(1, "Approved"), { id: 5, status: "Requested", venue: null }] });
+    const res = await submit(app);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain("Venue booking #5 is still Requested");
+  });
+
+  it("checks the arrangements only after the event and notes pass", async () => {
+    // A Planning check failure must not depend on the other services being up.
+    const { app, fetchMock } = buildApp({ event: { id: 7, status: "Confirmed", coordinator_id: coordinator.id } });
+    await submit(app, {});
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("AC7: blocks any role other than coordinator", async () => {
@@ -237,6 +261,23 @@ describe("POST /api/events/:id/submit-safety-review (E3-4)", () => {
 
     expect(res.status).toBe(502);
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("returns 502 when equipment-service can't be reached", async () => {
+    const { app, rpc } = buildApp({ equipmentServiceFails: true });
+    expect((await submit(app)).status).toBe(502);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 when the submission can't be written", async () => {
+    const { app } = buildApp({ rpcError: { message: "boom" } });
+    expect((await submit(app)).status).toBe(500);
+  });
+
+  it("returns 404 for a malformed event id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).post("/api/events/abc/submit-safety-review").send({ safetyNotes: notes });
+    expect(res.status).toBe(404);
   });
 
   it("returns 404 for an unknown event", async () => {
