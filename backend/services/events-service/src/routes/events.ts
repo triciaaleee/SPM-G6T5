@@ -4,11 +4,10 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { normaliseDraftEventRequest, validateEventRequest } from "../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../lib/validation.js";
-import { assignCoordinator } from "../lib/coordinatorAssignment.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
 import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
-import { fetchCoordinators } from "../lib/usersClient.js";
+import { fetchCoordinatorLeads, fetchCoordinators } from "../lib/usersClient.js";
 import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
 import {
   describeOutstanding,
@@ -67,6 +66,32 @@ async function recordEventHistory(
   }
 }
 
+/**
+ * E2-14: a newly-unassigned request waits in the Lead's queue (E1-8) until
+ * assigned (E2-13) — notify every Lead so they know there's something to
+ * triage. Best-effort: a notification failure never blocks the submission
+ * that already committed.
+ */
+async function notifyCoordinatorLeads(
+  authorization: string,
+  eventId: number,
+  eventName: string,
+): Promise<void> {
+  const leads = await fetchCoordinatorLeads(authorization);
+  if (leads.status === "error" || leads.coordinators.length === 0) return;
+
+  await sendNotifications(
+    leads.coordinators.map((lead) => ({
+      recipientId: lead.id,
+      type: "event_unassigned",
+      title: "New request in the unassigned queue",
+      body: `"${eventName}" needs a coordinator assigned.`,
+      link: `/events/${eventId}`,
+    })),
+    authorization,
+  );
+}
+
 export const eventsRouter = Router();
 
 eventsRouter.use(requireAuth);
@@ -93,17 +118,25 @@ const EVENT_COLUMNS =
  * organiser_id is always set from the verified JWT's subject, never
  * trusted from the request body.
  *
- * E2-6: a coordinator is auto-assigned round-robin at submission time,
- * right as the request reaches "Requested" — not later, whenever a
- * coordinator happens to open it (see lib/coordinatorAssignment.ts). If
- * no coordinators exist yet, the request is flagged "Unassigned" instead
- * and waits in the Event Coordinator Lead's unassigned queue (E1-8) until
- * the Lead assigns it (E2-13). E2-14 replaces the auto-assignment itself.
+ * E2-14: every submitted request enters the unassigned queue (E1-8) with
+ * no coordinator — replaces E2-6's round-robin auto-assignment, which used
+ * to set the request straight to "Requested". The Event Coordinator Lead
+ * assigns it from the queue instead (E2-13), and is notified here so they
+ * know there's something to triage. Restricted to organisers: notifying
+ * the Lead means events-service must resolve Lead ids from user-service
+ * using the submitter's own token, and user-service only grants that
+ * lookup to the organiser role (see LISTABLE_ROLES_BY_CALLER in
+ * user-service's users.ts).
  */
 eventsRouter.post("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
   if (!supabase || !user) {
     res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  if (user.role !== "organiser") {
+    res.status(403).json({ error: "Only organisers can submit event requests" });
     return;
   }
 
@@ -113,14 +146,12 @@ eventsRouter.post("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const coordinatorId = await assignCoordinator(supabase);
-
   const { data, error } = await supabase
     .from("events")
     .insert({
       organiser_id: user.id,
-      status: coordinatorId ? "Requested" : "Unassigned",
-      coordinator_id: coordinatorId,
+      status: EVENT_STATUS.Unassigned,
+      coordinator_id: null,
       submitted_details: result.value,
     })
     .select(EVENT_COLUMNS)
@@ -130,6 +161,12 @@ eventsRouter.post("/", async (req: AuthedRequest, res) => {
     res.status(500).json({ error: "Failed to submit event request" });
     return;
   }
+
+  await notifyCoordinatorLeads(
+    req.headers.authorization!,
+    data.id,
+    eventDisplayName(data as unknown as AssignmentEventRow),
+  );
 
   res.status(201).json({ event: data, message: "Your event request has been submitted." });
 });
@@ -608,7 +645,7 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   const isClarificationResponse = existing.status === "Clarification Requested";
   const isDirectEdit = ORGANISER_DIRECT_EDIT_STATUSES.has(existing.status);
   // E2-4 AC3: editing a draft here means submitting it — same E2-1
-  // validation as a fresh request, and the same auto-assignment as POST /.
+  // validation as a fresh request, and the same E2-14 handling as POST /.
   const isDraftSubmit = existing.status === "Draft";
 
   if (!isClarificationResponse && !isDirectEdit && !isDraftSubmit) {
@@ -616,6 +653,13 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
       error:
         "This request has already been approved and can no longer be edited directly. Contact your coordinator to request a change.",
     });
+    return;
+  }
+
+  // E2-14: same restriction as POST / — only an organiser's draft reaches
+  // the Lead-notification lookup under their own token.
+  if (isDraftSubmit && user.role !== "organiser") {
+    res.status(403).json({ error: "Only organisers can submit event requests" });
     return;
   }
 
@@ -634,9 +678,8 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     updatePayload.status = existing.status_before_clarification || "Requested";
     updatePayload.status_before_clarification = null;
   } else if (isDraftSubmit) {
-    const coordinatorId = await assignCoordinator(supabase);
-    updatePayload.status = coordinatorId ? "Requested" : "Unassigned";
-    updatePayload.coordinator_id = coordinatorId;
+    updatePayload.status = EVENT_STATUS.Unassigned;
+    updatePayload.coordinator_id = null;
   }
 
   const { data, error } = await supabase
@@ -686,6 +729,14 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
         console.error("Failed to record clarification response reply", { eventId: existing.id, error: replyError });
       }
     }
+  }
+
+  if (isDraftSubmit) {
+    await notifyCoordinatorLeads(
+      req.headers.authorization!,
+      data.id,
+      eventDisplayName(data as unknown as AssignmentEventRow),
+    );
   }
 
   res.json({ event: data });

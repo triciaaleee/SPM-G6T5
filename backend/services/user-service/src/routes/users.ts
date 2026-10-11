@@ -20,9 +20,16 @@ usersRouter.get("/me", (req: AuthedRequest, res) => {
  * Roles each caller may list, and only those. E2-13/E2-12: the Event
  * Coordinator Lead picks an active coordinator to assign or reassign an
  * event to (events-service checks the choice against this same list).
+ * E2-14: an organiser submitting a request needs to notify the Event
+ * Coordinator Lead, so events-service resolves Lead ids the same way,
+ * forwarding the organiser's own token — events-service's POST /api/events
+ * and the draft-submit branch of PATCH /api/events/:id both restrict
+ * submission to the organiser role, which is what keeps this listing
+ * scoped rather than open to any caller.
  */
 const LISTABLE_ROLES_BY_CALLER: Record<string, ReadonlySet<string>> = {
   coordinator_lead: new Set(["coordinator"]),
+  organiser: new Set(["coordinator_lead"]),
 };
 
 /**

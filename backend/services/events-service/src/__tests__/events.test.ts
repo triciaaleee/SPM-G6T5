@@ -1,8 +1,10 @@
 import express from "express";
 import request from "supertest";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
+import { fetchCoordinatorLeads } from "../lib/usersClient.js";
+import { sendNotifications } from "../lib/notificationsClient.js";
 
 vi.mock("../middleware/auth.js", async () => {
   return {
@@ -13,6 +15,9 @@ vi.mock("../middleware/auth.js", async () => {
     },
   };
 });
+
+vi.mock("../lib/usersClient.js", () => ({ fetchCoordinatorLeads: vi.fn() }));
+vi.mock("../lib/notificationsClient.js", () => ({ sendNotifications: vi.fn() }));
 
 const validPayload = {
   name: "Freshman Orientation",
@@ -306,47 +311,22 @@ describe("GET /api/events/:id", () => {
 });
 
 /**
- * E2-6: mocks the two lookups assignCoordinator makes (active coordinators,
- * most recently auto-assigned event) plus the actual events.insert(...).
- * `coordinators` is the round-robin order; `lastAssignedCoordinatorId`
- * simulates prior submissions having already rotated through some of them.
+ * E2-14: mocks the events.insert(...) submission writes. There's no
+ * coordinator lookup on this path any more — every submission lands
+ * Unassigned with no coordinator.
  */
 function buildSubmitSupabase(options: {
-  coordinators?: string[];
-  lastAssignedCoordinatorId?: string | null;
   insertedEvent?: Record<string, unknown> | null;
   insertError?: { message: string } | null;
 }) {
-  const {
-    coordinators = [],
-    lastAssignedCoordinatorId = null,
-    insertedEvent = null,
-    insertError = null,
-  } = options;
-
-  const usersOrder = vi.fn().mockResolvedValue({
-    data: coordinators.map((id) => ({ id })),
-    error: null,
-  });
-  const usersEq = vi.fn().mockReturnValue({ order: usersOrder });
-  const usersSelect = vi.fn().mockReturnValue({ eq: usersEq });
-
-  const lastAssignedMaybeSingle = vi.fn().mockResolvedValue({
-    data: lastAssignedCoordinatorId ? { coordinator_id: lastAssignedCoordinatorId } : null,
-    error: null,
-  });
-  const lastAssignedLimit = vi.fn().mockReturnValue({ maybeSingle: lastAssignedMaybeSingle });
-  const lastAssignedOrder = vi.fn().mockReturnValue({ limit: lastAssignedLimit });
-  const lastAssignedNot = vi.fn().mockReturnValue({ order: lastAssignedOrder });
-  const eventsSelect = vi.fn().mockReturnValue({ not: lastAssignedNot });
+  const { insertedEvent = null, insertError = null } = options;
 
   const insertSingle = vi.fn().mockResolvedValue({ data: insertedEvent, error: insertError });
   const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
   const insert = vi.fn().mockReturnValue({ select: insertSelect });
 
   const from = vi.fn().mockImplementation((table: string) => {
-    if (table === "users") return { select: usersSelect };
-    if (table === "events") return { select: eventsSelect, insert };
+    if (table === "events") return { insert };
     return {};
   });
 
@@ -354,38 +334,15 @@ function buildSubmitSupabase(options: {
 }
 
 describe("POST /api/events", () => {
-  it("creates the request with status Requested when a coordinator is available", async () => {
-    const { from, insert } = buildSubmitSupabase({
-      coordinators: ["COORD-0001"],
-      insertedEvent: {
-        id: "e2",
-        status: "Requested",
-        submitted_details: validPayload,
-        coordinator_id: "COORD-0001",
-        review_outcome: null,
-        created_at: "2026-01-01",
-      },
-    });
-
-    const app = buildApp({ from });
-    const res = await request(app).post("/api/events").send(validPayload);
-
-    expect(res.status).toBe(201);
-    expect(res.body.event.status).toBe("Requested");
-    expect(insert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        organiser_id: "user-1",
-        status: "Requested",
-        coordinator_id: "COORD-0001",
-      }),
-    );
+  beforeEach(() => {
+    vi.mocked(fetchCoordinatorLeads).mockReset().mockResolvedValue({ status: "ok", coordinators: [] });
+    vi.mocked(sendNotifications).mockReset().mockResolvedValue(true);
   });
 
-  it("flags the request Unassigned when no coordinators exist (E2-6 AC4)", async () => {
+  it("creates the request Unassigned with no coordinator (E2-14)", async () => {
     const { from, insert } = buildSubmitSupabase({
-      coordinators: [],
       insertedEvent: {
-        id: "e3",
+        id: "e2",
         status: "Unassigned",
         submitted_details: validPayload,
         coordinator_id: null,
@@ -400,35 +357,53 @@ describe("POST /api/events", () => {
     expect(res.status).toBe(201);
     expect(res.body.event.status).toBe("Unassigned");
     expect(insert).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "Unassigned", coordinator_id: null }),
+      expect.objectContaining({
+        organiser_id: "user-1",
+        status: "Unassigned",
+        coordinator_id: null,
+      }),
     );
   });
 
-  it("round-robins to the coordinator after whoever was assigned last (E2-6)", async () => {
-    const { from, insert } = buildSubmitSupabase({
-      coordinators: ["COORD-0001", "COORD-0002", "COORD-0003"],
-      lastAssignedCoordinatorId: "COORD-0001",
-      insertedEvent: { id: "e4", status: "Requested", coordinator_id: "COORD-0002" },
+  it("notifies every Event Coordinator Lead on submission (E2-14)", async () => {
+    vi.mocked(fetchCoordinatorLeads).mockResolvedValue({
+      status: "ok",
+      coordinators: [{ id: "LEAD-0001", name: "Lead One" }],
+    });
+
+    const { from } = buildSubmitSupabase({
+      insertedEvent: {
+        id: "e2",
+        status: "Unassigned",
+        submitted_details: validPayload,
+        coordinator_id: null,
+        review_outcome: null,
+        created_at: "2026-01-01",
+      },
     });
 
     const app = buildApp({ from });
-    await request(app).post("/api/events").send(validPayload);
+    const res = await request(app).post("/api/events").send(validPayload);
 
-    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ coordinator_id: "COORD-0002" }));
+    expect(res.status).toBe(201);
+    expect(sendNotifications).toHaveBeenCalledWith(
+      [expect.objectContaining({ recipientId: "LEAD-0001" })],
+      undefined,
+    );
   });
 
-  it("wraps back to the first coordinator after the last one in rotation (E2-6)", async () => {
-    const { from, insert } = buildSubmitSupabase({
-      coordinators: ["COORD-0001", "COORD-0002"],
-      lastAssignedCoordinatorId: "COORD-0002",
-      insertedEvent: { id: "e5", status: "Requested", coordinator_id: "COORD-0001" },
-    });
+  it.each(["coordinator", "coordinator_lead", "attendee", "venue_staff"])(
+    "blocks a %s from submitting (E2-14)",
+    async (role) => {
+      const from = vi.fn();
+      const app = buildApp({ from }, { id: "X-0001", role });
 
-    const app = buildApp({ from });
-    await request(app).post("/api/events").send(validPayload);
+      const res = await request(app).post("/api/events").send(validPayload);
 
-    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ coordinator_id: "COORD-0001" }));
-  });
+      expect(res.status).toBe(403);
+      expect(from).not.toHaveBeenCalled();
+    },
+  );
 
   it("blocks submission and identifies every missing mandatory field", async () => {
     const from = vi.fn();
@@ -509,12 +484,11 @@ describe("POST /api/events", () => {
 
   it("records requirement fields and the registration flag when provided", async () => {
     const { from, insert } = buildSubmitSupabase({
-      coordinators: ["COORD-0001"],
       insertedEvent: {
         id: "e6",
-        status: "Requested",
+        status: "Unassigned",
         submitted_details: {},
-        coordinator_id: "COORD-0001",
+        coordinator_id: null,
         review_outcome: null,
         created_at: "2026-01-01",
       },
@@ -1273,32 +1247,15 @@ describe("DELETE /api/events/:id/draft", () => {
 describe("PATCH /api/events/:id (submitting a draft)", () => {
   const owner = { id: "ORG-0001", role: "organiser" };
 
-  /** Extends buildPatchSupabase's "events" mock with the two lookups
-   * assignCoordinator makes, so a Draft's submit-and-assign path can be
-   * exercised the same way POST /'s buildSubmitSupabase does. */
   function buildDraftSubmitSupabase(options: {
     event: { id: number; status: string; organiser_id: string; submitted_details: Record<string, unknown> };
-    coordinators?: string[];
     updatedEvent?: Record<string, unknown>;
   }) {
-    const { event, coordinators = [], updatedEvent } = options;
+    const { event, updatedEvent } = options;
 
     const lookupMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
     const lookupEq = vi.fn().mockReturnValue({ maybeSingle: lookupMaybeSingle });
-
-    const lastAssignedMaybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
-    const lastAssignedLimit = vi.fn().mockReturnValue({ maybeSingle: lastAssignedMaybeSingle });
-    const lastAssignedOrder = vi.fn().mockReturnValue({ limit: lastAssignedLimit });
-    const lastAssignedNot = vi.fn().mockReturnValue({ order: lastAssignedOrder });
-
-    const eventsSelect = vi.fn().mockImplementation((columns: string) => {
-      if (columns.startsWith("coordinator_id")) return { not: lastAssignedNot };
-      return { eq: lookupEq };
-    });
-
-    const usersOrder = vi.fn().mockResolvedValue({ data: coordinators.map((id) => ({ id })), error: null });
-    const usersEq = vi.fn().mockReturnValue({ order: usersOrder });
-    const usersSelect = vi.fn().mockReturnValue({ eq: usersEq });
+    const eventsSelect = vi.fn().mockReturnValue({ eq: lookupEq });
 
     const updateSingle = vi.fn().mockResolvedValue({ data: updatedEvent ?? null, error: null });
     const updateSelect = vi.fn().mockReturnValue({ single: updateSingle });
@@ -1308,13 +1265,17 @@ describe("PATCH /api/events/:id (submitting a draft)", () => {
     const historyInsert = vi.fn().mockResolvedValue({ error: null });
 
     const from = vi.fn().mockImplementation((table: string) => {
-      if (table === "users") return { select: usersSelect };
       if (table === "event_history") return { insert: historyInsert };
       return { select: eventsSelect, update };
     });
 
     return { from, update };
   }
+
+  beforeEach(() => {
+    vi.mocked(fetchCoordinatorLeads).mockReset().mockResolvedValue({ status: "ok", coordinators: [] });
+    vi.mocked(sendNotifications).mockReset().mockResolvedValue(true);
+  });
 
   it("still enforces E2-1 validation when submitting a draft (AC3)", async () => {
     const { from } = buildDraftSubmitSupabase({
@@ -1327,27 +1288,9 @@ describe("PATCH /api/events/:id (submitting a draft)", () => {
     expect(res.status).toBe(400);
   });
 
-  it("assigns a coordinator and moves a valid draft to Requested (AC3)", async () => {
+  it("moves a valid draft to Unassigned with no coordinator (E2-14)", async () => {
     const { from, update } = buildDraftSubmitSupabase({
       event: { id: 1, status: "Draft", organiser_id: owner.id, submitted_details: {} },
-      coordinators: ["COORD-0001"],
-      updatedEvent: { id: 1, status: "Requested", coordinator_id: "COORD-0001" },
-    });
-    const app = buildApp({ from }, owner);
-
-    const res = await request(app).patch("/api/events/1").send(validPayload);
-
-    expect(res.status).toBe(200);
-    expect(res.body.event.status).toBe("Requested");
-    expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "Requested", coordinator_id: "COORD-0001" }),
-    );
-  });
-
-  it("flags it Unassigned instead when no coordinators exist", async () => {
-    const { from, update } = buildDraftSubmitSupabase({
-      event: { id: 1, status: "Draft", organiser_id: owner.id, submitted_details: {} },
-      coordinators: [],
       updatedEvent: { id: 1, status: "Unassigned", coordinator_id: null },
     });
     const app = buildApp({ from }, owner);
@@ -1355,9 +1298,42 @@ describe("PATCH /api/events/:id (submitting a draft)", () => {
     const res = await request(app).patch("/api/events/1").send(validPayload);
 
     expect(res.status).toBe(200);
+    expect(res.body.event.status).toBe("Unassigned");
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ status: "Unassigned", coordinator_id: null }),
     );
+  });
+
+  it("notifies every Event Coordinator Lead when a draft is submitted (E2-14)", async () => {
+    vi.mocked(fetchCoordinatorLeads).mockResolvedValue({
+      status: "ok",
+      coordinators: [{ id: "LEAD-0001", name: "Lead One" }],
+    });
+    const { from } = buildDraftSubmitSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id, submitted_details: {} },
+      updatedEvent: { id: 1, status: "Unassigned", coordinator_id: null },
+    });
+    const app = buildApp({ from }, owner);
+
+    await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(sendNotifications).toHaveBeenCalledWith(
+      [expect.objectContaining({ recipientId: "LEAD-0001" })],
+      undefined,
+    );
+  });
+
+  it("blocks a non-organiser from submitting their own draft (E2-14)", async () => {
+    const attendeeOwner = { id: "ATT-0001", role: "attendee" };
+    const { from, update } = buildDraftSubmitSupabase({
+      event: { id: 1, status: "Draft", organiser_id: attendeeOwner.id, submitted_details: {} },
+    });
+    const app = buildApp({ from }, attendeeOwner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(403);
+    expect(update).not.toHaveBeenCalled();
   });
 });
 
