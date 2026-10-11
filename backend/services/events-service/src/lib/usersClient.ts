@@ -33,3 +33,21 @@ export async function fetchCoordinators(authorization: string): Promise<FetchCoo
     return { status: "error" };
   }
 }
+
+/**
+ * Every Event Coordinator Lead, so a freshly submitted request (E2-14) can
+ * notify whoever triages the unassigned queue. Forwards the submitting
+ * user's own bearer token, same as fetchCoordinators above.
+ */
+export async function fetchCoordinatorLeads(authorization: string): Promise<FetchCoordinatorsResult> {
+  try {
+    const res = await fetch(`${userServiceUrl()}/api/users?role=coordinator_lead`, {
+      headers: { Authorization: authorization },
+    });
+    if (!res.ok) return { status: "error" };
+    const body = (await res.json()) as { users?: Coordinator[] };
+    return { status: "ok", coordinators: body.users ?? [] };
+  } catch {
+    return { status: "error" };
+  }
+}

@@ -81,3 +81,29 @@ describe("GET /api/users?role=coordinator (E2-13 / E2-12)", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("GET /api/users?role=coordinator_lead (E2-14)", () => {
+  it("lets an organiser list Coordinator Leads, to notify them on submission", async () => {
+    const leads = [{ id: "LEAD-0001", name: "Lead One" }];
+    const { app, select, eq } = buildApp({ id: "ORG-0001", role: "organiser" }, { data: leads, error: null });
+
+    const res = await request(app).get("/api/users?role=coordinator_lead");
+
+    expect(res.status).toBe(200);
+    expect(res.body.users).toEqual(leads);
+    expect(select).toHaveBeenCalledWith("id, name");
+    expect(eq).toHaveBeenCalledWith("role", "coordinator_lead");
+  });
+
+  it.each(["coordinator", "attendee", "venue_staff", "coordinator_lead"])(
+    "denies a %s",
+    async (role) => {
+      const { app, from } = buildApp({ id: "X-0001", role });
+
+      const res = await request(app).get("/api/users?role=coordinator_lead");
+
+      expect(res.status).toBe(403);
+      expect(from).not.toHaveBeenCalled();
+    },
+  );
+});
