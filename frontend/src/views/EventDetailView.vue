@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { landingRouteForRole } from "../lib/auth";
 import {
   AccessDeniedError,
   AssignmentError,
@@ -48,6 +49,7 @@ interface SubmittedEventDetails {
 }
 
 const route = useRoute();
+const router = useRouter();
 const activeTab = ref<"overview" | "history">("overview");
 const event = ref<EventSummary | null>(null);
 const loading = ref(true);
@@ -378,6 +380,20 @@ function formatDate(value: string | undefined | null): string {
   return date.toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" });
 }
 
+/** Returns to wherever the user came from (the events list, a coordinator
+ * queue, a search result, etc.) rather than always landing on the role's
+ * home page. `history.state.back` is only set once there's actual in-app
+ * navigation history to go back to — e.g. a bookmarked/direct link here has
+ * none — so that case falls back to the role's landing route instead of
+ * leaving the back button a dead end or taking the user out of the app. */
+function goBack(): void {
+  if (window.history.state?.back) {
+    router.back();
+  } else {
+    router.push({ name: landingRouteForRole(currentUser.value.role) });
+  }
+}
+
 /** §3: no transitions out of these, so no reassignment either (E2-12 AC3). */
 const CLOSED_STATUSES = new Set(["Rejected", "Cancelled", "Completed"]);
 
@@ -492,7 +508,7 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="content">
-      <RouterLink to="/" class="back-link">&larr; Back</RouterLink>
+      <button type="button" class="back-link" @click="goBack">&larr; Back</button>
 
       <p v-if="loading" class="body-default muted">Loading…</p>
 
@@ -991,6 +1007,16 @@ onMounted(async () => {
   font-size: 0.875rem;
   font-weight: 700;
   margin-bottom: var(--spacing-24);
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  color: var(--color-purple-600);
+  cursor: pointer;
+}
+
+.back-link:hover {
+  color: var(--color-purple-700);
 }
 
 .body-default {

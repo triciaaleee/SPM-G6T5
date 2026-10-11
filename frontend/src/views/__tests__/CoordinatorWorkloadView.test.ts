@@ -123,32 +123,18 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     expect(wrapper.text()).toContain("Requested by: Sam Organiser");
   });
 
-  it("groups events under the correct status section header", async () => {
+  it("lists events flat in status-priority order with no section headers", async () => {
     const events = [
-      makeEvent({ id: 1, status: "Requested" }),
-      makeEvent({ id: 2, status: "Planning" }),
+      makeEvent({ id: 1, status: "Planning", submitted_details: { name: "Plan Event", proposedDate: "2099-01-01" } }),
+      makeEvent({ id: 2, status: "Requested", submitted_details: { name: "Review Event", proposedDate: "2099-09-01" } }),
     ];
     const wrapper = await mountView(events);
 
-    const groupHeaders = wrapper.findAll(".group-label");
-    const labels = groupHeaders.map((h) => h.text());
-    expect(labels).toContain("Needs Review");
-    expect(labels).toContain("Planning");
-  });
-
-  it("shows Unassigned events under All events in their own group, not Needs Review", async () => {
-    const events = [
-      makeEvent({ id: 1, status: "Requested" }),
-      makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
-    ];
-    const wrapper = await mountView(events);
-    await wrapper.findAll(".toggle-btn")[1].trigger("click");
-
-    const sections = wrapper.findAll(".status-group");
-    expect(sections[0].text()).toContain("Needs Review");
-    expect(sections[0].findAll(".event-card")).toHaveLength(1);
-    expect(sections[1].text()).toContain("Unassigned");
-    expect(sections[1].findAll(".event-card--action")).toHaveLength(0);
+    expect(wrapper.findAll(".group-label")).toHaveLength(0);
+    expect(wrapper.findAll(".status-group")).toHaveLength(0);
+    const cards = wrapper.findAll(".event-card");
+    expect(cards[0].text()).toContain("Review Event");
+    expect(cards[1].text()).toContain("Plan Event");
   });
 
   it("sorts events within a group by proposedDate ascending", async () => {
@@ -163,26 +149,78 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     expect(cards[1].text()).toContain("Late Event");
   });
 
-  it("applies the action highlight class to Requested cards only", async () => {
+  it("marks only Requested cards with the accent bar class, not Unassigned (the Lead's to assign)", async () => {
     const events = [
       makeEvent({ id: 1, status: "Requested" }),
+      makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
       makeEvent({ id: 3, status: "Planning" }),
     ];
     const wrapper = await mountView(events);
+    await wrapper.findAll(".toggle-btn")[1].trigger("click");
 
-    const actionCards = wrapper.findAll(".event-card--action");
-    const normalCards = wrapper.findAll(".event-card:not(.event-card--action)");
+    expect(wrapper.findAll(".event-card")).toHaveLength(3);
+    expect(wrapper.findAll(".event-card--needs-action")).toHaveLength(1);
+    expect(wrapper.findAll(".event-card--action")).toHaveLength(0);
+  });
+});
 
-    expect(actionCards).toHaveLength(1);
-    expect(normalCards).toHaveLength(1);
+describe("CoordinatorWorkloadView — status tabs", () => {
+  const tabEvents = () => [
+    makeEvent({ id: 1, status: "Requested" }),
+    makeEvent({ id: 2, status: "Requested" }),
+    makeEvent({ id: 3, status: "Planning" }),
+  ];
+
+  it("gives Unassigned events their own tab under All events", async () => {
+    const wrapper = await mountView([
+      makeEvent({ id: 1, status: "Requested" }),
+      makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
+    ]);
+    await wrapper.findAll(".toggle-btn")[1].trigger("click");
+
+    const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
+    expect(tabs).toEqual(["All 2", "Needs Review 1", "Unassigned 1"]);
   });
 
-  it("does not show a status group section when no events belong to it", async () => {
-    const wrapper = await mountView([makeEvent({ status: "Requested" })]);
+  it("renders an All tab plus one tab per non-empty group, with counts", async () => {
+    const wrapper = await mountView(tabEvents());
 
-    const groupLabels = wrapper.findAll(".group-label").map((el) => el.text());
-    expect(groupLabels).not.toContain("Planning");
-    expect(groupLabels).not.toContain("Completed");
+    const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
+    expect(tabs).toEqual(["All 3", "Needs Review 2", "Planning 1"]);
+  });
+
+  it("defaults to All and shows every event in one flat grid", async () => {
+    const wrapper = await mountView(tabEvents());
+
+    expect(wrapper.find(".tab--active").text()).toContain("All");
+    expect(wrapper.findAll(".card-grid")).toHaveLength(1);
+    expect(wrapper.findAll(".event-card")).toHaveLength(3);
+  });
+
+  it("filters cards to one status group when its tab is selected", async () => {
+    const wrapper = await mountView(tabEvents());
+
+    await wrapper.findAll("[role='tab']")[2].trigger("click");
+
+    expect(wrapper.find(".tab--active").text()).toContain("Planning");
+    expect(wrapper.findAll(".event-card")).toHaveLength(1);
+    expect(wrapper.findAll(".group-label")).toHaveLength(0);
+  });
+
+  it("falls back to All when the selected tab empties after switching scope", async () => {
+    const events = [
+      makeEvent({ id: 1, status: "Requested" }),
+      makeEvent({ id: 2, status: "Planning", coordinator_id: "COORD-0002" }),
+    ];
+    const wrapper = await mountView(events);
+
+    await wrapper.findAll(".toggle-btn")[1].trigger("click"); // All events
+    await wrapper.findAll("[role='tab']")[2].trigger("click"); // Planning
+    expect(wrapper.findAll(".event-card")).toHaveLength(1);
+
+    await wrapper.findAll(".toggle-btn")[0].trigger("click"); // back to My events
+    expect(wrapper.find(".tab--active").text()).toContain("All");
+    expect(wrapper.findAll(".event-card")).toHaveLength(1);
   });
 });
 

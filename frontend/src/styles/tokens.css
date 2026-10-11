@@ -18,6 +18,7 @@
   --color-grey-900: #222222;
 
   /* Purple Primary */
+  --color-purple-50: #F9F4FE;
   --color-purple-100: #F3EAFC;
   --color-purple-200: #E5D3F7;
   --color-purple-300: #CEABF1;
@@ -29,6 +30,7 @@
 
   /* Semantic */
   --color-error-200: #FFE3E0;
+  --color-error-300: #FFA199;
   --color-error-400: #FF5444;
   /* Grey/40% Dark #454545 (Style.md 2.3) — modal/drawer scrim. */
   --color-grey-alpha-40-dark: rgba(69, 69, 69, 0.4);
@@ -47,6 +49,11 @@
   --color-success-300: #BBE2C1;
   --color-success-600: #008545;
   --color-success-700: #006E3A;
+
+  /* Orchid — role chip only (Style.md Section 2.9) */
+  --color-orchid-50: #FAF1FA;
+  --color-orchid-200: #EBC9E6;
+  --color-orchid-800: #7A1470;
 
   /* Secondary Blue (Style.md Section 2.8) */
   --color-blue-100: #F4F5FB;

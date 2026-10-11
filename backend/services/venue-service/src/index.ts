@@ -1,6 +1,7 @@
 import "./lib/env.js";
 import cors from "cors";
 import express from "express";
+import { attendeeInfoRouter } from "./routes/attendeeInfo.js";
 import { eventBookingsRouter } from "./routes/eventBookings.js";
 import { staffRouter } from "./routes/staff.js";
 import { unavailabilityRouter } from "./routes/unavailability.js";
@@ -34,6 +35,8 @@ app.use("/api/venues/staff", staffRouter);
 // E4-3: venue staff only, so also mounted ahead of venuesRouter.
 app.use("/api/venues/unavailability", unavailabilityRouter);
 app.use("/api/venues/events", eventBookingsRouter);
+// E6: attendees' view of where an event is held — names only, ahead of venuesRouter.
+app.use("/api/venues/attendee-info", attendeeInfoRouter);
 app.use("/api/venues", venuesRouter);
 
 app.get("/health", (_req, res) => {

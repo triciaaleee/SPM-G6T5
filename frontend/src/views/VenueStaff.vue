@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
 import CalendarPicker, { type DayMarker } from "../components/venues/CalendarPicker.vue";
 import BlockOutPanel from "../components/venues/BlockOutPanel.vue";
+import VenueIcon from "../components/venues/VenueIcon.vue";
 import UnavailabilityCard from "../components/venues/UnavailabilityCard.vue";
 import VenueFormPanel from "../components/venues/VenueFormPanel.vue";
 import {
@@ -425,10 +426,8 @@ onMounted(async () => {
       <div>
         <h1 class="h2">Venue schedule</h1>
         <p class="subheading">Select a date and venue to see bookings and requests for that day</p>
-        <!-- E4-10: decisions are made in the queue, which orders by event date. -->
-        <RouterLink :to="{ name: 'venue-requests' }" class="queue-link">Go to booking requests</RouterLink>
       </div>
-      <!-- Block out time stays the page's one solid action (Style.md 3.4); adding a venue is the outline one. -->
+      <!-- Style.md 3.4: one solid action per view, so "Go to booking requests" is it; the rest are outline. -->
       <div class="header-actions">
         <div class="venue-actions">
         <button type="button" class="btn-outline" @click="openAddVenue">Add new venue</button>
@@ -460,10 +459,14 @@ onMounted(async () => {
           </div>
         </div>
         </div>
-        <!-- E4-3 -->
-        <button v-if="venueId !== null" type="button" class="btn-primary" @click="openBlockOut()">
-          Block out time
-        </button>
+        <div class="main-actions">
+          <!-- E4-3: secondary action. -->
+          <button v-if="venueId !== null" type="button" class="btn-outline" @click="openBlockOut()">
+            Block out time
+          </button>
+          <!-- E4-10: decisions are made in the queue, which orders by event date. It is the page's one primary action. -->
+          <RouterLink :to="{ name: 'venue-requests' }" class="btn-primary">Go to booking requests</RouterLink>
+        </div>
       </div>
     </div>
 
@@ -488,14 +491,14 @@ onMounted(async () => {
         </div>
 
         <section class="calendar-card" aria-label="Choose a date">
-          <CalendarPicker v-model="selectedDate" allow-past :markers="dateMarkers"
+          <CalendarPicker v-model="selectedDate" allow-past roomy :markers="dateMarkers"
             :blocked-dates="blockedDays.full" :partly-blocked-dates="blockedDays.partial"
             @month-change="visibleMonth = $event" />
           <ul class="legend" aria-hidden="true">
             <li class="legend__item"><span class="legend__dot legend__dot--booking" />Booking</li>
             <li class="legend__item"><span class="legend__dot legend__dot--request" />Request</li>
-            <li class="legend__item"><span class="legend__swatch" />Unavailable</li>
-            <li class="legend__item"><span class="legend__swatch legend__swatch--partial" />Partly unavailable</li>
+            <li class="legend__item"><span class="legend__lock"><VenueIcon name="lock" :size="10" /></span>Unavailable</li>
+            <li class="legend__item"><span class="legend__bar" />Partly unavailable</li>
           </ul>
         </section>
       </div>
@@ -697,22 +700,6 @@ onMounted(async () => {
   margin: 0;
 }
 
-.queue-link {
-  color: var(--color-purple-600);
-  font-size: 0.875rem;
-  font-weight: 700;
-  text-decoration: none;
-}
-
-.queue-link:hover {
-  text-decoration: underline;
-}
-
-.queue-link:focus-visible {
-  outline: 2px solid var(--color-purple-600);
-  outline-offset: 2px;
-}
-
 .subheading {
   font-size: 1.125rem;
   font-weight: 400;
@@ -793,10 +780,10 @@ onMounted(async () => {
 
 /* Form label: Small Text 700, Style.md 3.2 label colour (Grey/600). */
 .field-label {
-  font-size: 0.75rem;
+  font-size: 1rem;
   font-weight: 700;
-  line-height: 1rem;
-  color: var(--color-grey-600);
+  line-height: 1.25rem;
+  color: var(--color-grey-900);
 }
 
 .venue-select {
@@ -809,15 +796,15 @@ onMounted(async () => {
 .venue-select__input {
   appearance: none;
   width: 100%;
-  height: 40px;
-  padding: 0 var(--spacing-40) 0 var(--spacing-16);
+  height: var(--spacing-48);
+  padding: 0 var(--spacing-48) 0 var(--spacing-16);
   border: 1px solid var(--color-grey-200);
   border-radius: var(--radius-sm);
   background: var(--color-base-white);
   color: var(--color-grey-900);
   font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  line-height: 1.125rem;
+  font-size: 1rem;
+  line-height: 1.25rem;
   cursor: pointer;
   margin-top:4px;
 }
@@ -832,9 +819,9 @@ onMounted(async () => {
 
 .venue-select__icon {
   position: absolute;
-  width: var(--spacing-16);
-  height: var(--spacing-16);
-  right: var(--spacing-12);
+  width: var(--spacing-20);
+  height: var(--spacing-20);
+  right: var(--spacing-16);
   color: var(--color-grey-700);
   pointer-events: none;
 }
@@ -984,6 +971,37 @@ onMounted(async () => {
   gap: var(--spacing-16);
 }
 
+.btn-primary,
+.btn-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.btn-outline {
+  height: 40px;
+  padding: 0 var(--spacing-16);
+  border: 1px solid var(--color-purple-300);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-purple-600);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  cursor: pointer;
+}
+
+.btn-outline:hover {
+  background: var(--color-purple-100);
+}
+
+.btn-outline:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
 .btn-primary {
   height: 40px;
   padding: 0 var(--spacing-16);
@@ -1008,7 +1026,7 @@ onMounted(async () => {
   outline-offset: 2px;
 }
 
-/* "Add new venue" and "Edit venue" side by side, with "Block out time" full width beneath them. */
+/* "Add new venue" and "Edit venue" side by side, with "Block out time" and "Go to booking requests" beneath them. */
 .header-actions {
   display: flex;
   flex-direction: column;
@@ -1016,28 +1034,11 @@ onMounted(async () => {
   gap: var(--spacing-8);
 }
 
-.venue-actions {
+.venue-actions,
+.main-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--spacing-8);
-}
-
-.btn-outline {
-  height: 40px;
-  padding: 0 var(--spacing-16);
-  border: 1px solid var(--color-purple-300);
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-purple-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn-outline:hover {
-  background: var(--color-purple-100);
 }
 
 /* E4-1: "Edit venue" menu of the staff member's own venues. */
@@ -1147,21 +1148,23 @@ onMounted(async () => {
   row-gap: var(--spacing-8);
 }
 
-/* Style.md 3.5: pattern-unavailable / -partial, as calendar swatches. */
-.legend__swatch {
-  width: var(--spacing-12);
-  height: var(--spacing-12);
-  border-radius: var(--radius-xs);
-  box-shadow: inset 0 0 0 1px var(--color-grey-300);
-  background: repeating-linear-gradient(135deg,
-      var(--color-grey-200) 0 var(--spacing-2),
-      var(--color-grey-50) var(--spacing-2) var(--spacing-4));
+/* Style.md 3.5: the calendar's unavailable markers (lock chip, orange bar), as legend keys. */
+.legend__lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--spacing-20);
+  height: var(--spacing-20);
+  border-radius: var(--radius-full);
+  background: var(--color-grey-100);
+  color: var(--color-grey-600);
 }
 
-.legend__swatch--partial {
-  background: repeating-linear-gradient(135deg,
-      var(--color-grey-200) 0 var(--spacing-2),
-      var(--color-grey-50) var(--spacing-2) var(--spacing-4)) bottom / 100% 50% no-repeat;
+.legend__bar {
+  width: var(--spacing-16);
+  height: var(--spacing-2);
+  border-radius: var(--radius-xs);
+  background: var(--color-warning-800);
 }
 
 .notice {

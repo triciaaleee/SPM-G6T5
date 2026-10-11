@@ -16,7 +16,8 @@ export type VenueIconName =
   | "location"
   | "accessibility"
   | "layout"
-  | "facilities";
+  | "facilities"
+  | "lock";
 
 defineProps<{ name: VenueIconName; size?: number }>();
 </script>
@@ -56,6 +57,10 @@ defineProps<{ name: VenueIconName; size?: number }>();
       <rect x="14" y="14" width="7" height="7" rx="1" />
     </template>
     <path v-else-if="name === 'facilities'" d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0V8ZM12 17v4" />
+    <template v-else-if="name === 'lock'">
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </template>
   </svg>
 </template>
 

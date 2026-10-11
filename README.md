@@ -3,12 +3,13 @@
 
 # Backend
 
-Four Express/TypeScript microservices:
+Express/TypeScript microservices:
 
 - **`services/events-service`** (port 4001) — event CRUD, scoped by role
 - **`services/user-service`** (port 4002) — signup/login, JWT issuance, user records
 - **`services/venue-service`** (port 4003) — venue search/filters and venue recommendations for an event (reads events via events-service's API), venue staff schedule and block-out periods (E4-3)
 - **`services/notification-service`** (port 4004) — in-app notifications: each user's feed, plus a REST endpoint other services call to notify someone (e.g. venue-service telling coordinators a booked venue was blocked out)
+- **`services/registration-service`** (port 4007) — attendee registration (E6): register for / withdraw from an event, an attendee's own registrations, an event's roster (organiser/coordinator only), and the attendee-facing event view. Reads event, venue and user data through those services' REST APIs
 
 All share one config file and Supabase project.
 
@@ -22,6 +23,7 @@ cd services/events-service && npm install
 cd ../user-service && npm install
 cd ../venue-service && npm install
 cd ../notification-service && npm install
+cd ../registration-service && npm install
 ```
 
 Edit `backend/.env`:
@@ -35,13 +37,16 @@ EVENTS_SERVICE_PORT=4001
 USER_SERVICE_PORT=4002
 VENUE_SERVICE_PORT=4003
 NOTIFICATION_SERVICE_PORT=4004
+REGISTRATION_SERVICE_PORT=4007
 
 # Where venue-service reaches events-service (defaults to localhost:EVENTS_SERVICE_PORT)
 EVENTS_SERVICE_URL=http://localhost:4001
 # Where venue-service and events-service reach notification-service (defaults to localhost:NOTIFICATION_SERVICE_PORT)
 NOTIFICATION_SERVICE_URL=http://localhost:4004
-# Where events-service reaches user-service for the coordinator list (defaults to localhost:USER_SERVICE_PORT)
+# Where events-service and registration-service reach user-service (defaults to localhost:USER_SERVICE_PORT)
 USER_SERVICE_URL=http://localhost:4002
+# Where registration-service reaches venue-service (defaults to localhost:VENUE_SERVICE_PORT)
+VENUE_SERVICE_URL=http://localhost:4003
 ```
 
 Apply the SQL migrations in `supabase/migrations/` (in numeric order) against your Supabase project, then `supabase/seed.sql` for test data.
@@ -61,12 +66,12 @@ cd backend
 npm run dev
 ```
 
-Output is prefixed per service (`[events]`, `[users]`, `[venues]`, `[notifications]`) so you can tell which one logged what. Ctrl+C stops them all.
+Output is prefixed per service (`[events]`, `[users]`, `[venues]`, `[notifications]`, `[registrations]`) so you can tell which one logged what. Ctrl+C stops them all.
 
 To run just one service on its own:
 
 ```bash
-cd backend/services/events-service && npm run dev   # or services/user-service, services/venue-service, services/notification-service
+cd backend/services/events-service && npm run dev   # or services/user-service, services/venue-service, services/notification-service, services/registration-service
 ```
 
 ## Verify it's up
@@ -76,6 +81,7 @@ curl http://localhost:4001/health   # events-service
 curl http://localhost:4002/health   # user-service
 curl http://localhost:4003/health   # venue-service
 curl http://localhost:4004/health   # notification-service
+curl http://localhost:4007/health   # registration-service
 ```
 
 Each should return `{"ok":true}`.
@@ -87,6 +93,7 @@ cd backend/services/events-service && npm test
 cd backend/services/user-service && npm test
 cd backend/services/venue-service && npm test
 cd backend/services/notification-service && npm test
+cd backend/services/registration-service && npm test
 ```
 
 ## Notes
