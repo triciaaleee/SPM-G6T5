@@ -17,6 +17,7 @@
 import { computed, reactive, onMounted, ref } from "vue";
 import {
   EQUIPMENT_REQUEST_STATUSES,
+  EquipmentReservationShortfallError,
   EquipmentRequestError,
   EquipmentValidationError,
   checkEquipmentAvailability,
@@ -59,6 +60,11 @@ interface EditState {
   error: string | null;
   fieldErrors: Record<string, string>;
   notice: { text: string; warning: boolean } | null;
+  /** AC2: Technical Support's own call on how much of each item was actually
+   * handed out — keyed by item id. Starts from a suggested default (see
+   * openEditor) but is editable, so a request isn't forced to take exactly
+   * what the stock table happens to show at save time. */
+  fulfilledQuantities: Record<number, number>;
 }
 
 const edits = reactive<Record<number, EditState>>({});
@@ -72,9 +78,37 @@ function editFor(r: EquipmentRequestWithEvent): EditState {
       error: null,
       fieldErrors: {},
       notice: null,
+      fulfilledQuantities: {},
     };
   }
   return edits[r.id];
+}
+
+/**
+ * The starting number shown in the editable field: whatever this item is
+ * already recorded as fulfilled (re-editing an existing partial
+ * fulfilment), or else a suggestion based on current stock — a sensible
+ * default Technical Support can override, not the final word.
+ */
+function suggestedFulfilledQuantity(r: EquipmentRequestWithEvent, item: EquipmentItem): number {
+  if (r.status === "Partially Fulfilled") return item.quantityFulfilled;
+  const available = catalog.value.find((c) => c.name === item.equipmentType)?.availableStock ?? 0;
+  return Math.min(item.quantity, Math.max(0, available));
+}
+
+function fulfilledQuantityFor(r: EquipmentRequestWithEvent, item: EquipmentItem): number {
+  const edit = editFor(r);
+  const value = edit.fulfilledQuantities[item.id];
+  return value !== undefined ? value : suggestedFulfilledQuantity(r, item);
+}
+
+function setFulfilledQuantity(r: EquipmentRequestWithEvent, item: EquipmentItem, raw: string): void {
+  const edit = editFor(r);
+  const numericValue = Number(raw);
+  if (!Number.isFinite(numericValue)) return;
+  // Clamp client-side for a sane input experience; the backend is still the
+  // authority and re-validates 0..item.quantity itself.
+  edit.fulfilledQuantities[item.id] = Math.max(0, Math.min(item.quantity, Math.round(numericValue)));
 }
 
 /** Opens the editor, resynced to the request's current status — discards any stale pick from last time. */
@@ -83,6 +117,10 @@ function openEditor(r: EquipmentRequestWithEvent): void {
   edit.status = (r.status as EquipmentRequestStatus) || "Requested";
   edit.error = null;
   edit.fieldErrors = {};
+  edit.fulfilledQuantities = {};
+  for (const item of r.items) {
+    edit.fulfilledQuantities[item.id] = suggestedFulfilledQuantity(r, item);
+  }
   edit.expanded = true;
 }
 
@@ -142,24 +180,14 @@ async function checkAllAvailability(targetRequests: EquipmentRequestWithEvent[])
 }
 
 /**
- * Auto-generates what remains outstanding from the fulfilled-quantity
- * inputs, rather than asking Technical Support to type it out separately —
- * the per-item numbers already say exactly what's short.
+ * Auto-generates what remains outstanding from Technical Support's own
+ * fulfilled-quantity entries, rather than asking them to type it out
+ * separately — the per-item numbers already say exactly what's short.
  */
-/**
- * No manual entry at all: fulfilled = however much is actually free right
- * now (equipment_catalog.available_stock, the same number the stock table
- * on the left shows), capped at what was requested.
- */
-function fulfilledQuantityFor(item: EquipmentItem): number {
-  const available = catalog.value.find((c) => c.name === item.equipmentType)?.availableStock ?? 0;
-  return Math.min(item.quantity, Math.max(0, available));
-}
-
 function outstandingSummary(r: EquipmentRequestWithEvent): string {
   const parts = r.items
     .map((item) => {
-      const remaining = item.quantity - fulfilledQuantityFor(item);
+      const remaining = item.quantity - fulfilledQuantityFor(r, item);
       return remaining > 0 ? `${remaining} ${item.equipmentType}` : null;
     })
     .filter((part): part is string => part !== null);
@@ -175,7 +203,7 @@ async function saveStatus(r: EquipmentRequestWithEvent): Promise<void> {
   try {
     const fulfillments =
       edit.status === "Partially Fulfilled"
-        ? r.items.map((item) => ({ itemId: item.id, fulfilledQuantity: fulfilledQuantityFor(item) }))
+        ? r.items.map((item) => ({ itemId: item.id, fulfilledQuantity: fulfilledQuantityFor(r, item) }))
         : undefined;
     const note = edit.status === "Partially Fulfilled" ? outstandingSummary(r) : undefined;
     const { equipmentRequest, notified } = await updateEquipmentRequestStatus(r.id, edit.status, note, fulfillments);
@@ -204,6 +232,11 @@ async function saveStatus(r: EquipmentRequestWithEvent): Promise<void> {
     if (err instanceof EquipmentValidationError) {
       edit.fieldErrors = err.fields;
       edit.error = err.fields.note ?? err.fields.status ?? null;
+    } else if (err instanceof EquipmentReservationShortfallError) {
+      // AC2: rejected with the available quantity shown.
+      edit.error = Object.values(err.shortfalls)
+        .map((s) => `${s.equipmentType}: only ${s.availableCount} available (need ${s.availableCount + s.shortfall})`)
+        .join("; ");
     } else if (err instanceof EquipmentRequestError) {
       edit.error = err.message;
     } else {
@@ -327,6 +360,11 @@ function formatSubmitted(value: string): string {
                     <template v-else>{{ item.quantity }}&times;</template>
                     {{ item.equipmentType }}
                   </strong>
+                  <!-- E5-6 AC3: this item's claimed units no longer hold —
+                       re-checked against every involved event's current schedule. -->
+                  <span v-if="item.reservationFlag?.flagged" class="badge status-warning" :title="item.reservationFlag.reason ?? undefined">
+                    Needs review
+                  </span>
                 </div>
 
                 <!-- E5-4: checked automatically against the event's own date/time —
@@ -377,9 +415,28 @@ function formatSubmitted(value: string): string {
                   </button>
                 </div>
 
-                <!-- AC2: what remains outstanding, computed automatically from current
-                     stock (equipment_catalog.available_stock) — nothing to type. -->
+                <!-- AC2: how much of EACH item was actually handed out — Technical
+                     Support's own call, pre-filled with a suggestion but editable,
+                     since the equipment to arrange isn't always just "whatever's
+                     in stock right now". -->
                 <div v-if="editFor(r).status === 'Partially Fulfilled'" class="fulfilled-items">
+                  <div v-for="item in r.items" :key="item.id" class="field">
+                    <label :for="`fulfilled-${r.id}-${item.id}`" class="body-small muted mb-1">
+                      {{ item.equipmentType }} fulfilled (of {{ item.quantity }})
+                    </label>
+                    <input
+                      :id="`fulfilled-${r.id}-${item.id}`"
+                      type="number"
+                      min="0"
+                      :max="item.quantity"
+                      class="eq-input"
+                      :value="fulfilledQuantityFor(r, item)"
+                      @input="setFulfilledQuantity(r, item, ($event.target as HTMLInputElement).value)"
+                    />
+                    <p v-if="editFor(r).fieldErrors[`fulfillments[${item.id}]`]" class="body-small error-text">
+                      {{ editFor(r).fieldErrors[`fulfillments[${item.id}]`] }}
+                    </p>
+                  </div>
                   <div class="field">
                     <p class="body-small muted mb-1">Outstanding</p>
                     <p class="body-small outstanding-preview">{{ outstandingSummary(r) }}</p>
@@ -769,6 +826,17 @@ function formatSubmitted(value: string): string {
 .field {
   min-width: 0;
   width: 100%;
+}
+
+.eq-input {
+  width: 100%;
+  font-family: var(--font-family-lato);
+  font-size: 0.9375rem;
+  color: var(--color-grey-900);
+  background: var(--color-base-white);
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-8) var(--spacing-12);
 }
 
 .mb-1 {
