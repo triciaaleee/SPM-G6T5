@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   AccessDeniedError,
   RegistrationRequestError,
   fetchAttendeeEventView,
+  register,
   withdraw,
   type AttendeeEventView,
 } from "../lib/registrationApi";
 import { registrationBadgeClass } from "../lib/registrationStatus";
 import { formatCardTimeRange, formatLongDate } from "../lib/attendeeEvents";
+import { getStoredUser, landingRouteForRole } from "../lib/auth";
 
 /**
  * One event as an attendee sees it: name, description, date, time, venues,
@@ -18,7 +20,21 @@ import { formatCardTimeRange, formatLongDate } from "../lib/attendeeEvents";
  * event (not registered and not open) nothing about the event is rendered.
  */
 const route = useRoute();
+const router = useRouter();
 const eventId = String(route.params.id);
+
+/** Returns to wherever the user came from (Discover, My events, etc.)
+ * rather than always landing on "My events". `history.state.back` is only
+ * set once there's actual in-app navigation history to go back to — a
+ * bookmarked/direct link here has none — so that case falls back to the
+ * attendee's home page instead of leaving the back button a dead end. */
+function goBack(): void {
+  if (window.history.state?.back) {
+    router.back();
+  } else {
+    router.push({ name: landingRouteForRole(getStoredUser()?.role) });
+  }
+}
 
 const event = ref<AttendeeEventView | null>(null);
 const loading = ref(true);
@@ -28,6 +44,9 @@ const errorMessage = ref<string | null>(null);
 const withdrawing = ref(false);
 const withdrawError = ref<string | null>(null);
 
+const registering = ref(false);
+const registerError = ref<string | null>(null);
+
 const paragraphs = computed(() =>
   (event.value?.description ?? "")
     .split(/\n+/)
@@ -36,6 +55,33 @@ const paragraphs = computed(() =>
 );
 
 const canWithdraw = computed(() => event.value?.registrationStatus === "Registered");
+
+// Registering lives here, not on the Discover cards. A withdrawn attendee may register again.
+const canRegister = computed(
+  () => event.value?.open === true && event.value.registrationStatus !== "Registered",
+);
+
+async function handleRegister() {
+  if (!event.value || registering.value) return;
+  registering.value = true;
+  registerError.value = null;
+  try {
+    await register(eventId);
+    event.value = { ...event.value, registrationStatus: "Registered" };
+  } catch (err) {
+    if (err instanceof RegistrationRequestError && err.code === "already_registered") {
+      // Registered elsewhere (another tab): the page was just out of date.
+      event.value = { ...event.value, registrationStatus: "Registered" };
+    } else if (err instanceof RegistrationRequestError && err.code === "not_open") {
+      event.value = { ...event.value, open: false };
+      registerError.value = "This event is no longer open for registration.";
+    } else {
+      registerError.value = err instanceof Error ? err.message : "Failed to register";
+    }
+  } finally {
+    registering.value = false;
+  }
+}
 
 async function handleWithdraw() {
   if (!event.value || withdrawing.value) return;
@@ -77,10 +123,10 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="back">
-      <RouterLink :to="{ name: 'attendee-events' }" class="back-link">
+      <button type="button" class="back-link" @click="goBack">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
-        Back to my events
-      </RouterLink>
+        Back
+      </button>
     </div>
 
     <p v-if="loading" class="full body-default muted">Loading event…</p>
@@ -103,12 +149,18 @@ onMounted(async () => {
           <h1 class="h2">{{ event.name || `Event #${event.id}` }}</h1>
         </div>
 
-        <div v-if="canWithdraw" class="actions">
+        <div v-if="canRegister" class="actions">
+          <button type="button" class="btn-register" :disabled="registering" @click="handleRegister">
+            {{ registering ? "Registering…" : "Register" }}
+          </button>
+        </div>
+        <div v-else-if="canWithdraw" class="actions">
           <button type="button" class="btn-withdraw" :disabled="withdrawing" @click="handleWithdraw">
             {{ withdrawing ? "Withdrawing…" : "Withdraw registration" }}
           </button>
         </div>
       </div>
+      <p v-if="registerError" class="full body-small error-text" role="alert">{{ registerError }}</p>
       <p v-if="withdrawError" class="full body-small error-text" role="alert">{{ withdrawError }}</p>
 
       <div v-if="paragraphs.length > 0" class="description">
@@ -217,7 +269,8 @@ onMounted(async () => {
     flex-direction: column;
     align-items: stretch;
   }
-  .btn-withdraw {
+  .btn-withdraw,
+  .btn-register {
     width: 100%;
   }
 }
@@ -232,6 +285,11 @@ onMounted(async () => {
   font-weight: 700;
   line-height: 1.125rem;
   text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
 }
 
 .back-link:hover {
@@ -329,6 +387,37 @@ onMounted(async () => {
 .status-warning {
   background: var(--color-warning-100);
   color: var(--color-warning-900);
+}
+
+/* Register: the page's one solid button (Style.md 3.4). */
+.btn-register {
+  flex: none;
+  min-height: 44px;
+  padding: 0 var(--spacing-24);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: var(--color-purple-600);
+  color: var(--color-base-white);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  cursor: pointer;
+}
+
+.btn-register:hover:not(:disabled) {
+  background: var(--color-purple-500);
+}
+
+.btn-register:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.btn-register:disabled {
+  background: var(--color-grey-100);
+  color: var(--color-grey-300);
+  cursor: not-allowed;
 }
 
 /* Withdraw: outline in Red Error 300, label in Red Error 600; hover tints, focus rings. */

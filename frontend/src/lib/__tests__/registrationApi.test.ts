@@ -4,6 +4,8 @@ import {
   RegistrationRequestError,
   fetchAttendeeEventView,
   fetchMyRegistrations,
+  fetchOpenEvents,
+  register,
   withdraw,
 } from "../registrationApi";
 
@@ -109,5 +111,46 @@ describe("withdraw", () => {
 
     expect(error.message).toBe("Failed to withdraw");
     expect(error.code).toBeNull();
+  });
+});
+
+describe("fetchOpenEvents", () => {
+  it("requests the open events with the bearer token", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { events: [{ id: 3, registrationStatus: null }] }));
+
+    const result = await fetchOpenEvents();
+
+    expect(result).toEqual([{ id: 3, registrationStatus: null }]);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/open-events$/);
+    expect(init.headers).toEqual({ Authorization: "Bearer test-token" });
+  });
+
+  it("throws on a failed response", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(502, {}));
+
+    await expect(fetchOpenEvents()).rejects.toThrow("Failed to load events");
+  });
+});
+
+describe("register", () => {
+  it("posts the event id", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(201, {}));
+
+    await register("7");
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ eventId: 7 });
+  });
+
+  it("throws a RegistrationRequestError carrying the backend's code", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(409, { error: "Not open", code: "not_open" }));
+
+    const error = await register(7).catch((e) => e);
+
+    expect(error).toBeInstanceOf(RegistrationRequestError);
+    expect(error.code).toBe("not_open");
+    expect(error.status).toBe(409);
   });
 });

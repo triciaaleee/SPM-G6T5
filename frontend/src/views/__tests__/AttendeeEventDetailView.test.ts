@@ -7,6 +7,7 @@ import {
   AccessDeniedError,
   RegistrationRequestError,
   fetchAttendeeEventView,
+  register,
   withdraw,
   type AttendeeEventView,
 } from "../../lib/registrationApi";
@@ -17,12 +18,14 @@ vi.mock("../../lib/registrationApi", async () => {
     AccessDeniedError: actual.AccessDeniedError,
     RegistrationRequestError: actual.RegistrationRequestError,
     fetchAttendeeEventView: vi.fn(),
+    register: vi.fn(),
     withdraw: vi.fn(),
   };
 });
 
 const mockedView = vi.mocked(fetchAttendeeEventView);
 const mockedWithdraw = vi.mocked(withdraw);
+const mockedRegister = vi.mocked(register);
 
 const router = createRouter({
   history: createMemoryHistory(),
@@ -104,19 +107,52 @@ describe("AttendeeEventDetailView", () => {
     expect(wrapper.find(".details").text()).toContain("Venue to be confirmed");
   });
 
-  it("offers Withdraw registration only while registered, and never a Register button", async () => {
+  it("offers Withdraw only while registered, and Register only while open and not registered", async () => {
     mockedView.mockResolvedValue(eventView());
     const registered = await mountView();
     expect(registered.findAll("button").map((b) => b.text())).toEqual(["Withdraw registration"]);
 
-    mockedView.mockResolvedValue(eventView({ registrationStatus: "Withdrawn" }));
-    const withdrawn = await mountView();
-    expect(withdrawn.findAll("button")).toHaveLength(0);
+    mockedView.mockResolvedValue(eventView({ registrationStatus: "Withdrawn", open: false }));
+    const withdrawnClosed = await mountView();
+    expect(withdrawnClosed.findAll("button")).toHaveLength(0);
+
+    mockedView.mockResolvedValue(eventView({ registrationStatus: "Withdrawn", open: true }));
+    const withdrawnOpen = await mountView();
+    expect(withdrawnOpen.findAll("button").map((b) => b.text())).toEqual(["Register"]);
 
     mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
     const unregistered = await mountView();
-    expect(unregistered.findAll("button")).toHaveLength(0);
+    expect(unregistered.findAll("button").map((b) => b.text())).toEqual(["Register"]);
     expect(unregistered.find(".badge").exists()).toBe(false);
+  });
+
+  it("registers and flips the badge and button in place", async () => {
+    mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
+    mockedRegister.mockResolvedValue(undefined);
+    const wrapper = await mountView();
+
+    await wrapper.find("button").trigger("click");
+    await flushPromises();
+
+    expect(mockedRegister).toHaveBeenCalledWith("1");
+    expect(wrapper.find(".badge").text()).toBe("Registered");
+    expect(wrapper.findAll("button").map((b) => b.text())).toEqual(["Withdraw registration"]);
+  });
+
+  it("treats already_registered as success and shows an error when the event is no longer open", async () => {
+    mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
+    mockedRegister.mockRejectedValue(new RegistrationRequestError("dup", 409, "already_registered"));
+    const dup = await mountView();
+    await dup.find("button").trigger("click");
+    await flushPromises();
+    expect(dup.find(".badge").text()).toBe("Registered");
+
+    mockedRegister.mockRejectedValue(new RegistrationRequestError("closed", 409, "not_open"));
+    const closed = await mountView();
+    await closed.find("button").trigger("click");
+    await flushPromises();
+    expect(closed.find("[role='alert']").text()).toContain("no longer open");
+    expect(closed.findAll("button")).toHaveLength(0);
   });
 
   it("withdraws and flips the badge in place", async () => {

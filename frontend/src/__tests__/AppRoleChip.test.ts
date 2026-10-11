@@ -18,6 +18,7 @@ const router = createRouter({
     { path: "/", name: "home", component: { render: () => h("div") } },
     { path: "/login", name: "login", component: { render: () => h("div") } },
     { path: "/attendee/events", name: "attendee-events", component: { render: () => h("div") } },
+    { path: "/attendee/discover", name: "attendee-discover", component: { render: () => h("div") } },
     { path: "/coordinator", name: "coordinator-workload", component: { render: () => h("div") } },
     { path: "/venue-availability", name: "venue-availability", component: { render: () => h("div") } },
   ],

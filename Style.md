@@ -165,7 +165,7 @@ Use Grey Alpha tokens to create hierarchy, separation, and contrast without intr
 | `Colors/Purple Primary/300` | `#CEABF1` | Stroke colour, secondary button hover |
 | `Colors/Purple Primary/400` | `#A25FE5` | Secondary badge / chip fill |
 | `Colors/Purple Primary/500` | `#8841CF` | Interactive icon, link hover, Primary Button hover |
-| `Colors/Purple Primary/600` | `#701EC2` | **Primary button fill, primary link, active nav, secondary button label, text links and icons** |
+| `Colors/Purple Primary/600` | `#701EC2` | **Primary button fill, primary link, secondary button label, text links and icons** |
 | `Colors/Purple Primary/700` | `#5A04AF` | — |
 | `Colors/Purple Primary/800` | `#3F037A` | Deep emphasis |
 | `Colors/Purple Primary/900` | `#230244` | — |
@@ -349,6 +349,16 @@ Colour choice on the *non-solid* buttons follows the same logic as Section 2.8: 
 **AVOID:** Defaulting to a hollow/outline Secondary Blue button as if it were the standard secondary-button treatment — that treats a 10%-presence accent colour like a second primary, which is the mistake this section exists to prevent.
 
 ---
+
+### 3.5a App header navigation
+
+The header's wordmark and nav links follow these rules:
+
+- **Logo:** the ConnectSphere mark (`public/logoo.svg`) replaces a text wordmark. It is `spacing-40` tall with its width following the aspect ratio, and carries `alt="ConnectSphere"`.
+- **Nav links:** 16px, regular weight, capitalised, `Colors/Grey/500`; `Colors/Grey/900` on hover. The current page is marked by bold (700) `Colors/Secondary Blue/600` text, plus `aria-current="page"`.
+
+**AVOID:** Purple on the active nav link — the logo and most interactive elements (CTAs, links, focus rings) are already Purple Primary/600, and one more purple element here would blur with the brand mark. Secondary Blue is the relief accent for exactly this situation (Section 2.8).  
+**NOTE:** The Organiser role chip (Section 3.6) is also Secondary Blue. That is acceptable because organisers have no nav links; revisit if they gain any.
 
 ### 3.6 Role Chip Colours
 

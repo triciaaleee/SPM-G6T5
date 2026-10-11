@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 import EventsListView from "../views/EventsListView.vue";
 import AttendeeEventsView from "../views/AttendeeEventsView.vue";
+import AttendeeDiscoverView from "../views/AttendeeDiscoverView.vue";
 import AttendeeEventDetailView from "../views/AttendeeEventDetailView.vue";
 import EventDetailView from "../views/EventDetailView.vue";
 import NewEventRequestView from "../views/NewEventRequestView.vue";
@@ -30,6 +31,13 @@ export const router = createRouter({
       path: "/attendee/events",
       name: "attendee-events",
       component: AttendeeEventsView,
+      meta: { requiresAuth: true, roles: ["attendee"] },
+    },
+    {
+      // E6: events open for registration, to find and open before registering.
+      path: "/attendee/discover",
+      name: "attendee-discover",
+      component: AttendeeDiscoverView,
       meta: { requiresAuth: true, roles: ["attendee"] },
     },
     {

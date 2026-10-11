@@ -39,6 +39,18 @@ export interface AttendeeEventView {
   open: boolean;
 }
 
+/** An event open for registration, with the caller's own registration status for it (null if none). */
+export interface OpenEvent {
+  id: number;
+  name: string | null;
+  description: string | null;
+  proposedDate: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  accessibility: string | null;
+  registrationStatus: RegistrationStatus | null;
+}
+
 /** The backend refused the event: the attendee isn't registered and it isn't open (or it doesn't exist). */
 export class AccessDeniedError extends Error {}
 
@@ -93,4 +105,32 @@ export async function withdraw(eventId: number | string): Promise<void> {
     // No JSON body: fall back to the generic message below.
   }
   throw new RegistrationRequestError(body.error ?? "Failed to withdraw", res.status, body.code ?? null);
+}
+
+/** Events open for registration, each with the signed-in attendee's own registration status. */
+export async function fetchOpenEvents(): Promise<OpenEvent[]> {
+  const res = await fetch(`${apiBase}/open-events`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) throw new Error("Failed to load events");
+  const body = await res.json();
+  return body.events as OpenEvent[];
+}
+
+/** Register the attendee for an open event (or re-register after a withdrawal). */
+export async function register(eventId: number | string): Promise<void> {
+  const res = await fetch(apiBase, {
+    method: "POST",
+    headers: { ...authHeader(), "Content-Type": "application/json" },
+    body: JSON.stringify({ eventId: Number(eventId) }),
+  });
+  await redirectIfUnauthenticated(res);
+  if (res.ok) return;
+
+  let body: { error?: string; code?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    // No JSON body: fall back to the generic message below.
+  }
+  throw new RegistrationRequestError(body.error ?? "Failed to register", res.status, body.code ?? null);
 }
