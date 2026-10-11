@@ -30,7 +30,7 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-const port = Number(process.env.REGISTRATION_SERVICE_PORT ?? 4006);
+const port = Number(process.env.REGISTRATION_SERVICE_PORT ?? 4007);
 app.listen(port, () => {
   console.log(`registration-service listening on :${port}`);
 });

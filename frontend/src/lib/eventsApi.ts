@@ -262,6 +262,108 @@ export function requestClarification(id: number, message: string): Promise<Event
   return postReviewAction(id, "request-clarification", { message });
 }
 
+/** E3-4 AC5: the notes the Safety Officer reviews, all required. */
+export interface SafetyNotes {
+  equipmentPlacement: string;
+  crowdMovement: string;
+  emergencyAccess: string;
+  venueRestrictions: string;
+}
+
+/** E3-4 AC2/AC3: what still has to be settled before the event can be submitted. */
+export interface OutstandingArrangements {
+  noApprovedVenue: boolean;
+  bookings: { bookingId: number; venueName: string | null; status: string }[];
+  equipment: { requestId: number; equipmentType: string; quantity: number; quantityReserved: number }[];
+}
+
+/**
+ * Thrown when the backend refuses a safety-review submission. `fields` holds
+ * per-note errors (AC5); `outstanding` the unsettled arrangements (AC2/AC3).
+ * The message is server-provided and safe to show directly.
+ */
+export class SafetyReviewSubmitError extends Error {
+  fields: Record<string, string>;
+  outstanding: OutstandingArrangements | null;
+  constructor(message: string, fields: Record<string, string> = {}, outstanding: OutstandingArrangements | null = null) {
+    super(message);
+    this.fields = fields;
+    this.outstanding = outstanding;
+  }
+}
+
+/** E3-4: the assigned coordinator submits a Planning event for safety review. */
+export async function submitForSafetyReview(id: number, safetyNotes: SafetyNotes): Promise<EventSummary> {
+  const res = await fetch(`${apiBase}/${id}/submit-safety-review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ safetyNotes }),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new SafetyReviewSubmitError(
+      body.error ?? "We couldn't submit this event for safety review. Please try again.",
+      body.fields ?? {},
+      body.outstanding ?? null,
+    );
+  }
+  return body.event as EventSummary;
+}
+
+/**
+ * E1-8 AC1: the Event Coordinator Lead's unassigned queue — submitted
+ * requests waiting for a coordinator, oldest submission first. Any other
+ * role gets a 403 (AC3), surfaced as AccessDeniedError.
+ */
+export async function fetchUnassignedQueue(): Promise<EventSummary[]> {
+  const res = await fetch(`${apiBase}/unassigned`, { headers: await authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (res.status === 403) throw new AccessDeniedError("Only the Event Coordinator Lead can view the unassigned queue");
+  if (!res.ok) throw new Error("Failed to load the unassigned queue");
+  const body = await res.json();
+  return body.events as EventSummary[];
+}
+
+/**
+ * Thrown by assign/reassign when the backend refuses (already assigned,
+ * closed event, not an active coordinator, someone else got there first).
+ * The message is server-provided and safe to show directly.
+ */
+export class AssignmentError extends Error {}
+
+export interface AssignmentResult {
+  event: EventSummary;
+  /** The change saved, but notification-service didn't accept every notification. */
+  notificationsFailed: boolean;
+}
+
+async function postAssignment(id: number, action: "assign" | "reassign", coordinatorId: string): Promise<AssignmentResult> {
+  const res = await fetch(`${apiBase}/${id}/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ coordinatorId }),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json();
+  if (!res.ok) throw new AssignmentError(body.error ?? "That change couldn't be saved");
+  return { event: body.event as EventSummary, notificationsFailed: body.notificationsFailed === true };
+}
+
+/** E2-13: the Lead assigns an Unassigned request to a coordinator. */
+export function assignCoordinator(id: number, coordinatorId: string): Promise<AssignmentResult> {
+  return postAssignment(id, "assign", coordinatorId);
+}
+
+/** E2-12: the Lead hands an assigned event to a different coordinator. */
+export function reassignCoordinator(id: number, coordinatorId: string): Promise<AssignmentResult> {
+  return postAssignment(id, "reassign", coordinatorId);
+}
+
 export interface ClarificationMessage {
   id: number;
   parent_id: number | null;

@@ -105,18 +105,79 @@ export type DecisionResult =
   | { status: "error" };
 
 /**
+ * E4-12, change 4: the coordinator hears about an expiry "before or when it
+ * expires" — the system decided, so `decided_by` is null, same as an
+ * auto-rejection.
+ */
+function expiredNotification(
+  venue: Pick<VenueRow, "id" | "name">,
+  booking: BookingRow,
+  event: VenueBookingInfo | undefined,
+): NewNotification | null {
+  const coordinatorId = event?.coordinatorId;
+  if (!coordinatorId) return null;
+  const eventName = eventLabel(event, booking.event_id);
+  return {
+    recipientId: coordinatorId,
+    type: "venue_booking_expired",
+    title: `${venue.name} — hold expired`,
+    body:
+      `The hold on ${venue.name} for ${eventName} expired before it was decided. ` +
+      "You can request another venue or another time.",
+    link: `/events/${booking.event_id}`,
+  };
+}
+
+/**
+ * E4-12: every lapsed `On Hold` row becomes `Expired`, and its coordinator
+ * is told (change 4). Best-effort and shared by the single-booking sweep
+ * (`sweepIfExpired`) and the queue's bulk sweep, so both notify the same way.
+ */
+export async function expireLapsedHolds(
+  supabase: Supabase,
+  lapsed: BookingRow[],
+  venuesById: Map<number, Pick<VenueRow, "id" | "name">>,
+  authorization: string,
+): Promise<void> {
+  if (lapsed.length === 0) return;
+  const now = new Date();
+  const { error } = await supabase
+    .from("venue_bookings")
+    .update({ status: "Expired", decided_at: now.toISOString(), decided_by: null })
+    .in(
+      "id",
+      lapsed.map((booking) => booking.id),
+    )
+    .eq("status", "On Hold");
+  if (error) return;
+
+  const info = await fetchVenueBookingInfo([...new Set(lapsed.map((booking) => booking.event_id))], authorization);
+  const eventsById = info.status === "ok" ? new Map(info.events.map((event) => [event.id, event])) : new Map();
+
+  const notifications = lapsed.flatMap((booking) => {
+    const venue = venuesById.get(booking.venue_id);
+    if (!venue) return [];
+    const notification = expiredNotification(venue, booking, eventsById.get(booking.event_id));
+    return notification ? [notification] : [];
+  });
+  await notifyDecision(notifications, authorization);
+}
+
+/**
  * E4-12: a hold that has passed its deadline is `Expired` — it holds
  * nothing and has no approve/hold/reject action. §3a requires expiry to be
  * applied whenever availability is checked, so it is swept here rather
  * than waiting for a scheduled job.
  */
-async function sweepIfExpired(supabase: Supabase, booking: BookingRow, now: Date): Promise<boolean> {
+async function sweepIfExpired(
+  supabase: Supabase,
+  booking: BookingRow,
+  venue: VenueRow,
+  now: Date,
+  authorization: string,
+): Promise<boolean> {
   if (booking.status !== "On Hold" || blocksVenue(booking, now)) return false;
-  await supabase
-    .from("venue_bookings")
-    .update({ status: "Expired", decided_at: now.toISOString(), decided_by: null })
-    .eq("id", booking.id)
-    .eq("status", "On Hold");
+  await expireLapsedHolds(supabase, [booking], new Map([[venue.id, venue]]), authorization);
   return true;
 }
 
@@ -339,7 +400,16 @@ export async function decideBooking(supabase: Supabase, input: DecisionInput): P
   if (assignment.status === "error") return { status: "error" };
   if (!assignment.assigned) return { status: "not_assigned" };
 
-  if (await sweepIfExpired(supabase, booking, now)) {
+  const { data: venueData, error: venueError } = await supabase
+    .from("venues")
+    .select(VENUE_COLUMNS)
+    .eq("id", booking.venue_id)
+    .maybeSingle();
+  if (venueError) return { status: "error" };
+  if (!venueData) return { status: "not_found" };
+  const venue = venueData as VenueRow;
+
+  if (await sweepIfExpired(supabase, booking, venue, now, input.authorization)) {
     return { status: "blocked", message: "This hold has expired, so it can no longer be decided" };
   }
 
@@ -349,15 +419,6 @@ export async function decideBooking(supabase: Supabase, input: DecisionInput): P
       message: `A ${booking.status} booking cannot be ${input.decision === "Rejected" ? "rejected" : `moved to ${input.decision}`}`,
     };
   }
-
-  const { data: venueData, error: venueError } = await supabase
-    .from("venues")
-    .select(VENUE_COLUMNS)
-    .eq("id", booking.venue_id)
-    .maybeSingle();
-  if (venueError) return { status: "error" };
-  if (!venueData) return { status: "not_found" };
-  const venue = venueData as VenueRow;
 
   const result =
     input.decision === "Rejected"

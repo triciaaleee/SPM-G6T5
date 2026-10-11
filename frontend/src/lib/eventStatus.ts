@@ -43,7 +43,9 @@ export function statusLabel(status: string): string {
  * rejection note / clarification thread, not this summary field).
  */
 export function reviewOutcomeLabel(status: string): string {
-  if (status === "Planning" || status === "Confirmed" || status === "Completed") return "Approved";
+  if (status === "Planning" || status === "Safety Review" || status === "Confirmed" || status === "Completed") {
+    return "Approved";
+  }
   if (status === "Rejected") return "Rejected";
   if (status === "Clarification Requested") return "Clarification Ongoing";
   return "Pending"; // Requested / Unassigned

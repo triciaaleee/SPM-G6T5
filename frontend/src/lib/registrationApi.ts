@@ -66,7 +66,7 @@ export class RegistrationRequestError extends Error {
 }
 
 const apiBase =
-  (import.meta.env.VITE_REGISTRATION_API_URL as string | undefined) ?? "http://localhost:4006/api/registrations";
+  (import.meta.env.VITE_REGISTRATION_API_URL as string | undefined) ?? "http://localhost:4007/api/registrations";
 
 /** The signed-in attendee's own registrations, newest first. */
 export async function fetchMyRegistrations(userId: string): Promise<MyRegistration[]> {

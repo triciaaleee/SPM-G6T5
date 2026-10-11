@@ -17,8 +17,11 @@ interface StatusGroup {
   statuses: string[];
 }
 
+// "Unassigned" isn't a coordinator's to act on — the Lead assigns it
+// (E2-13) — so it's its own group, seen only under "All events".
 const STATUS_GROUPS: StatusGroup[] = [
-  { key: "needs-review",  label: "Needs Review",            statuses: ["Requested", "Unassigned"] },
+  { key: "needs-review",  label: "Needs Review",            statuses: ["Requested"] },
+  { key: "unassigned",    label: "Unassigned",              statuses: ["Unassigned"] },
   { key: "clarification", label: "Clarification Requested", statuses: ["Clarification Requested"] },
   { key: "planning",      label: "Planning",                statuses: ["Planning"] },
   { key: "confirmed",     label: "Confirmed",               statuses: ["Confirmed"] },
@@ -26,8 +29,8 @@ const STATUS_GROUPS: StatusGroup[] = [
   { key: "rejected",      label: "Rejected",                statuses: ["Rejected"] },
 ];
 
-// Statuses that wait on the coordinator (Requested, Unassigned): flagged with an accent bar.
-const NEEDS_ACTION_STATUSES = ["Requested", "Unassigned"];
+// Statuses that wait on the coordinator: flagged with an accent bar. Unassigned is the Lead's to act on.
+const NEEDS_ACTION_STATUSES = ["Requested"];
 
 function needsAction(event: EventSummary): boolean {
   return NEEDS_ACTION_STATUSES.includes(event.status);
@@ -53,11 +56,10 @@ function coordinatorInitial(event: EventSummary): string {
   return event.coordinator?.name?.charAt(0).toUpperCase() ?? "";
 }
 
+/** E1-8 AC4: "My events" is only what's assigned to this coordinator. */
 const visibleEvents = computed(() => {
   if (viewMode.value === "mine") {
-    return events.value.filter(
-      (e) => e.coordinator_id === userId.value || e.status === "Unassigned",
-    );
+    return events.value.filter((e) => e.coordinator_id === userId.value);
   }
   return events.value;
 });

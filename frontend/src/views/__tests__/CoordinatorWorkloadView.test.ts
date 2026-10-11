@@ -94,7 +94,7 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     expect(cards).toHaveLength(1);
   });
 
-  it("includes Unassigned events so the coordinator can self-assign them", async () => {
+  it("leaves Unassigned events out — only events assigned to me (E1-8 AC4)", async () => {
     const events = [
       makeEvent({ id: 1, coordinator_id: "COORD-0001" }),
       makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
@@ -102,7 +102,7 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     const wrapper = await mountView(events, "COORD-0001");
 
     const cards = wrapper.findAll(".event-card");
-    expect(cards).toHaveLength(2);
+    expect(cards).toHaveLength(1);
   });
 
   it("excludes events assigned to a different coordinator", async () => {
@@ -149,16 +149,17 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     expect(cards[1].text()).toContain("Late Event");
   });
 
-  it("marks only cards that wait on the coordinator with the accent bar class", async () => {
+  it("marks only Requested cards with the accent bar class, not Unassigned (the Lead's to assign)", async () => {
     const events = [
       makeEvent({ id: 1, status: "Requested" }),
       makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
       makeEvent({ id: 3, status: "Planning" }),
     ];
     const wrapper = await mountView(events);
+    await wrapper.findAll(".toggle-btn")[1].trigger("click");
 
     expect(wrapper.findAll(".event-card")).toHaveLength(3);
-    expect(wrapper.findAll(".event-card--needs-action")).toHaveLength(2);
+    expect(wrapper.findAll(".event-card--needs-action")).toHaveLength(1);
     expect(wrapper.findAll(".event-card--action")).toHaveLength(0);
   });
 });
@@ -166,9 +167,20 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
 describe("CoordinatorWorkloadView — status tabs", () => {
   const tabEvents = () => [
     makeEvent({ id: 1, status: "Requested" }),
-    makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
+    makeEvent({ id: 2, status: "Requested" }),
     makeEvent({ id: 3, status: "Planning" }),
   ];
+
+  it("gives Unassigned events their own tab under All events", async () => {
+    const wrapper = await mountView([
+      makeEvent({ id: 1, status: "Requested" }),
+      makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
+    ]);
+    await wrapper.findAll(".toggle-btn")[1].trigger("click");
+
+    const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
+    expect(tabs).toEqual(["All 2", "Needs Review 1", "Unassigned 1"]);
+  });
 
   it("renders an All tab plus one tab per non-empty group, with counts", async () => {
     const wrapper = await mountView(tabEvents());

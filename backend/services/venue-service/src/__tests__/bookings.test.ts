@@ -116,6 +116,8 @@ function buildApp(
     eventStatus?: string;
     eventDetails?: Record<string, unknown>;
     eventHttpStatus?: number;
+    /** The event's assigned coordinator, as events-service returns it. */
+    eventCoordinatorId?: string | null;
     bookings?: BookingFixture[];
     bookedEvents?: Record<string, unknown>[];
     existing?: { id: number; status: string }[];
@@ -196,6 +198,7 @@ function buildApp(
           id: 7,
           status: options.eventStatus ?? "Planning",
           submitted_details: options.eventDetails ?? eventDetails(),
+          coordinator_id: options.eventCoordinatorId === undefined ? "COORD-0001" : options.eventCoordinatorId,
         },
       }),
     };
@@ -284,6 +287,17 @@ describe("POST /api/venues/bookings access", () => {
     expect(res.status).toBe(403);
     expect(supabase.from).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["another coordinator's event (or one reassigned away, E2-12 AC6)", "COORD-0002"],
+    ["an event with no coordinator yet", null],
+  ])("rejects a coordinator requesting a venue for %s", async (_label, eventCoordinatorId) => {
+    const { app, insert } = buildApp({ eventCoordinatorId });
+    const res = await submit(app);
+
+    expect(res.status).toBe(403);
+    expect(insert).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/venues/bookings", () => {
@@ -341,7 +355,9 @@ describe("POST /api/venues/bookings", () => {
       return {
         ok: true,
         status: 200,
-        json: async () => ({ event: { id: 7, status: "Planning", submitted_details: eventDetails() } }),
+        json: async () => ({
+          event: { id: 7, status: "Planning", submitted_details: eventDetails(), coordinator_id: "COORD-0001" },
+        }),
       };
     });
 

@@ -110,19 +110,19 @@ describe("AttendeeEventDetailView", () => {
   it("offers Withdraw only while registered, and Register only while open and not registered", async () => {
     mockedView.mockResolvedValue(eventView());
     const registered = await mountView();
-    expect(registered.findAll("button").map((b) => b.text())).toEqual(["Withdraw registration"]);
+    expect(registered.findAll(".actions button").map((b) => b.text())).toEqual(["Withdraw registration"]);
 
     mockedView.mockResolvedValue(eventView({ registrationStatus: "Withdrawn", open: false }));
     const withdrawnClosed = await mountView();
-    expect(withdrawnClosed.findAll("button")).toHaveLength(0);
+    expect(withdrawnClosed.findAll(".actions button")).toHaveLength(0);
 
     mockedView.mockResolvedValue(eventView({ registrationStatus: "Withdrawn", open: true }));
     const withdrawnOpen = await mountView();
-    expect(withdrawnOpen.findAll("button").map((b) => b.text())).toEqual(["Register"]);
+    expect(withdrawnOpen.findAll(".actions button").map((b) => b.text())).toEqual(["Register"]);
 
     mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
     const unregistered = await mountView();
-    expect(unregistered.findAll("button").map((b) => b.text())).toEqual(["Register"]);
+    expect(unregistered.findAll(".actions button").map((b) => b.text())).toEqual(["Register"]);
     expect(unregistered.find(".badge").exists()).toBe(false);
   });
 
@@ -131,28 +131,28 @@ describe("AttendeeEventDetailView", () => {
     mockedRegister.mockResolvedValue(undefined);
     const wrapper = await mountView();
 
-    await wrapper.find("button").trigger("click");
+    await wrapper.find(".actions button").trigger("click");
     await flushPromises();
 
     expect(mockedRegister).toHaveBeenCalledWith("1");
     expect(wrapper.find(".badge").text()).toBe("Registered");
-    expect(wrapper.findAll("button").map((b) => b.text())).toEqual(["Withdraw registration"]);
+    expect(wrapper.findAll(".actions button").map((b) => b.text())).toEqual(["Withdraw registration"]);
   });
 
   it("treats already_registered as success and shows an error when the event is no longer open", async () => {
     mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
     mockedRegister.mockRejectedValue(new RegistrationRequestError("dup", 409, "already_registered"));
     const dup = await mountView();
-    await dup.find("button").trigger("click");
+    await dup.find(".actions button").trigger("click");
     await flushPromises();
     expect(dup.find(".badge").text()).toBe("Registered");
 
     mockedRegister.mockRejectedValue(new RegistrationRequestError("closed", 409, "not_open"));
     const closed = await mountView();
-    await closed.find("button").trigger("click");
+    await closed.find(".actions button").trigger("click");
     await flushPromises();
     expect(closed.find("[role='alert']").text()).toContain("no longer open");
-    expect(closed.findAll("button")).toHaveLength(0);
+    expect(closed.findAll(".actions button")).toHaveLength(0);
   });
 
   it("withdraws and flips the badge in place", async () => {
@@ -160,13 +160,13 @@ describe("AttendeeEventDetailView", () => {
     mockedWithdraw.mockResolvedValue(undefined);
     const wrapper = await mountView();
 
-    await wrapper.find("button").trigger("click");
+    await wrapper.find(".actions button").trigger("click");
     await flushPromises();
 
     expect(mockedWithdraw).toHaveBeenCalledWith("1");
     expect(wrapper.find(".badge").text()).toBe("Withdrawn");
     expect(wrapper.find(".badge").classes()).toContain("status-warning");
-    expect(wrapper.findAll("button")).toHaveLength(0);
+    expect(wrapper.findAll(".actions button")).toHaveLength(0);
   });
 
   it("disables the button while withdrawing", async () => {
@@ -175,10 +175,10 @@ describe("AttendeeEventDetailView", () => {
     mockedWithdraw.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
     const wrapper = await mountView();
 
-    await wrapper.find("button").trigger("click");
+    await wrapper.find(".actions button").trigger("click");
 
-    expect(wrapper.find("button").attributes("disabled")).toBeDefined();
-    expect(wrapper.find("button").text()).toBe("Withdrawing…");
+    expect(wrapper.find(".actions button").attributes("disabled")).toBeDefined();
+    expect(wrapper.find(".actions button").text()).toBe("Withdrawing…");
     finish();
     await flushPromises();
   });
@@ -188,12 +188,12 @@ describe("AttendeeEventDetailView", () => {
     mockedWithdraw.mockRejectedValue(new RegistrationRequestError("Failed to withdraw", 500, null));
     const wrapper = await mountView();
 
-    await wrapper.find("button").trigger("click");
+    await wrapper.find(".actions button").trigger("click");
     await flushPromises();
 
     expect(wrapper.find('[role="alert"]').text()).toBe("Failed to withdraw");
     expect(wrapper.find(".badge").text()).toBe("Registered");
-    expect(wrapper.find("button").attributes("disabled")).toBeUndefined();
+    expect(wrapper.find(".actions button").attributes("disabled")).toBeUndefined();
   });
 
   it("treats 'already withdrawn' as withdrawn", async () => {
@@ -201,7 +201,7 @@ describe("AttendeeEventDetailView", () => {
     mockedWithdraw.mockRejectedValue(new RegistrationRequestError("already", 409, "already_withdrawn"));
     const wrapper = await mountView();
 
-    await wrapper.find("button").trigger("click");
+    await wrapper.find(".actions button").trigger("click");
     await flushPromises();
 
     expect(wrapper.find(".badge").text()).toBe("Withdrawn");
@@ -214,8 +214,8 @@ describe("AttendeeEventDetailView", () => {
     expect(wrapper.find('[role="alert"]').text()).toContain("You don't have access to this event");
     expect(wrapper.find(".details").exists()).toBe(false);
     expect(wrapper.find(".badge").exists()).toBe(false);
-    expect(wrapper.find("button").exists()).toBe(false);
-    expect(wrapper.find("a").attributes("href")).toBe("/attendee/events");
+    expect(wrapper.find(".actions button").exists()).toBe(false);
+    expect(wrapper.find(".back-link").text()).toContain("Back");
   });
 
   it("shows an error message when loading fails", async () => {

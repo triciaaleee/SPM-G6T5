@@ -110,10 +110,13 @@ async function loadBlockingWindows(
 }
 
 /**
- * AC2: venues with a blocking booking overlapping the requested window.
- * The requested window is padded by the same venue's setup/turnaround
- * times as the booking it is compared against, so the two are measured the
- * same way. Resolves to null when a lookup fails.
+ * AC2 / E4-16: venues that can't host the requested window. The requested
+ * window is padded by each venue's own setup/turnaround and compared with
+ * that venue's blocking bookings (each padded the same way) and its
+ * block-out periods. Windows are half-open, so a requested window starting
+ * exactly when a booking's padded window ends is still free. A venue with
+ * no setup/turnaround configured is compared on the bare times. Resolves to
+ * null when a lookup fails.
  */
 async function findUnavailableVenueIds(
   supabase: NonNullable<AuthedRequest["supabase"]>,
@@ -125,8 +128,17 @@ async function findUnavailableVenueIds(
   const unavailableVenueIds = new Set<number>();
   if (!criteria.date) return unavailableVenueIds;
 
+  const wanted = new Map<number, OccupiedWindow>();
+  for (const venue of venues) {
+    const window = occupiedWindow(
+      { proposedDate: criteria.date, startTime: criteria.startTime, endTime: criteria.endTime },
+      venue,
+    );
+    if (window) wanted.set(venue.id, window);
+  }
+
   // E4-3 AC3: venues staff have blocked out for this slot are excluded too.
-  const blockedVenueIds = await findBlockedVenueIds(supabase, criteria.date, criteria.startTime, criteria.endTime);
+  const blockedVenueIds = await findBlockedVenueIds(supabase, wanted);
   if (blockedVenueIds === null) return null;
   for (const id of blockedVenueIds) unavailableVenueIds.add(id);
 
@@ -148,14 +160,6 @@ async function findUnavailableVenueIds(
   const eventsById = new Map(infoResult.events.map((event) => [event.id, event]));
 
   const venuesById = new Map(venues.map((venue) => [venue.id, venue]));
-  const wanted = new Map<number, OccupiedWindow>();
-  for (const venue of venues) {
-    const window = occupiedWindow(
-      { proposedDate: criteria.date, startTime: criteria.startTime, endTime: criteria.endTime },
-      venue,
-    );
-    if (window) wanted.set(venue.id, window);
-  }
 
   // Each booking occupies its venue for the event's times padded by that
   // venue's setup and turnaround, and the requested window is padded the
@@ -544,7 +548,7 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
   }
 
   // events-service is asked with the coordinator's own token, so its access
-  // rules decide whether this event is theirs to plan.
+  // rules decide whether this event is theirs to see.
   const eventResult = await fetchEvent(eventId, req.headers.authorization!);
   if (eventResult.status === "not_found") {
     res.status(404).json({ error: "Event not found" });
@@ -552,6 +556,13 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
   }
   if (eventResult.status === "error") {
     res.status(502).json({ error: "Failed to load the event" });
+    return;
+  }
+  // Every coordinator can see every event, but only the assigned one plans
+  // it — so a coordinator an event was reassigned away from (E2-12 AC6), or
+  // one it was never assigned to, can't request venues for it.
+  if (eventResult.event.coordinator_id !== req.user!.id) {
+    res.status(403).json({ error: "Only the event's assigned coordinator can request a venue for it" });
     return;
   }
   // §3a: — → `Requested` happens while venue arrangements are being made.

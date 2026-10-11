@@ -119,6 +119,17 @@ describe("POST /api/notifications", () => {
     ]);
   });
 
+  it("lets the Event Coordinator Lead notify about assignments (E2-13, E2-12)", async () => {
+    const { app, insert } = buildApp({ user: { id: "LEAD-0001", role: "coordinator_lead" } });
+
+    const res = await request(app)
+      .post("/api/notifications")
+      .send({ notifications: [{ ...valid, type: "event_assigned" }] });
+
+    expect(res.status).toBe(201);
+    expect(insert).toHaveBeenCalled();
+  });
+
   it("rejects attendees", async () => {
     const { app, insert } = buildApp({ user: { id: "ATT-0001", role: "attendee" } });
 

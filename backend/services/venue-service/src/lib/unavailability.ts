@@ -172,52 +172,6 @@ export function periodBlocksSlot(
   return period.startTime < end && period.endTime > start;
 }
 
-/**
- * AC3: ids of venues blocked out for a search slot. The slot is widened by
- * each venue's own setup/turnaround first — an event can't start at 20:00
- * in a venue blocked until 20:00 if it needs 30 minutes to set up. Resolves
- * to null when a lookup fails, so the caller can fail the search rather
- * than show a venue that may well be unavailable.
- */
-export async function findBlockedVenueIds(
-  supabase: Supabase,
-  date: string,
-  startTime?: string,
-  endTime?: string,
-): Promise<Set<number> | null> {
-  const { data, error } = await supabase
-    .from("venue_unavailability")
-    .select(PERIOD_COLUMNS)
-    .lte("start_date", date)
-    .gte("end_date", date);
-  if (error) return null;
-
-  const rows = (data ?? []) as PeriodRow[];
-  if (rows.length === 0) return new Set();
-
-  // Buffers only matter for a timed search; an all-day search clashes with
-  // any block that day regardless.
-  const buffersByVenue = new Map<number, VenueBuffers>();
-  if (startTime && endTime) {
-    const venueIds = [...new Set(rows.map((row) => row.venue_id))];
-    const { data: venues, error: venuesError } = await supabase
-      .from("venues")
-      .select("id, setup_minutes, turnaround_minutes")
-      .in("id", venueIds);
-    if (venuesError) return null;
-    for (const venue of (venues ?? []) as { id: number; setup_minutes: number; turnaround_minutes: number }[]) {
-      buffersByVenue.set(venue.id, toBuffers(venue));
-    }
-  }
-
-  const blocked = new Set<number>();
-  for (const row of rows) {
-    const slot = occupiedWindow(startTime, endTime, buffersByVenue.get(row.venue_id) ?? NO_BUFFERS);
-    if (periodBlocksSlot(toPeriod(row), date, slot.start, slot.end)) blocked.add(row.venue_id);
-  }
-  return blocked;
-}
-
 const MINUTE_MS = 60 * 1000;
 
 /** "YYYY-MM-DD" of an epoch-ms instant, read as UTC like lib/bookingConflicts. */
@@ -254,6 +208,37 @@ export function periodOverlapsWindow(
     if (overlaps(block, window)) return true;
   }
   return false;
+}
+
+/**
+ * AC3 / E4-16: ids of venues blocked out for a search slot. `windows` holds
+ * each venue's requested window, already widened by that venue's own
+ * setup/turnaround (lib/bookingConflicts occupiedWindow) — an event can't
+ * start at 20:00 in a venue blocked until 20:00 if it needs 30 minutes to
+ * set up. Padding can carry a window into the day before or after, so
+ * block-outs on those days are checked too. Resolves to null when the
+ * lookup fails, so the caller can fail the search rather than show a venue
+ * that may well be unavailable.
+ */
+export async function findBlockedVenueIds(
+  supabase: Supabase,
+  windows: Map<number, OccupiedWindow>,
+): Promise<Set<number> | null> {
+  if (windows.size === 0) return new Set();
+  const all = [...windows.values()];
+  const { data, error } = await supabase
+    .from("venue_unavailability")
+    .select(PERIOD_COLUMNS)
+    .lte("start_date", dateOf(Math.max(...all.map((w) => w.endMs)) - 1))
+    .gte("end_date", dateOf(Math.min(...all.map((w) => w.startMs))));
+  if (error) return null;
+
+  const blocked = new Set<number>();
+  for (const row of (data ?? []) as PeriodRow[]) {
+    const window = windows.get(row.venue_id);
+    if (window && periodOverlapsWindow(toPeriod(row), window)) blocked.add(row.venue_id);
+  }
+  return blocked;
 }
 
 /**

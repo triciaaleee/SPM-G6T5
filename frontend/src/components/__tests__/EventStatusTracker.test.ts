@@ -128,6 +128,12 @@ describe("EventStatusTracker — outstanding arrangements (E3-1 AC3)", () => {
     expect(wrapper.text()).not.toContain("Equipment");
   });
 
+  it("E3-4: a booking that needs a replacement venue keeps the venue outstanding", () => {
+    const wrapper = mountTracker([booking({ status: "Approved" }), booking({ id: 901, status: "Replacement Required" })]);
+    expect(venueLine(wrapper).text()).toBe("Venue — 1 needs a replacement");
+    expect(venueLine(wrapper).classes()).not.toContain("outstanding__item--done");
+  });
+
   it("stays outstanding when one of several requests isn't Arranged yet", () => {
     const wrapper = mountTracker(
       [],
@@ -135,5 +141,29 @@ describe("EventStatusTracker — outstanding arrangements (E3-1 AC3)", () => {
     );
     expect(equipmentLine(wrapper).text()).toBe("Equipment — 1 awaiting Technical Support");
     expect(equipmentLine(wrapper).classes()).not.toContain("outstanding__item--done");
+  });
+});
+
+describe("EventStatusTracker timeline (E3-4)", () => {
+  function mountTimeline(status: string) {
+    return mount(EventStatusTracker, {
+      props: { status, lastChangedAt: "2026-10-07T02:00:00.000Z", reviewOutcome: null, showOutstanding: false },
+    });
+  }
+
+  it("places Safety Review after Requested, not back at the start", () => {
+    const wrapper = mountTimeline("Safety Review");
+    const steps = wrapper.findAll(".status-tracker__step");
+
+    expect(steps[0].attributes("data-state")).toBe("complete");
+    expect(steps[1].attributes("data-state")).toBe("current");
+    expect(steps[1].text()).toContain("Safety Review");
+    expect(wrapper.text()).toContain("Operational Safety Check");
+  });
+
+  it("still labels stage two Planning while the event is in Planning", () => {
+    const steps = mountTimeline("Planning").findAll(".status-tracker__step");
+    expect(steps[1].text()).toContain("Planning");
+    expect(steps[1].attributes("data-state")).toBe("current");
   });
 });

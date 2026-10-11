@@ -14,6 +14,8 @@ const props = defineProps<{
   /** Coordinator-only: whether the thread can be acted on right now — asking a follow-up question or resolving one (AC2: only while clarification is outstanding). */
   canManage: boolean;
   currentUserId: string;
+  /** E1-8 AC2: the Event Coordinator Lead reads the thread but can't reply. */
+  readOnly?: boolean;
 }>();
 
 const messages = ref<ClarificationMessage[]>([]);
@@ -259,7 +261,7 @@ onMounted(refresh);
                Independent of the expand toggle below, not an else-branch
                of it — a resolved question must still require a click to
                reveal the thread, not just skip straight to it. -->
-          <div v-if="!expanded.has(q.id) && !q.resolved" class="clarification-thread__reply-area">
+          <div v-if="!readOnly && !expanded.has(q.id) && !q.resolved" class="clarification-thread__reply-area">
             <button type="button" class="clarification-thread__reply-btn" @click="openReplyBox(q.id)">
               Reply
             </button>
@@ -285,7 +287,7 @@ onMounted(refresh);
 
             <!-- Reply drops to the bottom of the thread, like a thread input.
                  Resolved questions are read-only — the thread stays viewable, but no more replies. -->
-            <template v-if="!q.resolved">
+            <template v-if="!readOnly && !q.resolved">
               <div v-if="replyOpenFor === q.id" class="clarification-thread__reply-box">
                 <textarea v-model="replyText" rows="2" class="clarification-panel__textarea" placeholder="Write a reply…" />
                 <p v-if="replyError" class="clarification-panel__error">{{ replyError }}</p>

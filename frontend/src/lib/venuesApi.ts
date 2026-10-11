@@ -195,6 +195,136 @@ export async function fetchStaffVenues(): Promise<StaffVenueOption[]> {
   return ((await res.json()) as { venues: StaffVenueOption[] }).venues;
 }
 
+/**
+ * E4-1: a venue record as venue staff fill it in. The number fields are the
+ * raw text typed, so "abc" reaches validation instead of silently becoming
+ * 0 (AC4); the server does the same parsing.
+ */
+export interface VenueDraft {
+  name: string;
+  location: string;
+  description: string;
+  capacity: string;
+  accessibility: string[];
+  /** The venue genuinely has none — sent with an empty `accessibility` list. */
+  noAccessibilityFeatures: boolean;
+  layouts: string[];
+  facilities: string[];
+  setupMinutes: string;
+  turnaroundMinutes: string;
+  /** "HH:MM". */
+  openingTime: string;
+  closingTime: string;
+}
+
+/** A saved venue record, as venue-service returns it. */
+export interface VenueRecord {
+  id: number;
+  name: string;
+  location: string;
+  description: string;
+  capacity: number;
+  accessibility: string[];
+  layouts: string[];
+  facilities: string[];
+  setupMinutes: number;
+  turnaroundMinutes: number;
+  openingTime: string;
+  closingTime: string;
+  status: string;
+}
+
+/** AC6: a future Approved booking whose expected attendance no longer fits. */
+export interface CapacityShortfall {
+  bookingId: number;
+  eventId: number;
+  eventName: string | null;
+  date: string;
+  expectedAttendance: number;
+  hasCoordinator: boolean;
+}
+
+interface OverlapSide {
+  bookingId: number;
+  eventId: number;
+  eventName: string | null;
+  /** The booking's new occupied window, e.g. "2026-10-12 09:30–12:45". */
+  window: string;
+  hasCoordinator: boolean;
+}
+
+/** Two bookings that only overlap under the new setup/turnaround times (§3a change 1). */
+export interface BufferOverlap {
+  first: OverlapSide;
+  second: OverlapSide;
+}
+
+export interface VenueChangeImpact {
+  capacityShortfalls: CapacityShortfall[];
+  bufferOverlaps: BufferOverlap[];
+}
+
+export interface VenueUpdateResult extends VenueChangeImpact {
+  venue: VenueRecord;
+  coordinatorsNotified: number;
+  notificationsFailed: boolean;
+}
+
+/** Option lists for the venue form — the same words coordinators filter by. */
+export interface VenueFormOptions {
+  locations: string[];
+  accessibility: string[];
+  layouts: string[];
+  facilities: string[];
+}
+
+export class VenueFormError extends Error {
+  fields: Record<string, string>;
+  constructor(message: string, fields: Record<string, string> = {}) {
+    super(message);
+    this.fields = fields;
+  }
+}
+
+export async function fetchVenueFormOptions(): Promise<VenueFormOptions> {
+  const res = await fetch(`${apiBase}/staff/venue-options`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) throw new Error("Failed to load venue options");
+  return (await res.json()) as VenueFormOptions;
+}
+
+const jsonHeaders = () => ({ ...authHeader(), "Content-Type": "application/json" });
+
+/** The venues this staff member looks after, in full. */
+export async function fetchMyVenues(): Promise<VenueRecord[]> {
+  const res = await fetch(`${apiBase}/staff/my-venues`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) throw new Error("Failed to load your venues");
+  return ((await res.json()) as { venues: VenueRecord[] }).venues;
+}
+
+async function sendVenue<T>(url: string, method: string, draft: VenueDraft, fallback: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(url, { method, headers: jsonHeaders(), body: JSON.stringify(draft), signal });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new VenueFormError(body.error ?? fallback, body.fields ?? {});
+  return body as T;
+}
+
+export async function createVenue(draft: VenueDraft): Promise<VenueRecord> {
+  const body = await sendVenue<{ venue: VenueRecord }>(`${apiBase}/staff/venues`, "POST", draft, "Failed to add the venue");
+  return body.venue;
+}
+
+/** What saving `draft` would do to the venue's existing bookings. Nothing is written. */
+export function previewVenueUpdate(venueId: number, draft: VenueDraft, signal?: AbortSignal): Promise<VenueChangeImpact> {
+  return sendVenue(`${apiBase}/staff/venues/${venueId}/preview`, "POST", draft, "Failed to check bookings", signal);
+}
+
+export function updateVenue(venueId: number, draft: VenueDraft): Promise<VenueUpdateResult> {
+  return sendVenue(`${apiBase}/staff/venues/${venueId}`, "PATCH", draft, "Failed to update the venue");
+}
+
 /** Bookings at one venue between two local dates, inclusive (at most 42 days). */
 export async function fetchVenueBookings(venueId: number, from: string, to: string): Promise<VenueBooking[]> {
   const params = new URLSearchParams({ from, to });

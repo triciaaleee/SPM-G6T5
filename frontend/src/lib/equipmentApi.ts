@@ -47,10 +47,30 @@ export interface FulfillmentInput {
   fulfilledQuantity: number | string;
 }
 
+/** E5-4: whether enough suitable equipment is free for an item's event, before committing to it. */
+export interface EquipmentAvailability {
+  event: { id: number; name: string | null };
+  type: string;
+  requestedQuantity: number;
+  totalUnits: number;
+  /** equipment_catalog.available_stock for this type — null if it isn't in the catalog. */
+  catalogAvailableStock: number | null;
+  /** AC2: damaged/under-maintenance units. */
+  unusableCount: number;
+  /** AC1: usable units already booked to another, overlapping event. */
+  reservedElsewhereCount: number;
+  availableCount: number;
+  /** AC3: how many short of the requested quantity, if any. */
+  shortfall: number;
+}
+
 const apiBase =
   (import.meta.env.VITE_EQUIPMENT_API_URL as string | undefined) ?? "http://localhost:4005/api/equipment-requests";
 const catalogApiBase =
   (import.meta.env.VITE_EQUIPMENT_CATALOG_API_URL as string | undefined) ?? "http://localhost:4005/api/equipment-catalog";
+const availabilityApiBase =
+  (import.meta.env.VITE_EQUIPMENT_AVAILABILITY_API_URL as string | undefined) ??
+  "http://localhost:4005/api/equipment-availability";
 
 export class EquipmentValidationError extends Error {
   fields: Record<string, string>;
@@ -141,4 +161,23 @@ export async function updateEquipmentRequestStatus(
     throw new EquipmentRequestError(body.error ?? "Failed to update the equipment request");
   }
   return body as { equipmentRequest: EquipmentRequest; notified: boolean };
+}
+
+/**
+ * E5-4: Technical Support check whether enough suitable equipment is free
+ * for an item's event before deciding how to arrange it (AC1-3).
+ */
+export async function checkEquipmentAvailability(
+  eventId: number,
+  type: string,
+  quantity: number,
+): Promise<EquipmentAvailability> {
+  const query = new URLSearchParams({ eventId: String(eventId), type, quantity: String(quantity) });
+  const res = await fetch(`${availabilityApiBase}?${query}`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) {
+    throw new EquipmentRequestError(body.error ?? "Failed to check equipment availability");
+  }
+  return body as EquipmentAvailability;
 }
