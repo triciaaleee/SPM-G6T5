@@ -640,6 +640,76 @@ eventsRouter.get("/unassigned", async (req: AuthedRequest, res) => {
 });
 
 /**
+ * E1-10: the Safety Officer's queue — every event awaiting an Operational
+ * Safety Check, with the coordinator's safety notes from their latest
+ * submission (E3-4), so the Safety Officer can assess without a second
+ * request. Any Safety Officer sees every event in Safety Review — there's
+ * no per-officer assignment. Declared before GET /:id so
+ * "safety-review-queue" isn't read as an event id.
+ */
+eventsRouter.get("/safety-review-queue", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  if (user.role !== "safety_officer") {
+    await recordAccessDenial(supabase, user.id, "safety_review_queue", "safety_review_queue_role_not_allowed");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const { data: events, error } = await supabase
+    .from("events")
+    .select(EVENT_COLUMNS)
+    .eq("status", EVENT_STATUS.SafetyReview)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load the safety review queue" });
+    return;
+  }
+
+  const eventIds = (events ?? []).map((event) => event.id);
+  const { data: submissions, error: submissionsError } = await supabase
+    .from("event_safety_submissions")
+    .select("event_id, equipment_placement, crowd_movement, emergency_access, venue_restrictions, submitted_at")
+    .in("event_id", eventIds.length > 0 ? eventIds : [-1])
+    .order("submitted_at", { ascending: false });
+
+  if (submissionsError) {
+    res.status(500).json({ error: "Failed to load safety notes" });
+    return;
+  }
+
+  // Keep only the latest submission per event — resubmission after a
+  // reject/changes-requested gets fresh notes and the earlier ones no
+  // longer apply (E3-12 AC4).
+  const latestByEvent = new Map<number, (typeof submissions)[number]>();
+  for (const submission of submissions ?? []) {
+    if (!latestByEvent.has(submission.event_id)) latestByEvent.set(submission.event_id, submission);
+  }
+
+  const result = (events ?? []).map((event) => {
+    const submission = latestByEvent.get(event.id);
+    return {
+      ...event,
+      safetyNotes: submission
+        ? {
+            equipmentPlacement: submission.equipment_placement,
+            crowdMovement: submission.crowd_movement,
+            emergencyAccess: submission.emergency_access,
+            venueRestrictions: submission.venue_restrictions,
+          }
+        : null,
+    };
+  });
+
+  res.json({ events: result });
+});
+
+/**
  * Fetch a single event by id. The service-role client returns any row
  * regardless of ownership, so ownership/role is checked explicitly here;
  * a non-owner (and non-coordinator) request is treated the same as
@@ -1200,6 +1270,119 @@ eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) =
   }
 
   res.json({ event: data, submissionId });
+});
+
+interface SafetyReviewEventRow {
+  id: number;
+  status: string;
+  coordinator_id: string | null;
+  organiser_id: string | null;
+}
+
+/**
+ * E3-12/13/14: shared entry checks for the Safety Officer's decision
+ * routes. Unlike authorizeCoordinatorReview, there's no per-event
+ * assignment to check — any Safety Officer may act on any event in Safety
+ * Review (E1-10 AC4/AC5).
+ */
+async function authorizeSafetyOfficerReview(
+  req: AuthedRequest,
+  res: Response,
+  eventId: string,
+): Promise<SafetyReviewEventRow | null> {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return null;
+  }
+
+  if (user.role !== "safety_officer") {
+    res.status(403).json({ error: "Only the Safety Officer can decide an Operational Safety Check" });
+    return null;
+  }
+
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, status, coordinator_id, organiser_id")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load event" });
+    return null;
+  }
+
+  if (!data) {
+    res.status(404).json({ error: "Event not found" });
+    return null;
+  }
+
+  return data as SafetyReviewEventRow;
+}
+
+/**
+ * E3-12: the Safety Officer approves the Operational Safety Check (Safety
+ * Review -> Confirmed, AGENTS.md §3). The decision and status change land
+ * together in approve_event_safety_review (migration 0028), which also
+ * links the decision to the submission it answers. The assigned
+ * coordinator and Organiser are notified (AC1); a failure to notify never
+ * blocks the already-committed decision.
+ */
+eventsRouter.post("/:id/safety-review/approve", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeSafetyOfficerReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.SafetyReview) {
+    res.status(409).json({ error: "Only an event in Safety Review can be approved" });
+    return;
+  }
+
+  const reason = typeof req.body?.reason === "string" && req.body.reason.trim() ? req.body.reason.trim() : null;
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data: reviewId, error: approveError } = await supabase.rpc("approve_event_safety_review", {
+    p_event_id: event.id,
+    p_officer_id: user.id,
+    p_reason: reason,
+  });
+  if (approveError) {
+    res.status(500).json({ error: "Failed to approve the safety review" });
+    return;
+  }
+  if (reviewId === null) {
+    res.status(409).json({ error: "This event is no longer in Safety Review" });
+    return;
+  }
+
+  const { data, error } = await supabase.from("events").select(EVENT_COLUMNS).eq("id", event.id).single();
+  if (error) {
+    res.status(500).json({ error: "Approved, but failed to reload the event" });
+    return;
+  }
+
+  const authorization = req.headers.authorization!;
+  const recipients = [event.coordinator_id, event.organiser_id].filter(
+    (id): id is string => typeof id === "string",
+  );
+  const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
+  await sendNotifications(
+    recipients.map((recipientId) => ({
+      recipientId,
+      type: "event_safety_approved",
+      title: "Safety review approved",
+      body: `"${typeof eventName === "string" ? eventName : "Your event"}" passed its Operational Safety Check and is now Confirmed.`,
+      link: `/events/${event.id}`,
+    })),
+    authorization,
+  );
+
+  res.json({ event: data, reviewId });
 });
 
 /**

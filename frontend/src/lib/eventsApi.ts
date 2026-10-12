@@ -427,3 +427,40 @@ export async function resolveClarificationQuestion(eventId: number, questionId: 
   if (!res.ok) throw new ClarificationActionError(body.error ?? "Failed to resolve question");
   return body.clarification as ClarificationMessage;
 }
+
+/** E1-10: an event in the Safety Officer's queue, with its latest safety notes (or none, if the event skipped having one — can't happen via E3-4, but the type stays honest). */
+export interface SafetyReviewQueueItem extends EventSummary {
+  safetyNotes: SafetyNotes | null;
+}
+
+/** E1-10 AC1/AC3: every event awaiting an Operational Safety Check. */
+export async function fetchSafetyReviewQueue(): Promise<SafetyReviewQueueItem[]> {
+  const res = await fetch(`${apiBase}/safety-review-queue`, { headers: await authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (res.status === 403) throw new AccessDeniedError("Only the Safety Officer can view the safety review queue");
+  if (!res.ok) throw new Error("Failed to load the safety review queue");
+  const body = await res.json();
+  return body.events as SafetyReviewQueueItem[];
+}
+
+/**
+ * Thrown when the backend refuses a safety-review approval (event no
+ * longer in Safety Review, wrong role). The message is server-provided and
+ * safe to show directly.
+ */
+export class SafetyReviewApproveError extends Error {}
+
+/** E3-12: the Safety Officer approves the Operational Safety Check. */
+export async function approveSafetyReview(id: number, reason?: string): Promise<EventSummary> {
+  const res = await fetch(`${apiBase}/${id}/safety-review/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ reason: reason ?? null }),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new SafetyReviewApproveError(body.error ?? "We couldn't approve this event. Please try again.");
+  return body.event as EventSummary;
+}

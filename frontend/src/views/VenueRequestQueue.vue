@@ -148,7 +148,7 @@ function formatMoment(value: string | null): string {
       <header class="page-header">
         <div>
           <h1 class="page-title">Booking requests</h1>
-          <p class="body-default muted">
+          <p class="body-default muted py-3">
             Requests waiting on you, soonest event first. Holding a venue reserves it until the hold expires.
           </p>
         </div>
