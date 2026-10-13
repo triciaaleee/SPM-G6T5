@@ -35,6 +35,7 @@ insert into users (id, name, email, password_hash, role) values
   ('LEAD-0001', 'Coordinator Lead', 'coordinator-lead@example.com', crypt('password123', gen_salt('bf')), 'coordinator_lead'),
   ('VEN-0001', 'Venue Staff One', 'venue-staff-one@example.com', crypt('password123', gen_salt('bf')), 'venue_staff'),
   ('TS-0001', 'Technical Support One', 'tech-support-one@example.com', crypt('password123', gen_salt('bf')), 'technical_support'),
+  ('SAF-0001', 'Safety Officer One', 'safety-officer-one@example.com', crypt('password123', gen_salt('bf')), 'safety_officer'),
   ('ATT-0001', 'Attendee One', 'attendee-one@example.com', crypt('password123', gen_salt('bf')), 'attendee'),
   ('ATT-0002', 'Attendee Two', 'attendee-two@example.com', crypt('password123', gen_salt('bf')), 'attendee'),
   ('ATT-0003', 'Attendee Three', 'attendee-three@example.com', crypt('password123', gen_salt('bf')), 'attendee')
