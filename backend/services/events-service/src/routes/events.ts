@@ -997,6 +997,32 @@ eventsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
 });
 
 /**
+ * E3-12/13/14: every Operational Safety Check decision on this event,
+ * oldest first — outcome, reason, the Safety Officer and when. Lets the
+ * coordinator see why an event came back to Planning without relying on
+ * the notification. Same visibility as the edit history.
+ */
+eventsRouter.get("/:id/safety-reviews", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await loadEventForClarification(req, res, eventId);
+  if (!event) return;
+
+  const { supabase } = req as Required<Pick<AuthedRequest, "supabase">>;
+  const { data, error } = await supabase
+    .from("event_safety_reviews")
+    .select("id, outcome, reason, submission_id, officer:officer_id(name), created_at")
+    .eq("event_id", event.id)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load safety reviews" });
+    return;
+  }
+
+  res.json({ safetyReviews: data ?? [] });
+});
+
+/**
  * E2-7 AC1 / AGENTS.md §3 edit table: the owning organiser edits directly
  * while the request waits in the unassigned queue, waits on its
  * coordinator's review, or is in Planning.
