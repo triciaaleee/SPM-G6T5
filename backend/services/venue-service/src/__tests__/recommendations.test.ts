@@ -85,7 +85,6 @@ function details(overrides: Record<string, unknown> = {}) {
 
 /** venue_bookings only links a venue to an event; the schedule is the event's own. */
 type Booking = { venue_id: number; event_id: number; status?: string; hold_expires_at?: string | null };
-type BookedEvent = { id: number; proposedDate: string; startTime: string; endTime: string };
 
 function buildApp(
   options: {

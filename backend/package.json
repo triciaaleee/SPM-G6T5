@@ -2,9 +2,16 @@
   "name": "backend",
   "private": true,
   "scripts": {
+    "lint": "eslint .",
+    "smoke": "node scripts/smoke.mjs",
     "dev": "concurrently -n events,users,venues,notifications,equipment,chat,registrations -c blue,magenta,green,yellow,cyan,white,red \"npm run dev --prefix services/events-service\" \"npm run dev --prefix services/user-service\" \"npm run dev --prefix services/venue-service\" \"npm run dev --prefix services/notification-service\" \"npm run dev --prefix services/equipment-service\" \"npm run dev --prefix services/chat-service\" \"npm run dev --prefix services/registration-service\""
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "@eslint/js": "10.0.1",
+    "concurrently": "^9.1.0",
+    "eslint": "10.11.0",
+    "globals": "17.12.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.0"
   }
 }

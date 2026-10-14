@@ -11,7 +11,7 @@ import {
   type BookingStatus,
 } from "../lib/bookingStatus.js";
 import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "../lib/bookingConflicts.js";
-import { fetchEvent, fetchVenueBookingInfo, type VenueBookingInfo } from "../lib/eventsClient.js";
+import { fetchEvent, fetchVenueBookingInfo } from "../lib/eventsClient.js";
 import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
 import {
   PERIOD_COLUMNS,

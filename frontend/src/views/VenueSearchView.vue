@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { fetchEventById, type EventSummary } from "../lib/eventsApi";
 import {
-  clearCriterion,
   describeBookingFailure,
   emptyVenueFilters,
   fetchVenueAvailability,
@@ -13,7 +12,6 @@ import {
   timeWindowError,
   VenueSearchError,
   type AvailabilityTarget,
-  type CriterionKey,
   type RelaxOption,
   type Venue,
   type VenueAvailability,
@@ -145,10 +143,6 @@ watch(
 );
 
 onBeforeUnmount(() => clearTimeout(debounce));
-
-function relaxFilter(key: CriterionKey): void {
-  clearCriterion(filters.value, key);
-}
 
 function clearAllFilters(): void {
   Object.assign(filters.value, emptyVenueFilters());

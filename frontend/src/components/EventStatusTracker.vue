@@ -14,7 +14,7 @@
  * bar depicts the whole lifecycle, and will light up once that work lands.
  */
 import { computed } from "vue";
-import { formatEventDate, statusBadgeClass } from "../lib/eventStatus";
+import { formatEventDate } from "../lib/eventStatus";
 import type { EventVenueBooking } from "../lib/venuesApi";
 import type { EquipmentRequest } from "../lib/equipmentApi";
 

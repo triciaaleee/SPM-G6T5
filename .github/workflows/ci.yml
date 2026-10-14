@@ -1,0 +1,179 @@
+# Continuous integration: secret scan, lint, type-check, test, build and a
+# boot smoke test. CI only, nothing is deployed. See CI.md for the reasoning.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same PR cancels its run still in progress. Runs on main
+# are never cancelled, so every commit there gets a full result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  GITLEAKS_VERSION: "8.30.1"
+
+jobs:
+  # Fails if any commit added by this push / PR contains a secret.
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0 # full history, so the commit range below resolves
+
+      - name: Install gitleaks
+        run: |
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$tarball" "$base/$tarball"
+          curl -sSfL -o checksums.txt "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " $tarball\$" checksums.txt | sha256sum --check --strict
+          tar -xzf "$tarball" gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan new commits
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            range="$PR_BASE..$PR_HEAD"
+          elif [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..$SHA"
+          else
+            range="-1 $SHA" # manual run, or a push whose previous commit is unknown
+          fi
+          echo "Scanning commits: $range"
+          # --redact keeps any secret value out of this public log.
+          gitleaks git --log-opts="$range" --redact --verbose .
+
+  # Lists backend/services/* so every service is checked without editing this file.
+  discover-services:
+    name: Discover backend services
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      services: ${{ steps.list.outputs.services }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: list
+        run: |
+          services=$(find backend/services -mindepth 2 -maxdepth 2 -name package.json \
+            | xargs -n1 dirname | xargs -n1 basename | sort | jq -R . | jq -cs .)
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+          echo "Found: $services"
+
+  backend-lint:
+    name: Backend lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+
+  backend:
+    name: Backend (${{ matrix.service }})
+    needs: discover-services
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false # one failing service shouldn't hide the others' results
+      matrix:
+        service: ${{ fromJSON(needs.discover-services.outputs.services) }}
+    defaults:
+      run:
+        working-directory: backend/services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/services/${{ matrix.service }}/package-lock.json
+      - run: npm ci
+      - name: Type-check
+        run: npx tsc -p tsconfig.json --noEmit
+      - name: Test
+        run: npm test
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # Same first-time setup as a developer: some API modules read their base
+      # URL at import time with no fallback (CI.md K7). Localhost URLs only.
+      - name: Use example env
+        run: cp .env.example .env
+      - run: npm run lint
+      - run: npm test
+      - name: Build (type-check + bundle)
+        run: npm run build
+
+  # Boots every service with the real `npm run dev` and checks each /health.
+  smoke:
+    name: Smoke test (all services boot)
+    needs: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    # Placeholders only: the services refuse to boot without these, but /health
+    # never reaches Supabase. No real credential is stored in CI.
+    env:
+      SUPABASE_URL: http://127.0.0.1:54321
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-not-a-real-key # gitleaks:allow
+      JWT_SECRET: ci-placeholder-not-a-real-secret # gitleaks:allow
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            backend/services/*/package-lock.json
+      - name: Install backend root and every service
+        run: |
+          npm ci
+          for dir in services/*/; do
+            echo "::group::npm ci $dir"
+            npm ci --prefix "$dir"
+            echo "::endgroup::"
+          done
+      - run: npm run smoke
