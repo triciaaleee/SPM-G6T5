@@ -14,6 +14,18 @@ export interface NewNotification {
   link?: string;
 }
 
+/** notification-service refuses a body longer than this (its MAX_BODY_LENGTH). */
+export const MAX_NOTIFICATION_BODY_LENGTH = 1000;
+
+/**
+ * Cuts free text (e.g. a reason the user typed) so the whole body fits
+ * notification-service's limit — an over-long body would be refused and
+ * the notification lost. The full text stays wherever it was recorded.
+ */
+export function fitNotificationBody(body: string): string {
+  return body.length <= MAX_NOTIFICATION_BODY_LENGTH ? body : `${body.slice(0, MAX_NOTIFICATION_BODY_LENGTH - 1)}…`;
+}
+
 function notificationServiceUrl(): string {
   return (
     process.env.NOTIFICATION_SERVICE_URL ?? `http://localhost:${process.env.NOTIFICATION_SERVICE_PORT ?? 4004}`
