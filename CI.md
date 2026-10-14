@@ -36,7 +36,7 @@ Continuous integration for SPM-G6T5. Workflow file: [`.github/workflows/ci.yml`]
 | **Discover backend services** | repo root | Lists every `backend/services/*/` with a `package.json` | — (feeds the matrix) |
 | **Backend lint** | `backend/` | `npm ci` → `npm run lint` | Any ESLint **error** in any service (warnings don't fail) |
 | **Backend (*service*)** | `backend/services/<service>/` | `npm ci` → `tsc --noEmit` → `npm test` | A type error or a failing test in that service |
-| **Frontend** | `frontend/` | `npm ci` → `npm run lint` → `npm test` → `npm run build` | A lint error, failing test, type error (`vue-tsc`) or build error |
+| **Frontend** | `frontend/` | `npm ci` → copy `.env.example` to `.env` → `npm run lint` → `npm test` → `npm run build` | A lint error, failing test, type error (`vue-tsc`) or build error |
 | **Smoke test** | `backend/` | `npm ci` for root + every service → `npm run smoke` | Any service fails to boot or its `/health` isn't exactly `{"ok":true}` within 60 s |
 
 ### When it runs
@@ -58,7 +58,7 @@ Before pushing, from the repo root:
 cd backend && npm run lint
 cd backend/services/events-service && npx tsc -p tsconfig.json --noEmit && npm test   # repeat per service
 
-# Frontend
+# Frontend (needs frontend/.env: `cp .env.example .env` if you have none)
 cd frontend && npm run lint && npm test && npm run build
 
 # Smoke test (stop any running `npm run dev` first; uses your backend/.env)
@@ -102,6 +102,7 @@ The service still needs everything in the AGENTS.md §1 checklist. In particular
 | D16 | **Exact versions for new tooling and actions** (`eslint@10.11.0`, `actions/checkout@v7.0.1`, gitleaks `8.30.1`, …), each at least two weeks old when chosen. | Avoids a freshly published (possibly compromised or broken) release landing in CI unannounced. Upgrades are a deliberate change. |
 | D17 | **Node 22** in CI. | Matches the version the team develops on (v22.19). |
 | D18 | **`permissions: contents: read`** for the workflow. | CI only reads the repo; least privilege for the `GITHUB_TOKEN`. |
+| D19 | **Frontend job copies `frontend/.env.example` to `.env`** before lint, test and build. | Some API modules read their base URL at import time with no fallback, so the tests crashed in CI without it (they passed locally only because of each developer's `.env`). Copying the example is the documented first-time setup and holds only localhost URLs. The underlying code issue is K7 / Q9. |
 
 ---
 
@@ -116,6 +117,7 @@ The service still needs everything in the AGENTS.md §1 checklist. In particular
 | A5 | Ports 4001–4007 are free on the CI runner. | Fresh GitHub runners have nothing on them, so this holds. |
 | A6 | Each service's committed `package-lock.json` matches its `package.json`. | `npm ci` fails; run `npm install` in that service and commit the lockfile. |
 | A7 | The repo stays under a **personal** GitHub account. | Nothing changes: the CLI-based secret scan needs no licence either way. |
+| A8 | `frontend/.env.example` lists every `VITE_*` variable the code needs without a fallback. | Frontend tests or build fail in CI on import; add the variable to `.env.example`. |
 
 ---
 
@@ -131,6 +133,7 @@ The service still needs everything in the AGENTS.md §1 checklist. In particular
 | Q6 | Add **Dependabot** to keep npm packages and the pinned actions up to date? | Team | Would open PRs that CI then checks. |
 | Q7 | Should the frontend get **ESLint stricter Vue rules** (`flat/recommended` instead of `flat/essential`)? | Frontend owners | `recommended` adds many style-ish rules; start with `essential`. |
 | Q8 | Add a **migration check** (e.g. `supabase/migrations/` numbering, or applying migrations to a throwaway Postgres)? | Team | Decided against for now. |
+| Q9 | Give every frontend API module a **localhost fallback** for its base URL (like `chatApi.ts`, `notificationsApi.ts` already do), so tests don't depend on a `.env` at all? | Frontend owners | Would let CI drop the copy step in D19. See K7 for the affected files. |
 
 ---
 
@@ -144,6 +147,7 @@ The service still needs everything in the AGENTS.md §1 checklist. In particular
 | K4 | Venue search's **"Try relaxing one filter"** suggestions were removed from the page in `8083f46` (the API still returns them). Its handler `relaxFilter` was then dead code and removed for the lint. | **Open:** confirm with the venue search owner whether E4-6 still needs it. If so, restore the template block from `3e8933a`. |
 | K5 | `frontend/src/views/EventsListView.vue` logs `console.log(events)` on every load. | **Open:** leftover debug output; not a lint error under the current rules. |
 | K6 | Root `README.md` doesn't mention `equipment-service` (4005) or `chat-service` (4006) in its setup, health-check and test lists. | **Open:** docs only. |
+| K7 | **Frontend tests depended on a local `frontend/.env`.** `eventsApi.ts`, `auth.ts` and `unavailabilityApi.ts` read their URL with no fallback; `venuesApi.ts` and `usersApi.ts` call `.replace` on one, which throws on import when it's unset. This failed the first CI run. Also, `venuesApi.ts`'s fallback derives the venues URL from the **events** URL (`:4001/api/venues`), but venues are served by venue-service on `:4003`, so the fallback would hit the wrong service. | **Worked around** in CI (D19). Code fix open, see Q9. |
 
 ---
 

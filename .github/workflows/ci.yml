@@ -135,6 +135,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      # Same first-time setup as a developer: some API modules read their base
+      # URL at import time with no fallback (CI.md K7). Localhost URLs only.
+      - name: Use example env
+        run: cp .env.example .env
       - run: npm run lint
       - run: npm test
       - name: Build (type-check + bundle)
