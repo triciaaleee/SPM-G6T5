@@ -6,6 +6,7 @@ import { normaliseDraftEventRequest, validateEventRequest } from "../lib/validat
 import { isPositiveInteger } from "../lib/validation.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
+import { eventEndsAt } from "../lib/eventTiming.js";
 import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
 import { fetchCoordinatorLeads, fetchCoordinators } from "../lib/usersClient.js";
 import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
@@ -487,17 +488,14 @@ const MAX_ATTENDEE_INFO_IDS = 100;
  * "Open for registration": the event is Confirmed (safety-approved, so it
  * will go ahead), the organiser asked for registration, and it hasn't
  * ended yet. Lives here, with the event data, so registration-service
- * doesn't re-derive it. Date/time are the event's local wall-clock values.
+ * doesn't re-derive it. When it ends is worked out in Singapore time (see
+ * lib/eventTiming.ts), the same rule E3-5 completion uses.
  */
 function isOpenForRegistration(status: string, details: Record<string, unknown>, now: Date = new Date()): boolean {
   if (status !== "Confirmed" || details.registrationNeeded !== true) return false;
 
-  const date = typeof details.proposedDate === "string" ? details.proposedDate : null;
-  const endTime = typeof details.endTime === "string" ? details.endTime : "23:59";
-  if (!date) return false;
-
-  const endsAt = new Date(`${date}T${endTime}`);
-  return Number.isNaN(endsAt.getTime()) ? false : endsAt.getTime() > now.getTime();
+  const endsAt = eventEndsAt(details);
+  return endsAt !== null && endsAt.getTime() > now.getTime();
 }
 
 /**
