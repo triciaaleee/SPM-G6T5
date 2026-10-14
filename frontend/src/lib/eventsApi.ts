@@ -257,6 +257,11 @@ export function rejectEvent(id: number, reason: string): Promise<EventSummary> {
   return postReviewAction(id, "reject", { reason });
 }
 
+/** E3-5: the assigned coordinator marks a Confirmed event completed once it has ended. */
+export function completeEvent(id: number): Promise<EventSummary> {
+  return postReviewAction(id, "complete");
+}
+
 /** Requests clarification/amendment from the Organiser with a message. */
 export function requestClarification(id: number, message: string): Promise<EventSummary> {
   return postReviewAction(id, "request-clarification", { message });

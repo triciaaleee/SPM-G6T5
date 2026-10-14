@@ -167,3 +167,21 @@ describe("EventStatusTracker timeline (E3-4)", () => {
     expect(steps[1].attributes("data-state")).toBe("current");
   });
 });
+
+describe("EventStatusTracker timeline (E3-5)", () => {
+  function states(status: string) {
+    return mount(EventStatusTracker, {
+      props: { status, lastChangedAt: "2026-10-07T02:00:00.000Z", reviewOutcome: null, showOutstanding: false },
+    })
+      .findAll(".status-tracker__step")
+      .map((step) => step.attributes("data-state"));
+  }
+
+  it("marks Confirmed as the current stage once safety-approved", () => {
+    expect(states("Confirmed")).toEqual(["complete", "complete", "current", "pending"]);
+  });
+
+  it("lights up the last stage once the event is Completed", () => {
+    expect(states("Completed")).toEqual(["complete", "complete", "complete", "current"]);
+  });
+});
