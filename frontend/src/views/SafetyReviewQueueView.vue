@@ -1,15 +1,20 @@
 <script setup lang="ts">
 /**
- * E1-10/E3-12: the Safety Officer's queue — every event awaiting an
+ * E1-10/E3-12/E3-13: the Safety Officer's queue — every event awaiting an
  * Operational Safety Check, with the coordinator's safety notes, and the
- * approve action (E3-12). Reject and request-changes (E3-13/E3-14) aren't
- * built yet. Matches VenueRequestQueue.vue's layout and styling.
+ * approve (E3-12) and reject (E3-13) actions. Rejecting opens an inline
+ * reason box, because a reason is required and the coordinator is sent it.
+ * Request-changes (E3-14) isn't built yet. Matches VenueRequestQueue.vue's
+ * layout and styling.
  */
 import { computed, onMounted, ref } from "vue";
 import {
   approveSafetyReview,
   fetchSafetyReviewQueue,
+  MAX_SAFETY_REJECT_REASON_LENGTH,
+  rejectSafetyReview,
   SafetyReviewApproveError,
+  SafetyReviewRejectError,
   type SafetyReviewQueueItem,
 } from "../lib/eventsApi";
 
@@ -21,6 +26,11 @@ const loadError = ref<string | null>(null);
 const busyId = ref<number | null>(null);
 const rowError = ref<{ id: number; message: string } | null>(null);
 const notice = ref<string | null>(null);
+
+/** The row whose reject-reason box is open, and what's typed in it. */
+const rejectingId = ref<number | null>(null);
+const rejectReason = ref("");
+const rejectReasonError = ref<string | null>(null);
 
 const hasEvents = computed(() => events.value.length > 0);
 
@@ -79,6 +89,50 @@ async function approve(event: SafetyReviewQueueItem): Promise<void> {
     rowError.value = {
       id: event.id,
       message: err instanceof SafetyReviewApproveError ? err.message : "Couldn't approve this event. Try again.",
+    };
+  } finally {
+    busyId.value = null;
+  }
+}
+
+function openReject(event: SafetyReviewQueueItem): void {
+  rejectingId.value = event.id;
+  rejectReason.value = "";
+  rejectReasonError.value = null;
+  rowError.value = null;
+}
+
+function cancelReject(): void {
+  rejectingId.value = null;
+  rejectReason.value = "";
+  rejectReasonError.value = null;
+}
+
+/** E3-13 AC2: mirrors the backend's checks so an empty or over-long reason is caught before the round trip. */
+async function confirmReject(event: SafetyReviewQueueItem): Promise<void> {
+  const reason = rejectReason.value.trim();
+  if (!reason) {
+    rejectReasonError.value = "Give a reason for rejecting this safety review.";
+    return;
+  }
+  if (reason.length > MAX_SAFETY_REJECT_REASON_LENGTH) {
+    rejectReasonError.value = `Keep the reason under ${MAX_SAFETY_REJECT_REASON_LENGTH} characters.`;
+    return;
+  }
+  rejectReasonError.value = null;
+
+  busyId.value = event.id;
+  rowError.value = null;
+  notice.value = null;
+  try {
+    await rejectSafetyReview(event.id, reason);
+    notice.value = `${eventName(event)} rejected — back in Planning. The coordinator has been sent your reason.`;
+    cancelReject();
+    await load();
+  } catch (err) {
+    rowError.value = {
+      id: event.id,
+      message: err instanceof SafetyReviewRejectError ? err.message : "Couldn't reject this event. Try again.",
     };
   } finally {
     busyId.value = null;
@@ -148,9 +202,27 @@ async function approve(event: SafetyReviewQueueItem): Promise<void> {
             </div>
           </dl>
 
-          <div class="actions">
+          <div v-if="rejectingId === event.id" class="reject-box">
+            <label :for="`reason-${event.id}`" class="body-small muted">Reason for rejecting</label>
+            <textarea :id="`reason-${event.id}`" v-model="rejectReason" rows="3" class="reason-input"
+              :maxlength="MAX_SAFETY_REJECT_REASON_LENGTH" placeholder="The coordinator is sent this." />
+            <p v-if="rejectReasonError" class="body-small error-text">{{ rejectReasonError }}</p>
+            <div class="actions">
+              <button type="button" class="btn-danger" :disabled="busyId === event.id" @click="confirmReject(event)">
+                {{ busyId === event.id ? "Rejecting…" : "Confirm rejection" }}
+              </button>
+              <button type="button" class="btn-secondary" :disabled="busyId === event.id" @click="cancelReject">
+                Cancel
+              </button>
+            </div>
+          </div>
+
+          <div v-else class="actions">
             <button type="button" class="btn-primary" :disabled="busyId === event.id" @click="approve(event)">
               {{ busyId === event.id ? "Approving…" : "Approve" }}
+            </button>
+            <button type="button" class="btn-danger" :disabled="busyId === event.id" @click="openReject(event)">
+              Reject
             </button>
           </div>
 
@@ -315,14 +387,19 @@ async function approve(event: SafetyReviewQueueItem): Promise<void> {
   gap: var(--spacing-8);
 }
 
-/* Style.md 3.4 Button Hierarchy; 7 radius-xs; 8.2 focus ring. */
-.btn-primary {
+/* Style.md 3.4 Button Hierarchy; 7 radius-xs; 8.2 focus ring. Same set as VenueRequestQueue.vue. */
+.btn-primary,
+.btn-secondary,
+.btn-danger {
   padding: var(--spacing-8) var(--spacing-16);
   border-radius: var(--radius-xs);
   font-size: 0.875rem;
   font-weight: 700;
   cursor: pointer;
   border: 1px solid transparent;
+}
+
+.btn-primary {
   background: var(--color-purple-600);
   color: var(--color-base-white);
 }
@@ -331,13 +408,61 @@ async function approve(event: SafetyReviewQueueItem): Promise<void> {
   background: var(--color-purple-700);
 }
 
-.btn-primary:focus-visible {
+.btn-secondary {
+  background: var(--color-base-white);
+  border-color: var(--color-grey-200);
+  color: var(--color-grey-900);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--color-grey-50);
+}
+
+.btn-danger {
+  background: var(--color-base-white);
+  border-color: var(--color-error-200);
+  color: var(--color-error-600);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-error-200);
+}
+
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.btn-danger:focus-visible {
   outline: 2px solid var(--color-purple-600);
   outline-offset: 2px;
 }
 
-.btn-primary:disabled {
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-danger:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.reject-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+  margin-bottom: var(--spacing-8);
+}
+
+/* Style.md 2.2: Grey/200 default input border. 8.2: inputs get both rings. */
+.reason-input {
+  width: 100%;
+  padding: var(--spacing-8) var(--spacing-12);
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-xs);
+  font-size: 0.875rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.reason-input:focus-visible {
+  outline: 2px solid var(--color-purple-600);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px var(--color-purple-100);
 }
 </style>
