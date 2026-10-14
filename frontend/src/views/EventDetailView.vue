@@ -363,14 +363,6 @@ function formatHistoryTimestamp(value: string): string {
   return date.toLocaleString();
 }
 
-/** "coordinator" -> "Coordinator", "venue_staff" -> "Venue Staff". */
-function formatRoleLabel(role: string): string {
-  return role
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-}
-
 const NOT_PROVIDED = "Not provided";
 
 function formatDate(value: string | undefined | null): string {

@@ -143,11 +143,6 @@ const dayHeading = computed(() => {
   return `${dayMonth}, ${weekday}`;
 });
 
-const dayCount = computed(() => {
-  const n = dayBookings.value.length;
-  return `${n} ${activeTabConfig.value.noun}${n === 1 ? "" : "s"}`;
-});
-
 function formatLongDate(key: string): string {
   return fromKey(key).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 }
