@@ -177,3 +177,27 @@ jobs:
             echo "::endgroup::"
           done
       - run: npm run smoke
+
+  # The single check to require in branch protection. GitHub treats a skipped
+  # required check as passing, so requiring e.g. only `smoke` would let a PR
+  # merge when a backend job fails (smoke is then skipped, not failed). This job
+  # always runs and fails unless every job above succeeded, and it covers new
+  # services automatically (they join the `backend` matrix).
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs: [secret-scan, discover-services, backend-lint, backend, frontend, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check every job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        # Fails closed: if jq itself errors, the `if !` branch fails the job too.
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if ! echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null; then
+            echo "::error::Not every CI job succeeded (see the list above)."
+            exit 1
+          fi
+          echo "All CI jobs succeeded."

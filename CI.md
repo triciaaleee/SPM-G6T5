@@ -27,6 +27,11 @@ Continuous integration for SPM-G6T5. Workflow file: [`.github/workflows/ci.yml`]
                     ┌──────────────────────┐
                     │ smoke                │  `npm run dev` boots all services,
                     │                      │  every /health must be {"ok":true}
+                    └──────────┬───────────┘
+                               ▼  always runs
+                    ┌──────────────────────┐
+                    │ CI passed            │  green only if every job above
+                    │                      │  succeeded (the check to require)
                     └──────────────────────┘
 ```
 
@@ -38,6 +43,7 @@ Continuous integration for SPM-G6T5. Workflow file: [`.github/workflows/ci.yml`]
 | **Backend (*service*)** | `backend/services/<service>/` | `npm ci` → `tsc --noEmit` → `npm test` | A type error or a failing test in that service |
 | **Frontend** | `frontend/` | `npm ci` → copy `.env.example` to `.env` → `npm run lint` → `npm test` → `npm run build` | A lint error, failing test, type error (`vue-tsc`) or build error |
 | **Smoke test** | `backend/` | `npm ci` for root + every service → `npm run smoke` | Any service fails to boot or its `/health` isn't exactly `{"ok":true}` within 60 s |
+| **CI passed** | — | Always runs last; lists each job's result | Any other job failed, was skipped or was cancelled. **This is the check branch protection should require** (D20). |
 
 ### When it runs
 
@@ -103,6 +109,7 @@ The service still needs everything in the AGENTS.md §1 checklist. In particular
 | D17 | **Node 22** in CI. | Matches the version the team develops on (v22.19). |
 | D18 | **`permissions: contents: read`** for the workflow. | CI only reads the repo; least privilege for the `GITHUB_TOKEN`. |
 | D19 | **Frontend job copies `frontend/.env.example` to `.env`** before lint, test and build. | Some API modules read their base URL at import time with no fallback, so the tests crashed in CI without it (they passed locally only because of each developer's `.env`). Copying the example is the documented first-time setup and holds only localhost URLs. The underlying code issue is K7 / Q9. |
+| D20 | **A final `CI passed` job** that always runs and fails unless every other job succeeded. It is the one check branch protection should require. | GitHub treats a *skipped* required check as passing. The smoke test is skipped (not failed) when a backend job fails, so requiring individual jobs is easy to get wrong, and each new service would add a check to require by hand. One aggregate check avoids both. |
 
 ---
 
@@ -126,7 +133,7 @@ The service still needs everything in the AGENTS.md §1 checklist. In particular
 | # | Question | Who | Notes |
 |---|---|---|---|
 | Q1 | **Have the Supabase service-role key and `JWT_SECRET` from commit `9459dd4` (`backend/.env.bak`) been rotated?** | Repo owner | Public repo: if those were real values, anyone can read them from history. See K1. |
-| Q2 | Turn on **branch protection** for `main` (require a PR, require CI to pass)? | Team | Settings → Branches → add rule for `main` → *Require status checks to pass* → pick the CI jobs. Without it, CI reports failures but can't block a merge. |
+| Q2 | Turn on **branch protection** for `main` (require a PR, require CI to pass)? | Team | Planned for Sprint 4, when PRs become mandatory. Settings → Branches → add classic branch protection rule for `main` → *Require a pull request before merging* (approvals optional) → *Require status checks to pass* → require **only `CI passed`** (D20). Without it, CI reports failures but can't block a merge. |
 | Q3 | Should CI also **gate on coverage** (e.g. fail under X %)? | Team | Not added: no agreed threshold yet. Vitest supports `--coverage`. |
 | Q4 | Fix the 7 `any`s in backend `lib/` files and make `no-explicit-any` an error? | Owners of equipment-service / venue-service | `equipmentConflicts.ts` (5), `reservationFlags.ts` (1), `venueBookingLock.ts` (1). |
 | Q5 | Add **Prettier / formatting checks** later? | Team | Left out on purpose (D12): it would reformat most files in one go and cause merge conflicts on open branches. Best done in one agreed PR when few branches are open. |
