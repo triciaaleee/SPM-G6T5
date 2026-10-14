@@ -1,5 +1,6 @@
 # SPM-G6T5
 
+[![CI](https://github.com/triciaaleee/SPM-G6T5/actions/workflows/ci.yml/badge.svg)](https://github.com/triciaaleee/SPM-G6T5/actions/workflows/ci.yml)
 
 # Backend
 
@@ -86,6 +87,12 @@ curl http://localhost:4007/health   # registration-service
 
 Each should return `{"ok":true}`.
 
+Or check every service in one go (starts them with `npm run dev`, checks each `/health`, then stops them; stop any running services first):
+
+```bash
+cd backend && npm run smoke
+```
+
 ## Tests
 
 ```bash
@@ -94,6 +101,15 @@ cd backend/services/user-service && npm test
 cd backend/services/venue-service && npm test
 cd backend/services/notification-service && npm test
 cd backend/services/registration-service && npm test
+```
+
+## CI
+
+Every pull request and every push to `main` runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml): secret scan, lint, type-check, tests, frontend build and the smoke test above. See [CI.md](CI.md) for what each job does, how to run the same checks locally, and the decisions behind it.
+
+```bash
+cd backend && npm run lint      # ESLint for every service
+cd frontend && npm run lint     # ESLint for the Vue app
 ```
 
 ## Notes
