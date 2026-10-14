@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
-import { blocksVenue, type BookingStatus } from "../lib/bookingStatus.js";
+import { blocksVenue } from "../lib/bookingStatus.js";
 import {
   BOOKING_COLUMNS,
   decideBooking,

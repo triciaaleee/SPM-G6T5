@@ -335,7 +335,7 @@ function buildApp(
   };
 
   const eventHttpStatus = options.eventHttpStatus ?? 200;
-  const fetchMock = vi.fn(async (url: string, init?: { body?: string }) => {
+  const fetchMock = vi.fn(async (url: string, _init?: { body?: string }) => {
     if (String(url).includes("/api/notifications")) {
       const status = options.notificationHttpStatus ?? 200;
       return { ok: status >= 200 && status < 300, status, json: async () => ({}) };

@@ -87,7 +87,7 @@ equipmentAvailabilityRouter.get("/", async (req: AuthedRequest, res) => {
   const usableIds = equipmentRows.filter((row) => row.status === "Available").map((row) => row.id);
   const unusableCount = totalUnits - usableIds.length;
 
-  let reservedElsewhereCount = 0;
+  let reservedElsewhereCount: number;
   try {
     // AC1: "reserved for ANOTHER event" — this event's own existing claims
     // (if any) don't count against its own availability.
