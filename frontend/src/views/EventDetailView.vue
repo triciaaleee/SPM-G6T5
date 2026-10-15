@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { landingRouteForRole } from "../lib/auth";
 import {
@@ -10,6 +10,7 @@ import {
   ValidationError,
   approveEvent,
   assignCoordinator,
+  completeEvent,
   reassignCoordinator,
   fetchEventById,
   fetchEventHistory,
@@ -21,13 +22,15 @@ import {
   type EventRequestPayload,
   type EventSummary,
 } from "../lib/eventsApi";
-import { statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
+import { formatEventDate, statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
+import { hasEventEnded } from "../lib/eventTiming";
 import EventStatusTracker from "../components/EventStatusTracker.vue";
 import ClarificationPanel from "../components/ClarificationPanel.vue";
 import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
 import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel.vue";
 import VenueRequestsPanel from "../components/venues/VenueRequestsPanel.vue";
 import SafetyReviewPanel from "../components/SafetyReviewPanel.vue";
+import RegistrationsPanel from "../components/RegistrationsPanel.vue";
 import { fetchEventVenueBookings, type EventVenueBooking } from "../lib/venuesApi";
 import { fetchEquipmentRequestsForEvent, type EquipmentRequest } from "../lib/equipmentApi";
 import { fetchCoordinators, type CoordinatorOption } from "../lib/usersApi";
@@ -173,6 +176,47 @@ async function submitPendingAction(): Promise<void> {
         : await requestClarification(event.value.id, text);
     await clarificationPanelRef.value?.refresh();
     cancelPendingAction();
+  } catch (err) {
+    actionError.value = err instanceof ReviewActionError ? err.message : "We couldn't complete that action. Please try again.";
+  } finally {
+    isReviewing.value = false;
+  }
+}
+
+/**
+ * E3-5: the assigned coordinator marks a Confirmed event completed once it
+ * has run (AC1); before its end time the action is blocked (AC2) — the
+ * backend decides, this only mirrors it. `now` ticks every minute so the
+ * button unlocks when the event ends, without a reload. Completed is
+ * terminal, so the action asks for confirmation first.
+ */
+const now = ref(new Date());
+let nowTimer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  nowTimer = setInterval(() => (now.value = new Date()), 60_000);
+});
+onUnmounted(() => clearInterval(nowTimer));
+
+const eventHasEnded = computed(() =>
+  hasEventEnded(event.value?.submitted_details as Record<string, unknown> | undefined, now.value),
+);
+
+const eventEndLabel = computed(() => {
+  const details = asSubmittedDetails(event.value?.submitted_details ?? {});
+  const date = formatEventDate(details.proposedDate);
+  return details.endTime ? `${date} at ${details.endTime}` : date;
+});
+
+const confirmingComplete = ref(false);
+
+async function handleComplete(): Promise<void> {
+  if (!event.value) return;
+  isReviewing.value = true;
+  actionError.value = null;
+  try {
+    event.value = await completeEvent(event.value.id);
+    confirmingComplete.value = false;
+    await loadHistory();
   } catch (err) {
     actionError.value = err instanceof ReviewActionError ? err.message : "We couldn't complete that action. Please try again.";
   } finally {
@@ -475,8 +519,15 @@ onMounted(async () => {
     currentUser.value = user;
     await loadHistory();
     if (user.role === "coordinator_lead") await loadCoordinators();
-    // Only an event in Planning shows arrangements or a requests panel.
-    if (eventData.status === "Planning") await Promise.all([loadVenueBookings(), loadEquipmentRequests()]);
+    // Only an event in Planning shows the outstanding arrangements. A
+    // coordinator also sees the venue requests panel at every later stage,
+    // so its bookings load then too — a Completed event's bookings must stay
+    // viewable (E3-5 AC3), not sit on "Loading…".
+    const showsVenueRequests = user.role === "coordinator" && eventData.status !== "Rejected";
+    await Promise.all([
+      eventData.status === "Planning" || showsVenueRequests ? loadVenueBookings() : undefined,
+      eventData.status === "Planning" ? loadEquipmentRequests() : undefined,
+    ]);
   } catch (err) {
     if (err instanceof AccessDeniedError) {
       accessDenied.value = true;
@@ -867,6 +918,37 @@ onMounted(async () => {
         <p v-else-if="!isAssignedCoordinator" class="body-small muted">
           Only the assigned coordinator can review this request.
         </p>
+        <!-- E3-5: once the event has run, the assigned coordinator closes it -->
+        <template v-else-if="event.status === 'Confirmed'">
+          <p v-if="actionError" class="body-default error-text">{{ actionError }}</p>
+          <p v-if="!eventHasEnded" class="body-small muted review-actions__note" data-testid="complete-blocked">
+            This event is Confirmed. You can mark it completed after it ends ({{ eventEndLabel }}).
+          </p>
+          <div v-if="confirmingComplete" class="review-actions__form">
+            <p class="body-small">
+              Mark this event as completed? This can't be undone. Its details, history, bookings, equipment and
+              registrations stay available.
+            </p>
+            <div class="review-actions__buttons">
+              <button type="button" class="btn btn-primary" :disabled="isReviewing" @click="handleComplete">
+                {{ isReviewing ? "Completing…" : "Confirm" }}
+              </button>
+              <button type="button" class="btn btn-secondary" :disabled="isReviewing"
+                @click="confirmingComplete = false">
+                Cancel
+              </button>
+            </div>
+          </div>
+          <div v-else class="review-actions__buttons">
+            <button type="button" class="btn btn-primary" :disabled="!eventHasEnded || isReviewing"
+              @click="confirmingComplete = true">
+              Mark as completed
+            </button>
+          </div>
+        </template>
+        <p v-else-if="event.status === 'Completed'" class="body-small muted">
+          This event has been completed. Its full record stays available here.
+        </p>
         <template v-else-if="showReviewActions">
                     <p v-if="event.status === 'Planning'" class="body-small muted review-actions__note ">
                       This request has been approved and moved to Planning. You can still ask the organiser a
@@ -949,6 +1031,11 @@ onMounted(async () => {
 <div v-if="isAssignedCoordinator && event.status === 'Planning'" class="details-card">
   <SafetyReviewPanel :event-id="event.id" @submitted="(updated) => (event = updated)" />
 </div>
+
+<!-- E3-5 AC3: who registered, read-only — stays viewable once the event is Completed.
+     registration-service only lets the owning organiser and coordinators read it. -->
+<RegistrationsPanel v-if="(isOwnerView || isCoordinator) && asSubmittedDetails(event.submitted_details).registrationNeeded"
+  :event-id="event.id" />
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
   :current-user-id="currentUser.id" :read-only="isLead" />

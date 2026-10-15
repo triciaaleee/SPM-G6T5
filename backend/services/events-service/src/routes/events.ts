@@ -16,6 +16,7 @@ import {
   MAX_SAFETY_DECISION_REASON_LENGTH,
   parseSafetyNotes,
 } from "../lib/safetyReview.js";
+import { eventEndsAt, hasEventEnded } from "../lib/eventTiming.js";
 
 /**
  * Week 7 change 5: the Event Coordinator Lead oversees incoming requests,
@@ -488,17 +489,14 @@ const MAX_ATTENDEE_INFO_IDS = 100;
  * "Open for registration": the event is Confirmed (safety-approved, so it
  * will go ahead), the organiser asked for registration, and it hasn't
  * ended yet. Lives here, with the event data, so registration-service
- * doesn't re-derive it. Date/time are the event's local wall-clock values.
+ * doesn't re-derive it. When it ends is worked out in Singapore time (see
+ * lib/eventTiming.ts), the same rule E3-5 completion uses.
  */
 function isOpenForRegistration(status: string, details: Record<string, unknown>, now: Date = new Date()): boolean {
   if (status !== "Confirmed" || details.registrationNeeded !== true) return false;
 
-  const date = typeof details.proposedDate === "string" ? details.proposedDate : null;
-  const endTime = typeof details.endTime === "string" ? details.endTime : "23:59";
-  if (!date) return false;
-
-  const endsAt = new Date(`${date}T${endTime}`);
-  return Number.isNaN(endsAt.getTime()) ? false : endsAt.getTime() > now.getTime();
+  const endsAt = eventEndsAt(details);
+  return endsAt !== null && endsAt.getTime() > now.getTime();
 }
 
 /**
@@ -1221,6 +1219,81 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
     res.status(500).json({ error: "Failed to reject event request" });
     return;
   }
+
+  res.json({ event: data });
+});
+
+/**
+ * E3-5: the assigned coordinator marks an event completed once it has run
+ * (Confirmed -> Completed, AGENTS.md §3). AC1: only from Confirmed, which
+ * every event reaches through the Safety Officer's approval. AC2: blocked
+ * until the event's end time has passed (Singapore time, lib/eventTiming.ts).
+ * AC3: nothing is deleted or released — the event's details, history,
+ * venue bookings, equipment reservations and registrations all stay as
+ * they are, so its full record remains viewable. decided_at/decided_by are
+ * left alone (they hold the coordinator's original review decision); who
+ * completed it and when goes into the event history instead.
+ *
+ * The update only matches while the event is still Confirmed and still
+ * assigned to the caller, so a concurrent reassignment, cancellation or
+ * re-review between the checks and the write makes it a 409 instead.
+ */
+eventsRouter.post("/:id/complete", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeCoordinatorReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.Confirmed) {
+    res.status(409).json({ error: "Only a Confirmed event can be marked completed" });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data: detailsRow, error: detailsError } = await supabase
+    .from("events")
+    .select("submitted_details")
+    .eq("id", event.id)
+    .single();
+  if (detailsError) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+
+  const details = (detailsRow?.submitted_details ?? {}) as Record<string, unknown>;
+  if (!hasEventEnded(details)) {
+    const endsAt = eventEndsAt(details);
+    res.status(409).json({
+      error: endsAt
+        ? `This event hasn't finished yet. It can be marked completed after it ends (${details.proposedDate} ${details.endTime ?? "end of day"}).`
+        : "This event has no valid date and end time, so it can't be marked completed.",
+    });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .update({ status: EVENT_STATUS.Completed })
+    .eq("id", event.id)
+    .eq("status", EVENT_STATUS.Confirmed)
+    .eq("coordinator_id", user.id)
+    .select(EVENT_COLUMNS)
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to mark the event completed" });
+    return;
+  }
+  if (!data) {
+    res.status(409).json({ error: "This event is no longer Confirmed or no longer assigned to you" });
+    return;
+  }
+
+  await recordEventHistory(
+    supabase,
+    event.id,
+    [{ field: "Status", oldValue: EVENT_STATUS.Confirmed, newValue: EVENT_STATUS.Completed }],
+    user.id,
+  );
 
   res.json({ event: data });
 });
