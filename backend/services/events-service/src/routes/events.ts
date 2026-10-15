@@ -6,13 +6,14 @@ import { normaliseDraftEventRequest, validateEventRequest } from "../lib/validat
 import { isPositiveInteger } from "../lib/validation.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
-import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
+import { fitNotificationBody, sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
 import { fetchCoordinatorLeads, fetchCoordinators } from "../lib/usersClient.js";
 import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
 import {
   describeOutstanding,
   findOutstandingArrangements,
   hasOutstanding,
+  MAX_SAFETY_DECISION_REASON_LENGTH,
   parseSafetyNotes,
 } from "../lib/safetyReview.js";
 
@@ -996,6 +997,32 @@ eventsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
 });
 
 /**
+ * E3-12/13/14: every Operational Safety Check decision on this event,
+ * oldest first — outcome, reason, the Safety Officer and when. Lets the
+ * coordinator see why an event came back to Planning without relying on
+ * the notification. Same visibility as the edit history.
+ */
+eventsRouter.get("/:id/safety-reviews", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await loadEventForClarification(req, res, eventId);
+  if (!event) return;
+
+  const { supabase } = req as Required<Pick<AuthedRequest, "supabase">>;
+  const { data, error } = await supabase
+    .from("event_safety_reviews")
+    .select("id, outcome, reason, submission_id, officer:officer_id(name), created_at")
+    .eq("event_id", event.id)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load safety reviews" });
+    return;
+  }
+
+  res.json({ safetyReviews: data ?? [] });
+});
+
+/**
  * E2-7 AC1 / AGENTS.md §3 edit table: the owning organiser edits directly
  * while the request waits in the unassigned queue, waits on its
  * coordinator's review, or is in Planning.
@@ -1381,6 +1408,77 @@ eventsRouter.post("/:id/safety-review/approve", async (req: AuthedRequest, res) 
     })),
     authorization,
   );
+
+  res.json({ event: data, reviewId });
+});
+
+/**
+ * E3-13: the Safety Officer rejects the Operational Safety Check (Safety
+ * Review -> Planning, AGENTS.md §3). A reason is required (AC2). The
+ * decision and status change land together in reject_event_safety_review
+ * (migration 0029); the event's venue bookings and equipment reservations
+ * are left as they are, for the coordinator to rework. Only the assigned
+ * coordinator is notified, with the reason (AC1); a failure to notify
+ * never blocks the already-committed decision.
+ */
+eventsRouter.post("/:id/safety-review/reject", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeSafetyOfficerReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.SafetyReview) {
+    res.status(409).json({ error: "Only an event in Safety Review can be rejected" });
+    return;
+  }
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required to reject a safety review" });
+    return;
+  }
+  if (reason.length > MAX_SAFETY_DECISION_REASON_LENGTH) {
+    res.status(400).json({ error: `Keep the reason under ${MAX_SAFETY_DECISION_REASON_LENGTH} characters` });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data: reviewId, error: rejectError } = await supabase.rpc("reject_event_safety_review", {
+    p_event_id: event.id,
+    p_officer_id: user.id,
+    p_reason: reason,
+  });
+  if (rejectError) {
+    res.status(500).json({ error: "Failed to reject the safety review" });
+    return;
+  }
+  if (reviewId === null) {
+    res.status(409).json({ error: "This event is no longer in Safety Review" });
+    return;
+  }
+
+  const { data, error } = await supabase.from("events").select(EVENT_COLUMNS).eq("id", event.id).single();
+  if (error) {
+    res.status(500).json({ error: "Rejected, but failed to reload the event" });
+    return;
+  }
+
+  if (event.coordinator_id) {
+    const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
+    await sendNotifications(
+      [
+        {
+          recipientId: event.coordinator_id,
+          type: "event_safety_rejected",
+          title: "Safety review rejected",
+          body: fitNotificationBody(
+            `"${typeof eventName === "string" ? eventName : "Your event"}" failed its Operational Safety Check and is back in Planning. Reason: ${reason}`,
+          ),
+          link: `/events/${event.id}`,
+        },
+      ],
+      req.headers.authorization!,
+    );
+  }
 
   res.json({ event: data, reviewId });
 });
