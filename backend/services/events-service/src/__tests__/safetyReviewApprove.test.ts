@@ -3,15 +3,15 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
-  return {
-    requireAuth: (req: AuthedRequest, _res: unknown, next: () => void) => {
-      req.user = (globalThis as any).__mockUser;
-      req.supabase = (globalThis as any).__mockSupabase;
-      next();
-    },
+  const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
+    req.user = (globalThis as any).__mockUser;
+    req.supabase = (globalThis as any).__mockSupabase;
+    next();
   };
+  return { requireAuth: applyMock, requireAuthOrInternal: applyMock };
 });
 
 const safetyOfficer = { id: "SAF-0001", role: "safety_officer" };
@@ -55,17 +55,17 @@ function buildApp(
   (globalThis as any).__mockUser = options.user ?? safetyOfficer;
 
   const fetchMock = vi.fn().mockImplementation(async (url: string) => {
-    if (url.includes("/api/notifications")) {
-      return { ok: !options.notificationsFail, status: options.notificationsFail ? 500 : 200, json: async () => ({}) };
-    }
     throw new Error(`unexpected fetch ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
 
+  const publish = vi.fn().mockResolvedValue(!options.notificationsFail);
+  setPublisherForTest({ publish });
+
   const app = express();
   app.use(express.json());
   app.use("/api/events", eventsRouter);
-  return { app, rpc, fetchMock };
+  return { app, rpc, fetchMock, publish };
 }
 
 function approve(app: express.Express, id: number | string = 7, body: unknown = {}) {
@@ -74,7 +74,7 @@ function approve(app: express.Express, id: number | string = 7, body: unknown = 
 
 describe("POST /api/events/:id/safety-review/approve (E3-12)", () => {
   it("AC1: moves a Safety Review event to Confirmed, records the decision and notifies the coordinator and organiser", async () => {
-    const { app, rpc, fetchMock } = buildApp();
+    const { app, rpc, publish } = buildApp();
     const res = await approve(app);
 
     expect(res.status).toBe(200);
@@ -85,16 +85,11 @@ describe("POST /api/events/:id/safety-review/approve (E3-12)", () => {
       p_officer_id: safetyOfficer.id,
       p_reason: null,
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/notifications"),
+    expect(publish).toHaveBeenCalledWith(
       expect.objectContaining({
-        body: expect.stringContaining("COORD-0001"),
-      }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/notifications"),
-      expect.objectContaining({
-        body: expect.stringContaining("ORG-0001"),
+        type: "safety.decided",
+        recipients: { userIds: ["COORD-0001", "ORG-0001"], roles: [] },
+        data: expect.objectContaining({ outcome: "approved" }),
       }),
     );
   });

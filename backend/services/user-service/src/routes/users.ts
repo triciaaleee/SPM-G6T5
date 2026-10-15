@@ -1,10 +1,8 @@
 import { Router } from "express";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, requireAuthOrInternal } from "../middleware/auth.js";
 import type { AuthedRequest } from "../middleware/auth.js";
 
 export const usersRouter = Router();
-
-usersRouter.use(requireAuth);
 
 /**
  * Placeholder: returns the caller's own identity from their verified
@@ -12,7 +10,7 @@ usersRouter.use(requireAuth);
  * (see backend/services/events-service/src/routes/auth.ts) — this service
  * is scaffolding only, ready for that logic to move here later.
  */
-usersRouter.get("/me", (req: AuthedRequest, res) => {
+usersRouter.get("/me", requireAuth, (req: AuthedRequest, res) => {
   res.json({ user: req.user });
 });
 
@@ -25,7 +23,7 @@ const MAX_NAME_LOOKUP_IDS = 200;
  * other up. Returns id and name only — never email, role or anything else.
  * Ids that don't exist are simply absent.
  */
-usersRouter.get("/names", async (req: AuthedRequest, res) => {
+usersRouter.get("/names", requireAuth, async (req: AuthedRequest, res) => {
   const role = req.user?.role;
   if (role !== "organiser" && role !== "coordinator") {
     res.status(403).json({ error: "Access denied" });
@@ -69,14 +67,25 @@ const LISTABLE_ROLES_BY_CALLER: Record<string, ReadonlySet<string>> = {
  * password hash or lockout state. ?role= is required. There's no
  * active/inactive flag on users, so every account with the role counts as
  * active (the same assumption E2-6 made).
+ *
+ * `requireAuthOrInternal` also lets a sibling service call this with no
+ * end-user token (e.g. notification-service resolving a broker message's
+ * `recipients.roles`) — that case has no `req.user`, so it's trusted for
+ * any role rather than checked against LISTABLE_ROLES_BY_CALLER.
  */
-usersRouter.get("/", async (req: AuthedRequest, res) => {
+usersRouter.get("/", requireAuthOrInternal, async (req: AuthedRequest, res) => {
   const role = typeof req.query.role === "string" ? req.query.role : "";
-  const allowed = LISTABLE_ROLES_BY_CALLER[req.user!.role];
-
-  if (!allowed || !allowed.has(role)) {
-    res.status(403).json({ error: "Access denied" });
+  if (!role) {
+    res.status(400).json({ error: "role is required" });
     return;
+  }
+
+  if (req.user) {
+    const allowed = LISTABLE_ROLES_BY_CALLER[req.user.role];
+    if (!allowed || !allowed.has(role)) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
   }
 
   const { data, error } = await req

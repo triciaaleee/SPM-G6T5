@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { equipmentRequestsRouter } from "../routes/equipmentRequests.js";
 import { validateEquipmentItems, validateStatusUpdate } from "../lib/validateEquipmentRequest.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
   return {
@@ -236,6 +237,9 @@ function buildApp(
   });
   vi.stubGlobal("fetch", fetchMock);
 
+  const publish = vi.fn().mockResolvedValue((options.notificationsStatus ?? 201) < 300);
+  setPublisherForTest({ publish });
+
   (globalThis as any).__mockSupabase = supabase;
   (globalThis as any).__mockUser = options.user ?? coordinator;
 
@@ -250,6 +254,7 @@ function buildApp(
     deleteQuery,
     rpcMock,
     fetchMock,
+    publish,
     requestsTable,
     itemsTable,
     equipmentTable,
@@ -353,10 +358,8 @@ describe("POST /api/equipment-requests (E5-1)", () => {
     expect(res.status).toBe(409);
   });
 
-  it("records the request and items against their catalog entry, and notifies every Technical Support user", async () => {
-    const { app, requestInsert, itemsInsert, fetchMock } = buildApp({
-      technicalSupportStaff: [{ id: "TS-0001" }, { id: "TS-0002" }],
-    });
+  it("records the request and items against their catalog entry, and publishes equipment.requested for Technical Support", async () => {
+    const { app, requestInsert, itemsInsert, publish } = buildApp();
 
     const res = await request(app)
       .post("/api/equipment-requests")
@@ -376,11 +379,15 @@ describe("POST /api/equipment-requests (E5-1)", () => {
     });
     expect(res.body.notified).toBe(true);
 
-    const notifyCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/notifications"));
-    expect(notifyCall).toBeDefined();
-    const sentBody = JSON.parse((notifyCall![1] as RequestInit).body as string);
-    expect(sentBody.notifications).toHaveLength(2);
-    expect(sentBody.notifications[0]).toMatchObject({ recipientId: "TS-0001", type: "equipment_request_submitted" });
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "equipment.requested",
+        eventId: 7,
+        actorId: "COORD-0001",
+        recipients: { userIds: [], roles: ["technical_support"] },
+        data: expect.objectContaining({ itemCount: 1 }),
+      }),
+    );
   });
 
   it("reports notified:false when notification-service fails, without failing the request", async () => {
@@ -630,8 +637,8 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
   });
 
   // AC1: saving notifies the assigned coordinator and the new status is returned.
-  it("updates the status via the atomic RPC and notifies the assigned coordinator", async () => {
-    const { app, rpcMock, fetchMock } = buildApp({
+  it("updates the status via the atomic RPC and publishes equipment.status_changed to the assigned coordinator", async () => {
+    const { app, rpcMock, publish } = buildApp({
       user: technicalSupport,
       items: oneItem,
       updatedRequest: {
@@ -659,19 +666,20 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
     expect(res.body.equipmentRequest).toMatchObject({ id: 55, status: "Arranged", fulfillmentNote: null });
     expect(res.body.notified).toBe(true);
 
-    const notifyCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/notifications"));
-    const sentBody = JSON.parse((notifyCall![1] as RequestInit).body as string);
-    expect(sentBody.notifications[0]).toMatchObject({
-      recipientId: "COORD-0001",
-      type: "equipment_request_status_updated",
-    });
-    expect(sentBody.notifications[0].body).toContain("Alumni Gala");
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "equipment.status_changed",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: expect.objectContaining({ status: "Arranged", eventName: "Alumni Gala" }),
+      }),
+    );
   });
 
   // E2-12 AC6: after a reassignment the new coordinator owns the event's
   // pending requests, so the update reaches them, not whoever made the request.
   it("notifies the event's current coordinator after a reassignment", async () => {
-    const { app, fetchMock } = buildApp({
+    const { app, publish } = buildApp({
       user: technicalSupport,
       items: oneItem,
       updatedRequest: {
@@ -693,9 +701,9 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
       .send({ status: "Arranged" });
 
     expect(res.status).toBe(200);
-    const notifyCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/notifications"));
-    const sentBody = JSON.parse((notifyCall![1] as RequestInit).body as string);
-    expect(sentBody.notifications[0].recipientId).toBe("COORD-0002");
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ recipients: { userIds: ["COORD-0002"], roles: [] } }),
+    );
   });
 
   // AC2: the coordinator is told what remains outstanding, and the RPC gets the exact

@@ -1,13 +1,13 @@
 import { Router } from "express";
 import type { Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, requireAuthOrInternal } from "../middleware/auth.js";
 import { normaliseDraftEventRequest, validateEventRequest } from "../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../lib/validation.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
-import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
-import { fetchCoordinatorLeads, fetchCoordinators } from "../lib/usersClient.js";
+import { getPublisher } from "../lib/rabbitPublisher.js";
+import { fetchCoordinators } from "../lib/usersClient.js";
 import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
 import {
   describeOutstanding,
@@ -69,30 +69,31 @@ async function recordEventHistory(
 /**
  * E2-14: a newly-unassigned request waits in the Lead's queue (E1-8) until
  * assigned (E2-13) — notify every Lead so they know there's something to
- * triage. Best-effort: a notification failure never blocks the submission
- * that already committed.
+ * triage, and the submitting organiser with a confirmation (#104 row 1).
+ * Best-effort: a notification failure never blocks the submission that
+ * already committed.
+ *
+ * Lead ids are resolved by notification-service after this publishes
+ * (`recipients.roles`), not fetched from user-service here first — events-
+ * service has no REST dependency on user-service in this path at all.
  */
-async function notifyCoordinatorLeads(
-  authorization: string,
-  eventId: number,
-  eventName: string,
-): Promise<void> {
-  const leads = await fetchCoordinatorLeads(authorization);
-  if (leads.status === "error" || leads.coordinators.length === 0) return;
-
-  await sendNotifications(
-    leads.coordinators.map((lead) => ({
-      recipientId: lead.id,
-      type: "event_unassigned",
-      title: "New request in the unassigned queue",
-      body: `"${eventName}" needs a coordinator assigned.`,
-      link: `/events/${eventId}`,
-    })),
-    authorization,
-  );
+async function notifyCoordinatorLeads(eventId: number, eventName: string, actorId: string): Promise<void> {
+  await getPublisher().publish({
+    type: "request.submitted",
+    eventId,
+    actorId,
+    recipients: { userIds: [actorId], roles: ["coordinator_lead"] },
+    data: { eventName, organiserId: actorId },
+  });
 }
 
 export const eventsRouter = Router();
+
+// Registered ahead of the blanket requireAuth below: venue-service's
+// scheduled expiring-hold sweep (#106 row 4b) has no end-user token to
+// forward, so this one route accepts an internal token too. Every other
+// route keeps requireAuth only.
+eventsRouter.get("/venue-booking-info", requireAuthOrInternal, venueBookingInfoHandler);
 
 eventsRouter.use(requireAuth);
 
@@ -166,11 +167,7 @@ eventsRouter.post("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  await notifyCoordinatorLeads(
-    req.headers.authorization!,
-    data.id,
-    eventDisplayName(data as unknown as AssignmentEventRow),
-  );
+  await notifyCoordinatorLeads(data.id, eventDisplayName(data as unknown as AssignmentEventRow), user.id);
 
   res.status(201).json({ event: data, message: "Your event request has been submitted." });
 });
@@ -401,16 +398,24 @@ const VENUE_BOOKING_INFO_ROLES = new Set(["venue_staff", "coordinator", "technic
  * read as an event id. Drafts are never returned: a draft can't have been
  * booked, and it isn't anyone's business but the organiser's.
  */
-eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
+/**
+ * A hoisted function declaration (not registered inline) so it can be
+ * referenced by the early, internal-auth-aware route registration above
+ * requireAuth — see the comment there. `user` is absent for a trusted
+ * internal caller (venue-service's sweep); that skips the role check
+ * entirely rather than rejecting it, same reasoning as user-service's
+ * requireAuthOrInternal routes.
+ */
+async function venueBookingInfoHandler(req: AuthedRequest, res: Response): Promise<void> {
   const { supabase, user } = req;
-  if (!supabase || !user) {
+  if (!supabase) {
     res.status(401).json({ error: "Unauthenticated" });
     return;
   }
 
   const rawIds = typeof req.query.ids === "string" ? req.query.ids : "";
 
-  if (!VENUE_BOOKING_INFO_ROLES.has(user.role)) {
+  if (user && !VENUE_BOOKING_INFO_ROLES.has(user.role)) {
     await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_role_not_allowed");
     res.status(403).json({ error: "Access denied" });
     return;
@@ -455,7 +460,7 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
   });
 
   res.json({ events });
-});
+}
 
 /**
  * E6: the only fields an Attendee may see about an event — what is safe to
@@ -957,14 +962,48 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
         console.error("Failed to record clarification response reply", { eventId: existing.id, error: replyError });
       }
     }
+
+    // #104 row 6: the organiser's response goes to whoever is currently
+    // assigned — read fresh from `existing`, not cached from when the
+    // clarification was first requested, so a reassignment in between is
+    // respected.
+    if (existing.coordinator_id) {
+      await getPublisher().publish({
+        type: "clarification.answered",
+        eventId: data.id,
+        actorId: user.id,
+        recipients: { userIds: [existing.coordinator_id], roles: [] },
+        data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow) },
+      });
+    }
   }
 
   if (isDraftSubmit) {
-    await notifyCoordinatorLeads(
-      req.headers.authorization!,
-      data.id,
-      eventDisplayName(data as unknown as AssignmentEventRow),
-    );
+    await notifyCoordinatorLeads(data.id, eventDisplayName(data as unknown as AssignmentEventRow), user.id);
+  }
+
+  if (isDirectEdit) {
+    // #104 row 2 / AC4: the assigned coordinator, or every Lead if the
+    // event is still Unassigned (no coordinator to address).
+    const eventName = eventDisplayName(data as unknown as AssignmentEventRow);
+    if (existing.coordinator_id) {
+      await getPublisher().publish({
+        type: "request.edited",
+        eventId: data.id,
+        actorId: user.id,
+        recipients: { userIds: [existing.coordinator_id], roles: [] },
+        data: { eventName },
+      });
+    } else {
+      // No REST lookup — notification-service resolves the Lead ids itself.
+      await getPublisher().publish({
+        type: "request.edited",
+        eventId: data.id,
+        actorId: user.id,
+        recipients: { userIds: [], roles: ["coordinator_lead"] },
+        data: { eventName },
+      });
+    }
   }
 
   res.json({ event: data });
@@ -1027,6 +1066,7 @@ interface ReviewEventRow {
   id: number;
   status: string;
   coordinator_id: string | null;
+  organiser_id: string | null;
 }
 
 /**
@@ -1064,7 +1104,7 @@ async function authorizeCoordinatorReview(
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, status, coordinator_id")
+    .select("id, status, coordinator_id, organiser_id")
     .eq("id", Number(eventId))
     .maybeSingle();
 
@@ -1152,6 +1192,17 @@ eventsRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // #104 row 7: the organiser is the only recipient of the decision.
+  if (event.organiser_id) {
+    await getPublisher().publish({
+      type: "request.decided",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.organiser_id], roles: [] },
+      data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow), decision: "approved" },
+    });
+  }
+
   res.json({ event: data });
 });
 
@@ -1195,6 +1246,17 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // #104 row 7: the organiser is the only recipient of the decision.
+  if (event.organiser_id) {
+    await getPublisher().publish({
+      type: "request.decided",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.organiser_id], roles: [] },
+      data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow), decision: "rejected", reason },
+    });
+  }
+
   res.json({ event: data });
 });
 
@@ -1209,7 +1271,7 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
  * submit_event_for_safety_review (migration 0026). A resubmission after the
  * Safety Officer rejects or requests changes takes the same path, since
  * both return the event to Planning (AC8), and gets a fresh submission row.
- * Notifying the Safety Officer and Organiser is deferred to E7 (AC9).
+ * AC9: every Safety Officer and the Organiser are notified (#105 row 1).
  */
 eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) => {
   const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
@@ -1267,6 +1329,18 @@ eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) =
   if (error) {
     res.status(500).json({ error: "Submitted for safety review, but failed to reload the event" });
     return;
+  }
+
+  // #105 row 1 (E7-2b): every Safety Officer and the organiser, closing the
+  // gap this route's own AC9 comment used to defer to E7.
+  if (event.organiser_id) {
+    await getPublisher().publish({
+      type: "safety.submitted",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.organiser_id], roles: ["safety_officer"] },
+      data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow) },
+    });
   }
 
   res.json({ event: data, submissionId });
@@ -1366,21 +1440,19 @@ eventsRouter.post("/:id/safety-review/approve", async (req: AuthedRequest, res) 
     return;
   }
 
-  const authorization = req.headers.authorization!;
   const recipients = [event.coordinator_id, event.organiser_id].filter(
     (id): id is string => typeof id === "string",
   );
   const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
-  await sendNotifications(
-    recipients.map((recipientId) => ({
-      recipientId,
-      type: "event_safety_approved",
-      title: "Safety review approved",
-      body: `"${typeof eventName === "string" ? eventName : "Your event"}" passed its Operational Safety Check and is now Confirmed.`,
-      link: `/events/${event.id}`,
-    })),
-    authorization,
-  );
+
+  // Migrated to RabbitMQ (ARD section 1.1, RabbitMQ.md #9 "safety.decided").
+  await getPublisher().publish({
+    type: "safety.decided",
+    eventId: event.id,
+    actorId: user.id,
+    recipients: { userIds: recipients, roles: [] },
+    data: { outcome: "approved", eventName: typeof eventName === "string" ? eventName : null },
+  });
 
   res.json({ event: data, reviewId });
 });
@@ -1446,6 +1518,18 @@ eventsRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) 
 
   if (threadError) {
     console.error("Failed to record clarification thread entry", { eventId: event.id, error: threadError });
+  }
+
+  // #104 row 5: the organiser is the only recipient — there's always one,
+  // since only an organiser can submit a request in the first place.
+  if (event.organiser_id) {
+    await getPublisher().publish({
+      type: "clarification.requested",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.organiser_id], roles: [] },
+      data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow), message },
+    });
   }
 
   res.json({ event: data });
@@ -1836,28 +1920,24 @@ eventsRouter.post("/:id/assign", async (req: AuthedRequest, res) => {
   );
 
   const eventName = eventDisplayName(event);
-  const link = `/events/${event.id}`;
-  const notified = await sendNotifications(
-    [
-      {
-        recipientId: coordinator.id,
-        type: "event_assigned",
-        title: "New event assigned to you",
-        body: `"${eventName}" has been assigned to you. You are now its coordinator.`,
-        link,
-      },
-      {
-        recipientId: event.organiser_id,
-        type: "event_coordinator_assigned",
-        title: "Your event has a coordinator",
-        body: `${coordinator.name} is now the coordinator for "${eventName}".`,
-        link,
-      },
-    ],
-    req.headers.authorization!,
-  );
 
-  res.json({ event: data, notificationsFailed: !notified });
+  // Migrated to RabbitMQ (ARD section 1.1): notification-service's
+  // existing consumer renders this into the coordinator's and organiser's
+  // notifications (notification-service/src/lib/messageTemplates.ts).
+  const published = await getPublisher().publish({
+    type: "coordinator.assigned",
+    eventId: event.id,
+    actorId: user.id,
+    recipients: { userIds: [coordinator.id, event.organiser_id], roles: [] },
+    data: {
+      eventName,
+      coordinatorId: coordinator.id,
+      coordinatorName: coordinator.name,
+      organiserId: event.organiser_id,
+    },
+  });
+
+  res.json({ event: data, notificationsFailed: !published });
 });
 
 /**
@@ -1930,31 +2010,22 @@ eventsRouter.post("/:id/reassign", async (req: AuthedRequest, res) => {
   );
 
   const eventName = eventDisplayName(event);
-  const link = `/events/${event.id}`;
-  const notifications: NewNotification[] = [
-    {
-      recipientId: event.organiser_id,
-      type: "event_coordinator_reassigned",
-      title: "Your event has a new coordinator",
-      body: `${coordinator.name} is now the coordinator for "${eventName}", taking over from ${previousCoordinatorName}.`,
-      link,
-    },
-    {
-      recipientId: previousCoordinatorId,
-      type: "event_reassigned_away",
-      title: "Event reassigned",
-      body: `"${eventName}" has been reassigned to ${coordinator.name}. You can still view it, but you can no longer act on it.`,
-      link,
-    },
-    {
-      recipientId: coordinator.id,
-      type: "event_assigned",
-      title: "Event reassigned to you",
-      body: `"${eventName}" has been reassigned to you from ${previousCoordinatorName}. You are now its coordinator.`,
-      link,
-    },
-  ];
-  const notified = await sendNotifications(notifications, req.headers.authorization!);
 
-  res.json({ event: data, notificationsFailed: !notified });
+  // Migrated to RabbitMQ (ARD section 1.1, RabbitMQ.md #4 "coordinator.reassigned").
+  const published = await getPublisher().publish({
+    type: "coordinator.reassigned",
+    eventId: event.id,
+    actorId: user.id,
+    recipients: { userIds: [event.organiser_id, previousCoordinatorId, coordinator.id], roles: [] },
+    data: {
+      eventName,
+      organiserId: event.organiser_id,
+      newCoordinatorId: coordinator.id,
+      newCoordinatorName: coordinator.name,
+      previousCoordinatorId,
+      previousCoordinatorName,
+    },
+  });
+
+  res.json({ event: data, notificationsFailed: !published });
 });

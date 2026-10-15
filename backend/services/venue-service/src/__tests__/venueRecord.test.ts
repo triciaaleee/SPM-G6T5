@@ -5,6 +5,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { staffRouter } from "../routes/staff.js";
 import { parseVenueInput } from "../lib/venueRecord.js";
 import { findBufferOverlaps, findCapacityShortfalls, type LiveBooking } from "../lib/venueChanges.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
   return {
@@ -123,18 +124,16 @@ function buildApp(
   });
   vi.stubGlobal("fetch", fetchMock);
 
+  const publish = vi.fn().mockResolvedValue(options.notifyOk ?? true);
+  setPublisherForTest({ publish });
+
   (globalThis as any).__mockUser = options.user;
   (globalThis as any).__mockSupabase = supabase;
 
   const app = express();
   app.use(express.json());
   app.use("/api/venues/staff", staffRouter);
-  return { app, insert, update, fetchMock };
-}
-
-function notificationsSent(fetchMock: ReturnType<typeof vi.fn>) {
-  const call = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/notifications"));
-  return call ? (JSON.parse((call[1] as { body: string }).body).notifications as { recipientId: string; type: string }[]) : [];
+  return { app, insert, update, fetchMock, publish };
 }
 
 afterEach(() => {
@@ -325,7 +324,7 @@ describe("PATCH /api/venues/staff/venues/:venueId", () => {
   });
 
   it("AC6: notifies the coordinator when capacity drops below a future Approved booking's attendance", async () => {
-    const { app, fetchMock } = buildApp({ bookings: [approved], events: [eventInfo({ expectedAttendance: 200 })] });
+    const { app, publish } = buildApp({ bookings: [approved], events: [eventInfo({ expectedAttendance: 200 })] });
     const res = await request(app).patch("/api/venues/staff/venues/6").send({ ...validVenue, setupMinutes: 0, turnaroundMinutes: 0 });
 
     expect(res.status).toBe(200);
@@ -334,17 +333,17 @@ describe("PATCH /api/venues/staff/venues/:venueId", () => {
     ]);
     expect(res.body.capacityShortfalls[0]).not.toHaveProperty("coordinatorId");
     expect(res.body.coordinatorsNotified).toBe(1);
-    expect(notificationsSent(fetchMock)).toEqual([
-      expect.objectContaining({ recipientId: "COO-0001", type: "venue_capacity_reduced" }),
-    ]);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "venue.capacity_reduced", recipients: { userIds: ["COO-0001"], roles: [] } }),
+    );
   });
 
   it("AC6: notifies nobody when attendance still fits", async () => {
-    const { app, fetchMock } = buildApp({ bookings: [approved], events: [eventInfo({ expectedAttendance: 100 })] });
+    const { app, publish } = buildApp({ bookings: [approved], events: [eventInfo({ expectedAttendance: 100 })] });
     const res = await request(app).patch("/api/venues/staff/venues/6").send({ ...validVenue, setupMinutes: 0, turnaroundMinutes: 0 });
 
     expect(res.body.capacityShortfalls).toEqual([]);
-    expect(notificationsSent(fetchMock)).toEqual([]);
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("keeps the save when notifications fail", async () => {
@@ -361,7 +360,7 @@ describe("PATCH /api/venues/staff/venues/:venueId", () => {
   });
 
   it("flags bookings that now overlap under a longer setup/turnaround", async () => {
-    const { app, fetchMock } = buildApp({
+    const { app, publish } = buildApp({
       bookings: [approved, { id: 2, event_id: 8, status: "Approved", hold_expires_at: null }],
       events: [
         eventInfo({ id: 7, startTime: "10:00", endTime: "12:00", expectedAttendance: 50 }),
@@ -371,20 +370,26 @@ describe("PATCH /api/venues/staff/venues/:venueId", () => {
     const res = await request(app).patch("/api/venues/staff/venues/6").send(validVenue);
 
     expect(res.body.bufferOverlaps).toHaveLength(1);
-    expect(notificationsSent(fetchMock).map((n) => [n.recipientId, n.type])).toEqual([
-      ["COO-0001", "venue_setup_conflict"],
-      ["COO-0002", "venue_setup_conflict"],
-    ]);
+    // Both coordinators, plus the venue's own staff member (#107 row 2).
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "booking.setup_conflict", recipients: { userIds: ["COO-0001"], roles: [] } }),
+    );
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "booking.setup_conflict", recipients: { userIds: ["COO-0002"], roles: [] } }),
+    );
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "booking.setup_conflict", recipients: { userIds: ["VEN-0001"], roles: [] } }),
+    );
   });
 
   it("preview reports the impact without writing or notifying", async () => {
-    const { app, update, fetchMock } = buildApp({ bookings: [approved], events: [eventInfo({ expectedAttendance: 200 })] });
+    const { app, update, publish } = buildApp({ bookings: [approved], events: [eventInfo({ expectedAttendance: 200 })] });
     const res = await request(app).post("/api/venues/staff/venues/6/preview").send(validVenue);
 
     expect(res.status).toBe(200);
     expect(res.body.capacityShortfalls).toHaveLength(1);
     expect(update).not.toHaveBeenCalled();
-    expect(notificationsSent(fetchMock)).toEqual([]);
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("AC2/AC4/AC5: blocks invalid details without writing", async () => {

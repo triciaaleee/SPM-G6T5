@@ -5,6 +5,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { occupiedWindow, parsePeriodInput, periodBlocksSlot, periodOverlapsWindow } from "../lib/unavailability.js";
 import { occupiedWindow as bookingWindow } from "../lib/bookingConflicts.js";
 import { unavailabilityRouter } from "../routes/unavailability.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
   return {
@@ -96,13 +97,16 @@ function buildApp(
   });
   vi.stubGlobal("fetch", fetchMock);
 
+  const publish = vi.fn().mockResolvedValue((options.notificationsStatus ?? 201) < 300);
+  setPublisherForTest({ publish });
+
   (globalThis as any).__mockSupabase = supabase;
   (globalThis as any).__mockUser = options.user ?? venueStaff;
 
   const app = express();
   app.use(express.json());
   app.use("/api/venues/unavailability", unavailabilityRouter);
-  return { app, supabase, periodsQuery, bookingsQuery, updateQuery, insert, update, periodUpdate, fetchMock };
+  return { app, supabase, periodsQuery, bookingsQuery, updateQuery, insert, update, periodUpdate, fetchMock, publish };
 }
 
 afterEach(() => {
@@ -283,7 +287,7 @@ describe("occupiedWindow", () => {
 
 describe("PUT /api/venues/unavailability/:id (edit)", () => {
   it("saves the new dates/hours and flags bookings the edit now covers", async () => {
-    const { app, periodUpdate, update, fetchMock } = buildApp({
+    const { app, periodUpdate, update, publish } = buildApp({
       existing: { id: 4, venue_id: 6 },
       bookings: [{ id: 1, event_id: 1, status: "Approved" }],
       events: [eventInfo(1, "2026-10-15", "10:00", "12:00")],
@@ -298,7 +302,7 @@ describe("PUT /api/venues/unavailability/:id (edit)", () => {
       start_date: "2026-10-14", end_date: "2026-10-16", all_day: true, start_time: null, end_time: null, reason: "Extended works",
     });
     expect(update).toHaveBeenCalledWith({ status: "Replacement Required" });
-    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/notifications"))).toBe(true);
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: "booking.replacement_required" }));
     expect(res.body).toMatchObject({ period: { id: 4, reason: "Extended works" }, coordinatorsNotified: 1 });
   });
 
@@ -333,7 +337,7 @@ describe("POST /api/venues/unavailability (AC1 + AC2)", () => {
   });
 
   it("flags affected bookings Replacement Required and notifies their coordinators", async () => {
-    const { app, update, updateQuery, fetchMock } = buildApp({
+    const { app, update, updateQuery, publish } = buildApp({
       bookings: [{ id: 1, event_id: 1, status: "Approved" }, { id: 2, event_id: 2, status: "Approved" }],
       events: [eventInfo(1, "2026-10-13", "10:00", "12:00"), eventInfo(2, "2026-11-01", "10:00", "12:00")],
     });
@@ -345,18 +349,19 @@ describe("POST /api/venues/unavailability (AC1 + AC2)", () => {
     expect(updateQuery.in).toHaveBeenCalledWith("id", [1]);
     expect(updateQuery.eq).toHaveBeenCalledWith("status", "Approved");
 
-    const notifyCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/notifications"));
-    const sent = JSON.parse(notifyCall![1]!.body!).notifications;
-    expect(sent).toEqual([
-      expect.objectContaining({ recipientId: "COORD-0001", type: "venue_unavailable", link: "/events/1" }),
-    ]);
-    expect(sent[0].body).toContain("Great Lawn");
-    expect(sent[0].body).toContain("Floor resurfacing");
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "booking.replacement_required",
+        eventId: 1,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: expect.objectContaining({ venueName: "Great Lawn", reason: "Floor resurfacing" }),
+      }),
+    );
     expect(res.body).toMatchObject({ coordinatorsNotified: 1, notificationsFailed: false });
   });
 
   it("leaves pending bookings' status alone (AGENTS.md §3a) but still notifies their coordinators", async () => {
-    const { app, update, fetchMock } = buildApp({
+    const { app, update, publish } = buildApp({
       bookings: [{ id: 7, event_id: 1, status: "Requested" }, { id: 8, event_id: 2, status: "On Hold" }],
       events: [eventInfo(1, "2026-10-13", "10:00", "12:00"), eventInfo(2, "2026-10-14", "10:00", "12:00")],
     });
@@ -366,9 +371,8 @@ describe("POST /api/venues/unavailability (AC1 + AC2)", () => {
     expect(res.status).toBe(201);
     expect(update).not.toHaveBeenCalled();
     expect(res.body.affected.map((b: { replacementRequired: boolean }) => b.replacementRequired)).toEqual([false, false]);
-    const notifyCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/notifications"));
-    const sent = JSON.parse(notifyCall![1]!.body!).notifications;
-    expect(sent.map((n: { type: string }) => n.type)).toEqual(["venue_unavailable_pending", "venue_unavailable_pending"]);
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: "booking.unavailability_clash", eventId: 1 }));
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: "booking.unavailability_clash", eventId: 2 }));
   });
 
   it("still saves, but reports it, when notification-service can't be reached", async () => {

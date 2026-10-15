@@ -5,15 +5,15 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
 import { sendNotifications } from "../lib/notificationsClient.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
-  return {
-    requireAuth: (req: AuthedRequest, _res: unknown, next: () => void) => {
-      req.user = (globalThis as any).__mockUser;
-      req.supabase = (globalThis as any).__mockSupabase;
-      next();
-    },
+  const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
+    req.user = (globalThis as any).__mockUser;
+    req.supabase = (globalThis as any).__mockSupabase;
+    next();
   };
+  return { requireAuth: applyMock, requireAuthOrInternal: applyMock };
 });
 
 vi.mock("../lib/usersClient.js", () => ({ fetchCoordinators: vi.fn() }));
@@ -74,9 +74,13 @@ function called(q: ReturnType<typeof query>, method: string, ...args: unknown[])
   return q.calls.some(([m, a]) => m === method && JSON.stringify(a) === JSON.stringify(args));
 }
 
+const publish = vi.fn().mockResolvedValue(true);
+
 beforeEach(() => {
   vi.mocked(fetchCoordinators).mockReset().mockResolvedValue({ status: "ok", coordinators: COORDINATORS });
   vi.mocked(sendNotifications).mockReset().mockResolvedValue(true);
+  publish.mockReset().mockResolvedValue(true);
+  setPublisherForTest({ publish });
 });
 
 const unassignedEvent = {
@@ -223,9 +227,13 @@ describe("POST /api/events/:id/assign (E2-13)", () => {
       { event_id: 7, field: "Status", old_value: "Unassigned", new_value: "Requested", changed_by: "LEAD-0001" },
     ])).toBe(true);
 
-    const [notifications] = vi.mocked(sendNotifications).mock.calls[0];
-    expect(notifications.map((n) => n.recipientId)).toEqual(["COORD-0002", "ORG-0001"]);
-    expect(notifications.every((n) => n.link === "/events/7")).toBe(true);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "coordinator.assigned",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0002", "ORG-0001"], roles: [] },
+      }),
+    );
   });
 
   it("blocks assigning an event that already has a coordinator (AC2)", async () => {
@@ -238,7 +246,7 @@ describe("POST /api/events/:id/assign (E2-13)", () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/reassign/i);
     expect(write.calls).toHaveLength(0);
-    expect(sendNotifications).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("blocks assigning a request that isn't in the unassigned queue", async () => {
@@ -305,7 +313,7 @@ describe("POST /api/events/:id/assign (E2-13)", () => {
 
     expect(res.status).toBe(409);
     expect(history.calls).toHaveLength(0);
-    expect(sendNotifications).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("returns 502 when the coordinator list can't be loaded", async () => {
@@ -319,7 +327,7 @@ describe("POST /api/events/:id/assign (E2-13)", () => {
   });
 
   it("keeps the assignment when notifications fail, and says so", async () => {
-    vi.mocked(sendNotifications).mockResolvedValue(false);
+    publish.mockResolvedValue(false);
     const lookup = query({ data: unassignedEvent, error: null });
     const write = query({ data: { id: 7, status: "Requested" }, error: null });
     const app = buildApp(buildSupabase({ events: [lookup, write] }), lead);
@@ -377,8 +385,12 @@ describe("POST /api/events/:id/reassign (E2-12)", () => {
 
     await request(app).post("/api/events/7/reassign").send({ coordinatorId: "COORD-0002" });
 
-    const [notifications] = vi.mocked(sendNotifications).mock.calls[0];
-    expect(notifications.map((n) => n.recipientId)).toEqual(["ORG-0001", "COORD-0001", "COORD-0002"]);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "coordinator.reassigned",
+        recipients: { userIds: ["ORG-0001", "COORD-0001", "COORD-0002"], roles: [] },
+      }),
+    );
   });
 
   it.each(["Requested", "Clarification Requested", "Planning", "Safety Review", "Confirmed"])(

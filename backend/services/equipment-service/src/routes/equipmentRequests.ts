@@ -3,7 +3,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEvent, fetchEventBookingInfo, type EquipmentBookingInfo } from "../lib/eventsClient.js";
 import { claimUnits, recordClaims, releaseUnitsForItem } from "../lib/equipmentConflicts.js";
-import { sendNotifications } from "../lib/notificationsClient.js";
+import { getPublisher } from "../lib/rabbitPublisher.js";
 import { computeReservationFlags, type ReservationFlag } from "../lib/reservationFlags.js";
 import { occupiedWindow, type OccupiedWindow } from "../lib/scheduleWindow.js";
 import {
@@ -198,22 +198,17 @@ equipmentRequestsRouter.post("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const { data: technicalSupportStaff } = await supabase.from("users").select("id").eq("role", "technical_support");
-
+  // #107 row 4 ("raised"), RabbitMQ.md #26 `equipment.requested`. Lets
+  // notification-service resolve technical_support itself (recipients.roles)
+  // instead of equipment-service reading user-service's table directly.
   const eventName = (event.submitted_details?.name as string | undefined) || `Event #${eventId}`;
-  const notified =
-    technicalSupportStaff && technicalSupportStaff.length > 0
-      ? await sendNotifications(
-          technicalSupportStaff.map((staff) => ({
-            recipientId: staff.id as string,
-            type: "equipment_request_submitted",
-            title: "New equipment request",
-            body: `${eventName} needs ${items.length} equipment item${items.length === 1 ? "" : "s"} arranged.`,
-            link: `/events/${eventId}`,
-          })),
-          req.headers.authorization!,
-        )
-      : true;
+  const notified = await getPublisher().publish({
+    type: "equipment.requested",
+    eventId,
+    actorId: user.id,
+    recipients: { userIds: [], roles: ["technical_support"] },
+    data: { eventName, itemCount: items.length },
+  });
 
   res.status(201).json({ equipmentRequest: toRequest(requestRow as RequestRow, itemRows as ItemRow[]), notified });
 });
@@ -352,13 +347,6 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
     })),
   });
 });
-
-function statusNotificationBody(status: string, note: string | null, eventName: string): string {
-  if (status === "Partially Fulfilled") {
-    return `${eventName}'s equipment request is only partially fulfilled: ${note}`;
-  }
-  return `${eventName}'s equipment request is now ${status}.`;
-}
 
 /** The real values quantity_fulfilled can move between, to size a claim/release delta. */
 function targetFulfilledByItem(
@@ -602,18 +590,14 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // only the fallback when events-service doesn't answer.
   const recipientId = eventInfo?.coordinatorId || (requestRow.coordinator_id as string);
 
-  const notified = await sendNotifications(
-    [
-      {
-        recipientId,
-        type: "equipment_request_status_updated",
-        title: `Equipment request ${status.toLowerCase()}`,
-        body: statusNotificationBody(status, note, eventName),
-        link: `/events/${requestRow.event_id}`,
-      },
-    ],
-    req.headers.authorization!,
-  );
+  // #107 row 5, RabbitMQ.md #28 `equipment.status_changed`.
+  const notified = await getPublisher().publish({
+    type: "equipment.status_changed",
+    eventId: requestRow.event_id as number,
+    actorId: user.id,
+    recipients: { userIds: [recipientId], roles: [] },
+    data: { status, note, eventName },
+  });
 
   // AC3: fresh immediately after a write too, not just on the next GET.
   const allItems = (itemRows ?? []) as ItemRow[];

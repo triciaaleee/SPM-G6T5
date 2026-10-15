@@ -14,7 +14,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { UNAVAILABLE_BOOKING_STATUSES, blocksVenue, type BookingStatus } from "./bookingStatus.js";
 import { formatWindow, occupiedWindow, overlaps, type WindowPadding } from "./bookingConflicts.js";
 import { fetchVenueBookingInfo, type VenueBookingInfo } from "./eventsClient.js";
-import type { NewNotification } from "./notificationsClient.js";
+import type { OutboundMessage } from "./rabbitPublisher.js";
 
 type Supabase = NonNullable<AuthedRequest["supabase"]>;
 
@@ -154,25 +154,54 @@ export async function loadLiveBookings(
   });
 }
 
-/** One notification per coordinator per event, so an event in two overlaps isn't told twice. */
-export function impactNotifications(venueName: string, impact: VenueChangeImpact, capacity: number): NewNotification[] {
-  const notifications: NewNotification[] = [];
+/**
+ * One message per coordinator per event, so an event in two overlaps isn't
+ * told twice — plus one `booking.setup_conflict` message to the venue's
+ * staff member per unique overlap pair (#107 row 2). `venue.capacity_reduced`
+ * (row 3) has no Venue Staff recipient per the matrix.
+ */
+export function impactNotifications(
+  venueName: string,
+  impact: VenueChangeImpact,
+  capacity: number,
+  venueStaffId: string | null,
+): OutboundMessage[] {
+  const messages: OutboundMessage[] = [];
   const told = new Set<string>();
 
   for (const shortfall of impact.capacityShortfalls) {
     if (!shortfall.coordinatorId) continue;
     told.add(`capacity:${shortfall.coordinatorId}:${shortfall.eventId}`);
-    const name = shortfall.eventName || `Event #${shortfall.eventId}`;
-    notifications.push({
-      recipientId: shortfall.coordinatorId,
-      type: "venue_capacity_reduced",
-      title: `${venueName} capacity reduced`,
-      body: `${venueName} now holds at most ${capacity} people, but ${name} on ${shortfall.date} expects ${shortfall.expectedAttendance}. Check whether the event still fits or request another venue.`,
-      link: `/events/${shortfall.eventId}`,
+    messages.push({
+      type: "venue.capacity_reduced",
+      eventId: shortfall.eventId,
+      actorId: null,
+      recipients: { userIds: [shortfall.coordinatorId], roles: [] },
+      data: {
+        venueName,
+        capacity,
+        eventName: shortfall.eventName,
+        date: shortfall.date,
+        expectedAttendance: shortfall.expectedAttendance,
+      },
     });
   }
 
   for (const overlap of impact.bufferOverlaps) {
+    if (venueStaffId) {
+      messages.push({
+        type: "booking.setup_conflict",
+        eventId: overlap.first.eventId,
+        actorId: null,
+        recipients: { userIds: [venueStaffId], roles: [] },
+        data: {
+          venueName,
+          venueStaffId,
+          first: { eventName: overlap.first.eventName, window: overlap.first.window },
+          second: { eventName: overlap.second.eventName, window: overlap.second.window },
+        },
+      });
+    }
     for (const [mine, other] of [
       [overlap.first, overlap.second],
       [overlap.second, overlap.first],
@@ -180,17 +209,24 @@ export function impactNotifications(venueName: string, impact: VenueChangeImpact
       const key = `overlap:${mine.coordinatorId}:${mine.eventId}`;
       if (!mine.coordinatorId || told.has(key)) continue;
       told.add(key);
-      const name = mine.eventName || `Event #${mine.eventId}`;
-      notifications.push({
-        recipientId: mine.coordinatorId,
-        type: "venue_setup_conflict",
-        title: `${venueName} booking now overlaps another`,
-        body: `${venueName}'s setup or turnaround time changed. ${name} now needs the venue ${mine.window}, which overlaps ${other.eventName || `Event #${other.eventId}`} (${other.window}). Neither booking has been removed.`,
-        link: `/events/${mine.eventId}`,
+      messages.push({
+        type: "booking.setup_conflict",
+        eventId: mine.eventId,
+        actorId: null,
+        recipients: { userIds: [mine.coordinatorId], roles: [] },
+        data: {
+          venueName,
+          venueStaffId,
+          eventName: mine.eventName,
+          window: mine.window,
+          otherEventName: other.eventName,
+          otherEventId: other.eventId,
+          otherWindow: other.window,
+        },
       });
     }
   }
-  return notifications;
+  return messages;
 }
 
 /** The impact without coordinator ids, for the browser. */

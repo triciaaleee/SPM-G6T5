@@ -12,7 +12,7 @@ import {
 } from "../lib/bookingStatus.js";
 import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "../lib/bookingConflicts.js";
 import { fetchEvent, fetchVenueBookingInfo, type VenueBookingInfo } from "../lib/eventsClient.js";
-import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
+import { getPublisher } from "../lib/rabbitPublisher.js";
 import {
   PERIOD_COLUMNS,
   describePeriod,
@@ -291,7 +291,7 @@ async function notifyVenueStaff(
   venue: VenueRow,
   eventId: number,
   details: Record<string, unknown>,
-  authorization: string,
+  actorId: string,
 ): Promise<boolean> {
   const { data, error } = await supabase.from("venues").select("staff_id").eq("id", venue.id).maybeSingle();
   const staffId = (data as { staff_id: string | null } | null)?.staff_id;
@@ -303,15 +303,14 @@ async function notifyVenueStaff(
   const endTime = typeof details.endTime === "string" ? details.endTime : null;
   const when = date ? `${date}${startTime && endTime ? `, ${startTime}–${endTime}` : ""}` : "a date to be confirmed";
 
-  const notification: NewNotification = {
-    recipientId: staffId,
-    type: "venue_booking_requested",
-    title: `New booking request for ${venue.name}`,
-    body: `${eventName} has requested ${venue.name} for ${when}. Hold, approve or reject it from your booking requests.`,
-    link: "/venue-requests",
-  };
-
-  return sendNotifications([notification], authorization);
+  // #106 row 1, RabbitMQ.md #15 `booking.requested`.
+  return getPublisher().publish({
+    type: "booking.requested",
+    eventId,
+    actorId,
+    recipients: { userIds: [staffId], roles: [] },
+    data: { eventName, venueName: venue.name, when },
+  });
 }
 
 const VENUE_ID_PATTERN = /^[1-9]\d*$/;
@@ -665,7 +664,7 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
     venue,
     eventId,
     (eventResult.event.submitted_details ?? {}) as Record<string, unknown>,
-    req.headers.authorization!,
+    req.user!.id,
   );
 
   res.status(201).json({

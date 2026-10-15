@@ -31,7 +31,7 @@ import {
   toPublicImpact,
   type VenueChangeImpact,
 } from "../lib/venueChanges.js";
-import { sendNotifications } from "../lib/notificationsClient.js";
+import { getPublisher } from "../lib/rabbitPublisher.js";
 
 /**
  * E1-5: venue staff's view of what's booked at a venue. Staff see enough
@@ -238,14 +238,15 @@ staffRouter.patch("/venues/:venueId", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const notifications = impactNotifications(next.name, impact, next.capacity);
-  const sent = await sendNotifications(notifications, req.headers.authorization!);
+  const messages = impactNotifications(next.name, impact, next.capacity, venue.staff_id);
+  const results = await Promise.all(messages.map((m) => getPublisher().publish(m)));
+  const allSent = results.every(Boolean);
 
   res.json({
     venue: toVenueRecord(data as VenueRecordRow),
     ...toPublicImpact(impact),
-    coordinatorsNotified: sent ? new Set(notifications.map((n) => n.recipientId)).size : 0,
-    notificationsFailed: !sent,
+    coordinatorsNotified: allSent ? new Set(messages.flatMap((m) => m.recipients.userIds)).size : 0,
+    notificationsFailed: !allSent,
   });
 });
 

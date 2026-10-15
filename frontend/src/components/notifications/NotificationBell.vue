@@ -84,11 +84,11 @@ function announce(feed: AppNotification[], unread: number): void {
 
 async function refresh(): Promise<void> {
   try {
-    const feed = await fetchNotifications(LIST_LIMIT);
+    const feed = await fetchNotifications({ limit: LIST_LIMIT });
     notifications.value = feed.notifications;
-    unreadCount.value = feed.unreadCount;
+    unreadCount.value = feed.unreadCount ?? 0;
     loadError.value = null;
-    announce(feed.notifications, feed.unreadCount);
+    announce(feed.notifications, feed.unreadCount ?? 0);
   } catch {
     loadError.value = "We couldn't load your notifications.";
   }
@@ -129,6 +129,11 @@ async function openNotification(notification: AppNotification): Promise<void> {
 async function viewFromToast(): Promise<void> {
   toast.value = null;
   if (!open.value) await toggle();
+}
+
+async function viewAll(): Promise<void> {
+  close();
+  await router.push({ name: "notifications" });
 }
 
 function formatWhen(iso: string): string {
@@ -195,15 +200,15 @@ onBeforeUnmount(() => {
           <button type="button" class="item" :class="{ 'item--unread': !notification.read }"
             @click="openNotification(notification)">
             <span class="item__title">{{ notification.title }}</span>
+            <span v-if="notification.eventId !== null" class="item__event">Event #{{ notification.eventId }}</span>
             <span class="item__body">{{ notification.body }}</span>
             <span class="item__when">{{ formatWhen(notification.createdAt) }}</span>
           </button>
         </li>
       </ul>
 
-      <!-- The full history view isn't built yet; this is its entry point. -->
       <div class="dropdown__footer">
-        <button type="button" class="btn-ghost">See more</button>
+        <button type="button" class="btn-ghost" @click="viewAll">See more</button>
       </div>
     </div>
 
@@ -365,6 +370,13 @@ onBeforeUnmount(() => {
   font-weight: 700;
   line-height: 1.125rem;
   color: var(--color-grey-900);
+}
+
+.item__event {
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1rem;
+  color: var(--color-purple-600);
 }
 
 .item__body {
