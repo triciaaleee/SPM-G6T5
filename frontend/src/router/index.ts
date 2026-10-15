@@ -15,6 +15,7 @@ import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
 import TechnicalSupportView from "../views/TechnicalSupportView.vue";
 import LeadDashboardView from "../views/LeadDashboardView.vue";
 import SafetyReviewQueueView from "../views/SafetyReviewQueueView.vue";
+import NotificationsView from "../views/NotificationsView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
 
 export const router = createRouter({
@@ -66,7 +67,11 @@ export const router = createRouter({
       path: "/events/:id",
       name: "event-detail",
       component: EventDetailView,
-      meta: { requiresAuth: true, roles: ["organiser", "coordinator"] },
+      // coordinator_lead: EventDetailView's own `isLead`/`canAssign` (E2-13)
+      // and `canReassign` (E2-12) gate the Lead's assign/reassign panel —
+      // without this role here, the Lead's card click (LeadDashboardView)
+      // never reaches the page at all.
+      meta: { requiresAuth: true, roles: ["organiser", "coordinator", "coordinator_lead"] },
     },
     {
       path: "/coordinator",
@@ -127,6 +132,15 @@ export const router = createRouter({
       name: "safety-review-queue",
       component: SafetyReviewQueueView,
       meta: { requiresAuth: true, roles: ["safety_officer"] },
+    },
+    {
+      // E7-1 (#61): the full notification feed, beyond the bell's 5-item
+      // preview. The bell is now on every role's header (App.vue), so no
+      // role restriction here beyond being signed in.
+      path: "/notifications",
+      name: "notifications",
+      component: NotificationsView,
+      meta: { requiresAuth: true },
     },
   ],
 });

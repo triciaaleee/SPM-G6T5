@@ -41,6 +41,9 @@ interface NotificationRow {
   title: string;
   body: string;
   link: string | null;
+  event_id: number | null;
+  actor_id: string | null;
+  occurred_at: string | null;
   read_at: string | null;
   created_at: string;
 }
@@ -52,12 +55,25 @@ function toNotification(row: NotificationRow) {
     title: row.title,
     body: row.body,
     link: row.link,
+    eventId: row.event_id,
+    /** Who caused it — set only for broker-delivered notifications (M7/audit trail); null for the direct REST path. */
+    actorId: row.actor_id,
+    /** When the action actually happened, vs. createdAt (when this row was inserted). Null for the direct REST path. */
+    occurredAt: row.occurred_at,
     read: row.read_at !== null,
     createdAt: row.created_at,
   };
 }
 
-/** The caller's latest notifications (newest first) and how many are unread. */
+const SELECT_COLUMNS = "id, type, title, body, link, event_id, actor_id, occurred_at, read_at, created_at";
+
+/**
+ * The caller's notifications, newest first. `before` (a notification id)
+ * pages back through older ones — rows are ordered `created_at desc, id
+ * desc` and `id` is monotonic, so it's a simple, stable cursor. `unreadCount`
+ * is only computed on the first page (no `before`): "load more" pages skip
+ * it, since the bell already polls for the live count separately.
+ */
 notificationsRouter.get("/", async (req: AuthedRequest, res) => {
   const supabase = req.supabase!;
   const userId = req.user!.id;
@@ -65,19 +81,29 @@ notificationsRouter.get("/", async (req: AuthedRequest, res) => {
   const rawLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : DEFAULT_LIMIT;
   const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_LIMIT) : DEFAULT_LIMIT;
 
+  const rawBefore = typeof req.query.before === "string" ? Number(req.query.before) : undefined;
+  const before = Number.isInteger(rawBefore) && rawBefore! > 0 ? rawBefore : undefined;
+
+  let listQuery = supabase
+    .from("notifications")
+    .select(SELECT_COLUMNS)
+    .eq("recipient_id", userId)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(limit);
+  if (before !== undefined) {
+    listQuery = listQuery.lt("id", before);
+  }
+
   const [list, unread] = await Promise.all([
-    supabase
-      .from("notifications")
-      .select("id, type, title, body, link, read_at, created_at")
-      .eq("recipient_id", userId)
-      .order("created_at", { ascending: false })
-      .order("id", { ascending: false })
-      .limit(limit),
-    supabase
-      .from("notifications")
-      .select("id", { count: "exact", head: true })
-      .eq("recipient_id", userId)
-      .is("read_at", null),
+    listQuery,
+    before === undefined
+      ? supabase
+          .from("notifications")
+          .select("id", { count: "exact", head: true })
+          .eq("recipient_id", userId)
+          .is("read_at", null)
+      : Promise.resolve({ count: null, error: null }),
   ]);
 
   if (list.error || unread.error) {
@@ -85,9 +111,11 @@ notificationsRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
+  const rows = (list.data ?? []) as NotificationRow[];
   res.json({
-    notifications: ((list.data ?? []) as NotificationRow[]).map(toNotification),
-    unreadCount: unread.count ?? 0,
+    notifications: rows.map(toNotification),
+    nextCursor: rows.length === limit ? rows[rows.length - 1].id : null,
+    ...(before === undefined ? { unreadCount: unread.count ?? 0 } : {}),
   });
 });
 
@@ -101,6 +129,32 @@ notificationsRouter.post("/read", async (req: AuthedRequest, res) => {
 
   if (error) {
     res.status(500).json({ error: "Failed to mark notifications as read" });
+    return;
+  }
+  res.status(204).end();
+});
+
+/**
+ * Marks a single notification read. Scoped to `recipient_id` so no one can
+ * mark another user's notification, and a no-op (still 204) if it's
+ * already read or doesn't belong to the caller.
+ */
+notificationsRouter.post("/:id/read", async (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "id must be a positive integer" });
+    return;
+  }
+
+  const { error } = await req
+    .supabase!.from("notifications")
+    .update({ read_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("recipient_id", req.user!.id)
+    .is("read_at", null);
+
+  if (error) {
+    res.status(500).json({ error: "Failed to mark notification as read" });
     return;
   }
   res.status(204).end();

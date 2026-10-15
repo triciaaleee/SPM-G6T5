@@ -3,21 +3,34 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
-import { fetchCoordinatorLeads } from "../lib/usersClient.js";
 import { sendNotifications } from "../lib/notificationsClient.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
-  return {
-    requireAuth: (req: AuthedRequest, _res: unknown, next: () => void) => {
-      req.user = (globalThis as any).__mockUser ?? { id: "user-1", role: "organiser" };
+  const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
+    // Simulates requireAuthOrInternal's internal path: req.user stays
+    // unset, same as a trusted sibling-service call with no end-user token.
+    if ((globalThis as any).__mockInternalCall) {
       req.supabase = (globalThis as any).__mockSupabase;
       next();
-    },
+      return;
+    }
+    req.user = (globalThis as any).__mockUser ?? { id: "user-1", role: "organiser" };
+    req.supabase = (globalThis as any).__mockSupabase;
+    next();
   };
+  return { requireAuth: applyMock, requireAuthOrInternal: applyMock };
 });
 
-vi.mock("../lib/usersClient.js", () => ({ fetchCoordinatorLeads: vi.fn() }));
 vi.mock("../lib/notificationsClient.js", () => ({ sendNotifications: vi.fn() }));
+
+const publish = vi.fn().mockResolvedValue(true);
+
+beforeEach(() => {
+  publish.mockReset().mockResolvedValue(true);
+  setPublisherForTest({ publish });
+  (globalThis as any).__mockInternalCall = false;
+});
 
 const validPayload = {
   name: "Freshman Orientation",
@@ -48,7 +61,7 @@ const coordinator = { id: "COORD-0001", role: "coordinator" };
  * every decision route makes (the authorizeCoordinatorReview lookup, then
  * the update), plus `.from("access_denials")` for the mismatch case. */
 function buildReviewSupabase(options: {
-  event: { id: number; status: string; coordinator_id: string | null } | null;
+  event: { id: number; status: string; coordinator_id: string | null; organiser_id?: string | null } | null;
   updatedEvent?: Record<string, unknown>;
   updateError?: { message: string } | null;
   /** Top-level questions /approve checks when status is "Clarification
@@ -335,7 +348,6 @@ function buildSubmitSupabase(options: {
 
 describe("POST /api/events", () => {
   beforeEach(() => {
-    vi.mocked(fetchCoordinatorLeads).mockReset().mockResolvedValue({ status: "ok", coordinators: [] });
     vi.mocked(sendNotifications).mockReset().mockResolvedValue(true);
   });
 
@@ -366,11 +378,6 @@ describe("POST /api/events", () => {
   });
 
   it("notifies every Event Coordinator Lead on submission (E2-14)", async () => {
-    vi.mocked(fetchCoordinatorLeads).mockResolvedValue({
-      status: "ok",
-      coordinators: [{ id: "LEAD-0001", name: "Lead One" }],
-    });
-
     const { from } = buildSubmitSupabase({
       insertedEvent: {
         id: "e2",
@@ -386,9 +393,11 @@ describe("POST /api/events", () => {
     const res = await request(app).post("/api/events").send(validPayload);
 
     expect(res.status).toBe(201);
-    expect(sendNotifications).toHaveBeenCalledWith(
-      [expect.objectContaining({ recipientId: "LEAD-0001" })],
-      undefined,
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.submitted",
+        recipients: { userIds: ["user-1"], roles: ["coordinator_lead"] },
+      }),
     );
   });
 
@@ -603,6 +612,26 @@ describe("POST /api/events/:id/approve", () => {
     expect(updateEq).toHaveBeenCalledWith("id", 1);
   });
 
+  it("publishes request.decided (approved) to the organiser (#104 row 7)", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id, organiser_id: "ORG-0001" },
+      updatedEvent: { id: 1, status: "Planning", submitted_details: { name: "Spring Gala" } },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/approve");
+
+    expect(res.status).toBe(200);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.decided",
+        eventId: 1,
+        recipients: { userIds: ["ORG-0001"], roles: [] },
+        data: expect.objectContaining({ decision: "approved" }),
+      }),
+    );
+  });
+
   it("blocks and audits approval of an event with no coordinator — the Lead assigns it (E2-13)", async () => {
     const { from, update, denialInsert } = buildReviewSupabase({
       event: { id: 2, status: "Unassigned", coordinator_id: null },
@@ -670,6 +699,26 @@ describe("POST /api/events/:id/reject", () => {
     );
   });
 
+  it("publishes request.decided (rejected) with the reason to the organiser (#104 row 7)", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id, organiser_id: "ORG-0001" },
+      updatedEvent: { id: 1, status: "Rejected", submitted_details: { name: "Spring Gala" } },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/reject").send({ reason: "No venue available" });
+
+    expect(res.status).toBe(200);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.decided",
+        eventId: 1,
+        recipients: { userIds: ["ORG-0001"], roles: [] },
+        data: expect.objectContaining({ decision: "rejected", reason: "No venue available" }),
+      }),
+    );
+  });
+
   it("allows rejecting a request that has an outstanding clarification (AC3)", async () => {
     const { from } = buildReviewSupabase({
       event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
@@ -733,6 +782,28 @@ describe("POST /api/events/:id/request-clarification", () => {
         author_id: coordinator.id,
         author_role: "coordinator",
         message: "What time will setup start?",
+      }),
+    );
+  });
+
+  it("publishes clarification.requested with the message to the organiser (#104 row 5)", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id, organiser_id: "ORG-0001" },
+      updatedEvent: { id: 1, status: "Clarification Requested", submitted_details: { name: "Spring Gala" } },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app)
+      .post("/api/events/1/request-clarification")
+      .send({ message: "What time will setup start?" });
+
+    expect(res.status).toBe(200);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "clarification.requested",
+        eventId: 1,
+        recipients: { userIds: ["ORG-0001"], roles: [] },
+        data: expect.objectContaining({ message: "What time will setup start?" }),
       }),
     );
   });
@@ -1273,7 +1344,6 @@ describe("PATCH /api/events/:id (submitting a draft)", () => {
   }
 
   beforeEach(() => {
-    vi.mocked(fetchCoordinatorLeads).mockReset().mockResolvedValue({ status: "ok", coordinators: [] });
     vi.mocked(sendNotifications).mockReset().mockResolvedValue(true);
   });
 
@@ -1305,10 +1375,6 @@ describe("PATCH /api/events/:id (submitting a draft)", () => {
   });
 
   it("notifies every Event Coordinator Lead when a draft is submitted (E2-14)", async () => {
-    vi.mocked(fetchCoordinatorLeads).mockResolvedValue({
-      status: "ok",
-      coordinators: [{ id: "LEAD-0001", name: "Lead One" }],
-    });
     const { from } = buildDraftSubmitSupabase({
       event: { id: 1, status: "Draft", organiser_id: owner.id, submitted_details: {} },
       updatedEvent: { id: 1, status: "Unassigned", coordinator_id: null },
@@ -1317,9 +1383,11 @@ describe("PATCH /api/events/:id (submitting a draft)", () => {
 
     await request(app).patch("/api/events/1").send(validPayload);
 
-    expect(sendNotifications).toHaveBeenCalledWith(
-      [expect.objectContaining({ recipientId: "LEAD-0001" })],
-      undefined,
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.submitted",
+        recipients: { userIds: ["ORG-0001"], roles: ["coordinator_lead"] },
+      }),
     );
   });
 
@@ -1370,7 +1438,13 @@ describe("PATCH /api/events/:id", () => {
   it("allows a direct edit while still in Planning (AGENTS.md: only Confirmed locks it down)", async () => {
     const oldDetails = { ...validPayload, venue: "Old Hall" };
     const { from, update, historyInsert } = buildPatchSupabase({
-      event: { id: 1, status: "Planning", organiser_id: owner.id, submitted_details: oldDetails },
+      event: {
+        id: 1,
+        status: "Planning",
+        organiser_id: owner.id,
+        coordinator_id: coordinator.id,
+        submitted_details: oldDetails,
+      },
       updatedEvent: { id: 1, status: "Planning" },
     });
     const app = buildApp({ from }, owner);
@@ -1398,7 +1472,13 @@ describe("PATCH /api/events/:id", () => {
   it("saves the response, clears the flag, and posts the diff as a reply to the open question", async () => {
     const oldDetails = { ...validPayload, venue: "Old Hall" };
     const { from, update, clarificationInsert } = buildPatchSupabase({
-      event: { id: 1, status: "Clarification Requested", organiser_id: owner.id, submitted_details: oldDetails },
+      event: {
+        id: 1,
+        status: "Clarification Requested",
+        organiser_id: owner.id,
+        coordinator_id: coordinator.id,
+        submitted_details: oldDetails,
+      },
       updatedEvent: { id: 1, status: "Requested" },
       openQuestion: { id: 9 },
     });
@@ -1418,6 +1498,14 @@ describe("PATCH /api/events/:id", () => {
         author_id: owner.id,
         author_role: "organiser",
         message: expect.stringContaining("Venue changed from 'Old Hall' to 'Main Hall'"),
+      }),
+    );
+    // #104 row 6: the currently assigned coordinator is notified of the answer.
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "clarification.answered",
+        eventId: 1,
+        recipients: { userIds: [coordinator.id], roles: [] },
       }),
     );
   });
@@ -1480,7 +1568,13 @@ describe("PATCH /api/events/:id", () => {
   it("saves a direct edit from Requested immediately, with no status change or clarification post (E2-7 AC1)", async () => {
     const oldDetails = { ...validPayload, venue: "Old Hall" };
     const { from, update, clarificationInsert, historyInsert } = buildPatchSupabase({
-      event: { id: 1, status: "Requested", organiser_id: owner.id, submitted_details: oldDetails },
+      event: {
+        id: 1,
+        status: "Requested",
+        organiser_id: owner.id,
+        coordinator_id: coordinator.id,
+        submitted_details: oldDetails,
+      },
       updatedEvent: { id: 1, status: "Requested", submitted_details: validPayload },
     });
     const app = buildApp({ from }, owner);
@@ -1501,6 +1595,14 @@ describe("PATCH /api/events/:id", () => {
         }),
       ]),
     );
+    // #104 row 2: the assigned coordinator is notified of the edit.
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.edited",
+        eventId: 1,
+        recipients: { userIds: [coordinator.id], roles: [] },
+      }),
+    );
   });
 
   it("allows a direct edit from Unassigned too (E2-7 AC1)", async () => {
@@ -1513,6 +1615,15 @@ describe("PATCH /api/events/:id", () => {
     const res = await request(app).patch("/api/events/1").send(validPayload);
 
     expect(res.status).toBe(200);
+    // #104 row 2 / AC4: no coordinator yet, so every Lead is notified instead
+    // — resolved by notification-service, not fetched here via REST.
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.edited",
+        eventId: 1,
+        recipients: { userIds: [], roles: ["coordinator_lead"] },
+      }),
+    );
   });
 
   it("doesn't write history when a direct edit changes nothing", async () => {
@@ -1796,6 +1907,20 @@ describe("GET /api/events/venue-booking-info (E1-5)", () => {
     expect(res.status).toBe(200);
     expect(res.body.events[0]).toMatchObject({ id: 3, proposedDate: validPayload.proposedDate });
     expect(res.body.events[0]).not.toHaveProperty("purpose");
+  });
+
+  it("serves a trusted internal caller (venue-service's sweep) with no role check", async () => {
+    const supabase = buildVenueInfoSupabase([
+      { id: 3, status: "Planning", submitted_details: validPayload, coordinator_id: "COORD-0001" },
+    ]);
+    const app = buildApp(supabase);
+    (globalThis as any).__mockInternalCall = true;
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].coordinatorId).toBe("COORD-0001");
+    expect(supabase.denialInsert).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -4,7 +4,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { BOOKING_STATUS } from "../lib/bookingStatus.js";
 import { fetchVenueBookingInfo } from "../lib/eventsClient.js";
-import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
+import { getPublisher, type OutboundMessage } from "../lib/rabbitPublisher.js";
 import {
   PERIOD_COLUMNS,
   occupiedWindow,
@@ -176,27 +176,22 @@ function describePeriod(period: PeriodInput): string {
   return period.allDay ? `${days} (all day)` : `${days}, ${period.startTime}–${period.endTime}`;
 }
 
-function buildNotification(venue: Venue, period: PeriodInput, booking: AffectedBooking): NewNotification | null {
+/** #107 row 1: `booking.replacement_required` (#22) for an Approved booking, else `booking.unavailability_clash` (#23). */
+function buildMessage(venue: Venue, period: PeriodInput, booking: AffectedBooking, actorId: string): OutboundMessage | null {
   if (!booking.coordinatorId) return null;
-  const eventName = booking.eventName || "Your event";
-  const unavailable = `${venue.name} is unavailable ${describePeriod(period)}: ${period.reason}.`;
-  if (needsReplacement(booking)) {
-    return {
-      recipientId: booking.coordinatorId,
-      type: "venue_unavailable",
-      title: `Alternative venue needed for ${eventName}`,
-      body: `${unavailable} ${eventName} on ${formatDate(booking.date)} needs a replacement venue.`,
-      link: `/events/${booking.eventId}`,
-    };
-  }
+  const data = {
+    eventName: booking.eventName,
+    venueName: venue.name,
+    period: describePeriod(period),
+    reason: period.reason,
+    date: formatDate(booking.date),
+  };
   return {
-    recipientId: booking.coordinatorId,
-    type: "venue_unavailable_pending",
-    title: `Venue request for ${eventName} can't be met`,
-    body:
-      `${unavailable} Your pending request for ${eventName} on ${formatDate(booking.date)} ` +
-      `clashes with it — consider requesting another venue or time.`,
-    link: `/events/${booking.eventId}`,
+    type: needsReplacement(booking) ? "booking.replacement_required" : "booking.unavailability_clash",
+    eventId: booking.eventId,
+    actorId,
+    recipients: { userIds: [booking.coordinatorId], roles: [] },
+    data,
   };
 }
 
@@ -212,7 +207,7 @@ async function flagAndNotify(
   venue: Venue,
   period: PeriodInput,
   affected: AffectedBooking[],
-  authorization: string,
+  actorId: string,
 ): Promise<{ flagged: boolean; coordinatorsNotified: number; notificationsFailed: boolean }> {
   const toFlag = affected.filter(needsReplacement).map((b) => b.bookingId);
   if (toFlag.length > 0) {
@@ -224,14 +219,15 @@ async function flagAndNotify(
     if (error) return { flagged: false, coordinatorsNotified: 0, notificationsFailed: false };
   }
 
-  const notifications = affected
-    .map((booking) => buildNotification(venue, period, booking))
-    .filter((n): n is NewNotification => n !== null);
-  const sent = await sendNotifications(notifications, authorization);
+  const messages = affected
+    .map((booking) => buildMessage(venue, period, booking, actorId))
+    .filter((m): m is OutboundMessage => m !== null);
+  const results = await Promise.all(messages.map((m) => getPublisher().publish(m)));
+  const allSent = results.every(Boolean);
   return {
     flagged: true,
-    coordinatorsNotified: sent ? new Set(notifications.map((n) => n.recipientId)).size : 0,
-    notificationsFailed: !sent,
+    coordinatorsNotified: allSent ? new Set(messages.map((m) => m.recipients.userIds[0])).size : 0,
+    notificationsFailed: !allSent,
   };
 }
 
@@ -366,7 +362,7 @@ unavailabilityRouter.post("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const outcome = await flagAndNotify(supabase, venue, period, affected, req.headers.authorization!);
+  const outcome = await flagAndNotify(supabase, venue, period, affected, req.user!.id);
   if (!outcome.flagged) {
     res.status(500).json({
       error: "The period was saved, but the affected bookings couldn't be flagged. Please try again.",
@@ -446,7 +442,7 @@ unavailabilityRouter.put("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const outcome = await flagAndNotify(supabase, venue, period, affected, req.headers.authorization!);
+  const outcome = await flagAndNotify(supabase, venue, period, affected, req.user!.id);
   if (!outcome.flagged) {
     res.status(500).json({
       error: "The period was saved, but the affected bookings couldn't be flagged. Please try again.",

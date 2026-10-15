@@ -164,7 +164,9 @@ Every message above traces to an acceptance criterion or an E7-2 matrix row. The
 ## 6. Running it locally
 
 ```bash
-docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+docker compose up -d rabbitmq
 ```
+
+(from the repo root, using `docker-compose.yml`; `docker compose down` stops it, and a named volume keeps queue state across restarts.)
 
 The management UI is at `http://localhost:15672` (guest / guest), where queues, bindings and dead-lettered messages can be inspected. Per AGENTS.md section 5, adding `RABBITMQ_URL` means updating `backend/.env.example` and `backend/README.md` in the same change.

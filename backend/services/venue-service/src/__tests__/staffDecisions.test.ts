@@ -5,6 +5,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { staffRouter } from "../routes/staff.js";
 import { AUTO_REJECT_REASON } from "../lib/bookingDecisions.js";
 import { HOLD_DURATION_HOURS, canTransition } from "../lib/bookingStatus.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
   return {
@@ -353,13 +354,17 @@ function buildApp(
   });
   vi.stubGlobal("fetch", fetchMock);
 
+  const notificationsOk = (options.notificationHttpStatus ?? 200) < 300;
+  const publish = vi.fn().mockResolvedValue(notificationsOk);
+  setPublisherForTest({ publish });
+
   (globalThis as any).__mockSupabase = supabase;
   (globalThis as any).__mockUser = options.user ?? staff;
 
   const app = express();
   app.use(express.json());
   app.use("/api/venues/staff", staffRouter);
-  return { app, supabase, updates, fetchMock };
+  return { app, supabase, updates, fetchMock, publish };
 }
 
 function act(app: express.Express, action: string, bookingId = 10, body: Record<string, unknown> = {}) {
@@ -516,21 +521,18 @@ describe("POST /bookings/:id/approve", () => {
   });
 
   it("E4-12 change 4: tells the coordinator when their hold expires", async () => {
-    const { app, fetchMock } = buildApp({
+    const { app, publish } = buildApp({
       bookings: [booking({ id: 10, status: "On Hold", hold_expires_at: "2020-01-01T00:00:00.000Z" })],
     });
     await act(app, "approve");
 
-    const send = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/notifications"));
-    expect(send).toBeDefined();
-    const sent = JSON.parse(send![1]!.body!).notifications as Record<string, string>[];
-    expect(sent).toEqual([
+    expect(publish).toHaveBeenCalledWith(
       expect.objectContaining({
-        recipientId: "COORD-0007",
-        type: "venue_booking_expired",
-        link: "/events/7",
+        type: "hold.expired",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0007"], roles: [] },
       }),
-    ]);
+    );
   });
 
   it.each(["Rejected", "Expired", "Withdrawn", "Approved"])("refuses a %s booking", async (status) => {
@@ -561,7 +563,7 @@ describe("POST /bookings/:id/approve", () => {
   });
 
   it("E4-11 AC4: tells each auto-rejected booking's coordinator, and the winner's", async () => {
-    const { app, fetchMock } = buildApp({
+    const { app, publish } = buildApp({
       bookings: [booking({ id: 10 }), booking({ id: 11, event_id: 21 })],
       events: [bookedEvent(7), bookedEvent(21, "11:00", "13:00")],
     });
@@ -571,20 +573,24 @@ describe("POST /bookings/:id/approve", () => {
     expect(res.body.coordinatorsNotified).toBe(2);
     expect(res.body.notificationsFailed).toBe(false);
 
-    const send = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/notifications"));
-    expect(send).toBeDefined();
-    const sent = JSON.parse(send![1]!.body!).notifications as Record<string, string>[];
-
-    const loser = sent.find((n) => n.recipientId === "COORD-00021");
-    expect(loser).toMatchObject({ type: "venue_booking_auto_rejected", link: "/events/21" });
     // The fixed reason, and what they can do about it (AC4).
-    expect(loser!.body).toContain(AUTO_REJECT_REASON);
-    expect(loser!.body).toMatch(/another venue or another time/i);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "booking.decided",
+        eventId: 21,
+        recipients: { userIds: ["COORD-00021"], roles: [] },
+        data: expect.objectContaining({ decision: "auto_rejected", reason: AUTO_REJECT_REASON }),
+      }),
+    );
 
-    expect(sent.find((n) => n.recipientId === "COORD-0007")).toMatchObject({
-      type: "venue_booking_decided",
-      link: "/events/7",
-    });
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "booking.decided",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0007"], roles: [] },
+        data: expect.objectContaining({ decision: "approved" }),
+      }),
+    );
   });
 
   it("AC4: a failed notification never undoes a decision that landed", async () => {
@@ -832,15 +838,14 @@ describe("GET /api/venues/staff/requests", () => {
   });
 
   it("E4-12 change 4: tells the coordinator when the queue's own sweep expires their hold", async () => {
-    const { app, fetchMock } = buildApp({
+    const { app, publish } = buildApp({
       bookings: [booking({ id: 10, status: "On Hold", hold_expires_at: "2020-01-01T00:00:00.000Z" })],
     });
     await queue(app);
 
-    const send = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/notifications"));
-    expect(send).toBeDefined();
-    const sent = JSON.parse(send![1]!.body!).notifications as Record<string, string>[];
-    expect(sent).toEqual([expect.objectContaining({ recipientId: "COORD-0007", type: "venue_booking_expired" })]);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "hold.expired", recipients: { userIds: ["COORD-0007"], roles: [] } }),
+    );
   });
 
   it("E4-12: expiring a hold does not revive a booking it auto-rejected when placed", async () => {

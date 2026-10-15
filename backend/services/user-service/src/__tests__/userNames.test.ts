@@ -5,12 +5,14 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { usersRouter } from "../routes/users.js";
 
 vi.mock("../middleware/auth.js", async () => {
+  const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
+    req.user = (globalThis as any).__mockUser;
+    req.supabase = (globalThis as any).__mockSupabase;
+    next();
+  };
   return {
-    requireAuth: (req: AuthedRequest, _res: unknown, next: () => void) => {
-      req.user = (globalThis as any).__mockUser;
-      req.supabase = (globalThis as any).__mockSupabase;
-      next();
-    },
+    requireAuth: applyMock,
+    requireAuthOrInternal: applyMock,
   };
 });
 

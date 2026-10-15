@@ -6,6 +6,7 @@ import { venuesRouter } from "../routes/venues.js";
 import { eventBookingsRouter } from "../routes/eventBookings.js";
 import { blocksVenue } from "../lib/bookingStatus.js";
 import { formatWindow, occupiedWindow, overlaps } from "../lib/bookingConflicts.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
   return {
@@ -205,13 +206,16 @@ function buildApp(
   });
   vi.stubGlobal("fetch", fetchMock);
 
+  const publish = vi.fn().mockResolvedValue(true);
+  setPublisherForTest({ publish });
+
   (globalThis as any).__mockSupabase = supabase;
   (globalThis as any).__mockUser = options.user ?? { id: "COORD-0001", role: "coordinator" };
 
   const app = express();
   app.use(express.json());
   app.use("/api/venues", venuesRouter);
-  return { app, supabase, insert, blockingQuery, existingQuery, fetchMock };
+  return { app, supabase, insert, blockingQuery, existingQuery, fetchMock, publish };
 }
 
 function submit(app: express.Express, body: Record<string, unknown> = { eventId: 7, venueId: 1 }) {
@@ -315,25 +319,21 @@ describe("POST /api/venues/bookings", () => {
   });
 
   it("AC1: tells the venue's assigned staff a request is waiting on them", async () => {
-    const { app, fetchMock } = buildApp({ staffId: "VENUE-0007" });
+    const { app, publish } = buildApp({ staffId: "VENUE-0007" });
     const res = await submit(app);
 
     expect(res.status).toBe(201);
     expect(res.body.staffNotified).toBe(true);
 
-    const call = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/notifications"));
-    expect(call).toBeDefined();
-    const [, init] = call as unknown as [string, { headers: Record<string, string>; body: string }];
-    expect(init.headers.Authorization).toBe("Bearer test-token");
-    expect(JSON.parse(init.body).notifications).toEqual([
-      {
-        recipientId: "VENUE-0007",
-        type: "venue_booking_requested",
-        title: "New booking request for Grand Ballroom",
-        body: "Alumni Dinner has requested Grand Ballroom for 2026-11-10, 10:00–12:00. Hold, approve or reject it from your booking requests.",
-        link: "/venue-requests",
-      },
-    ]);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "booking.requested",
+        eventId: 7,
+        actorId: "COORD-0001",
+        recipients: { userIds: ["VENUE-0007"], roles: [] },
+        data: expect.objectContaining({ eventName: "Alumni Dinner", venueName: "Grand Ballroom" }),
+      }),
+    );
   });
 
   it("still creates the booking when the venue has nobody assigned", async () => {
@@ -345,21 +345,9 @@ describe("POST /api/venues/bookings", () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/notifications"))).toBe(false);
   });
 
-  it("still creates the booking when notification-service is down", async () => {
-    const { app, fetchMock } = buildApp();
-    fetchMock.mockImplementation(async (url: string) => {
-      if (String(url).includes("/api/notifications")) throw new Error("ECONNREFUSED");
-      if (String(url).includes("venue-booking-info")) {
-        return { ok: true, status: 200, json: async () => ({ events: [] }) };
-      }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
-          event: { id: 7, status: "Planning", submitted_details: eventDetails(), coordinator_id: "COORD-0001" },
-        }),
-      };
-    });
+  it("still creates the booking when the broker is unreachable", async () => {
+    const { app, publish } = buildApp();
+    publish.mockResolvedValue(false);
 
     const res = await submit(app);
 

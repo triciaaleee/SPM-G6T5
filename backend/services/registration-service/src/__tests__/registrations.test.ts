@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { registrationsRouter } from "../routes/registrations.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
   return {
@@ -89,8 +90,12 @@ function buildApp(user: { id: string; role: string }, ...registrationQueries: Re
   return { app, from };
 }
 
+const publish = vi.fn().mockResolvedValue(true);
+
 beforeEach(() => {
   vi.clearAllMocks();
+  publish.mockReset().mockResolvedValue(true);
+  setPublisherForTest({ publish });
   clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo()] });
   clients.fetchOpenEvents.mockResolvedValue({ status: "ok", events: [eventInfo()] });
   clients.canViewEvent.mockResolvedValue({ status: "ok" });
@@ -254,6 +259,15 @@ describe("POST / (register)", () => {
       status: "Registered",
       additional_info: { diet: "veg" },
     });
+    // #105 row 6: the attendee is notified their registration is confirmed.
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "registration.confirmed",
+        eventId: 1,
+        recipients: { userIds: ["ATT-0001"], roles: [] },
+        data: expect.objectContaining({ eventName: "Freshman Orientation Fair" }),
+      }),
+    );
   });
 
   it("takes the user id from the token, never the body", async () => {
@@ -315,6 +329,7 @@ describe("POST / (register)", () => {
     expect(updateQuery.update).toHaveBeenCalledWith({ status: "Registered" });
     expect(updateQuery.eq).toHaveBeenCalledWith("registration_id", 10);
     expect(res.body.registration.status).toBe("Registered");
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: "registration.confirmed" }));
   });
 
   it.each([
@@ -341,6 +356,14 @@ describe("PATCH /event/:eventId/withdraw", () => {
     expect(res.status).toBe(200);
     expect(updateQuery.update).toHaveBeenCalledWith({ status: "Withdrawn" });
     expect(res.body.registration.status).toBe("Withdrawn");
+    // #105 row 7: the attendee is notified their withdrawal went through.
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "registration.withdrawn",
+        eventId: 1,
+        recipients: { userIds: ["ATT-0001"], roles: [] },
+      }),
+    );
   });
 
   it("answers 404 when the attendee isn't registered", async () => {

@@ -75,6 +75,13 @@ export function holdExpiryFrom(now: Date = new Date()): string {
 }
 
 /**
+ * #106 row 4b: how far ahead of `hold_expires_at` the coordinator is warned
+ * the hold is about to lapse. No customer-given number exists — team
+ * decision, same category as HOLD_DURATION_HOURS itself.
+ */
+export const HOLD_EXPIRY_WARNING_HOURS = 12;
+
+/**
  * The transitions AGENTS.md §3a allows, as `from -> to`. Everything absent
  * here is refused: `Rejected`, `Expired` and `Withdrawn` are end states, and
  * there is no path back to `Requested` — to try again the coordinator makes

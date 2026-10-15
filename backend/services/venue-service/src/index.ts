@@ -6,6 +6,8 @@ import { eventBookingsRouter } from "./routes/eventBookings.js";
 import { staffRouter } from "./routes/staff.js";
 import { unavailabilityRouter } from "./routes/unavailability.js";
 import { venuesRouter } from "./routes/venues.js";
+import { sweepExpiringHolds } from "./lib/bookingDecisions.js";
+import { supabaseAdmin } from "./lib/supabaseAdmin.js";
 
 /**
  * Fail loudly at boot instead of at the first login. A missing JWT_SECRET
@@ -47,3 +49,17 @@ const port = Number(process.env.VENUE_SERVICE_PORT ?? 4003);
 app.listen(port, () => {
   console.log(`venue-service listening on :${port}`);
 });
+
+/**
+ * #106 row 4b: venue-service's first background job — everything else
+ * here is request-triggered. Runs independently of any queue view, so a
+ * hold still warns its coordinator even if nobody opens the staff queue
+ * before it lapses. Failures are caught and logged; a bad sweep must never
+ * crash the service, since the REST API has nothing to do with it.
+ */
+const SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+setInterval(() => {
+  sweepExpiringHolds(supabaseAdmin).catch((err) => {
+    console.error("venue-service: expiring-hold sweep failed", err);
+  });
+}, SWEEP_INTERVAL_MS);

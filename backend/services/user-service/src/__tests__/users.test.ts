@@ -5,12 +5,14 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { usersRouter } from "../routes/users.js";
 
 vi.mock("../middleware/auth.js", async () => {
+  const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
+    req.user = (globalThis as any).__mockUser;
+    req.supabase = (globalThis as any).__mockSupabase;
+    next();
+  };
   return {
-    requireAuth: (req: AuthedRequest, _res: unknown, next: () => void) => {
-      req.user = (globalThis as any).__mockUser;
-      req.supabase = (globalThis as any).__mockSupabase;
-      next();
-    },
+    requireAuth: applyMock,
+    requireAuthOrInternal: applyMock,
   };
 });
 
@@ -78,7 +80,22 @@ describe("GET /api/users?role=coordinator (E2-13 / E2-12)", () => {
 
     const res = await request(app).get("/api/users");
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/users?role= via internal service-to-service auth", () => {
+  it("bypasses LISTABLE_ROLES_BY_CALLER for a trusted internal caller", async () => {
+    const leads = [{ id: "LEAD-0001", name: "Lead One" }];
+    // No req.user set (as requireAuthOrInternal leaves it for an internal caller).
+    const { app, select, eq } = buildApp(undefined as any, { data: leads, error: null });
+
+    const res = await request(app).get("/api/users?role=coordinator_lead");
+
+    expect(res.status).toBe(200);
+    expect(res.body.users).toEqual(leads);
+    expect(select).toHaveBeenCalledWith("id, name");
+    expect(eq).toHaveBeenCalledWith("role", "coordinator_lead");
   });
 });
 

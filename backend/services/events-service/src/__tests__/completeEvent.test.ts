@@ -5,13 +5,12 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
 
 vi.mock("../middleware/auth.js", async () => {
-  return {
-    requireAuth: (req: AuthedRequest, _res: unknown, next: () => void) => {
-      req.user = (globalThis as any).__mockUser;
-      req.supabase = (globalThis as any).__mockSupabase;
-      next();
-    },
+  const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
+    req.user = (globalThis as any).__mockUser;
+    req.supabase = (globalThis as any).__mockSupabase;
+    next();
   };
+  return { requireAuth: applyMock, requireAuthOrInternal: applyMock };
 });
 
 const coordinator = { id: "COORD-0001", role: "coordinator" };
