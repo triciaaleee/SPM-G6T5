@@ -18,6 +18,15 @@ import {
   parseSafetyNotes,
 } from "../lib/safetyReview.js";
 import { eventEndsAt, hasEventEnded } from "../lib/eventTiming.js";
+import {
+  arrangementOptions,
+  combinedReason,
+  currentArrangements,
+  hasChanged,
+  parseChangeRequest,
+  resolveFlags,
+  type StoredFlag,
+} from "../lib/safetyChanges.js";
 
 /**
  * Week 7 change 5: the Event Coordinator Lead oversees incoming requests,
@@ -696,7 +705,35 @@ eventsRouter.get("/safety-review-queue", async (req: AuthedRequest, res) => {
     if (!latestByEvent.has(submission.event_id)) latestByEvent.set(submission.event_id, submission);
   }
 
-  const result = (events ?? []).map((event) => {
+  // E3-14: each event's venue bookings and equipment, so the Safety Officer
+  // can pick which ones must change (AC1), and — for an event resubmitted
+  // after a change request — which of those flags were addressed (AC3).
+  // Read with the officer's own token; null when a service couldn't answer,
+  // so the rest of the queue still loads.
+  const authorization = req.headers.authorization!;
+  const extras = await Promise.all(
+    (events ?? []).map(async (event) => {
+      try {
+        const [bookings, equipment, changeRequest] = await Promise.all([
+          fetchEventVenueBookings(event.id, authorization),
+          fetchEventEquipmentRequests(event.id, authorization),
+          loadChangeRequest(supabase, event.id, authorization),
+        ]);
+        return {
+          arrangements:
+            bookings.status === "ok" && equipment.status === "ok"
+              ? arrangementOptions(bookings.value, equipment.value)
+              : null,
+          changeRequest: changeRequest.status === "ok" ? changeRequest.value : null,
+        };
+      } catch {
+        // One event's extras failing must not take the whole queue down.
+        return { arrangements: null, changeRequest: null };
+      }
+    }),
+  );
+
+  const result = (events ?? []).map((event, index) => {
     const submission = latestByEvent.get(event.id);
     return {
       ...event,
@@ -708,6 +745,7 @@ eventsRouter.get("/safety-review-queue", async (req: AuthedRequest, res) => {
             venueRestrictions: submission.venue_restrictions,
           }
         : null,
+      ...extras[index],
     };
   });
 
@@ -753,8 +791,13 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   const isOwner = data?.organiser_id === user.id;
   const isCoordinator = user.role === "coordinator";
   const isLead = user.role === COORDINATOR_LEAD_ROLE && data?.status !== EVENT_STATUS.Draft;
+  // E3-14: read-only, for events the Safety Officer reviews — ones that
+  // have been submitted for safety review. venue-service and
+  // equipment-service defer to this check, which is how the officer can
+  // see the bookings and equipment they may flag.
+  const isSafetyOfficer = user.role === "safety_officer" && !!data && (await hasSafetySubmission(supabase, data.id));
 
-  if (!data || (!isOwner && !isCoordinator && !isLead)) {
+  if (!data || (!isOwner && !isCoordinator && !isLead && !isSafetyOfficer)) {
     await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
     res.status(403).json({ error: "Access denied" });
     return;
@@ -1627,6 +1670,234 @@ eventsRouter.post("/:id/safety-review/reject", async (req: AuthedRequest, res) =
   }
 
   res.json({ event: data, reviewId });
+});
+
+/**
+ * E3-14: the Safety Officer requests specific changes, short of rejecting
+ * (Safety Review -> Planning, AGENTS.md §3). At least one venue booking or
+ * equipment reservation must be picked, each with what must change about it,
+ * plus an optional general note (AC1, AC2). The picked arrangements are read from the services that own
+ * them — so only this event's live ones can be flagged — and snapshotted,
+ * so each flag can clear once its arrangement changes (AC3). The status
+ * change, decision and flags land together in request_event_safety_changes
+ * (migration 0035). Only the assigned coordinator is notified (AC1); a
+ * failure to notify never blocks the already-committed decision.
+ */
+eventsRouter.post("/:id/safety-review/request-changes", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeSafetyOfficerReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.SafetyReview) {
+    res.status(409).json({ error: "Changes can only be requested for an event in Safety Review" });
+    return;
+  }
+
+  const parsed = parseChangeRequest(req.body);
+  if (!parsed.valid) {
+    res.status(400).json({ error: "Pick what must change and say what for each", fields: parsed.fields });
+    return;
+  }
+
+  const authorization = req.headers.authorization!;
+  const [bookings, equipment] = await Promise.all([
+    fetchEventVenueBookings(event.id, authorization),
+    fetchEventEquipmentRequests(event.id, authorization),
+  ]);
+  if (bookings.status === "error" || equipment.status === "error") {
+    res.status(502).json({ error: "Couldn't load this event's venue bookings and equipment. Try again." });
+    return;
+  }
+
+  const resolved = resolveFlags(parsed.request.arrangements, bookings.value, equipment.value);
+  if (!resolved.ok) {
+    res.status(400).json({
+      error: "Some of the selected arrangements aren't this event's current venue bookings or equipment",
+      fields: { arrangements: "Pick from this event's current venue bookings and equipment." },
+      unknown: resolved.unknown,
+    });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const reason = combinedReason(resolved.flags, parsed.request.generalNote);
+  const { data: reviewId, error: requestError } = await supabase.rpc("request_event_safety_changes", {
+    p_event_id: event.id,
+    p_officer_id: user.id,
+    p_reason: reason,
+    p_general_note: parsed.request.generalNote,
+    p_flags: resolved.flags,
+  });
+  if (requestError) {
+    res.status(500).json({ error: "Failed to request changes" });
+    return;
+  }
+  if (reviewId === null) {
+    res.status(409).json({ error: "This event is no longer in Safety Review" });
+    return;
+  }
+
+  const { data, error } = await supabase.from("events").select(EVENT_COLUMNS).eq("id", event.id).single();
+  if (error) {
+    res.status(500).json({ error: "Changes requested, but failed to reload the event" });
+    return;
+  }
+
+  if (event.coordinator_id) {
+    const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
+    await sendNotifications(
+      [
+        {
+          recipientId: event.coordinator_id,
+          type: "event_safety_changes_requested",
+          title: "Safety changes requested",
+          body: fitNotificationBody(
+            `"${typeof eventName === "string" ? eventName : "Your event"}" is back in Planning. The Safety Officer asked for changes — ${reason}`,
+          ),
+          link: `/events/${event.id}`,
+        },
+      ],
+      authorization,
+    );
+  }
+
+  res.json({ event: data, reviewId });
+});
+
+/** Whether the event has ever been submitted for safety review (E3-4). */
+async function hasSafetySubmission(supabase: NonNullable<AuthedRequest["supabase"]>, eventId: number): Promise<boolean> {
+  const { data } = await supabase
+    .from("event_safety_submissions")
+    .select("id")
+    .eq("event_id", eventId)
+    .limit(1)
+    .maybeSingle();
+  return data !== null && data !== undefined;
+}
+
+interface SafetyChangeRequestView {
+  reviewId: number;
+  officerName: string | null;
+  requestedAt: string;
+  /** Every note combined, as recorded on the decision. */
+  reason: string;
+  generalNote: string | null;
+  flags: { type: string; id: number; label: string; note: string; clearedAt: string | null }[];
+  /** false when the arrangements couldn't be read, so changes weren't checked this time. */
+  arrangementsChecked: boolean;
+}
+
+/**
+ * E3-14 AC3: the event's open change request — only while the latest
+ * safety decision is "Changes Requested" (a later approval or rejection
+ * supersedes it). Each flag is compared with its arrangement's current
+ * state, read with the caller's token from the owning service; a flag
+ * whose arrangement changed is cleared for good. If the arrangements
+ * can't be read, the flags are returned as stored.
+ */
+async function loadChangeRequest(
+  supabase: NonNullable<AuthedRequest["supabase"]>,
+  eventId: number,
+  authorization: string,
+): Promise<{ status: "ok"; value: SafetyChangeRequestView | null } | { status: "error" }> {
+  const { data: latest, error: latestError } = await supabase
+    .from("event_safety_reviews")
+    .select("id, outcome, reason, general_note, created_at, officer:officer_id(name)")
+    .eq("event_id", eventId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestError) return { status: "error" };
+  if (!latest || latest.outcome !== "Changes Requested") return { status: "ok", value: null };
+
+  const { data: flagRows, error: flagsError } = await supabase
+    .from("event_safety_review_flags")
+    .select("id, arrangement_type, arrangement_id, label, note, snapshot, cleared_at")
+    .eq("review_id", latest.id)
+    .order("id");
+  if (flagsError) return { status: "error" };
+  const flags = (flagRows ?? []) as (StoredFlag & { id: number; label: string; note: string; cleared_at: string | null })[];
+
+  const [bookings, equipment] = await Promise.all([
+    fetchEventVenueBookings(eventId, authorization),
+    fetchEventEquipmentRequests(eventId, authorization),
+  ]);
+  const arrangementsChecked = bookings.status === "ok" && equipment.status === "ok";
+  if (bookings.status === "ok" && equipment.status === "ok") {
+    const states = currentArrangements(bookings.value, equipment.value);
+    const changed = flags.filter((flag) => !flag.cleared_at && hasChanged(flag, states));
+    if (changed.length > 0) {
+      const clearedAt = new Date().toISOString();
+      const { error: clearError } = await supabase
+        .from("event_safety_review_flags")
+        .update({ cleared_at: clearedAt })
+        .in("id", changed.map((flag) => flag.id))
+        .is("cleared_at", null);
+      // A failed write only means the flags show as open until the next look.
+      if (!clearError) for (const flag of changed) flag.cleared_at = clearedAt;
+    }
+  }
+
+  const officer = latest.officer as { name?: string } | { name?: string }[] | null;
+  return {
+    status: "ok",
+    value: {
+      reviewId: latest.id,
+      officerName: (Array.isArray(officer) ? officer[0]?.name : officer?.name) ?? null,
+      requestedAt: latest.created_at,
+      reason: latest.reason ?? "",
+      generalNote: latest.general_note ?? null,
+      flags: flags.map((flag) => ({
+        type: flag.arrangement_type,
+        id: Number(flag.arrangement_id),
+        label: flag.label,
+        note: flag.note,
+        clearedAt: flag.cleared_at,
+      })),
+      arrangementsChecked,
+    },
+  };
+}
+
+/**
+ * E3-14 AC3: the coordinator sees the flagged arrangements and the Safety
+ * Officer's notes when they open the event; the Safety Officer and the
+ * Coordinator Lead may read it too. `changeRequest` is null when there's
+ * no open change request.
+ */
+eventsRouter.get("/:id/safety-changes", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+  if (!["coordinator", COORDINATOR_LEAD_ROLE, "safety_officer"].includes(user.role)) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const { data: event, error } = await supabase.from("events").select("id").eq("id", Number(eventId)).maybeSingle();
+  if (error) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+  if (!event) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const result = await loadChangeRequest(supabase, event.id, req.headers.authorization!);
+  if (result.status === "error") {
+    res.status(500).json({ error: "Failed to load the requested safety changes" });
+    return;
+  }
+  res.json({ changeRequest: result.value });
 });
 
 /**

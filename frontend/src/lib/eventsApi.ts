@@ -436,6 +436,10 @@ export async function resolveClarificationQuestion(eventId: number, questionId: 
 /** E1-10: an event in the Safety Officer's queue, with its latest safety notes (or none, if the event skipped having one — can't happen via E3-4, but the type stays honest). */
 export interface SafetyReviewQueueItem extends EventSummary {
   safetyNotes: SafetyNotes | null;
+  /** E3-14: the venue bookings and equipment the Safety Officer may flag; null if they couldn't be loaded. */
+  arrangements?: SafetyArrangementOption[] | null;
+  /** E3-14: the earlier change request, for an event resubmitted after one. */
+  changeRequest?: SafetyChangeRequest | null;
 }
 
 /** E1-10 AC1/AC3: every event awaiting an Operational Safety Check. */
@@ -493,6 +497,84 @@ export async function rejectSafetyReview(id: number, reason: string): Promise<Ev
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new SafetyReviewRejectError(body.error ?? "We couldn't reject this event. Please try again.");
   return body.event as EventSummary;
+}
+
+// ---- E3-14: request changes, short of rejecting ---------------------------
+
+export type SafetyArrangementType = "venue_booking" | "equipment_item";
+
+/** A venue booking or equipment reservation the Safety Officer can flag. */
+export interface SafetyArrangementOption {
+  type: SafetyArrangementType;
+  id: number;
+  label: string;
+  /** e.g. "Approved", or "2 of 2 reserved". */
+  detail: string;
+}
+
+/** One flagged arrangement and what must change about it; clearedAt is set once it has been changed (AC3). */
+export interface SafetyChangeFlag {
+  type: SafetyArrangementType;
+  id: number;
+  label: string;
+  note: string;
+  clearedAt: string | null;
+}
+
+/** The Safety Officer's open change request on an event. */
+export interface SafetyChangeRequest {
+  reviewId: number;
+  officerName: string | null;
+  requestedAt: string;
+  /** Every note combined, as recorded on the decision. */
+  reason: string;
+  /** Anything not about one arrangement. */
+  generalNote: string | null;
+  flags: SafetyChangeFlag[];
+  /** false when the arrangements couldn't be checked this time, so flags may be out of date. */
+  arrangementsChecked: boolean;
+}
+
+/** Thrown when the backend refuses a change request; `fields` names what's missing (AC2). */
+export class SafetyChangesError extends Error {
+  fields: Record<string, string>;
+  constructor(message: string, fields: Record<string, string> = {}) {
+    super(message);
+    this.fields = fields;
+  }
+}
+
+/**
+ * E3-14: the Safety Officer requests changes to specific arrangements, each
+ * with what must change about it, plus an optional general note; the event
+ * returns to Planning.
+ */
+export async function requestSafetyChanges(
+  id: number,
+  arrangements: { type: SafetyArrangementType; id: number; note: string }[],
+  generalNote: string | null,
+): Promise<EventSummary> {
+  const res = await fetch(`${apiBase}/${id}/safety-review/request-changes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ arrangements, ...(generalNote ? { generalNote } : {}) }),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new SafetyChangesError(body.error ?? "We couldn't request changes. Please try again.", body.fields ?? {});
+  }
+  return body.event as EventSummary;
+}
+
+/** E3-14 AC3: the open change request on an event, or null when there isn't one. */
+export async function fetchSafetyChanges(id: number): Promise<SafetyChangeRequest | null> {
+  const res = await fetch(`${apiBase}/${id}/safety-changes`, { headers: await authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) throw new Error("Failed to load the requested safety changes");
+  return ((await res.json()) as { changeRequest: SafetyChangeRequest | null }).changeRequest;
 }
 
 /** One Operational Safety Check decision (E3-12/13/14), as recorded. */

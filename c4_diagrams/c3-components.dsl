@@ -71,7 +71,7 @@ workspace "ConnectSphere - C3 Components" "Level 3 of the C4 model. Component vi
 
                 safetyGate = component "Safety review gate" "Allows Planning to Safety Review only when every active venue booking is Approved and every requested equipment item is reserved; names whatever is outstanding (E3-4)." "TypeScript module"
 
-                safetyRecorder = component "Safety decision recorder" "Records each outcome with the safety officer, timestamp and reason, and the arrangements flagged for rework. A new submission needs a new approval (E3-12, E3-13, E3-14)." "TypeScript module"
+                safetyRecorder = component "Safety decision recorder" "Records each outcome with the safety officer, timestamp and reason, and the arrangements flagged for rework. Each flag snapshots its venue booking or equipment item and clears once that arrangement changes, read from venue-service and equipment-service. A new submission needs a new approval (E3-12, E3-13, E3-14)." "TypeScript module"
 
                 rereviewHandler = component "Re-review handler" "Returns a Safety Review or Confirmed event to Planning when a booking becomes Replacement Required or an approved change affects venues or equipment. Earlier safety approval no longer counts." "TypeScript module"
 
