@@ -173,6 +173,7 @@ describe("POST /api/venues/bookings/:bookingId/withdraw", () => {
         data: expect.objectContaining({
           bookingId: 900,
           venueName: "Grand Ballroom",
+          eventName: "Alumni Dinner",
           reason: "coordinator_withdrew",
         }),
       }),
