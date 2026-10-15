@@ -6,7 +6,6 @@ import { normaliseDraftEventRequest, validateEventRequest } from "../lib/validat
 import { isPositiveInteger } from "../lib/validation.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
-import { eventEndsAt, hasEventEnded } from "../lib/eventTiming.js";
 import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
 import { fetchCoordinatorLeads, fetchCoordinators } from "../lib/usersClient.js";
 import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
@@ -16,6 +15,7 @@ import {
   hasOutstanding,
   parseSafetyNotes,
 } from "../lib/safetyReview.js";
+import { eventEndsAt, hasEventEnded } from "../lib/eventTiming.js";
 
 /**
  * Week 7 change 5: the Event Coordinator Lead oversees incoming requests,
