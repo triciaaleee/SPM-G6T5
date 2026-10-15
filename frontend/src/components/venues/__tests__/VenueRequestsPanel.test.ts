@@ -1,6 +1,7 @@
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import VenueRequestsPanel from "../VenueRequestsPanel.vue";
+import * as venuesApi from "../../../lib/venuesApi";
 import type { EventVenueBooking } from "../../../lib/venuesApi";
 
 function makeBooking(overrides: Partial<EventVenueBooking> = {}): EventVenueBooking {
@@ -16,12 +17,21 @@ function makeBooking(overrides: Partial<EventVenueBooking> = {}): EventVenueBook
 }
 
 function mountPanel(
-  props: Partial<{ bookings: EventVenueBooking[] | undefined; loading: boolean; loadError: string | null }> = {},
+  props: Partial<{
+    bookings: EventVenueBooking[] | undefined;
+    loading: boolean;
+    loadError: string | null;
+    canWithdraw: boolean;
+  }> = {},
 ) {
   return mount(VenueRequestsPanel, {
     props: { bookings: [], loading: false, loadError: null, ...props },
   });
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("VenueRequestsPanel", () => {
   it("AC5: shows each requested venue and its pending state", () => {
@@ -74,5 +84,104 @@ describe("VenueRequestsPanel", () => {
   it("surfaces a load failure passed down from the page", () => {
     const wrapper = mountPanel({ loadError: "Failed to load this event's venue requests" });
     expect(wrapper.find(".error-text").text()).toBe("Failed to load this event's venue requests");
+  });
+
+  describe("E4-9: withdraw and release", () => {
+    it("hides the action when canWithdraw is false", () => {
+      const wrapper = mountPanel({ bookings: [makeBooking({ status: "Requested" })], canWithdraw: false });
+      expect(wrapper.find(".action-btn").exists()).toBe(false);
+    });
+
+    it.each([
+      ["Requested", "Withdraw"],
+      ["On Hold", "Withdraw"],
+      ["Approved", "Release"],
+    ] as const)("shows %s", async (status, label) => {
+      const wrapper = mountPanel({ bookings: [makeBooking({ status })], canWithdraw: true });
+      expect(wrapper.find(".action-btn").text()).toBe(label);
+    });
+
+    it.each(["Rejected", "Expired", "Withdrawn", "Replacement Required"] as const)(
+      "offers no action for a %s booking",
+      (status) => {
+        const wrapper = mountPanel({ bookings: [makeBooking({ status })], canWithdraw: true });
+        expect(wrapper.find(".action-btn").exists()).toBe(false);
+      },
+    );
+
+    it("opens an in-page confirm dialog instead of the browser's native confirm()", async () => {
+      const wrapper = mountPanel({ bookings: [makeBooking({ status: "Requested" })], canWithdraw: true });
+
+      expect(wrapper.find(".modal-overlay").exists()).toBe(false);
+      await wrapper.find(".action-btn").trigger("click");
+
+      expect(wrapper.find(".modal-overlay").exists()).toBe(true);
+      expect(wrapper.find(".modal-title").text()).toBe("Withdraw this request?");
+    });
+
+    it("shows the release wording for an Approved booking's dialog", async () => {
+      const wrapper = mountPanel({ bookings: [makeBooking({ status: "Approved" })], canWithdraw: true });
+      await wrapper.find(".action-btn").trigger("click");
+
+      expect(wrapper.find(".modal-title").text()).toBe("Release this booking?");
+    });
+
+    it("closes the dialog without acting when Cancel is clicked", async () => {
+      const withdraw = vi.spyOn(venuesApi, "withdrawVenueBooking");
+      const wrapper = mountPanel({ bookings: [makeBooking({ status: "Requested" })], canWithdraw: true });
+      await wrapper.find(".action-btn").trigger("click");
+
+      await wrapper.find(".modal-button--secondary").trigger("click");
+
+      expect(wrapper.find(".modal-overlay").exists()).toBe(false);
+      expect(withdraw).not.toHaveBeenCalled();
+    });
+
+    it("AC1: withdraws once confirmed in the dialog and tells the page to refresh", async () => {
+      const withdraw = vi
+        .spyOn(venuesApi, "withdrawVenueBooking")
+        .mockResolvedValue({ booking: { id: 900, status: "Withdrawn", venue: null as never }, staffNotified: true });
+      const wrapper = mountPanel({ bookings: [makeBooking({ status: "Requested" })], canWithdraw: true });
+      await wrapper.find(".action-btn").trigger("click");
+
+      await wrapper.find(".modal-button--danger").trigger("click");
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(withdraw).toHaveBeenCalledWith(900);
+      expect(wrapper.emitted("changed")).toHaveLength(1);
+      expect(wrapper.find(".modal-overlay").exists()).toBe(false);
+    });
+
+    it("AC2: releases an Approved booking once confirmed", async () => {
+      const release = vi
+        .spyOn(venuesApi, "releaseVenueBooking")
+        .mockResolvedValue({ booking: { id: 900, status: "Withdrawn", venue: null as never }, staffNotified: true });
+      const wrapper = mountPanel({ bookings: [makeBooking({ status: "Approved" })], canWithdraw: true });
+      await wrapper.find(".action-btn").trigger("click");
+
+      await wrapper.find(".modal-button--danger").trigger("click");
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(release).toHaveBeenCalledWith(900);
+      expect(wrapper.emitted("changed")).toHaveLength(1);
+    });
+
+    it("AC2: shows the server's blocked message and doesn't emit changed", async () => {
+      vi.spyOn(venuesApi, "withdrawVenueBooking").mockRejectedValue(
+        new venuesApi.BookingRequestError("This booking is already Approved — release it instead."),
+      );
+      const wrapper = mountPanel({ bookings: [makeBooking({ status: "Requested" })], canWithdraw: true });
+      await wrapper.find(".action-btn").trigger("click");
+
+      await wrapper.find(".modal-button--danger").trigger("click");
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(wrapper.text()).toContain("This booking is already Approved — release it instead.");
+      expect(wrapper.emitted("changed")).toBeUndefined();
+      expect(wrapper.find(".modal-overlay").exists()).toBe(false);
+    });
   });
 });

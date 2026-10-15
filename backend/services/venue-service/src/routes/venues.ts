@@ -13,6 +13,7 @@ import {
 import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "../lib/bookingConflicts.js";
 import { fetchEvent, fetchVenueBookingInfo } from "../lib/eventsClient.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
+import { withdrawBooking, type WithdrawalAction } from "../lib/bookingWithdrawal.js";
 import {
   PERIOD_COLUMNS,
   describePeriod,
@@ -314,6 +315,7 @@ async function notifyVenueStaff(
 }
 
 const VENUE_ID_PATTERN = /^[1-9]\d*$/;
+const BOOKING_ID_PATTERN = /^[1-9]\d*$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -677,3 +679,55 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
     },
   });
 });
+
+/**
+ * E4-9: the coordinator gives up a booking. `/withdraw` drops a pending
+ * request (`Requested`/`On Hold`); `/release` gives up a confirmed one
+ * (`Approved`). Each is refused on the other's statuses and points the
+ * coordinator at the one that applies (AC2). Either way the venue frees up
+ * and other bookings of the same event are untouched (AC1/AC3) — this acts
+ * on exactly the one booking id given.
+ */
+async function endBooking(req: AuthedRequest, res: Response, action: WithdrawalAction): Promise<void> {
+  const rawId = Array.isArray(req.params.bookingId) ? req.params.bookingId[0] : req.params.bookingId;
+  if (!BOOKING_ID_PATTERN.test(rawId)) {
+    res.status(400).json({ error: "Invalid booking id" });
+    return;
+  }
+
+  const result = await withdrawBooking(req.supabase!, {
+    bookingId: Number(rawId),
+    action,
+    coordinatorId: req.user!.id,
+    authorization: req.headers.authorization!,
+  });
+
+  switch (result.status) {
+    case "not_found":
+      res.status(404).json({ error: "Booking not found" });
+      return;
+    case "not_owner":
+      res.status(403).json({ error: `Only the event's assigned coordinator can ${action} this booking` });
+      return;
+    case "blocked":
+      res.status(409).json({ error: result.message });
+      return;
+    case "event_error":
+      res.status(502).json({ error: "Failed to load the booked event" });
+      return;
+    case "error":
+      res.status(500).json({ error: `Failed to ${action} the booking` });
+      return;
+    default:
+      res.json({
+        booking: { id: result.booking.id, status: result.booking.status, venue: result.venue },
+        staffNotified: result.staffNotified,
+      });
+  }
+}
+
+/** AC1: drop a pending request or hold; the venue is free for another one. */
+venuesRouter.post("/bookings/:bookingId/withdraw", (req: AuthedRequest, res) => endBooking(req, res, "withdraw"));
+
+/** AC2: give up a confirmed booking — the only way to undo an Approved one. */
+venuesRouter.post("/bookings/:bookingId/release", (req: AuthedRequest, res) => endBooking(req, res, "release"));

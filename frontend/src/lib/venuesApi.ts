@@ -611,3 +611,36 @@ export function approveBooking(bookingId: number): Promise<BookingDecisionResult
 export function rejectBooking(bookingId: number, reason: string): Promise<BookingDecisionResult> {
   return decideBooking(bookingId, "reject", { reason });
 }
+
+/** E4-9: the booking as it stands after the coordinator withdrew or released it. */
+export interface WithdrawalResult {
+  booking: { id: number; status: BookingStatus; venue: { id: number; name: string; location: string } };
+  staffNotified: boolean;
+}
+
+/**
+ * E4-9: give up a booking — "withdraw" a pending request/hold, or "release"
+ * a confirmed one. A 409 means the action doesn't apply to this booking's
+ * current status (e.g. withdrawing an Approved one) and carries a message
+ * naming the action to use instead.
+ */
+async function endBooking(bookingId: number, action: "withdraw" | "release"): Promise<WithdrawalResult> {
+  const res = await fetch(`${apiBase}/bookings/${bookingId}/${action}`, {
+    method: "POST",
+    headers: { ...authHeader(), "Content-Type": "application/json" },
+  });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new BookingRequestError(body.error ?? `Failed to ${action} this booking`, body.fields ?? {});
+  return body as WithdrawalResult;
+}
+
+/** AC1: drop a pending request or hold; the venue frees up for another request. */
+export function withdrawVenueBooking(bookingId: number): Promise<WithdrawalResult> {
+  return endBooking(bookingId, "withdraw");
+}
+
+/** AC2: give up a confirmed booking — the only way to undo an Approved one. */
+export function releaseVenueBooking(bookingId: number): Promise<WithdrawalResult> {
+  return endBooking(bookingId, "release");
+}

@@ -1025,7 +1025,8 @@ onMounted(async () => {
 
 <!-- E4-8 AC5: this event's venue requests and the state each one is in -->
 <VenueRequestsPanel v-if="isCoordinator && event.status !== 'Rejected'" :bookings="venueBookings"
-  :loading="venueBookingsLoading" :load-error="venueBookingsError" />
+  :loading="venueBookingsLoading" :load-error="venueBookingsError" :can-withdraw="isAssignedCoordinator"
+  @changed="loadVenueBookings()" />
 
 <!-- E3-4: the assigned coordinator submits a Planning event for the Safety Officer's check -->
 <div v-if="isAssignedCoordinator && event.status === 'Planning'" class="details-card">
