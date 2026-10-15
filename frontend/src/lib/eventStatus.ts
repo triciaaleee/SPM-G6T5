@@ -4,7 +4,7 @@
  */
 export function statusBadgeClass(status: string): string {
   if (status === "Planning" || status === "Confirmed" || status === "Completed") return "status-success";
-  if (status === "Rejected") return "status-error";
+  if (status === "Rejected" || status === "Cancelled") return "status-error";
   if (status === "Clarification Requested") return "status-info";
   return "status-warning"; // Requested
 }
@@ -47,6 +47,7 @@ export function reviewOutcomeLabel(status: string): string {
     return "Approved";
   }
   if (status === "Rejected") return "Rejected";
+  if (status === "Cancelled") return "Cancelled";
   if (status === "Clarification Requested") return "Clarification Ongoing";
   return "Pending"; // Requested / Unassigned
 }

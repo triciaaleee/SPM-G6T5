@@ -27,20 +27,29 @@ function eventLink(msg: InboundMessage): string | null {
  */
 const TEMPLATES: Record<string, Template> = {
   /**
-   * #18 in RabbitMQ.md section 3.3 — only the coordinator-driven reasons
-   * (E4-9: `coordinator_withdrew`/`coordinator_released`) publish today;
-   * #19 and #33's reasons (`replaced`, `event_cancelled`) fall back to
-   * "withdrawn" rather than mis-rendering once their publishers land.
+   * #18/#33 in RabbitMQ.md section 3.3. The coordinator-driven reasons
+   * (E4-9: `coordinator_withdrew`/`coordinator_released`) and the E3-6
+   * cancellation reason (`event_cancelled`) each read differently; #19's
+   * `replaced` still falls back to generic "withdrawn" wording, since
+   * that publisher hasn't landed.
    */
   "booking.withdrawn": (msg) => {
     const venueName = String(msg.data.venueName ?? "A venue");
     const eventName = String(msg.data.eventName ?? "your event");
+    const link = eventLink(msg);
+    if (msg.data.reason === "event_cancelled") {
+      return {
+        title: `${venueName} — booking released`,
+        body: `${eventName} was cancelled, so its booking for ${venueName} was released and the venue is free again.`,
+        link,
+      };
+    }
     const released = msg.data.reason === "coordinator_released";
     const verb = released ? "released" : "withdrawn";
     return {
       title: `${venueName} — booking ${verb}`,
       body: `${venueName}'s booking for ${eventName} was ${verb}. The venue is free for this period again.`,
-      link: eventLink(msg),
+      link,
     };
   },
   /** #106 rows 2/3, RabbitMQ.md #16/#17 — `data.decision` is on_hold/approved/rejected/auto_rejected. */
@@ -76,11 +85,15 @@ const TEMPLATES: Record<string, Template> = {
       link: eventLink(msg),
     };
   },
-  "event.cancelled": (msg) => ({
-    title: "Event cancelled",
-    body: `This event was cancelled${msg.data.reason ? ` (${msg.data.reason})` : ""}.`,
-    link: eventLink(msg),
-  }),
+  /** #14 in RabbitMQ.md section 3.2 (E3-6) — the organiser's confirmation and the notified coordinator/leads read the same text. */
+  "event.cancelled": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    return {
+      title: "Event cancelled",
+      body: `${eventName} was cancelled${msg.data.reason ? ` (${msg.data.reason})` : ""}.`,
+      link: eventLink(msg),
+    };
+  },
 
   /**
    * #104 (E7-2a): first trigger migrated off direct REST (ARD section
@@ -337,6 +350,23 @@ const TEMPLATES: Record<string, Template> = {
       link: eventLink(msg),
     };
   },
+
+  /** #34 in RabbitMQ.md section 3.4 (E3-6 AC3) — to every Technical Support Staff member. */
+  "equipment.released": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    return {
+      title: "Equipment reservations released",
+      body: `${eventName} was cancelled, so its equipment reservations were released back to inventory.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** #35 in RabbitMQ.md section 3.5 (E3-6 AC4) — to each attendee who held a place. */
+  "registration.cancelled_by_event": (msg) => ({
+    title: "Event cancelled",
+    body: `Your registration${msg.data.eventName ? ` for "${msg.data.eventName}"` : ""} was cancelled because the event itself was cancelled.`,
+    link: eventLink(msg),
+  }),
 
   /** #28 in RabbitMQ.md section 3.4 (#107 row 5) — to the assigned coordinator. */
   "equipment.status_changed": (msg) => {

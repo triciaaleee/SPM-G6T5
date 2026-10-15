@@ -10,6 +10,7 @@ import {
   ValidationError,
   approveEvent,
   assignCoordinator,
+  cancelEvent,
   completeEvent,
   reassignCoordinator,
   fetchEventById,
@@ -481,6 +482,62 @@ function goBack(): void {
 /** §3: no transitions out of these, so no reassignment either (E2-12 AC3). */
 const CLOSED_STATUSES = new Set(["Rejected", "Cancelled", "Completed"]);
 
+/** E3-6 / AGENTS.md §3 transitions table: every active stage the owning
+ * Organiser may cancel from — mirrors the backend's CANCELLABLE_STATUSES. */
+const CANCELLABLE_STATUSES = new Set([
+  "Unassigned",
+  "Requested",
+  "Clarification Requested",
+  "Planning",
+  "Safety Review",
+  "Confirmed",
+]);
+const canCancelEvent = computed(
+  () => isOwnerView.value && !!event.value && CANCELLABLE_STATUSES.has(event.value.status),
+);
+
+const confirmingCancel = ref(false);
+const cancelReason = ref("");
+const cancelling = ref(false);
+const cancelError = ref<string | null>(null);
+
+function openCancel(): void {
+  confirmingCancel.value = true;
+  cancelReason.value = "";
+  cancelError.value = null;
+}
+
+function closeCancel(): void {
+  confirmingCancel.value = false;
+  cancelReason.value = "";
+  cancelError.value = null;
+}
+
+/** E3-6 AC2: cancellation is automatic (no coordinator approval) once the
+ * Organiser confirms it with a reason — the reason is required client-side
+ * too, but the backend is what actually enforces it. */
+async function handleCancel(): Promise<void> {
+  if (!event.value) return;
+  const reason = cancelReason.value.trim();
+  if (!reason) {
+    cancelError.value = "A reason is required to cancel this event.";
+    return;
+  }
+
+  cancelling.value = true;
+  cancelError.value = null;
+  try {
+    event.value = await cancelEvent(event.value.id, reason);
+    confirmingCancel.value = false;
+    cancelReason.value = "";
+    await loadHistory();
+  } catch (err) {
+    cancelError.value = err instanceof ReviewActionError ? err.message : "We couldn't cancel this event. Please try again.";
+  } finally {
+    cancelling.value = false;
+  }
+}
+
 const coordinators = ref<CoordinatorOption[]>([]);
 const coordinatorsLoading = ref(false);
 const coordinatorsError = ref<string | null>(null);
@@ -846,6 +903,27 @@ onMounted(async () => {
                       </div>
                     </div>
                   </template>
+
+  <!-- E3-6: the owning Organiser cancels their own event with a required reason. -->
+  <div v-if="isOwnerView && event.status !== 'Draft'" class="cancel-event-row">
+    <div v-if="event.status === 'Cancelled'" class="cancel-event-row__cancelled-note">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"
+        class="cancel-event-row__icon">
+        <path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+      </svg>
+      <p class="body-default">
+        This event was cancelled{{ event.review_outcome ? `: "${event.review_outcome}"` : "." }}
+      </p>
+    </div>
+    <button v-else-if="canCancelEvent" type="button" class="btn btn-danger cancel-event-row__button"
+      @click="openCancel">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"
+        class="cancel-event-row__icon">
+        <path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+      </svg>
+      Cancel event
+    </button>
+  </div>
 </div>
 
 <EventStatusTracker v-if="event.status === 'Planning'" :status="event.status"
@@ -1052,6 +1130,7 @@ onMounted(async () => {
       </p>
     </div>
   </div>
+
 </div>
 
 <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
@@ -1093,6 +1172,36 @@ onMounted(async () => {
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
   :current-user-id="currentUser.id" :read-only="isLead" />
+
+<!-- E3-6: a popup for the mandatory cancellation reason, same pattern as
+     VenueRequestsPanel's withdraw/release confirm dialog. -->
+<div v-if="confirmingCancel" class="modal-overlay" @click.self="closeCancel">
+  <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="cancel-event-title">
+    <p id="cancel-event-title" class="modal-title">Cancel this event?</p>
+    <p class="body-default muted">
+      Cancelling releases every venue booking and equipment reservation, and notifies
+      {{ event.coordinator_id ? "your coordinator" : "the Event Coordinator Leads" }} and anyone registered.
+      <strong class="modal-emphasis">This can't be undone.</strong>
+    </p>
+
+    <label for="cancel-reason" class="body-small muted mb-1 modal-label">
+      Reason for cancellation <span class="modal-required">*</span>
+    </label>
+    <textarea id="cancel-reason" v-model="cancelReason" rows="3" class="review-actions__textarea"
+      placeholder="Let your coordinator and attendees know why this event is being cancelled…" />
+    <p v-if="cancelError" class="body-default error-text" role="alert">{{ cancelError }}</p>
+
+    <div class="modal-actions">
+      <button type="button" class="modal-button modal-button--secondary" :disabled="cancelling" @click="closeCancel">
+        Keep event
+      </button>
+      <button type="button" class="modal-button modal-button--danger" :disabled="cancelling || !cancelReason.trim()"
+        @click="handleCancel">
+        {{ cancelling ? "Cancelling…" : "Confirm cancellation" }}
+      </button>
+    </div>
+  </div>
+</div>
 </div>
 </div>
 </div>
@@ -1637,6 +1746,142 @@ onMounted(async () => {
 
 .btn-reject-outline:not(:disabled):hover {
   background: var(--color-error-200);
+}
+
+/* E3-6: the trigger lives at the bottom-left of the Event Details card,
+   left-aligned like the rest of that card's content rather than
+   right-aligned like a dialog's own action row. */
+.cancel-event-row {
+  margin-top: var(--spacing-24);
+  display: flex;
+  justify-content: flex-start;
+}
+
+.cancel-event-row__button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+}
+
+.cancel-event-row__icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.cancel-event-row__cancelled-note {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  background: var(--color-error-200);
+  border: 1px solid var(--color-error-300);
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-12) var(--spacing-16);
+  color: var(--color-error-600);
+}
+
+.cancel-event-row__cancelled-note p {
+  margin: 0;
+}
+
+.btn-danger {
+  background: var(--color-error-600);
+  color: var(--color-base-white);
+  border-color: var(--color-error-600);
+}
+
+.btn-danger:not(:disabled):hover {
+  filter: brightness(0.9);
+}
+
+.btn-danger:focus-visible {
+  outline: 2px solid var(--color-error-600);
+  outline-offset: 2px;
+}
+
+/* E3-6: the reason popup — same overlay/dialog shell as
+   VenueRequestsPanel's withdraw/release confirm modal, so every
+   "are you sure" dialog in the app looks and behaves the same way. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 40%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-24);
+  z-index: 50;
+}
+
+.modal {
+  background: var(--color-base-white);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-24);
+  max-width: 440px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.modal-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+  margin: 0 0 var(--spacing-8);
+}
+
+.modal-label {
+  margin-top: var(--spacing-16);
+}
+
+.modal-required {
+  color: var(--color-error-600);
+}
+
+.modal-emphasis {
+  color: var(--color-error-600);
+  font-weight: 700;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-8);
+  margin-top: var(--spacing-16);
+}
+
+.modal-button {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-12) var(--spacing-16);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.modal-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.modal-button--secondary {
+  background: var(--color-grey-100);
+  color: var(--color-grey-900);
+}
+
+.modal-button--secondary:hover:not(:disabled) {
+  background: var(--color-grey-200);
+}
+
+.modal-button--danger {
+  background: var(--color-error-600);
+  color: var(--color-base-white);
+}
+
+.modal-button--danger:hover:not(:disabled) {
+  filter: brightness(0.9);
 }
 
 .venue-search-entry {

@@ -4,6 +4,9 @@ import express from "express";
 import { equipmentRequestsRouter } from "./routes/equipmentRequests.js";
 import { equipmentCatalogRouter } from "./routes/equipmentCatalog.js";
 import { equipmentAvailabilityRouter } from "./routes/equipmentAvailability.js";
+import { connectAndConsume } from "./lib/rabbitConsumer.js";
+import { handleEventCancelled } from "./lib/eventCancelledHandler.js";
+import { supabaseAdmin } from "./lib/supabaseAdmin.js";
 
 /**
  * Fail loudly at boot instead of at the first login. A missing JWT_SECRET
@@ -38,3 +41,26 @@ const port = Number(process.env.EQUIPMENT_SERVICE_PORT ?? 4005);
 app.listen(port, () => {
   console.log(`equipment-service listening on :${port}`);
 });
+
+/**
+ * E3-6: consumes `event.cancelled` to release a cancelled event's
+ * reservations (E5-6 AC4). A missing RABBITMQ_URL or a broker that's down
+ * must not break the REST API — only log, never process.exit.
+ */
+async function startRabbit(): Promise<void> {
+  const url = process.env.RABBITMQ_URL;
+  if (!url) {
+    console.log("equipment-service: RABBITMQ_URL not set, consumer idle");
+    return;
+  }
+
+  try {
+    const consumer = connectAndConsume(url, (msg) => handleEventCancelled(msg, { supabase: supabaseAdmin }));
+    await consumer.start();
+    console.log("equipment-service: connected to RabbitMQ, consuming event.cancelled");
+  } catch (err) {
+    console.error("equipment-service: failed to connect to RabbitMQ, consumer idle", err);
+  }
+}
+
+void startRabbit();

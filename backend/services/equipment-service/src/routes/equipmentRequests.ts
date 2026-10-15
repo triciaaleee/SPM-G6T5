@@ -5,6 +5,7 @@ import { fetchEvent, fetchEventBookingInfo, type EquipmentBookingInfo } from "..
 import { claimUnits, recordClaims, releaseUnitsForItem } from "../lib/equipmentConflicts.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { computeReservationFlags, type ReservationFlag } from "../lib/reservationFlags.js";
+import { releaseEquipmentForEvent } from "../lib/eventCancellation.js";
 import { occupiedWindow, type OccupiedWindow } from "../lib/scheduleWindow.js";
 import {
   validateEquipmentItems,
@@ -611,12 +612,13 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
 /**
  * E5-6 AC4: "Given an event is cancelled, when cancellation completes, then
  * its reservations are released and inventory returns to available."
- * Not called by anything yet — events-service has no cancel-event endpoint
- * (E3-6, #31, still open) to call it from. Ready for events-service to call
- * the same way it already forwards the caller's own token to this service
- * (lib/arrangementsClient.ts), ONCE E3-6 exists; until then this is only
- * reachable directly. Gated the same way E3-6 itself is specified: the
- * owning Organiser, and only once the event is actually Cancelled.
+ * E3-6 landed as a RabbitMQ flow (RabbitMQ.md section 3.4, #34): events-
+ * service publishes `event.cancelled` and the consumer in
+ * lib/eventCancelledHandler.ts releases reservations the same way this
+ * route does, via the shared releaseEquipmentForEvent helper — so this
+ * manual route is a direct-call fallback, not the primary path. Gated the
+ * same way E3-6 itself is specified: the owning Organiser, and only once
+ * the event is actually Cancelled.
  */
 equipmentRequestsRouter.post("/events/:eventId/release", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -650,8 +652,9 @@ equipmentRequestsRouter.post("/events/:eventId/release", async (req: AuthedReque
     return;
   }
 
-  const { error } = await supabase.rpc("release_equipment_for_event", { p_event_id: eventId });
-  if (error) {
+  try {
+    await releaseEquipmentForEvent(supabase, eventId);
+  } catch {
     res.status(500).json({ error: "Failed to release the event's equipment reservations" });
     return;
   }

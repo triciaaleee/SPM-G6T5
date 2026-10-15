@@ -133,8 +133,14 @@ const stage2Label = computed(() => {
 });
 
 /** Rejected is terminal — Confirmed/Completed can never happen after it,
- * so the tracker only shows the two stages that actually occurred. */
+ * so the tracker only shows the two stages that actually occurred.
+ * Cancelled (E3-6) is terminal too, but — unlike Rejected — it can happen
+ * from any active stage (AGENTS.md §3) and nothing here records which one,
+ * so there's no honest step to highlight; the stepper is hidden entirely
+ * and the status note below carries the reason instead. */
 const steps = computed(() => {
+  if (props.status === "Cancelled") return [];
+
   const requested = { key: "requested", label: "Requested", variant: "neutral" as StepVariant };
   const stage2 = { key: "stage2", label: stage2Label.value, variant: STAGE_TWO_VARIANT[props.status] ?? "neutral" };
 
@@ -148,7 +154,9 @@ const steps = computed(() => {
   ];
 });
 
-const trackFillPercent = computed(() => (currentIndex.value / (steps.value.length - 1)) * 100);
+const trackFillPercent = computed(() =>
+  steps.value.length > 1 ? (currentIndex.value / (steps.value.length - 1)) * 100 : 0,
+);
 
 function stepState(index: number): "complete" | "current" | "pending" {
   if (index < currentIndex.value) return "complete";
@@ -166,7 +174,7 @@ function stepState(index: number): "complete" | "current" | "pending" {
         <p class="body-small muted status-summary__date">Last updated {{ formatEventDate(lastChangedAt) }}</p>
       </div>
 
-      <div class="status-tracker" role="list" aria-label="Event progress" :data-status="status">
+      <div v-if="steps.length > 0" class="status-tracker" role="list" aria-label="Event progress" :data-status="status">
         <div class="status-tracker__track">
           <div class="status-tracker__track-fill" :style="{ width: trackFillPercent + '%' }" />
         </div>
@@ -187,6 +195,9 @@ function stepState(index: number): "complete" | "current" | "pending" {
       </p>
       <p v-else-if="status === 'Rejected'" class="body-small status-note status-note--error">
         This request was rejected{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
+      </p>
+      <p v-else-if="status === 'Cancelled'" class="body-small status-note status-note--error">
+        This event was cancelled{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
       </p>
       <p v-else-if="status === 'Safety Review'" class="body-small muted pt-8">
         Submitted for the Safety Officer's Operational Safety Check. The event can't be edited while it's under review.

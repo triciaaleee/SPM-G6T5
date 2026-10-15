@@ -262,6 +262,11 @@ export function completeEvent(id: number): Promise<EventSummary> {
   return postReviewAction(id, "complete");
 }
 
+/** E3-6: the owning Organiser cancels their own event with a mandatory reason. */
+export function cancelEvent(id: number, reason: string): Promise<EventSummary> {
+  return postReviewAction(id, "cancel", { reason });
+}
+
 /** Requests clarification/amendment from the Organiser with a message. */
 export function requestClarification(id: number, message: string): Promise<EventSummary> {
   return postReviewAction(id, "request-clarification", { message });

@@ -9,6 +9,8 @@ import { unavailabilityRouter } from "./routes/unavailability.js";
 import { venuesRouter } from "./routes/venues.js";
 import { sweepExpiringHolds } from "./lib/bookingDecisions.js";
 import { supabaseAdmin } from "./lib/supabaseAdmin.js";
+import { connectAndConsume } from "./lib/rabbitConsumer.js";
+import { handleEventCancelled } from "./lib/eventCancelledHandler.js";
 
 /**
  * Fail loudly at boot instead of at the first login. A missing JWT_SECRET
@@ -66,3 +68,26 @@ setInterval(() => {
     console.error("venue-service: expiring-hold sweep failed", err);
   });
 }, SWEEP_INTERVAL_MS);
+
+/**
+ * E3-6: consumes `event.cancelled` to release every active booking of a
+ * cancelled event (AGENTS.md §3a). A missing RABBITMQ_URL or a broker
+ * that's down must not break the REST API — only log, never process.exit.
+ */
+async function startRabbit(): Promise<void> {
+  const url = process.env.RABBITMQ_URL;
+  if (!url) {
+    console.log("venue-service: RABBITMQ_URL not set, consumer idle");
+    return;
+  }
+
+  try {
+    const consumer = connectAndConsume(url, (msg) => handleEventCancelled(msg, { supabase: supabaseAdmin }));
+    await consumer.start();
+    console.log("venue-service: connected to RabbitMQ, consuming event.cancelled");
+  } catch (err) {
+    console.error("venue-service: failed to connect to RabbitMQ, consumer idle", err);
+  }
+}
+
+void startRabbit();

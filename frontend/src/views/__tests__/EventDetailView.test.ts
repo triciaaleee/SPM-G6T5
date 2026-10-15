@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter } from "vue-router";
 import { h } from "vue";
 import EventDetailView from "../EventDetailView.vue";
 import {
+  cancelEvent,
   completeEvent,
   fetchEventById,
   fetchEventHistory,
@@ -21,6 +22,7 @@ vi.mock("../../lib/eventsApi", async () => {
     getCurrentUser: vi.fn(),
     fetchEventHistory: vi.fn(),
     completeEvent: vi.fn(),
+    cancelEvent: vi.fn(),
   };
 });
 
@@ -38,6 +40,7 @@ const mockedFetchEvent = vi.mocked(fetchEventById);
 const mockedUser = vi.mocked(getCurrentUser);
 const mockedHistory = vi.mocked(fetchEventHistory);
 const mockedComplete = vi.mocked(completeEvent);
+const mockedCancel = vi.mocked(cancelEvent);
 const mockedBookings = vi.mocked(fetchEventVenueBookings);
 
 const coordinator = { id: "COORD-0001", role: "coordinator" };
@@ -174,6 +177,77 @@ describe("EventDetailView — Mark as completed (E3-5)", () => {
   it("isn't offered to the organiser", async () => {
     const wrapper = await mountPage(makeEvent(), { id: "ORG-0001", role: "organiser" });
     expect(button(wrapper, "Mark as completed")).toBeUndefined();
+  });
+});
+
+describe("EventDetailView — Cancel event (E3-6)", () => {
+  const organiser = { id: "ORG-0001", role: "organiser" };
+
+  it("AC1: the owning organiser cancels an active event with a reason", async () => {
+    mockedCancel.mockResolvedValue(makeEvent({ status: "Cancelled", review_outcome: "Venue flooded" }));
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }), organiser);
+
+    await button(wrapper, "Cancel event")!.trigger("click");
+    expect(mockedCancel).not.toHaveBeenCalled();
+
+    await wrapper.get("#cancel-reason").setValue("Venue flooded");
+    await button(wrapper, "Confirm cancellation")!.trigger("click");
+    await flushPromises();
+
+    expect(mockedCancel).toHaveBeenCalledWith(7, "Venue flooded");
+    expect(wrapper.text()).toContain('This event was cancelled: "Venue flooded"');
+    expect(button(wrapper, "Cancel event")).toBeUndefined();
+  });
+
+  it("AC2: keeps the confirm button disabled until a reason is entered", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }), organiser);
+
+    await button(wrapper, "Cancel event")!.trigger("click");
+    expect(button(wrapper, "Confirm cancellation")!.attributes("disabled")).toBeDefined();
+
+    await button(wrapper, "Confirm cancellation")!.trigger("click");
+    expect(mockedCancel).not.toHaveBeenCalled();
+
+    await wrapper.get("#cancel-reason").setValue("Venue flooded");
+    expect(button(wrapper, "Confirm cancellation")!.attributes("disabled")).toBeUndefined();
+  });
+
+  it("Keep event closes the form without cancelling", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }), organiser);
+
+    await button(wrapper, "Cancel event")!.trigger("click");
+    await button(wrapper, "Keep event")!.trigger("click");
+
+    expect(mockedCancel).not.toHaveBeenCalled();
+    expect(button(wrapper, "Cancel event")).toBeDefined();
+  });
+
+  it("shows the server's message when cancellation is refused", async () => {
+    mockedCancel.mockRejectedValue(new ReviewActionError("This event is Completed and can no longer be cancelled."));
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }), organiser);
+
+    await button(wrapper, "Cancel event")!.trigger("click");
+    await wrapper.get("#cancel-reason").setValue("Venue flooded");
+    await button(wrapper, "Confirm cancellation")!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("This event is Completed and can no longer be cancelled.");
+  });
+
+  it("isn't offered to a coordinator", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    expect(button(wrapper, "Cancel event")).toBeUndefined();
+  });
+
+  it("isn't offered for a Draft event", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Draft" }), organiser);
+    expect(button(wrapper, "Cancel event")).toBeUndefined();
+  });
+
+  it("isn't offered once the event is already closed", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Completed" }), organiser);
+    expect(button(wrapper, "Cancel event")).toBeUndefined();
+    expect(wrapper.text()).not.toContain("This event was cancelled");
   });
 });
 

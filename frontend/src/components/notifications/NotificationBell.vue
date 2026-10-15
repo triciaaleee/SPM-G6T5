@@ -200,7 +200,6 @@ onBeforeUnmount(() => {
           <button type="button" class="item" :class="{ 'item--unread': !notification.read }"
             @click="openNotification(notification)">
             <span class="item__title">{{ notification.title }}</span>
-            <span v-if="notification.eventId !== null" class="item__event">Event #{{ notification.eventId }}</span>
             <span class="item__body">{{ notification.body }}</span>
             <span class="item__when">{{ formatWhen(notification.createdAt) }}</span>
           </button>
@@ -370,13 +369,6 @@ onBeforeUnmount(() => {
   font-weight: 700;
   line-height: 1.125rem;
   color: var(--color-grey-900);
-}
-
-.item__event {
-  font-size: 0.75rem;
-  font-weight: 600;
-  line-height: 1rem;
-  color: var(--color-purple-600);
 }
 
 .item__body {

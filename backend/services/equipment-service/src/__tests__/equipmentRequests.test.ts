@@ -931,9 +931,8 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
 });
 
 describe("POST /api/equipment-requests/events/:eventId/release (E5-6 AC4)", () => {
-  // Not called by anything today (E3-6 cancel-event doesn't exist yet) —
-  // these exercise the endpoint directly, ready for events-service to call
-  // once it does.
+  // Now a direct-call fallback alongside the event.cancelled consumer
+  // (eventCancelledHandler.test.ts) — both share releaseEquipmentForEvent.
   it("rejects a non-organiser", async () => {
     const { app } = buildApp({ user: technicalSupport, event: eventRow({ status: "Cancelled" }) });
     const res = await request(app).post("/api/equipment-requests/events/7/release");
