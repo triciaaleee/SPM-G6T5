@@ -176,6 +176,55 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders the rejected outcome for safety.decided", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "safety.decided",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: { outcome: "rejected", reason: "Fire exit blocked by staging", eventName: "Spring Gala" },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "Safety review rejected",
+        body: expect.stringContaining("Fire exit blocked by staging"),
+      }),
+    ]);
+  });
+
+  it("renders the changes_requested outcome for safety.decided", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "safety.decided",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: {
+          outcome: "changes_requested",
+          reason: "Seminar Room 3-01: Exits are blocked by the stage.",
+          eventName: "Spring Gala",
+        },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        body: expect.stringContaining("Seminar Room 3-01: Exits are blocked by the stage."),
+      }),
+    ]);
+  });
+
   it("tells the organiser's confirmation apart from the leads' notice for request.submitted", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
 import { combinedReason, currentArrangements, hasChanged, parseChangeRequest, resolveFlags } from "../lib/safetyChanges.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 /** E3-14: the Safety Officer requests specific changes, short of rejecting. */
 
@@ -83,7 +84,6 @@ function buildApp(options: Options = {}) {
 
   const fetchMock = vi.fn(async (url: string) => {
     const json = (body: unknown, ok = true) => ({ ok, status: ok ? 200 : 500, json: async () => body });
-    if (url.includes("/api/notifications")) return json({});
     if (options.arrangementsFail) return json({}, false);
     if (url.includes("/api/venues/events/7/bookings")) return json({ bookings: options.currentBookings ?? bookings });
     if (url.includes("/api/equipment-requests?eventId=7")) {
@@ -93,10 +93,13 @@ function buildApp(options: Options = {}) {
   });
   vi.stubGlobal("fetch", fetchMock);
 
+  const publish = vi.fn().mockResolvedValue(true);
+  setPublisherForTest({ publish });
+
   const app = express();
   app.use(express.json());
   app.use("/api/events", eventsRouter);
-  return { app, rpc, fetchMock, flagUpdate, tables };
+  return { app, rpc, fetchMock, flagUpdate, tables, publish };
 }
 
 const validBody = {
@@ -129,12 +132,6 @@ const expectedReason =
 
 function requestChanges(app: express.Express, body: unknown = validBody) {
   return request(app).post("/api/events/7/safety-review/request-changes").set("Authorization", "Bearer t").send(body as object);
-}
-
-function sentNotifications(fetchMock: ReturnType<typeof vi.fn>): { recipientId: string; type: string; body: string }[] {
-  return fetchMock.mock.calls
-    .filter(([url]) => String(url).includes("/api/notifications"))
-    .flatMap(([, init]) => JSON.parse((init as { body: string }).body).notifications);
 }
 
 describe("parseChangeRequest (AC2)", () => {
@@ -231,14 +228,20 @@ describe("POST /api/events/:id/safety-review/request-changes (E3-14)", () => {
   });
 
   it("AC1: notifies only the assigned coordinator, with each arrangement and what must change", async () => {
-    const { app, fetchMock } = buildApp();
+    const { app, publish } = buildApp();
     await requestChanges(app);
 
-    const notifications = sentNotifications(fetchMock);
-    expect(notifications).toHaveLength(1);
-    expect(notifications[0]).toMatchObject({ recipientId: "COORD-0001", type: "event_safety_changes_requested" });
-    expect(notifications[0].body).toContain("Seminar Room 3-01: Exits are blocked by the stage");
-    expect(notifications[0].body).toContain("PA system × 2: Move the PA away from the fire exit.");
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "safety.decided",
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: expect.objectContaining({
+          outcome: "changes_requested",
+          reason: expectedReason,
+        }),
+      }),
+    );
   });
 
   it.each([
@@ -285,9 +288,9 @@ describe("POST /api/events/:id/safety-review/request-changes (E3-14)", () => {
   );
 
   it("returns 409 when the event left Safety Review between the check and the write", async () => {
-    const { app, fetchMock } = buildApp({ reviewId: null });
+    const { app, publish } = buildApp({ reviewId: null });
     expect((await requestChanges(app)).status).toBe(409);
-    expect(sentNotifications(fetchMock)).toHaveLength(0);
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("returns 502 without deciding when the arrangements can't be read", async () => {

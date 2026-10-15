@@ -172,25 +172,37 @@ const TEMPLATES: Record<string, Template> = {
     };
   },
 
-  /**
-   * #9 in RabbitMQ.md section 3.2. Only the "approved" outcome publishes
-   * today (events-service's reject/changes-requested path isn't built —
-   * #105); the fallback keeps this forward-compatible rather than
-   * silently mis-rendering if that lands later.
-   */
+  /** #9/#10 in RabbitMQ.md section 3.2 (#105). All three outcomes (approved/rejected/changes_requested) now publish. */
   "safety.decided": (msg) => {
     const eventName = String(msg.data.eventName ?? "Your event");
+    const link = eventLink(msg);
+    const reason = msg.data.reason ? ` ${msg.data.reason}` : "";
+
     if (msg.data.outcome === "approved") {
       return {
         title: "Safety review approved",
         body: `"${eventName}" passed its Operational Safety Check and is now Confirmed.`,
-        link: eventLink(msg),
+        link,
+      };
+    }
+    if (msg.data.outcome === "rejected") {
+      return {
+        title: "Safety review rejected",
+        body: `"${eventName}" failed its Operational Safety Check and is back in Planning. Reason:${reason}`,
+        link,
+      };
+    }
+    if (msg.data.outcome === "changes_requested") {
+      return {
+        title: "Safety changes requested",
+        body: `"${eventName}" is back in Planning. The Safety Officer asked for changes —${reason}`,
+        link,
       };
     }
     return {
       title: "Safety review decision",
       body: `"${eventName}" received a safety review decision.`,
-      link: eventLink(msg),
+      link,
     };
   },
 

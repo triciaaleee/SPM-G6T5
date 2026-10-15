@@ -7,7 +7,6 @@ import { isPositiveInteger } from "../lib/validation.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
-import { fitNotificationBody, sendNotifications } from "../lib/notificationsClient.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
 import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
 import {
@@ -1786,20 +1785,15 @@ eventsRouter.post("/:id/safety-review/reject", async (req: AuthedRequest, res) =
 
   if (event.coordinator_id) {
     const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
-    await sendNotifications(
-      [
-        {
-          recipientId: event.coordinator_id,
-          type: "event_safety_rejected",
-          title: "Safety review rejected",
-          body: fitNotificationBody(
-            `"${typeof eventName === "string" ? eventName : "Your event"}" failed its Operational Safety Check and is back in Planning. Reason: ${reason}`,
-          ),
-          link: `/events/${event.id}`,
-        },
-      ],
-      req.headers.authorization!,
-    );
+    // Migrated to RabbitMQ (ARD section 1.1, RabbitMQ.md #9 "safety.decided"),
+    // same type the approve route already publishes.
+    await getPublisher().publish({
+      type: "safety.decided",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.coordinator_id], roles: [] },
+      data: { outcome: "rejected", reason, eventName: typeof eventName === "string" ? eventName : null },
+    });
   }
 
   res.json({ event: data, reviewId });
@@ -1878,20 +1872,15 @@ eventsRouter.post("/:id/safety-review/request-changes", async (req: AuthedReques
 
   if (event.coordinator_id) {
     const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
-    await sendNotifications(
-      [
-        {
-          recipientId: event.coordinator_id,
-          type: "event_safety_changes_requested",
-          title: "Safety changes requested",
-          body: fitNotificationBody(
-            `"${typeof eventName === "string" ? eventName : "Your event"}" is back in Planning. The Safety Officer asked for changes — ${reason}`,
-          ),
-          link: `/events/${event.id}`,
-        },
-      ],
-      authorization,
-    );
+    // Migrated to RabbitMQ (ARD section 1.1, RabbitMQ.md #9 "safety.decided"),
+    // same type the approve/reject routes already publish.
+    await getPublisher().publish({
+      type: "safety.decided",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.coordinator_id], roles: [] },
+      data: { outcome: "changes_requested", reason, eventName: typeof eventName === "string" ? eventName : null },
+    });
   }
 
   res.json({ event: data, reviewId });
