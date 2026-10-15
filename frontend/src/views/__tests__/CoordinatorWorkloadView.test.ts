@@ -179,20 +179,20 @@ describe("CoordinatorWorkloadView — status tabs", () => {
     await wrapper.findAll(".toggle-btn")[1].trigger("click");
 
     const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
-    expect(tabs).toEqual(["All 2", "Needs Review 1", "Unassigned 1"]);
+    expect(tabs).toEqual(["Active 2", "All 2", "Needs Review 1", "Unassigned 1"]);
   });
 
-  it("renders an All tab plus one tab per non-empty group, with counts", async () => {
+  it("renders Active and All tabs plus one tab per non-empty group, with counts", async () => {
     const wrapper = await mountView(tabEvents());
 
     const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
-    expect(tabs).toEqual(["All 3", "Needs Review 2", "Planning 1"]);
+    expect(tabs).toEqual(["Active 3", "All 3", "Needs Review 2", "Planning 1"]);
   });
 
-  it("defaults to All and shows every event in one flat grid", async () => {
+  it("defaults to Active and shows every open event in one flat grid", async () => {
     const wrapper = await mountView(tabEvents());
 
-    expect(wrapper.find(".tab--active").text()).toContain("All");
+    expect(wrapper.find(".tab--active").text()).toContain("Active");
     expect(wrapper.findAll(".card-grid")).toHaveLength(1);
     expect(wrapper.findAll(".event-card")).toHaveLength(3);
   });
@@ -200,14 +200,14 @@ describe("CoordinatorWorkloadView — status tabs", () => {
   it("filters cards to one status group when its tab is selected", async () => {
     const wrapper = await mountView(tabEvents());
 
-    await wrapper.findAll("[role='tab']")[2].trigger("click");
+    await wrapper.findAll("[role='tab']")[3].trigger("click");
 
     expect(wrapper.find(".tab--active").text()).toContain("Planning");
     expect(wrapper.findAll(".event-card")).toHaveLength(1);
     expect(wrapper.findAll(".group-label")).toHaveLength(0);
   });
 
-  it("falls back to All when the selected tab empties after switching scope", async () => {
+  it("falls back to Active when the selected tab empties after switching scope", async () => {
     const events = [
       makeEvent({ id: 1, status: "Requested" }),
       makeEvent({ id: 2, status: "Planning", coordinator_id: "COORD-0002" }),
@@ -215,12 +215,69 @@ describe("CoordinatorWorkloadView — status tabs", () => {
     const wrapper = await mountView(events);
 
     await wrapper.findAll(".toggle-btn")[1].trigger("click"); // All events
-    await wrapper.findAll("[role='tab']")[2].trigger("click"); // Planning
+    await wrapper.findAll("[role='tab']")[3].trigger("click"); // Planning
     expect(wrapper.findAll(".event-card")).toHaveLength(1);
 
     await wrapper.findAll(".toggle-btn")[0].trigger("click"); // back to My events
-    expect(wrapper.find(".tab--active").text()).toContain("All");
+    expect(wrapper.find(".tab--active").text()).toContain("Active");
     expect(wrapper.findAll(".event-card")).toHaveLength(1);
+  });
+});
+
+describe("CoordinatorWorkloadView — Active list (E3-5 AC1)", () => {
+  const mixedEvents = () => [
+    makeEvent({ id: 1, status: "Confirmed", submitted_details: { name: "Confirmed Event", proposedDate: "2099-01-01" } }),
+    makeEvent({ id: 2, status: "Completed", submitted_details: { name: "Completed Event", proposedDate: "2099-01-02" } }),
+    makeEvent({ id: 3, status: "Rejected", submitted_details: { name: "Rejected Event", proposedDate: "2099-01-03" } }),
+    makeEvent({ id: 4, status: "Cancelled", submitted_details: { name: "Cancelled Event", proposedDate: "2099-01-04" } }),
+    makeEvent({ id: 5, status: "Safety Review", submitted_details: { name: "Safety Event", proposedDate: "2099-01-05" } }),
+  ];
+
+  function cardTitles(wrapper: Awaited<ReturnType<typeof mountView>>) {
+    return wrapper.findAll(".event-card .card-title").map((c) => c.text());
+  }
+
+  it("leaves Completed, Rejected and Cancelled events out of the default Active tab", async () => {
+    const wrapper = await mountView(mixedEvents());
+
+    expect(cardTitles(wrapper)).toEqual(["Safety Event", "Confirmed Event"]);
+  });
+
+  it("still lists them under All, so the record isn't lost", async () => {
+    const wrapper = await mountView(mixedEvents());
+    await wrapper.findAll("[role='tab']")[1].trigger("click");
+
+    expect(cardTitles(wrapper)).toHaveLength(5);
+    expect(cardTitles(wrapper)).toContain("Completed Event");
+  });
+
+  it("gives Safety Review and Cancelled events their own tabs, so none go missing", async () => {
+    const wrapper = await mountView(mixedEvents());
+
+    const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
+    expect(tabs).toEqual([
+      "Active 2",
+      "All 5",
+      "Safety Review 1",
+      "Confirmed 1",
+      "Completed 1",
+      "Rejected 1",
+      "Cancelled 1",
+    ]);
+  });
+
+  it("opens a closed group's tab on request", async () => {
+    const wrapper = await mountView(mixedEvents());
+    await wrapper.findAll("[role='tab']").find((t) => t.text().startsWith("Completed"))!.trigger("click");
+
+    expect(cardTitles(wrapper)).toEqual(["Completed Event"]);
+  });
+
+  it("says where to look when every event is closed", async () => {
+    const wrapper = await mountView([makeEvent({ id: 2, status: "Completed" })]);
+
+    expect(wrapper.findAll(".event-card")).toHaveLength(0);
+    expect(wrapper.text()).toContain("No active events. Completed, rejected and cancelled events are under All.");
   });
 });
 

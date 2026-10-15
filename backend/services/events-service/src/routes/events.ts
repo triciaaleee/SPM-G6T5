@@ -7,14 +7,17 @@ import { isPositiveInteger } from "../lib/validation.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
+import { fitNotificationBody, sendNotifications } from "../lib/notificationsClient.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
 import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
 import {
   describeOutstanding,
   findOutstandingArrangements,
   hasOutstanding,
+  MAX_SAFETY_DECISION_REASON_LENGTH,
   parseSafetyNotes,
 } from "../lib/safetyReview.js";
+import { eventEndsAt, hasEventEnded } from "../lib/eventTiming.js";
 
 /**
  * Week 7 change 5: the Event Coordinator Lead oversees incoming requests,
@@ -492,17 +495,14 @@ const MAX_ATTENDEE_INFO_IDS = 100;
  * "Open for registration": the event is Confirmed (safety-approved, so it
  * will go ahead), the organiser asked for registration, and it hasn't
  * ended yet. Lives here, with the event data, so registration-service
- * doesn't re-derive it. Date/time are the event's local wall-clock values.
+ * doesn't re-derive it. When it ends is worked out in Singapore time (see
+ * lib/eventTiming.ts), the same rule E3-5 completion uses.
  */
 function isOpenForRegistration(status: string, details: Record<string, unknown>, now: Date = new Date()): boolean {
   if (status !== "Confirmed" || details.registrationNeeded !== true) return false;
 
-  const date = typeof details.proposedDate === "string" ? details.proposedDate : null;
-  const endTime = typeof details.endTime === "string" ? details.endTime : "23:59";
-  if (!date) return false;
-
-  const endsAt = new Date(`${date}T${endTime}`);
-  return Number.isNaN(endsAt.getTime()) ? false : endsAt.getTime() > now.getTime();
+  const endsAt = eventEndsAt(details);
+  return endsAt !== null && endsAt.getTime() > now.getTime();
 }
 
 /**
@@ -1035,6 +1035,32 @@ eventsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
 });
 
 /**
+ * E3-12/13/14: every Operational Safety Check decision on this event,
+ * oldest first — outcome, reason, the Safety Officer and when. Lets the
+ * coordinator see why an event came back to Planning without relying on
+ * the notification. Same visibility as the edit history.
+ */
+eventsRouter.get("/:id/safety-reviews", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await loadEventForClarification(req, res, eventId);
+  if (!event) return;
+
+  const { supabase } = req as Required<Pick<AuthedRequest, "supabase">>;
+  const { data, error } = await supabase
+    .from("event_safety_reviews")
+    .select("id, outcome, reason, submission_id, officer:officer_id(name), created_at")
+    .eq("event_id", event.id)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load safety reviews" });
+    return;
+  }
+
+  res.json({ safetyReviews: data ?? [] });
+});
+
+/**
  * E2-7 AC1 / AGENTS.md §3 edit table: the owning organiser edits directly
  * while the request waits in the unassigned queue, waits on its
  * coordinator's review, or is in Planning.
@@ -1261,6 +1287,81 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
 });
 
 /**
+ * E3-5: the assigned coordinator marks an event completed once it has run
+ * (Confirmed -> Completed, AGENTS.md §3). AC1: only from Confirmed, which
+ * every event reaches through the Safety Officer's approval. AC2: blocked
+ * until the event's end time has passed (Singapore time, lib/eventTiming.ts).
+ * AC3: nothing is deleted or released — the event's details, history,
+ * venue bookings, equipment reservations and registrations all stay as
+ * they are, so its full record remains viewable. decided_at/decided_by are
+ * left alone (they hold the coordinator's original review decision); who
+ * completed it and when goes into the event history instead.
+ *
+ * The update only matches while the event is still Confirmed and still
+ * assigned to the caller, so a concurrent reassignment, cancellation or
+ * re-review between the checks and the write makes it a 409 instead.
+ */
+eventsRouter.post("/:id/complete", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeCoordinatorReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.Confirmed) {
+    res.status(409).json({ error: "Only a Confirmed event can be marked completed" });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data: detailsRow, error: detailsError } = await supabase
+    .from("events")
+    .select("submitted_details")
+    .eq("id", event.id)
+    .single();
+  if (detailsError) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+
+  const details = (detailsRow?.submitted_details ?? {}) as Record<string, unknown>;
+  if (!hasEventEnded(details)) {
+    const endsAt = eventEndsAt(details);
+    res.status(409).json({
+      error: endsAt
+        ? `This event hasn't finished yet. It can be marked completed after it ends (${details.proposedDate} ${details.endTime ?? "end of day"}).`
+        : "This event has no valid date and end time, so it can't be marked completed.",
+    });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .update({ status: EVENT_STATUS.Completed })
+    .eq("id", event.id)
+    .eq("status", EVENT_STATUS.Confirmed)
+    .eq("coordinator_id", user.id)
+    .select(EVENT_COLUMNS)
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to mark the event completed" });
+    return;
+  }
+  if (!data) {
+    res.status(409).json({ error: "This event is no longer Confirmed or no longer assigned to you" });
+    return;
+  }
+
+  await recordEventHistory(
+    supabase,
+    event.id,
+    [{ field: "Status", oldValue: EVENT_STATUS.Confirmed, newValue: EVENT_STATUS.Completed }],
+    user.id,
+  );
+
+  res.json({ event: data });
+});
+
+/**
  * E3-4: the assigned coordinator submits a Planning event for the Safety
  * Officer's Operational Safety Check (Planning → Safety Review, AGENTS.md §3).
  * Checked in order: the caller is the assigned coordinator (AC7, in
@@ -1453,6 +1554,77 @@ eventsRouter.post("/:id/safety-review/approve", async (req: AuthedRequest, res) 
     recipients: { userIds: recipients, roles: [] },
     data: { outcome: "approved", eventName: typeof eventName === "string" ? eventName : null },
   });
+
+  res.json({ event: data, reviewId });
+});
+
+/**
+ * E3-13: the Safety Officer rejects the Operational Safety Check (Safety
+ * Review -> Planning, AGENTS.md §3). A reason is required (AC2). The
+ * decision and status change land together in reject_event_safety_review
+ * (migration 0029); the event's venue bookings and equipment reservations
+ * are left as they are, for the coordinator to rework. Only the assigned
+ * coordinator is notified, with the reason (AC1); a failure to notify
+ * never blocks the already-committed decision.
+ */
+eventsRouter.post("/:id/safety-review/reject", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeSafetyOfficerReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.SafetyReview) {
+    res.status(409).json({ error: "Only an event in Safety Review can be rejected" });
+    return;
+  }
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required to reject a safety review" });
+    return;
+  }
+  if (reason.length > MAX_SAFETY_DECISION_REASON_LENGTH) {
+    res.status(400).json({ error: `Keep the reason under ${MAX_SAFETY_DECISION_REASON_LENGTH} characters` });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data: reviewId, error: rejectError } = await supabase.rpc("reject_event_safety_review", {
+    p_event_id: event.id,
+    p_officer_id: user.id,
+    p_reason: reason,
+  });
+  if (rejectError) {
+    res.status(500).json({ error: "Failed to reject the safety review" });
+    return;
+  }
+  if (reviewId === null) {
+    res.status(409).json({ error: "This event is no longer in Safety Review" });
+    return;
+  }
+
+  const { data, error } = await supabase.from("events").select(EVENT_COLUMNS).eq("id", event.id).single();
+  if (error) {
+    res.status(500).json({ error: "Rejected, but failed to reload the event" });
+    return;
+  }
+
+  if (event.coordinator_id) {
+    const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
+    await sendNotifications(
+      [
+        {
+          recipientId: event.coordinator_id,
+          type: "event_safety_rejected",
+          title: "Safety review rejected",
+          body: fitNotificationBody(
+            `"${typeof eventName === "string" ? eventName : "Your event"}" failed its Operational Safety Check and is back in Planning. Reason: ${reason}`,
+          ),
+          link: `/events/${event.id}`,
+        },
+      ],
+      req.headers.authorization!,
+    );
+  }
 
   res.json({ event: data, reviewId });
 });

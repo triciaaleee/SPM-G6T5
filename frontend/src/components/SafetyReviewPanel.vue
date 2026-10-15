@@ -6,14 +6,21 @@
  * backend's call (AC1–AC4); when it refuses, each outstanding booking and
  * equipment item it names is listed here so the coordinator knows what to
  * chase.
+ *
+ * E3-13: if the Safety Officer's most recent decision sent the event back
+ * to Planning, it is shown at the top with the reason, so the coordinator
+ * doesn't have to rely on the notification while reworking the
+ * arrangements.
  */
-import { reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import {
+  fetchSafetyReviews,
   SafetyReviewSubmitError,
   submitForSafetyReview,
   type EventSummary,
   type OutstandingArrangements,
   type SafetyNotes,
+  type SafetyReviewDecision,
 } from "../lib/eventsApi";
 
 const props = defineProps<{ eventId: number }>();
@@ -54,6 +61,38 @@ const notes = reactive<SafetyNotes>({
 const fieldErrors = ref<Record<string, string>>({});
 const generalError = ref<string | null>(null);
 const outstanding = ref<OutstandingArrangements | null>(null);
+
+const decisions = ref<SafetyReviewDecision[]>([]);
+
+/**
+ * The latest decision, unless it was an approval: an approved event is only
+ * back in Planning through the automatic re-review, and "approved" tells
+ * the coordinator nothing to fix.
+ */
+const lastReturnedDecision = computed(() => {
+  const latest = decisions.value.at(-1);
+  return latest && latest.outcome !== "Approved" ? latest : null;
+});
+
+const DECISION_HEADINGS: Record<SafetyReviewDecision["outcome"], string> = {
+  Approved: "The Safety Officer approved the last safety review",
+  Rejected: "The Safety Officer rejected the last safety review",
+  "Changes Requested": "The Safety Officer requested changes in the last safety review",
+};
+
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+onMounted(async () => {
+  try {
+    decisions.value = await fetchSafetyReviews(props.eventId);
+  } catch {
+    // Non-critical — the panel still works without the decision history.
+    decisions.value = [];
+  }
+});
 
 function openForm(): void {
   formOpen.value = true;
@@ -102,6 +141,16 @@ async function submit(): Promise<void> {
 <template>
   <section class="sr-panel" aria-labelledby="safety-review-title">
     <p id="safety-review-title" class="body-default font-semibold sr-title">Safety Review</p>
+
+    <div v-if="lastReturnedDecision" class="sr-decision" data-testid="safety-decision">
+      <p class="body-small font-semibold">{{ DECISION_HEADINGS[lastReturnedDecision.outcome] }}</p>
+      <p class="body-small">
+        {{ lastReturnedDecision.officer?.name ?? "Safety Officer" }}, {{ formatTimestamp(lastReturnedDecision.created_at) }}
+      </p>
+      <p class="body-small sr-decision__reason">{{ lastReturnedDecision.reason }}</p>
+      <p class="body-small">Fix the arrangements, then submit for safety review again.</p>
+    </div>
+
     <p class="body-small muted">
       Once the venue is approved and all requested equipment is reserved, submit this event for the Safety
       Officer's Operational Safety Check. The event can't be edited while it's under review.
@@ -203,6 +252,23 @@ async function submit(): Promise<void> {
   border-radius: var(--radius-xs);
   background: var(--color-warning-100);
   color: var(--color-warning-900);
+}
+
+/* Style.md 2.6: Orange Warning — needs the coordinator's attention, not an error. */
+.sr-decision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  padding: var(--spacing-8) var(--spacing-12);
+  border: 1px solid var(--color-warning-300);
+  border-radius: var(--radius-xs);
+  background: var(--color-warning-100);
+  color: var(--color-warning-900);
+}
+
+.sr-decision__reason {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .sr-outstanding__list {

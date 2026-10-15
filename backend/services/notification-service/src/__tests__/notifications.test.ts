@@ -190,6 +190,20 @@ describe("POST /api/notifications", () => {
     expect(insert).toHaveBeenCalled();
   });
 
+  it.each(["event_safety_approved", "event_safety_rejected"])(
+    "lets the Safety Officer notify about a safety decision (%s, E3-12/E3-13)",
+    async (type) => {
+      const { app, insert } = buildApp({ user: { id: "SAF-0001", role: "safety_officer" } });
+
+      const res = await request(app)
+        .post("/api/notifications")
+        .send({ notifications: [{ ...valid, type }] });
+
+      expect(res.status).toBe(201);
+      expect(insert).toHaveBeenCalled();
+    },
+  );
+
   it("rejects attendees", async () => {
     const { app, insert } = buildApp({ user: { id: "ATT-0001", role: "attendee" } });
 

@@ -8,13 +8,12 @@
  * Four stages, per the story: Requested -> (Planning | Rejected |
  * Clarification Requested) -> Confirmed -> Completed. Stage 2 is a single
  * slot whose label and colour switch to whichever of the three outcomes
- * actually applies. Confirmed/Completed aren't statuses the backend can
- * set yet (no story has built that transition), so those two stages will
- * always render as upcoming/pending for now — they're shown anyway so the
- * bar depicts the whole lifecycle, and will light up once that work lands.
+ * actually applies. Confirmed is reached when the Safety Officer approves
+ * (E3-12) and Completed when the coordinator closes the event after it has
+ * run (E3-5).
  */
 import { computed } from "vue";
-import { formatEventDate, statusBadgeClass } from "../lib/eventStatus";
+import { formatEventDate } from "../lib/eventStatus";
 import type { EventVenueBooking } from "../lib/venuesApi";
 import type { EquipmentRequest } from "../lib/equipmentApi";
 

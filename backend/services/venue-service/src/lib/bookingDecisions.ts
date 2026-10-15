@@ -181,7 +181,7 @@ async function sweepIfExpired(
 
 /**
  * #106 row 4b: warns a coordinator their hold is about to lapse, once per
- * booking (dedup via `expiry_warning_sent_at`, migration 0032). Run on a
+ * booking (dedup via `expiry_warning_sent_at`, migration 0033). Run on a
  * timer (`src/index.ts`), not inside a request — there's no caller's token
  * to forward to events-service, so this uses the internal-auth lookup
  * (`fetchVenueBookingInfoInternal`) instead.

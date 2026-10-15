@@ -257,6 +257,11 @@ export function rejectEvent(id: number, reason: string): Promise<EventSummary> {
   return postReviewAction(id, "reject", { reason });
 }
 
+/** E3-5: the assigned coordinator marks a Confirmed event completed once it has ended. */
+export function completeEvent(id: number): Promise<EventSummary> {
+  return postReviewAction(id, "complete");
+}
+
 /** Requests clarification/amendment from the Organiser with a message. */
 export function requestClarification(id: number, message: string): Promise<EventSummary> {
   return postReviewAction(id, "request-clarification", { message });
@@ -463,4 +468,50 @@ export async function approveSafetyReview(id: number, reason?: string): Promise<
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new SafetyReviewApproveError(body.error ?? "We couldn't approve this event. Please try again.");
   return body.event as EventSummary;
+}
+
+/** E3-13: the backend's cap on a rejection reason. */
+export const MAX_SAFETY_REJECT_REASON_LENGTH = 2000;
+
+/**
+ * Thrown when the backend refuses a safety-review rejection (no reason,
+ * event no longer in Safety Review, wrong role). The message is
+ * server-provided and safe to show directly.
+ */
+export class SafetyReviewRejectError extends Error {}
+
+/** E3-13: the Safety Officer rejects the Operational Safety Check; the event returns to Planning. */
+export async function rejectSafetyReview(id: number, reason: string): Promise<EventSummary> {
+  const res = await fetch(`${apiBase}/${id}/safety-review/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ reason }),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new SafetyReviewRejectError(body.error ?? "We couldn't reject this event. Please try again.");
+  return body.event as EventSummary;
+}
+
+/** One Operational Safety Check decision (E3-12/13/14), as recorded. */
+export interface SafetyReviewDecision {
+  id: number;
+  outcome: "Approved" | "Rejected" | "Changes Requested";
+  reason: string | null;
+  submission_id: number | null;
+  officer: { name: string } | null;
+  created_at: string;
+}
+
+/** Every safety decision on this event, oldest first. */
+export async function fetchSafetyReviews(id: number): Promise<SafetyReviewDecision[]> {
+  const res = await fetch(`${apiBase}/${id}/safety-reviews`, { headers: await authHeader() });
+
+  await redirectIfUnauthenticated(res);
+
+  if (!res.ok) throw new Error("Failed to load safety reviews");
+  const body = await res.json();
+  return body.safetyReviews as SafetyReviewDecision[];
 }
