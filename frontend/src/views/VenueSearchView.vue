@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { fetchEventById, type EventSummary } from "../lib/eventsApi";
 import {
   describeBookingFailure,
@@ -33,6 +33,7 @@ interface EventScheduleDetails {
 }
 
 const route = useRoute();
+const router = useRouter();
 
 const filters = ref(emptyVenueFilters());
 const options = ref<VenueFilterOptions | null>(null);
@@ -65,6 +66,26 @@ function prefillFromEvent(event: EventSummary): void {
   }
   const attendance = Number(details.expectedAttendance);
   if (Number.isInteger(attendance) && attendance > 0) filters.value.capacityMin = attendance;
+}
+
+/** The event page this search was opened from. */
+const sourceEventRoute = computed(() =>
+  sourceEvent.value ? router.resolve({ name: "event-detail", params: { id: sourceEvent.value.id } }) : null,
+);
+
+/**
+ * "Back to <event>" goes *back* when the previous page is that event, rather
+ * than opening it again as a new history entry — otherwise each event →
+ * search → event round trip adds two entries, and the browser's back button
+ * bounces between the two pages before ever reaching the page before them.
+ * Opened any other way (a bookmark, a shared link), it opens the event, the
+ * same fallback EventDetailView's own back button uses.
+ */
+function backToEvent(): void {
+  const target = sourceEventRoute.value;
+  if (!target) return;
+  if (window.history.state?.back === target.fullPath) router.back();
+  else void router.push(target);
 }
 
 /**
@@ -278,11 +299,12 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="content">
-      <RouterLink v-if="sourceEvent" :to="{ name: 'event-detail', params: { id: sourceEvent.id } }"
-        class="back-link body-small">
+      <!-- A real link (so it can still be opened in a new tab), but a plain click goes back — see backToEvent. -->
+      <a v-if="sourceEventRoute" :href="sourceEventRoute.href" class="back-link body-small"
+        @click.exact.prevent="backToEvent">
         <VenueIcon name="chevron-left" :size="16" />
         Back to {{ sourceEventName }}
-      </RouterLink>
+      </a>
 
       <div class="page-header">
         <div>
