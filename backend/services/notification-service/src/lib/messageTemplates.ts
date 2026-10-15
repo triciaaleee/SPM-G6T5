@@ -26,13 +26,23 @@ function eventLink(msg: InboundMessage): string | null {
  * (ARD section 1.1: triggers move over one at a time).
  */
 const TEMPLATES: Record<string, Template> = {
-  "booking.withdrawn": (msg) => ({
-    title: "Venue booking withdrawn",
-    body: `A booking for venue "${msg.data.venueName ?? "unknown"}" was withdrawn${
-      msg.data.reason ? ` (${msg.data.reason})` : ""
-    }.`,
-    link: eventLink(msg),
-  }),
+  /**
+   * #18 in RabbitMQ.md section 3.3 — only the coordinator-driven reasons
+   * (E4-9: `coordinator_withdrew`/`coordinator_released`) publish today;
+   * #19 and #33's reasons (`replaced`, `event_cancelled`) fall back to
+   * "withdrawn" rather than mis-rendering once their publishers land.
+   */
+  "booking.withdrawn": (msg) => {
+    const venueName = String(msg.data.venueName ?? "A venue");
+    const eventName = String(msg.data.eventName ?? "your event");
+    const released = msg.data.reason === "coordinator_released";
+    const verb = released ? "released" : "withdrawn";
+    return {
+      title: `${venueName} — booking ${verb}`,
+      body: `${venueName}'s booking for ${eventName} was ${verb}. The venue is free for this period again.`,
+      link: eventLink(msg),
+    };
+  },
   /** #106 rows 2/3, RabbitMQ.md #16/#17 — `data.decision` is on_hold/approved/rejected/auto_rejected. */
   "booking.decided": (msg) => {
     const venueName = String(msg.data.venueName ?? "The venue");

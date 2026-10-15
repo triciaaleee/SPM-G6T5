@@ -83,6 +83,7 @@ function withdrawalMessage(
   booking: BookingRow,
   action: WithdrawalAction,
   actorId: string,
+  eventName: string,
 ): OutboundMessage | null {
   if (!venue.staff_id) return null;
   return {
@@ -90,7 +91,7 @@ function withdrawalMessage(
     eventId: booking.event_id,
     actorId,
     recipients: { userIds: [venue.staff_id], roles: [] },
-    data: { bookingId: booking.id, venueName: venue.name, reason: WITHDRAWAL_REASON[action] },
+    data: { bookingId: booking.id, venueName: venue.name, eventName, reason: WITHDRAWAL_REASON[action] },
   };
 }
 
@@ -147,7 +148,9 @@ export async function withdrawBooking(supabase: Supabase, input: WithdrawalInput
 
   // Best-effort, exactly like E4-8/E4-10: the status change is already
   // committed, so a failed publish never undoes it.
-  const message = withdrawalMessage(venue, updated, input.action, input.coordinatorId);
+  const details = (eventResult.event.submitted_details ?? {}) as Record<string, unknown>;
+  const eventName = typeof details.name === "string" && details.name ? details.name : `Event #${booking.event_id}`;
+  const message = withdrawalMessage(venue, updated, input.action, input.coordinatorId, eventName);
   const staffNotified = message ? await getPublisher().publish(message) : false;
 
   return {
