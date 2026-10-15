@@ -231,7 +231,10 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
 
   const rawEventId = typeof req.query.eventId === "string" ? req.query.eventId : undefined;
 
-  if (user.role === "coordinator" || user.role === "organiser") {
+  // E3-14: the Safety Officer reads an event's equipment to flag what must
+  // change — read-only, and events-service decides which events (those
+  // submitted for safety review).
+  if (user.role === "coordinator" || user.role === "organiser" || user.role === "safety_officer") {
     if (!rawEventId || !isPositiveInteger(rawEventId)) {
       res.status(400).json({ error: "A valid eventId is required" });
       return;

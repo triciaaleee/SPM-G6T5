@@ -475,6 +475,24 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
     expect(res.status).toBe(404);
   });
 
+  // E3-14: the Safety Officer reads an event's equipment to flag what must
+  // change; events-service decides which events they may see.
+  it("allows the Safety Officer to view one event's requests", async () => {
+    const { app } = buildApp({
+      user: { id: "SAF-0001", role: "safety_officer" },
+      requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2 }],
+    });
+    const res = await request(app).get("/api/equipment-requests?eventId=7");
+    expect(res.status).toBe(200);
+    expect(res.body.equipmentRequests[0].items[0]).toMatchObject({ id: 1, equipmentType: "Projector" });
+  });
+
+  it("404s the Safety Officer for an event events-service won't show them", async () => {
+    const { app } = buildApp({ user: { id: "SAF-0001", role: "safety_officer" }, eventStatus: 404 });
+    expect((await request(app).get("/api/equipment-requests?eventId=7")).status).toBe(404);
+  });
+
   it("rejects a role that is neither coordinator nor technical support", async () => {
     const { app } = buildApp({ user: { id: "VEN-0001", role: "venue_staff" } });
     const res = await request(app).get("/api/equipment-requests");

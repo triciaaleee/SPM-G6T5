@@ -19,7 +19,9 @@ import {
   rejectEvent,
   requestClarification,
   updateEventDetails,
+  fetchSafetyChanges,
   type EventHistoryEntry,
+  type SafetyChangeRequest,
   type EventRequestPayload,
   type EventSummary,
 } from "../lib/eventsApi";
@@ -32,6 +34,7 @@ import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel
 import VenueRequestsPanel from "../components/venues/VenueRequestsPanel.vue";
 import BookingPlanForm from "../components/venues/BookingPlanForm.vue";
 import SafetyReviewPanel from "../components/SafetyReviewPanel.vue";
+import SafetyChangesCard from "../components/SafetyChangesCard.vue";
 import RegistrationsPanel from "../components/RegistrationsPanel.vue";
 import {
   fetchEventSuitability,
@@ -403,6 +406,27 @@ async function loadVenueBookings(): Promise<void> {
   }
   // E4-17: suitability is read from the same bookings, so it refreshes with them.
   if (isCoordinator.value) void loadSuitability();
+  // E3-14: a flag clears once its booking changes, so re-check with them.
+  if (isCoordinator.value) void loadSafetyChanges();
+}
+
+/*
+ * E3-14 AC3: the Safety Officer's open change request, if any — re-read
+ * whenever the event's venue bookings or equipment reload, since that's
+ * when a flagged arrangement can have changed.
+ */
+const safetyChanges = ref<SafetyChangeRequest | null>(null);
+let safetyChangesSeq = 0;
+
+async function loadSafetyChanges(): Promise<void> {
+  if (!event.value) return;
+  const seq = ++safetyChangesSeq;
+  try {
+    const result = await fetchSafetyChanges(event.value.id);
+    if (seq === safetyChangesSeq) safetyChanges.value = result;
+  } catch {
+    // Keep what's shown; the next reload tries again.
+  }
 }
 
 /*
@@ -448,6 +472,8 @@ async function loadEquipmentRequests(): Promise<void> {
   } catch {
     equipmentRequests.value = [];
   }
+  // E3-14: a flagged equipment reservation clears once it changes.
+  if (isCoordinator.value) void loadSafetyChanges();
 }
 
 function formatHistoryTimestamp(value: string): string {
@@ -1132,6 +1158,9 @@ onMounted(async () => {
   </div>
 
 </div>
+
+<!-- E3-14 AC3: what the Safety Officer asked to change, and which flags have cleared -->
+<SafetyChangesCard v-if="isCoordinator && safetyChanges" :change-request="safetyChanges" />
 
 <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
 <div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
