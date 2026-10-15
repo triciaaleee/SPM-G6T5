@@ -20,7 +20,7 @@ const user = computed(() => {
 });
 
 /** Top tabs per role. Roles with a single screen get none. */
-const NAV_TABS: Record<string, { name: string; label: string }[]> = {
+const NAV_TABS: Record<string, { name: string; label: string; alsoActiveOn?: string[] }[]> = {
   attendee: [
     { name: "attendee-events", label: "My events" },
     { name: "attendee-discover", label: "Discover events" },
@@ -29,7 +29,17 @@ const NAV_TABS: Record<string, { name: string; label: string }[]> = {
     { name: "coordinator-workload", label: "Events" },
     { name: "venue-availability", label: "Venue Availability" },
   ],
+  technical_support: [
+    // A request's detail page belongs to Requests, so that link stays current while it is open.
+    { name: "equipment-requests", label: "Requests", alsoActiveOn: ["equipment-request-detail"] },
+    { name: "equipment-inventory", label: "Inventory" },
+  ],
 };
+
+function isTabActive(tab: { name: string; alsoActiveOn?: string[] }): boolean {
+  const current = String(route.name ?? "");
+  return current === tab.name || (tab.alsoActiveOn ?? []).includes(current);
+}
 
 const navTabs = computed(() => (user.value ? NAV_TABS[user.value.role] ?? [] : []));
 
@@ -54,8 +64,8 @@ async function handleLogout() {
     <img :src="LOGO_URL" alt="ConnectSphere" class="brand" />
     <nav v-if="navTabs.length > 0" class="nav" aria-label="Main">
       <RouterLink v-for="tab in navTabs" :key="tab.name" :to="{ name: tab.name }" class="nav__tab"
-        :class="{ 'nav__tab--active': route.name === tab.name }"
-        :aria-current="route.name === tab.name ? 'page' : undefined">
+        :class="{ 'nav__tab--active': isTabActive(tab) }"
+        :aria-current="isTabActive(tab) ? 'page' : undefined">
         {{ tab.label }}
       </RouterLink>
     </nav>

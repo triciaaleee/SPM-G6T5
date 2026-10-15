@@ -1,34 +1,52 @@
 <script setup lang="ts">
 /**
- * E5-1 AC1: Technical Support Staff's view of every equipment request
- * Event Coordinators have recorded, newest first.
- *
- * E5-3: each card also lets Technical Support update that request's status
- * as arrangements are made (AC1), recording a note — and, for a partial
- * fulfilment, exactly how much of each item was handed out (AC2). That
- * per-item amount is what moves stock in equipment_catalog (migration
- * 0022), so the left-hand stock table reflects it as soon as it's saved.
- *
- * Layout: a 1/4-width stock table (current availability per equipment
- * type) alongside a 3/4-width requests panel, split into Requested /
- * Arranged / Partially Fulfilled tabs so Technical Support can see what
- * still needs attention without scanning every request.
+ * E5-1 AC1: Technical Support Staff's queue of equipment requests, grouped by
+ * the equipment they need to arrange. Each equipment type is a section (with
+ * how many are needed and how many are in stock) listing the events that
+ * want it, soonest first, with the event's date and time in their own
+ * columns. The tabs split the queue by status; the two filters narrow it by
+ * date range and by equipment. Opening a row (E5-1 AC1/AC2) shows the full
+ * request, which is also where the status is updated (E5-3).
  */
-import { computed, reactive, onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { ChevronDownIcon } from "@heroicons/vue/16/solid";
 import {
   EQUIPMENT_REQUEST_STATUSES,
-  EquipmentRequestError,
-  EquipmentValidationError,
-  checkEquipmentAvailability,
   fetchAllEquipmentRequests,
   fetchEquipmentCatalog,
-  updateEquipmentRequestStatus,
-  type EquipmentAvailability,
   type EquipmentCatalogItem,
-  type EquipmentItem,
   type EquipmentRequestStatus,
   type EquipmentRequestWithEvent,
 } from "../lib/equipmentApi";
+
+/** One line of the queue: a single item of a request, with its event's timing. */
+interface QueueRow {
+  key: string;
+  eventId: number;
+  status: EquipmentRequestStatus;
+  date: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  eventName: string;
+  venue: string | null;
+  equipmentType: string;
+  quantity: number;
+  quantityFulfilled: number;
+}
+
+type RangeKey = "7" | "30" | "90" | "all";
+
+const RANGES: { key: RangeKey; label: string; empty: string }[] = [
+  { key: "7", label: "Next 7 days", empty: "in the next 7 days" },
+  { key: "30", label: "Next 30 days", empty: "in the next 30 days" },
+  { key: "90", label: "Next 90 days", empty: "in the next 90 days" },
+  { key: "all", label: "All dates", empty: "" },
+];
+
+const ALL_EQUIPMENT = "";
+
+/** How close an unarranged event has to be before its row gets an urgency badge. */
+const URGENT_WITHIN_DAYS = 3;
 
 const requests = ref<EquipmentRequestWithEvent[]>([]);
 const catalog = ref<EquipmentCatalogItem[]>([]);
@@ -36,380 +54,261 @@ const loading = ref(true);
 const errorMessage = ref<string | null>(null);
 
 const activeTab = ref<EquipmentRequestStatus>("Requested");
+const range = ref<RangeKey>("30");
+const equipment = ref<string>(ALL_EQUIPMENT);
 
-const requestsByTab = computed(() => {
-  const groups: Record<EquipmentRequestStatus, EquipmentRequestWithEvent[]> = {
-    Requested: [],
-    Arranged: [],
-    "Partially Fulfilled": [],
-  };
-  for (const r of requests.value) {
-    const status = (r.status as EquipmentRequestStatus) in groups ? (r.status as EquipmentRequestStatus) : "Requested";
-    groups[status].push(r);
-  }
+function statusOf(r: EquipmentRequestWithEvent): EquipmentRequestStatus {
+  return (EQUIPMENT_REQUEST_STATUSES as readonly string[]).includes(r.status)
+    ? (r.status as EquipmentRequestStatus)
+    : "Requested";
+}
+
+const rows = computed<QueueRow[]>(() =>
+  requests.value.flatMap((r) =>
+    r.items.map((item) => ({
+      key: `${r.id}-${item.id}`,
+      eventId: r.eventId,
+      status: statusOf(r),
+      date: r.event?.proposedDate ?? null,
+      startTime: r.event?.startTime ?? null,
+      endTime: r.event?.endTime ?? null,
+      eventName: r.event?.name || `Event #${r.eventId}`,
+      venue: r.event?.venue ?? null,
+      equipmentType: item.equipmentType,
+      quantity: item.quantity,
+      quantityFulfilled: item.quantityFulfilled,
+    })),
+  ),
+);
+
+// Dates -------------------------------------------------------------------------
+
+/** Whole days from today to a "YYYY-MM-DD" date: negative once it has passed. */
+function daysUntil(dateKey: string): number {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((new Date(y, m - 1, d).getTime() - today.getTime()) / 86_400_000);
+}
+
+function formatDate(dateKey: string | null): string {
+  if (!dateKey) return "Date not set";
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+
+function formatTime(start: string | null, end: string | null): string {
+  return start && end ? `${start} to ${end}` : "Time not set";
+}
+
+/** Soonest first: by date, then start time; undated rows last. */
+function compareRows(a: QueueRow, b: QueueRow): number {
+  const byDate = (a.date ?? "9999-12-31").localeCompare(b.date ?? "9999-12-31");
+  return byDate !== 0 ? byDate : (a.startTime ?? "").localeCompare(b.startTime ?? "");
+}
+
+/**
+ * Everything up to the end of the chosen range, including events that have
+ * already passed: an unarranged request for a past event is overdue, not gone.
+ */
+function inRange(row: QueueRow): boolean {
+  if (range.value === "all" || !row.date) return true;
+  return daysUntil(row.date) <= Number(range.value);
+}
+
+// Filtering and grouping --------------------------------------------------------
+
+const filteredRows = computed(() =>
+  rows.value.filter(
+    (row) => inRange(row) && (equipment.value === ALL_EQUIPMENT || row.equipmentType === equipment.value),
+  ),
+);
+
+const rowsByTab = computed(() => {
+  const groups: Record<EquipmentRequestStatus, QueueRow[]> = { Requested: [], Arranged: [], "Partially Fulfilled": [] };
+  for (const row of filteredRows.value) groups[row.status].push(row);
   return groups;
 });
 
-const visibleRequests = computed(() => requestsByTab.value[activeTab.value]);
+const equipmentOptions = computed(() => [...new Set(rows.value.map((row) => row.equipmentType))].sort());
 
-interface EditState {
-  expanded: boolean;
-  status: EquipmentRequestStatus;
-  saving: boolean;
-  error: string | null;
-  fieldErrors: Record<string, string>;
-  notice: { text: string; warning: boolean } | null;
+interface Group {
+  equipmentType: string;
+  rows: QueueRow[];
+  total: number;
+  inStock: number | null;
 }
 
-const edits = reactive<Record<number, EditState>>({});
+/** What the group's badge counts: what is still needed for a partial fulfilment, otherwise the quantity. */
+function groupTotal(groupRows: QueueRow[]): number {
+  return groupRows.reduce(
+    (sum, row) => sum + (row.status === "Partially Fulfilled" ? row.quantity - row.quantityFulfilled : row.quantity),
+    0,
+  );
+}
 
-function editFor(r: EquipmentRequestWithEvent): EditState {
-  if (!edits[r.id]) {
-    edits[r.id] = {
-      expanded: false,
-      status: (r.status as EquipmentRequestStatus) || "Requested",
-      saving: false,
-      error: null,
-      fieldErrors: {},
-      notice: null,
-    };
+const groups = computed<Group[]>(() => {
+  const byType = new Map<string, QueueRow[]>();
+  for (const row of rowsByTab.value[activeTab.value]) {
+    byType.set(row.equipmentType, [...(byType.get(row.equipmentType) ?? []), row]);
   }
-  return edits[r.id];
-}
-
-/** Opens the editor, resynced to the request's current status — discards any stale pick from last time. */
-function openEditor(r: EquipmentRequestWithEvent): void {
-  const edit = editFor(r);
-  edit.status = (r.status as EquipmentRequestStatus) || "Requested";
-  edit.error = null;
-  edit.fieldErrors = {};
-  edit.expanded = true;
-}
-
-function cancelEdit(r: EquipmentRequestWithEvent): void {
-  editFor(r).expanded = false;
-}
-
-async function refreshCatalog(): Promise<void> {
-  try {
-    catalog.value = await fetchEquipmentCatalog();
-  } catch {
-    // Non-fatal: the stock table just keeps showing its last known values.
-  }
-}
-
-/**
- * E5-4: "check whether enough suitable equipment is free for a date and
- * time so I do not over-commit" — run per item, against the request's own
- * event, before deciding how to arrange it.
- */
-interface AvailabilityCheckState {
-  loading: boolean;
-  error: string | null;
-  result: EquipmentAvailability | null;
-}
-
-const availabilityChecks = reactive<Record<number, AvailabilityCheckState>>({});
-
-function availabilityFor(item: EquipmentItem): AvailabilityCheckState {
-  if (!availabilityChecks[item.id]) {
-    availabilityChecks[item.id] = { loading: false, error: null, result: null };
-  }
-  return availabilityChecks[item.id];
-}
-
-async function checkAvailability(r: EquipmentRequestWithEvent, item: EquipmentItem): Promise<void> {
-  const state = availabilityFor(item);
-  state.loading = true;
-  state.error = null;
-  try {
-    state.result = await checkEquipmentAvailability(r.eventId, item.equipmentType, item.quantity);
-  } catch (err) {
-    state.error = err instanceof EquipmentRequestError ? err.message : "Couldn't check availability.";
-  } finally {
-    state.loading = false;
-  }
-}
-
-/**
- * Only meaningful before Technical Support has acted: once a request is
- * Arranged or Partially Fulfilled, the decision is already made, so the
- * check no longer applies. Runs every Requested item in parallel.
- */
-async function checkAllAvailability(targetRequests: EquipmentRequestWithEvent[]): Promise<void> {
-  const requested = targetRequests.filter((r) => r.status === "Requested");
-  await Promise.all(requested.flatMap((r) => r.items.map((item) => checkAvailability(r, item))));
-}
-
-/**
- * Auto-generates what remains outstanding from the fulfilled-quantity
- * inputs, rather than asking Technical Support to type it out separately —
- * the per-item numbers already say exactly what's short.
- */
-/**
- * No manual entry at all: fulfilled = however much is actually free right
- * now (equipment_catalog.available_stock, the same number the stock table
- * on the left shows), capped at what was requested.
- */
-function fulfilledQuantityFor(item: EquipmentItem): number {
-  const available = catalog.value.find((c) => c.name === item.equipmentType)?.availableStock ?? 0;
-  return Math.min(item.quantity, Math.max(0, available));
-}
-
-function outstandingSummary(r: EquipmentRequestWithEvent): string {
-  const parts = r.items
-    .map((item) => {
-      const remaining = item.quantity - fulfilledQuantityFor(item);
-      return remaining > 0 ? `${remaining} ${item.equipmentType}` : null;
+  return [...byType.entries()]
+    .map(([equipmentType, groupRows]) => {
+      const sorted = [...groupRows].sort(compareRows);
+      const stock = catalog.value.find((item) => item.name === equipmentType);
+      return { equipmentType, rows: sorted, total: groupTotal(sorted), inStock: stock?.availableStock ?? null };
     })
-    .filter((part): part is string => part !== null);
-  return parts.length > 0 ? `${parts.join(", ")} outstanding` : "All requested items have been fulfilled";
+    .sort((a, b) => compareRows(a.rows[0], b.rows[0]));
+});
+
+const badgeLabel = computed(() => {
+  if (activeTab.value === "Arranged") return "arranged";
+  if (activeTab.value === "Partially Fulfilled") return "still needed";
+  return "needed";
+});
+
+function quantityLabel(row: QueueRow): string {
+  return row.status === "Partially Fulfilled" ? `${row.quantityFulfilled} of ${row.quantity}` : `${row.quantity}×`;
 }
 
-async function saveStatus(r: EquipmentRequestWithEvent): Promise<void> {
-  const edit = editFor(r);
-  edit.saving = true;
-  edit.error = null;
-  edit.fieldErrors = {};
-  edit.notice = null;
-  try {
-    const fulfillments =
-      edit.status === "Partially Fulfilled"
-        ? r.items.map((item) => ({ itemId: item.id, fulfilledQuantity: fulfilledQuantityFor(item) }))
-        : undefined;
-    const note = edit.status === "Partially Fulfilled" ? outstandingSummary(r) : undefined;
-    const { equipmentRequest, notified } = await updateEquipmentRequestStatus(r.id, edit.status, note, fulfillments);
-    Object.assign(r, equipmentRequest);
-    edit.expanded = false;
-    edit.notice = notified
-      ? { text: "Status updated. The coordinator has been notified.", warning: false }
-      : { text: "Status updated, but we couldn't notify the coordinator — please follow up directly.", warning: true };
-    // The save may have moved stock (Arranged/Partially Fulfilled take
-    // items off the shelf, moving away from either returns them) — refresh
-    // so the stock table on the left never shows a stale count.
-    await refreshCatalog();
-    if (r.status === "Requested") {
-      void checkAllAvailability([r]);
-    } else {
-      // The decision is made — clear any stale check so it can't reappear
-      // (e.g. re-opening the editor) once the request has moved on.
-      for (const item of r.items) {
-        const state = availabilityFor(item);
-        state.loading = false;
-        state.error = null;
-        state.result = null;
-      }
-    }
-  } catch (err) {
-    if (err instanceof EquipmentValidationError) {
-      edit.fieldErrors = err.fields;
-      edit.error = err.fields.note ?? err.fields.status ?? null;
-    } else if (err instanceof EquipmentRequestError) {
-      edit.error = err.message;
-    } else {
-      edit.error = "We couldn't update this request. Please try again.";
-    }
-  } finally {
-    edit.saving = false;
-  }
+/** A red badge for an unarranged event that is close or already past. */
+function urgencyLabel(row: QueueRow): string | null {
+  if (row.status !== "Requested" || !row.date) return null;
+  const days = daysUntil(row.date);
+  if (days < 0) return "Overdue";
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  return days <= URGENT_WITHIN_DAYS ? `In ${days} days` : null;
 }
 
-/** Colour-codes the status badge, same red/amber/green convention as event statuses elsewhere. */
-function statusBadgeClass(status: string): string {
-  if (status === "Arranged") return "status-success";
-  if (status === "Partially Fulfilled") return "status-warning";
-  return "status-neutral"; // Requested
-}
+const emptyMessage = computed(() => {
+  const what = activeTab.value === "Requested" ? "to arrange" : activeTab.value.toLowerCase();
+  const suffix = RANGES.find((r) => r.key === range.value)?.empty ?? "";
+  return `Nothing ${what}${suffix ? ` ${suffix}` : ""}.`;
+});
 
 onMounted(async () => {
   try {
-    const [loadedRequests, loadedCatalog] = await Promise.all([fetchAllEquipmentRequests(), fetchEquipmentCatalog()]);
+    const [loadedRequests, loadedCatalog] = await Promise.all([
+      fetchAllEquipmentRequests(),
+      fetchEquipmentCatalog().catch(() => [] as EquipmentCatalogItem[]),
+    ]);
     requests.value = loadedRequests;
     catalog.value = loadedCatalog;
-    // Progressive: the list renders first, each item's availability fills
-    // in as its own check resolves rather than blocking the whole page.
-    void checkAllAvailability(loadedRequests);
+    // Open on the first tab that has anything in it.
+    const first = EQUIPMENT_REQUEST_STATUSES.find((status) => rowsByTab.value[status].length > 0);
+    activeTab.value = first ?? "Requested";
   } catch {
     errorMessage.value = "We couldn't load equipment requests. Please try again.";
   } finally {
     loading.value = false;
   }
 });
-
-function formatDate(value: string | null): string {
-  if (!value) return "Date not set";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-}
-
-function formatTimeRange(start: string | null, end: string | null): string {
-  return start && end ? `${start} – ${end}` : "Time not specified";
-}
-
-function formatSubmitted(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
-}
 </script>
 
 <template>
+  <!--
+    Column mapping — Equipment requests (Technical Support)
+    Desktop (12-col, grid-desktop-margin 80px): header, tabs, filters and every equipment section col 1-12.
+      Nested grid: each section's rows are a 7-column table (date, time, event, venue, quantity, urgency, link) filling the row.
+    Tablet (6-col, grid-tablet-margin 32px): everything col 1-6; each row folds into date + time + urgency on one line, then event, venue + quantity, and the link.
+    Mobile (4-col, grid-mobile-margin 6px): everything col 1-4; same folded rows.
+  -->
   <div class="page">
-    <div class="page-header full-row">
+    <div class="page-header">
       <h1 class="h2">Equipment requests</h1>
-      <p class="subheading">Requests Event Coordinators have recorded, newest first</p>
+      <p class="subheading">Everything still to arrange, soonest event first</p>
     </div>
 
-    <p v-if="loading" class="body-default muted full-row">Loading equipment requests…</p>
-    <p v-else-if="errorMessage" class="body-default error-text full-row">{{ errorMessage }}</p>
+    <p v-if="loading" class="body-default muted full">Loading equipment requests…</p>
+    <p v-else-if="errorMessage" class="body-default error-text full" role="alert">{{ errorMessage }}</p>
 
     <template v-else>
-      <!-- Left 1/4: current stock, read straight from equipment_catalog. -->
-      <section class="stock-col" aria-labelledby="stock-title">
-        <h2 id="stock-title" class="h3">Equipment stock</h2>
-        <table v-if="catalog.length > 0" class="stock-table">
-          <thead>
-            <tr>
-              <th scope="col">Equipment</th>
-              <th scope="col">Available</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in catalog" :key="item.id">
-              <td>{{ item.name }}</td>
-              <td :class="{ 'stock-low': item.availableStock === 0 }">{{ item.availableStock }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-else class="body-small muted">No equipment catalog recorded yet.</p>
-      </section>
+      <div class="tabs" role="tablist" aria-label="Request status">
+        <button
+          v-for="tabStatus in EQUIPMENT_REQUEST_STATUSES"
+          :id="`tab-${tabStatus}`"
+          :key="tabStatus"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === tabStatus"
+          aria-controls="requests-panel"
+          class="tab"
+          :class="{ 'tab--active': activeTab === tabStatus }"
+          @click="activeTab = tabStatus"
+        >
+          {{ tabStatus }}
+          <span class="tab-count">{{ rowsByTab[tabStatus].length }}</span>
+        </button>
+      </div>
 
-      <!-- Right 3/4: incoming requests, split by status so the queue that needs action is obvious. -->
-      <section class="requests-col">
-        <div class="tabs" role="tablist" aria-label="Request status">
-          <button
-            v-for="tabStatus in EQUIPMENT_REQUEST_STATUSES"
-            :key="tabStatus"
-            type="button"
-            role="tab"
-            :aria-selected="activeTab === tabStatus"
-            class="tab"
-            :class="{ 'tab--active': activeTab === tabStatus }"
-            @click="activeTab = tabStatus"
-          >
-            {{ tabStatus }}
-            <span class="tab-count">{{ requestsByTab[tabStatus].length }}</span>
-          </button>
+      <div class="filters">
+        <div class="select">
+          <select v-model="range" class="select__input" aria-label="Date range">
+            <option v-for="option in RANGES" :key="option.key" :value="option.key">{{ option.label }}</option>
+          </select>
+          <ChevronDownIcon class="select__icon" aria-hidden="true" />
+        </div>
+        <div class="select">
+          <select v-model="equipment" class="select__input" aria-label="Equipment">
+            <option :value="ALL_EQUIPMENT">All equipment</option>
+            <option v-for="type in equipmentOptions" :key="type" :value="type">{{ type }}</option>
+          </select>
+          <ChevronDownIcon class="select__icon" aria-hidden="true" />
+        </div>
+      </div>
+
+      <div id="requests-panel" role="tabpanel" :aria-labelledby="`tab-${activeTab}`" class="panel">
+        <div v-if="groups.length === 0" class="empty-state">
+          <p class="empty-state__title">Nothing here</p>
+          <p class="body-default muted">{{ emptyMessage }}</p>
         </div>
 
-        <div v-if="visibleRequests.length === 0" class="empty-state">
-          <p class="empty-state__title">Nothing here yet</p>
-          <p class="body-default muted">No requests are currently {{ activeTab.toLowerCase() }}.</p>
-        </div>
+        <section
+          v-for="group in groups"
+          :key="group.equipmentType"
+          class="group"
+          :aria-labelledby="`group-${group.equipmentType}`"
+        >
+          <div class="group-header">
+            <h2 :id="`group-${group.equipmentType}`" class="h4">{{ group.equipmentType }}</h2>
+            <span class="count-badge">{{ group.total }} {{ badgeLabel }}</span>
+            <span v-if="group.inStock !== null" class="stock">{{ group.inStock }} in stock</span>
+          </div>
 
-        <ul v-else class="request-list">
-          <li v-for="r in visibleRequests" :key="r.id" class="request-card">
-            <div class="request-card__header">
-              <!-- Not a link: events-service's full event detail is organiser/coordinator-only,
-                   same as venue_staff's schedule (VenueStaff.vue) — technical_support can't open it. -->
-              <p class="card-title">{{ r.event?.name || `Event #${r.eventId}` }}</p>
-              <span class="badge" :class="statusBadgeClass(r.status)">{{ r.status }}</span>
-            </div>
-            <p class="body-small muted">
-              {{ formatDate(r.event?.proposedDate ?? null) }} · {{ formatTimeRange(r.event?.startTime ?? null, r.event?.endTime ?? null) }}
-            </p>
-            <p class="body-small muted request-card__submitted">Submitted {{ formatSubmitted(r.createdAt) }}</p>
-
-            <ul class="item-list">
-              <li v-for="item in r.items" :key="item.id" class="body-default item-row">
-                <div class="item-row__main">
-                  <strong>
-                    <template v-if="r.status === 'Partially Fulfilled'">{{ item.quantityFulfilled }} of {{ item.quantity }}</template>
-                    <template v-else>{{ item.quantity }}&times;</template>
-                    {{ item.equipmentType }}
-                  </strong>
-                </div>
-
-                <!-- E5-4: checked automatically against the event's own date/time —
-                     green when enough is free, red with the shortfall otherwise. Only
-                     meaningful before a decision has been made on the request. -->
-                <template v-if="r.status === 'Requested'">
-                  <p v-if="availabilityFor(item).loading" class="body-small muted">Checking availability…</p>
-                  <p v-else-if="availabilityFor(item).error" class="body-small error-text">{{ availabilityFor(item).error }}</p>
-                  <p v-else-if="availabilityFor(item).result" class="body-small availability-result"
-                    :class="{ 'availability-result--short': availabilityFor(item).result!.shortfall > 0 }">
-                    <template v-if="availabilityFor(item).result!.shortfall > 0">
-                      Unavailable — need {{ availabilityFor(item).result!.shortfall }} more
-                    </template>
-                    <template v-else>Available</template>
-                  </p>
-                </template>
-              </li>
-            </ul>
-
-            <p v-if="r.fulfillmentNote" class="body-small muted request-card__note">
-              Outstanding: {{ r.fulfillmentNote }}
-            </p>
-
-            <!-- E5-3: update this request's status as arrangements are made -->
-            <div class="status-editor">
-              <button
-                v-if="!editFor(r).expanded"
-                type="button"
-                class="btn btn-secondary"
-                @click="openEditor(r)"
+          <ul class="rows">
+            <li class="row row--header" aria-hidden="true">
+              <span class="cell-header">Date</span>
+              <span class="cell-header">Time</span>
+              <span class="cell-header">Event</span>
+              <span class="cell-header">Venue</span>
+              <span class="cell-header">Qty</span>
+              <span class="cell-header">Status</span>
+              <span class="cell-header"></span>
+            </li>
+            <li v-for="row in group.rows" :key="row.key" class="row">
+              <span class="cell cell-date">{{ formatDate(row.date) }}</span>
+              <span class="cell cell-time">{{ formatTime(row.startTime, row.endTime) }}</span>
+              <span class="cell cell-event">{{ row.eventName }}</span>
+              <span class="cell cell-venue" :class="{ 'cell-venue--empty': !row.venue }">{{ row.venue || "Venue not set" }}</span>
+              <span class="cell cell-qty">{{ quantityLabel(row) }}</span>
+              <span class="cell cell-urgency">
+                <span v-if="urgencyLabel(row)" class="urgency">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+                  {{ urgencyLabel(row) }}
+                </span>
+              </span>
+              <RouterLink
+                :to="{ name: 'equipment-request-detail', params: { eventId: row.eventId } }"
+                class="cell cell-link"
               >
-                Update status
-              </button>
-
-              <div v-else class="status-form">
-                <div class="status-pills" role="radiogroup" aria-label="Status">
-                  <button
-                    v-for="option in EQUIPMENT_REQUEST_STATUSES"
-                    :key="option"
-                    type="button"
-                    role="radio"
-                    :aria-checked="editFor(r).status === option"
-                    class="status-pill"
-                    :class="{ 'status-pill--active': editFor(r).status === option }"
-                    @click="editFor(r).status = option"
-                  >
-                    {{ option }}
-                  </button>
-                </div>
-
-                <!-- AC2: what remains outstanding, computed automatically from current
-                     stock (equipment_catalog.available_stock) — nothing to type. -->
-                <div v-if="editFor(r).status === 'Partially Fulfilled'" class="fulfilled-items">
-                  <div class="field">
-                    <p class="body-small muted mb-1">Outstanding</p>
-                    <p class="body-small outstanding-preview">{{ outstandingSummary(r) }}</p>
-                  </div>
-                </div>
-
-                <p v-if="editFor(r).error" class="body-small error-text">{{ editFor(r).error }}</p>
-
-                <div class="status-form-actions">
-                  <button type="button" class="btn btn-primary" :disabled="editFor(r).saving" @click="saveStatus(r)">
-                    {{ editFor(r).saving ? "Saving…" : "Save" }}
-                  </button>
-                  <button type="button" class="btn btn-secondary" :disabled="editFor(r).saving" @click="cancelEdit(r)">
-                    Cancel
-                  </button>
-                </div>
-              </div>
-
-              <p
-                v-if="editFor(r).notice"
-                class="body-small status-notice"
-                :class="{ 'status-notice--warning': editFor(r).notice?.warning }"
-                role="status"
-              >
-                {{ editFor(r).notice?.text }}
-              </p>
-            </div>
-          </li>
-        </ul>
-      </section>
+                View details
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
+              </RouterLink>
+            </li>
+          </ul>
+        </section>
+      </div>
     </template>
   </div>
 </template>
@@ -419,33 +318,30 @@ function formatSubmitted(value: string): string {
   display: grid;
   grid-template-columns: repeat(12, 1fr);
   gap: var(--spacing-24) var(--grid-desktop-gutter);
-  padding: var(--spacing-40) var(--grid-desktop-margin);
+  padding: var(--spacing-40) var(--grid-desktop-margin) var(--spacing-80);
   align-content: start;
 }
 
 .page-header,
-.full-row {
+.full,
+.tabs,
+.filters,
+.panel {
   grid-column: 1 / 13;
-}
-
-.stock-col {
-  grid-column: 1 / 4;
-}
-
-.requests-col {
-  grid-column: 4 / 13;
 }
 
 @media (max-width: 1024px) {
   .page {
     grid-template-columns: repeat(6, 1fr);
-    padding: var(--spacing-32) var(--grid-tablet-margin);
+    gap: var(--spacing-24) var(--grid-tablet-gutter);
+    padding: var(--spacing-32) var(--grid-tablet-margin) var(--spacing-48);
   }
 
   .page-header,
-  .full-row,
-  .stock-col,
-  .requests-col {
+  .full,
+  .tabs,
+  .filters,
+  .panel {
     grid-column: 1 / 7;
   }
 }
@@ -453,13 +349,15 @@ function formatSubmitted(value: string): string {
 @media (max-width: 640px) {
   .page {
     grid-template-columns: repeat(4, 1fr);
-    padding: var(--spacing-24) var(--grid-mobile-margin);
+    gap: var(--spacing-24) var(--grid-mobile-gutter);
+    padding: var(--spacing-24) var(--grid-mobile-margin) var(--spacing-48);
   }
 
   .page-header,
-  .full-row,
-  .stock-col,
-  .requests-col {
+  .full,
+  .tabs,
+  .filters,
+  .panel {
     grid-column: 1 / 5;
   }
 }
@@ -472,30 +370,26 @@ function formatSubmitted(value: string): string {
   margin: 0;
 }
 
-.h3 {
+.h4 {
   font-size: 1.25rem;
   font-weight: 700;
   line-height: 1.75rem;
   color: var(--color-grey-900);
-  margin: 0 0 var(--spacing-12);
+  margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
+  font-size: 1rem;
   font-weight: 400;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  line-height: 1.25rem;
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
 
 .body-default {
   font-size: 1rem;
   line-height: 1.25rem;
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
+  margin: 0;
 }
 
 .muted {
@@ -506,74 +400,58 @@ function formatSubmitted(value: string): string {
   color: var(--color-error-600);
 }
 
-/* Stock table ----------------------------------------------------------- */
-
-.stock-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.stock-table th {
-  text-align: left;
-  color: var(--color-grey-500);
-  font-weight: 700;
-  padding: var(--spacing-8);
-  border-bottom: 1px solid var(--color-grey-200);
-}
-
-.stock-table td {
-  padding: var(--spacing-8);
-  border-bottom: 1px solid var(--color-grey-100);
-  color: var(--color-grey-900);
-}
-
-.stock-low {
-  color: var(--color-error-600);
-  font-weight: 700;
-}
-
-/* Tabs -------------------------------------------------------------------- */
+/* Tabs --------------------------------------------------------------------- */
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-8);
-  margin-bottom: var(--spacing-16);
   border-bottom: 1px solid var(--color-grey-100);
 }
 
 .tab {
-  font-family: var(--font-family-lato);
-  font-size: 0.9375rem;
-  font-weight: 700;
-  color: var(--color-grey-500);
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: var(--spacing-8) var(--spacing-4) var(--spacing-12);
-  margin-bottom: -1px;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-8);
+  min-height: 44px;
+  padding: 0 var(--spacing-12);
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  color: var(--color-grey-600);
+  font-family: var(--font-family-lato);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  cursor: pointer;
 }
 
 .tab:hover {
   color: var(--color-grey-900);
 }
 
-.tab--active {
+.tab:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.tab--active,
+.tab--active:hover {
   color: var(--color-purple-600);
   border-bottom-color: var(--color-purple-600);
 }
 
 .tab-count {
+  min-width: var(--spacing-20);
+  padding: 0 var(--spacing-6);
+  border-radius: var(--radius-full);
+  background: var(--color-grey-100);
+  color: var(--color-grey-600);
   font-size: 0.75rem;
   font-weight: 700;
-  padding: 0 var(--spacing-8);
-  border-radius: 999px;
-  background: var(--color-grey-100);
-  color: var(--color-grey-700, var(--color-grey-900));
+  line-height: 1.25rem;
+  text-align: center;
 }
 
 .tab--active .tab-count {
@@ -581,7 +459,92 @@ function formatSubmitted(value: string): string {
   color: var(--color-purple-800);
 }
 
-/* Request list ------------------------------------------------------------ */
+/* Filters ------------------------------------------------------------------ */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-12);
+}
+
+.select {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.select__input {
+  appearance: none;
+  min-height: 44px;
+  padding: 0 var(--spacing-40) 0 var(--spacing-16);
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-xs);
+  background: var(--color-base-white);
+  color: var(--color-grey-900);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  cursor: pointer;
+}
+
+.select__input:hover {
+  border-color: var(--color-grey-300);
+}
+
+.select__input:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.select__icon {
+  position: absolute;
+  right: var(--spacing-12);
+  width: var(--spacing-16);
+  height: var(--spacing-16);
+  color: var(--color-grey-700);
+  pointer-events: none;
+}
+
+/* Equipment sections ------------------------------------------------------- */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-32);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-12);
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-12);
+}
+
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  height: var(--spacing-24);
+  padding: 0 var(--spacing-12);
+  border-radius: var(--radius-full);
+  background: var(--color-blue-200);
+  color: var(--color-blue-800);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+}
+
+.stock {
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-600);
+}
 
 .empty-state {
   display: flex;
@@ -591,7 +554,7 @@ function formatSubmitted(value: string): string {
   padding: var(--spacing-40) var(--spacing-24);
   background: var(--color-grey-50);
   border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
 }
 
 .empty-state__title {
@@ -602,225 +565,151 @@ function formatSubmitted(value: string): string {
   color: var(--color-grey-900);
 }
 
-.request-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-16);
+/* Rows: one bordered list per equipment type, a 7-column table on desktop. */
+.rows {
   list-style: none;
   margin: 0;
   padding: 0;
-}
-
-.request-card {
-  padding: var(--spacing-24);
-  background: var(--color-grey-50);
+  background: var(--color-base-white);
   border: 1px solid var(--color-grey-100);
   border-radius: var(--radius-sm);
 }
 
-.request-card__header {
-  display: flex;
+.row {
+  display: grid;
+  grid-template-columns: 7.5rem 9.5rem minmax(0, 2fr) minmax(0, 1.2fr) 4.5rem 7rem auto;
+  column-gap: var(--spacing-16);
   align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-12);
+  padding: var(--spacing-8) var(--spacing-20);
+  border-bottom: 1px solid var(--color-grey-100);
 }
 
-.card-title {
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.75rem;
-  color: var(--color-grey-900);
-  margin: 0;
+.row:last-child {
+  border-bottom: none;
 }
 
-.request-card__submitted {
-  margin-bottom: var(--spacing-12);
+/* Column header row: same grid as the data rows, so labels line up. */
+.row--header {
+  background: var(--color-grey-50);
+  padding-top: var(--spacing-12);
+  padding-bottom: var(--spacing-12);
 }
 
-.badge {
-  display: inline-block;
+.cell-header {
+  min-width: 0;
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-xs);
-  flex-shrink: 0;
+  color: var(--color-grey-500);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
-.status-neutral {
-  background: var(--color-purple-100);
-  color: var(--color-purple-800);
-}
-
-.status-success {
-  background: #e5eee5;
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: #fef5e7;
-  color: var(--color-warning-600);
-}
-
-.item-list {
-  margin: 0;
-  padding-top: var(--spacing-12);
-  border-top: 1px solid var(--color-grey-100);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  list-style: none;
-}
-
-.item-row {
-  color: var(--color-grey-900);
-  padding: var(--spacing-4) 0;
-}
-
-.item-row__main {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-8);
-}
-
-.availability-result {
-  margin: var(--spacing-4) 0 0;
-  color: var(--color-success-700);
-}
-
-.availability-result--short {
-  color: var(--color-error-600);
-}
-
-.request-card__note {
-  margin-top: var(--spacing-8);
-  padding: var(--spacing-8) var(--spacing-12);
-  border-radius: var(--radius-xs);
-  background: var(--color-warning-100);
-  color: var(--color-warning-900);
-}
-
-.status-editor {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-8);
-  margin-top: var(--spacing-12);
-  padding-top: var(--spacing-12);
-  border-top: 1px solid var(--color-grey-100);
-}
-
-.status-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-12);
-  width: 100%;
-}
-
-.status-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-8);
-}
-
-.status-pill {
-  font-family: var(--font-family-lato);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: var(--color-grey-700, var(--color-grey-900));
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: 999px;
-  padding: var(--spacing-8) var(--spacing-16);
-  cursor: pointer;
-}
-
-.status-pill:hover {
-  border-color: var(--color-purple-300, var(--color-purple-600));
-}
-
-.status-pill--active {
-  background: var(--color-purple-600);
-  border-color: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.fulfilled-items {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-12);
-  padding: var(--spacing-12);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-xs);
-}
-
-.outstanding-preview {
-  font-family: var(--font-family-lato);
-  color: var(--color-grey-900);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-8) var(--spacing-12);
-  margin: 0;
-  width: 100%;
-}
-
-.field {
+.cell {
   min-width: 0;
-  width: 100%;
-}
-
-.mb-1 {
-  margin-bottom: var(--spacing-8);
-}
-
-.status-form-actions {
-  display: flex;
-  gap: var(--spacing-8);
-}
-
-.btn {
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-8) var(--spacing-16);
   font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-600);
+}
+
+.cell-date,
+.cell-event {
+  font-size: 1rem;
   font-weight: 700;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.btn-primary {
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn-primary:not(:disabled):hover {
-  background: var(--color-purple-700, var(--color-purple-600));
-}
-
-.btn-secondary {
-  background: var(--color-grey-75);
+  line-height: 1.25rem;
   color: var(--color-grey-900);
-  border-color: var(--color-grey-200);
 }
 
-.btn-secondary:not(:disabled):hover {
-  background: var(--color-grey-100);
+.cell-venue--empty {
+  color: var(--color-grey-500);
 }
 
-.status-notice {
-  padding: var(--spacing-8) var(--spacing-12);
-  border-radius: var(--radius-xs);
-  background: var(--color-grey-75);
+.cell-qty {
+  font-weight: 700;
+  color: var(--color-grey-900);
 }
 
-.status-notice--warning {
-  background: var(--color-warning-100);
-  color: var(--color-warning-900);
+.urgency {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  height: var(--spacing-24);
+  padding: 0 var(--spacing-8);
+  border-radius: var(--radius-full);
+  background: var(--color-error-200);
+  color: var(--color-error-600);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+  white-space: nowrap;
+}
+
+.cell-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  min-height: 44px;
+  color: var(--color-purple-600);
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.cell-link:hover {
+  text-decoration: underline;
+}
+
+.cell-link:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+/* Tablet and mobile: each row folds so nothing has to fit in one line;
+   the column header row no longer lines up with anything, so hide it. */
+@media (max-width: 1024px) {
+  .row--header {
+    display: none;
+  }
+
+  .row {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "date time urgency"
+      "event event event"
+      "venue venue qty"
+      "link link link";
+    row-gap: var(--spacing-4);
+    padding: var(--spacing-12) var(--spacing-16);
+  }
+
+  .cell-date {
+    grid-area: date;
+  }
+
+  .cell-time {
+    grid-area: time;
+  }
+
+  .cell-urgency {
+    grid-area: urgency;
+    justify-self: end;
+  }
+
+  .cell-event {
+    grid-area: event;
+  }
+
+  .cell-venue {
+    grid-area: venue;
+  }
+
+  .cell-qty {
+    grid-area: qty;
+    justify-self: end;
+  }
+
+  .cell-link {
+    grid-area: link;
+  }
 }
 </style>

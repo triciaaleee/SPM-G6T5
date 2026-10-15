@@ -9,6 +9,7 @@ Express/TypeScript microservices:
 - **`services/user-service`** (port 4002) — signup/login, JWT issuance, user records
 - **`services/venue-service`** (port 4003) — venue search/filters and venue recommendations for an event (reads events via events-service's API), venue staff schedule and block-out periods (E4-3)
 - **`services/notification-service`** (port 4004) — in-app notifications: each user's feed, plus a REST endpoint other services call to notify someone (e.g. venue-service telling coordinators a booked venue was blocked out)
+- **`services/equipment-service`** (port 4005) — equipment requests (E5-1/E5-3/E5-4) and the equipment inventory. Technical Support open one event's requests with `GET /api/equipment-requests/event/:eventId` (the event's name, date, time and venue and the organiser's technical requirements only; 403 when the event has no request), and view and update stock with `GET`/`POST`/`PATCH /api/equipment-catalog`
 - **`services/registration-service`** (port 4007) — attendee registration (E6): register for / withdraw from an event, an attendee's own registrations, an event's roster (organiser/coordinator only), and the attendee-facing event view. Reads event, venue and user data through those services' REST APIs
 
 All share one config file and Supabase project.

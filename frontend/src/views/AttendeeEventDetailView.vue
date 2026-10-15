@@ -117,14 +117,17 @@ onMounted(async () => {
 <template>
   <!--
     Column mapping — Attendee event details
-    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); back link, title row and "When and where" card col 1-12; description col 1-8.
+    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); back link, title row and the "When and where" info strip col 1-12; description col 1-8. The strip's items (date, time, venue) sit side by side.
     Tablet (6-col): everything col 1-6 full width, grid-tablet-margin 32px; description col 1-6.
-    Mobile (4-col): everything col 1-4 full width, grid-mobile-margin 6px; title row stacks, Withdraw button full width.
+    Mobile (4-col): everything col 1-4 full width, grid-mobile-margin 6px; title row stacks, Withdraw button full width, strip items stack.
   -->
   <div class="page">
     <div class="back">
       <button type="button" class="back-link" @click="goBack">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M15.75 19.5 8.25 12l7.5-7.5" />
+        </svg>
         Back
       </button>
     </div>
@@ -167,46 +170,72 @@ onMounted(async () => {
         <p v-for="(paragraph, index) in paragraphs" :key="index" class="body-default">{{ paragraph }}</p>
       </div>
 
+      <!-- When and where: an info strip between two rules. Date/Time/Venue
+           share one space-between row. -->
       <section class="details" aria-label="When and where">
-        <h2 class="h4">When and where</h2>
-
-        <div class="detail-row">
-          <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" /></svg>
-          <div class="detail-text">
-            <span class="detail-label">Date</span>
-            <span class="detail-value">{{ formatLongDate(event.proposedDate) }}</span>
-          </div>
-        </div>
-        <hr class="divider" />
-
-        <div class="detail-row">
-          <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
-          <div class="detail-text">
-            <span class="detail-label">Time</span>
-            <span class="detail-value">{{ formatCardTimeRange(event.startTime, event.endTime) }}</span>
-          </div>
-        </div>
-        <hr class="divider" />
-
-        <div class="detail-row">
-          <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /><path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" /></svg>
-          <div class="detail-text">
-            <span class="detail-label">{{ event.venues.length > 1 ? "Venues" : "Venue" }}</span>
-            <span v-if="event.venues.length === 0" class="detail-value">Venue to be confirmed</span>
-            <span v-for="venue in event.venues" :key="venue" class="detail-value">{{ venue }}</span>
-          </div>
-        </div>
-
-        <template v-if="event.accessibility">
-          <hr class="divider" />
-          <div class="detail-row">
-            <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="4.5" r="1.75" /><path d="M5.5 8.5 12 10l6.5-1.5M12 10v4.5m0 0-3 6m3-6 3 6" /></svg>
+        <div class="details-row">
+          <div class="detail-item">
+            <span class="detail-icon-chip">
+              <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path
+                  d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+              </svg>
+            </span>
             <div class="detail-text">
-              <span class="detail-label">Accessibility</span>
-              <span class="detail-value">{{ event.accessibility }}</span>
+              <span class="detail-label">Date</span>
+              <span class="detail-value">{{ formatLongDate(event.proposedDate) }}</span>
             </div>
           </div>
-        </template>
+
+          <div class="detail-item">
+            <span class="detail-icon-chip">
+              <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              </svg>
+            </span>
+            <div class="detail-text">
+              <span class="detail-label">Time</span>
+              <span class="detail-value">{{ formatCardTimeRange(event.startTime, event.endTime) }}</span>
+            </div>
+          </div>
+
+          <div class="detail-item">
+            <span class="detail-icon-chip">
+              <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                <path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" />
+              </svg>
+            </span>
+            <div class="detail-text">
+              <span class="detail-label">{{ event.venues.length > 1 ? "Venues" : "Venue" }}</span>
+              <span v-if="event.venues.length === 0" class="detail-value detail-value--muted">Venue to be
+                confirmed</span>
+              <span v-for="venue in event.venues" :key="venue" class="detail-value">{{ venue }}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- One full-width container below the strip, items stacked in a column: Accessibility first, any
+           further event info below it (same markup, class "info-item"). The wrapper's v-if should also
+           cover any future item. -->
+      <section v-if="event.accessibility" class="info-rows pt-" aria-label="More about this event">
+        <div class="info-item accessibility-note">
+          <span class="detail-icon-chip">
+            <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="4.5" r="1.75" />
+              <path d="M5.5 8.5 12 10l6.5-1.5M12 10v4.5m0 0-3 6m3-6 3 6" />
+            </svg>
+          </span>
+          <div class="detail-text">
+            <span class="detail-label">Accessibility</span>
+            <span class="detail-value">{{ event.accessibility }}</span>
+          </div>
+        </div>
       </section>
     </template>
   </div>
@@ -225,7 +254,8 @@ onMounted(async () => {
 .back,
 .full,
 .title-row,
-.details {
+.details,
+.info-rows {
   grid-column: 1 / 13;
 }
 
@@ -243,10 +273,12 @@ onMounted(async () => {
     gap: var(--spacing-24) var(--grid-tablet-gutter);
     padding: var(--spacing-40) var(--grid-tablet-margin) var(--spacing-80);
   }
+
   .back,
   .full,
   .title-row,
   .details,
+  .info-rows,
   .description {
     grid-column: 1 / 7;
   }
@@ -258,17 +290,21 @@ onMounted(async () => {
     gap: var(--spacing-24) var(--grid-mobile-gutter);
     padding: var(--spacing-24) var(--grid-mobile-margin) var(--spacing-48);
   }
+
   .back,
   .full,
   .title-row,
   .details,
+  .info-rows,
   .description {
     grid-column: 1 / 5;
   }
+
   .title-row {
     flex-direction: column;
     align-items: stretch;
   }
+
   .btn-withdraw,
   .btn-register {
     width: 100%;
@@ -328,14 +364,6 @@ onMounted(async () => {
   font-size: 2rem;
   font-weight: 700;
   line-height: 2.5rem;
-  color: var(--color-grey-900);
-}
-
-.h4 {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.75rem;
   color: var(--color-grey-900);
 }
 
@@ -453,50 +481,116 @@ onMounted(async () => {
   cursor: not-allowed;
 }
 
+/* Info strip: no card, just a rule above and below; rows stack vertically,
+   each row's items spread across the full width. */
 .details {
+  border-top: 1px solid var(--color-grey-100);
+  border-bottom: 1px solid var(--color-grey-100);
+}
+
+/* Padding on the row so the items sit clear of the rules above and below. */
+.details-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: var(--spacing-16) 200px;
+  padding: var(--spacing-24) var(--spacing-24);
+}
+
+/* Info rows: one full-width container below the strip, its items stacked in a column (Accessibility
+   first). Any further event info is another .info-item inside it. Body copy: normal weight, 16px.
+   No borders of its own. */
+.info-rows {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-16);
-  padding: var(--spacing-24);
+  width: 100%;
   box-sizing: border-box;
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
+  /* No top padding: the page grid's 24px row gap is the only space between the strip and this block. */
+  padding: 0 var(--spacing-24) var(--spacing-24);
 }
 
-.detail-row {
+.info-item {
   display: flex;
+  align-items: flex-start;
   gap: var(--spacing-12);
+}
+
+/* 6px between the eyebrow label and the text (the strip's 2px plus 4px). */
+.info-item .detail-text {
+  flex: 1;
+  gap: var(--spacing-6);
+}
+
+/* Colors/Base/Black: the default body-text colour (Style.md 2.1). */
+.info-item .detail-value {
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.25rem;
+  color: var(--color-base-black);
+}
+
+.detail-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+  min-width: 0;
+}
+
+/* Tinted icon chip: Style.md 2.6/2.9 — Purple Primary/100 tinted background
+   behind Purple Primary/600 icons (licensed "text links and icons" use). */
+.detail-icon-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--spacing-40);
+  height: var(--spacing-40);
+  border-radius: var(--radius-sm);
+  background: var(--color-purple-100);
 }
 
 .detail-icon {
   flex: none;
-  margin-top: 1px;
-  color: var(--color-grey-500);
+  color: var(--color-purple-600);
 }
 
 .detail-text {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
+  gap: var(--spacing-2);
+  min-width: 0;
 }
 
 .detail-label {
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  color: var(--color-grey-600);
-}
-
-.detail-value {
-  font-size: 1rem;
-  line-height: 1.25rem;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1rem;
   color: var(--color-grey-700);
 }
 
-.divider {
-  margin: 0;
-  border: none;
-  border-top: 1px solid var(--color-grey-100);
+.detail-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.75rem;
+  color: var(--color-grey-900);
+}
+
+/* "Venue to be confirmed" reads as a placeholder, not a fact. */
+.detail-value--muted {
+  color: var(--color-grey-500);
+}
+
+@media (max-width: 640px) {
+  .details-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-16);
+    padding: var(--spacing-16);
+  }
+
+  .info-rows {
+    padding: 0 var(--spacing-16) var(--spacing-16);
+  }
 }
 </style>
