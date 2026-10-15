@@ -89,6 +89,7 @@ async function mountPage(event: EventSummary, user: { id: string; role: string }
         EquipmentRequestPanel: true,
         ClarificationPanel: true,
         SafetyReviewPanel: true,
+        RegistrationsPanel: true,
       },
     },
   });
@@ -212,5 +213,35 @@ describe("EventDetailView — a Completed event's record (E3-5 AC3)", () => {
 
     expect(wrapper.text()).toContain("Status changed from");
     expect(wrapper.text()).toContain("'Completed'");
+  });
+});
+
+describe("EventDetailView — registrations (E3-5 AC3)", () => {
+  function withRegistration(status: string) {
+    const event = makeEvent({ status });
+    return makeEvent({
+      status,
+      submitted_details: { ...(event.submitted_details as Record<string, unknown>), registrationNeeded: true },
+    });
+  }
+
+  function hasRegistrations(wrapper: Awaited<ReturnType<typeof mountPage>>) {
+    return wrapper.findComponent({ name: "RegistrationsPanel" }).exists();
+  }
+
+  it("shows a Completed event's registrations to the coordinator", async () => {
+    expect(hasRegistrations(await mountPage(withRegistration("Completed")))).toBe(true);
+  });
+
+  it("shows them to the owning organiser", async () => {
+    expect(hasRegistrations(await mountPage(withRegistration("Completed"), { id: "ORG-0001", role: "organiser" }))).toBe(true);
+  });
+
+  it("doesn't show them to the Lead, whom registration-service refuses", async () => {
+    expect(hasRegistrations(await mountPage(withRegistration("Completed"), { id: "LEAD-0001", role: "coordinator_lead" }))).toBe(false);
+  });
+
+  it("doesn't show them for an event that didn't ask for registration", async () => {
+    expect(hasRegistrations(await mountPage(makeEvent({ status: "Completed" })))).toBe(false);
   });
 });

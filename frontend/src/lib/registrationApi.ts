@@ -68,6 +68,31 @@ export class RegistrationRequestError extends Error {
 const apiBase =
   (import.meta.env.VITE_REGISTRATION_API_URL as string | undefined) ?? "http://localhost:4007/api/registrations";
 
+/** One attendee on an event's roster, as the organiser and coordinators see it. */
+export interface EventRegistration {
+  registrationId: number;
+  eventId: number;
+  userId: string;
+  status: RegistrationStatus;
+  createdAt: string;
+  additionalInfo: Record<string, unknown> | null;
+  /** Null when the attendee's name couldn't be looked up. */
+  name: string | null;
+}
+
+/**
+ * E3-5 AC3: everyone who registered for an event, oldest first, including
+ * withdrawals. The owning organiser and coordinators only; the backend
+ * refuses anyone else.
+ */
+export async function fetchEventRegistrations(eventId: number | string): Promise<EventRegistration[]> {
+  const res = await fetch(`${apiBase}/event/${encodeURIComponent(String(eventId))}`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) throw new Error("Failed to load registrations");
+  const body = await res.json();
+  return body.registrations as EventRegistration[];
+}
+
 /** The signed-in attendee's own registrations, newest first. */
 export async function fetchMyRegistrations(userId: string): Promise<MyRegistration[]> {
   const res = await fetch(`${apiBase}/user/${encodeURIComponent(userId)}`, { headers: authHeader() });

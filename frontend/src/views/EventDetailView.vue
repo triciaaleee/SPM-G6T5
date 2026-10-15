@@ -30,6 +30,7 @@ import VenueRecommendations from "../components/venues/VenueRecommendations.vue"
 import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel.vue";
 import VenueRequestsPanel from "../components/venues/VenueRequestsPanel.vue";
 import SafetyReviewPanel from "../components/SafetyReviewPanel.vue";
+import RegistrationsPanel from "../components/RegistrationsPanel.vue";
 import { fetchEventVenueBookings, type EventVenueBooking } from "../lib/venuesApi";
 import { fetchEquipmentRequestsForEvent, type EquipmentRequest } from "../lib/equipmentApi";
 import { fetchCoordinators, type CoordinatorOption } from "../lib/usersApi";
@@ -1030,6 +1031,11 @@ onMounted(async () => {
 <div v-if="isAssignedCoordinator && event.status === 'Planning'" class="details-card">
   <SafetyReviewPanel :event-id="event.id" @submitted="(updated) => (event = updated)" />
 </div>
+
+<!-- E3-5 AC3: who registered, read-only — stays viewable once the event is Completed.
+     registration-service only lets the owning organiser and coordinators read it. -->
+<RegistrationsPanel v-if="(isOwnerView || isCoordinator) && asSubmittedDetails(event.submitted_details).registrationNeeded"
+  :event-id="event.id" />
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
   :current-user-id="currentUser.id" :read-only="isLead" />
