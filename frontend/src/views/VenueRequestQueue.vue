@@ -187,7 +187,12 @@ function formatMoment(value: string | null): string {
                 <span v-if="paddingNote(request)" class="body-small muted">{{ paddingNote(request) }}</span>
               </dd>
             </div>
-            <div class="fact">
+            <!-- E4-17: what this venue is for, sized for its own session. -->
+            <div v-if="request.setup" class="fact">
+              <dt class="body-small muted">{{ request.setup.purpose }}</dt>
+              <dd class="body-default">{{ request.setup.headcount ?? "—" }} people</dd>
+            </div>
+            <div v-else class="fact">
               <dt class="body-small muted">Attendance</dt>
               <dd class="body-default">{{ request.event.expectedAttendance ?? "—" }}</dd>
             </div>
@@ -197,9 +202,12 @@ function formatMoment(value: string | null): string {
             </div>
           </dl>
 
-          <div v-if="request.event.layouts.length > 0 || request.event.facilities.length > 0" class="tags">
-            <span v-for="layout in request.event.layouts" :key="`l-${layout}`" class="tag">{{ layout }}</span>
-            <span v-for="facility in request.event.facilities" :key="`f-${facility}`" class="tag">{{ facility }}</span>
+          <div v-if="(request.setup ?? request.event).layouts.length > 0 || (request.setup ?? request.event).facilities.length > 0"
+            class="tags">
+            <span v-for="layout in (request.setup ?? request.event).layouts" :key="`l-${layout}`" class="tag">{{ layout }}</span>
+            <span v-for="facility in (request.setup ?? request.event).facilities" :key="`f-${facility}`" class="tag">
+              {{ facility }}
+            </span>
           </div>
 
           <div v-if="rejectingId === request.id" class="reject-box">

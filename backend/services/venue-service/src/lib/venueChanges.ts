@@ -23,6 +23,8 @@ export interface LiveBooking {
   id: number;
   status: BookingStatus;
   event: VenueBookingInfo;
+  /** E4-17: this booking's own headcount; null (pre-E4-17) means the event's whole attendance. */
+  headcount?: number | null;
 }
 
 /** A future Approved booking whose expected attendance no longer fits. */
@@ -66,8 +68,11 @@ export function findCapacityShortfalls(
   return bookings.flatMap((booking) => {
     const { event } = booking;
     if (booking.status !== "Approved" || !event.proposedDate || event.proposedDate < today) return [];
-    // submitted_details is free-form JSON, so attendance may arrive as a string.
-    const attendance = event.expectedAttendance === null ? NaN : Number(event.expectedAttendance);
+    // E4-17: judged on the booking's own headcount (a breakout room isn't
+    // short just because the whole event is bigger). submitted_details is
+    // free-form JSON, so the event's attendance may arrive as a string.
+    const attendance =
+      booking.headcount ?? (event.expectedAttendance === null ? NaN : Number(event.expectedAttendance));
     if (!Number.isFinite(attendance) || attendance <= newCapacity) return [];
     return [
       {
@@ -134,13 +139,19 @@ export async function loadLiveBookings(
 ): Promise<LiveBooking[] | null> {
   const { data, error } = await supabase
     .from("venue_bookings")
-    .select("id, event_id, status, hold_expires_at")
+    .select("id, event_id, status, hold_expires_at, headcount")
     .eq("venue_id", venueId)
     .in("status", UNAVAILABLE_BOOKING_STATUSES);
   if (error) return null;
 
   const rows = (
-    (data ?? []) as { id: number; event_id: number; status: BookingStatus; hold_expires_at: string | null }[]
+    (data ?? []) as {
+      id: number;
+      event_id: number;
+      status: BookingStatus;
+      hold_expires_at: string | null;
+      headcount?: number | null;
+    }[]
   ).filter((row) => blocksVenue(row, now));
   if (rows.length === 0) return [];
 
@@ -150,7 +161,7 @@ export async function loadLiveBookings(
 
   return rows.flatMap((row) => {
     const event = eventsById.get(row.event_id);
-    return event ? [{ id: row.id, status: row.status, event }] : [];
+    return event ? [{ id: row.id, status: row.status, event, headcount: row.headcount ?? null }] : [];
   });
 }
 

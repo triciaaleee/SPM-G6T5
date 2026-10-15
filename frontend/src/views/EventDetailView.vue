@@ -29,9 +29,19 @@ import ClarificationPanel from "../components/ClarificationPanel.vue";
 import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
 import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel.vue";
 import VenueRequestsPanel from "../components/venues/VenueRequestsPanel.vue";
+import BookingPlanForm from "../components/venues/BookingPlanForm.vue";
 import SafetyReviewPanel from "../components/SafetyReviewPanel.vue";
 import RegistrationsPanel from "../components/RegistrationsPanel.vue";
-import { fetchEventVenueBookings, type EventVenueBooking } from "../lib/venuesApi";
+import {
+  fetchEventSuitability,
+  fetchEventVenueBookings,
+  fetchVenueFilterOptions,
+  planRouteQuery,
+  type BookingPlan,
+  type EventSuitability,
+  type EventVenueBooking,
+  type VenueFilterOptions,
+} from "../lib/venuesApi";
 import { fetchEquipmentRequestsForEvent, type EquipmentRequest } from "../lib/equipmentApi";
 import { fetchCoordinators, type CoordinatorOption } from "../lib/usersApi";
 
@@ -389,6 +399,44 @@ async function loadVenueBookings(): Promise<void> {
       err instanceof Error ? err.message : "Failed to load this event's venue requests";
   } finally {
     venueBookingsLoading.value = false;
+  }
+  // E4-17: suitability is read from the same bookings, so it refreshes with them.
+  if (isCoordinator.value) void loadSuitability();
+}
+
+/*
+ * E4-17: each venue booking checked against its own purpose and headcount,
+ * plus the plan for the next booking — which drives the recommendations,
+ * the Find venues link and what a request records.
+ */
+const suitability = ref<EventSuitability | null>(null);
+const bookingPlan = ref<BookingPlan | null>(null);
+const venueOptions = ref<VenueFilterOptions | null>(null);
+
+/** Planning the next booking is the assigned coordinator's, while venues may be requested (E4-8). */
+const canPlanBooking = computed(() => isAssignedCoordinator.value && event.value?.status === "Planning");
+
+/** The recommendations' plan: undefined keeps E4-7's whole-event view where no booking is being planned. */
+const recommendationPlan = computed(() =>
+  canPlanBooking.value ? (suitability.value ? bookingPlan.value : null) : undefined,
+);
+
+const findVenuesQuery = computed(() => ({
+  eventId: String(event.value?.id ?? ""),
+  ...(canPlanBooking.value && bookingPlan.value ? planRouteQuery(bookingPlan.value) : {}),
+}));
+
+async function loadSuitability(): Promise<void> {
+  if (!event.value) return;
+  try {
+    suitability.value = await fetchEventSuitability(event.value.id);
+  } catch {
+    // Leave the last result; the requests panel simply shows no suitability line.
+  }
+  if (canPlanBooking.value && !venueOptions.value) {
+    fetchVenueFilterOptions()
+      .then((options) => (venueOptions.value = options))
+      .catch(() => undefined);
   }
 }
 
@@ -1009,9 +1057,14 @@ onMounted(async () => {
 <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
 <div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
   <h2 class="section-title">Venue Recommendations</h2>
+  <!-- E4-17: what the next booking is for; recommendations and Find venues follow it. Re-keyed after
+       each request so the next booking starts from the right defaults. -->
+  <BookingPlanForm v-if="canPlanBooking && suitability" :key="`${suitability.defaults.hasMainProgramme}-${suitability.defaults.liveBookingCount}`"
+    :defaults="suitability.defaults" :options="venueOptions" @update:plan="bookingPlan = $event" />
   <VenueRecommendations :event-id="event.id" :details="event.submitted_details"
-    :can-request="isAssignedCoordinator && event.status === 'Planning'" @requested="loadVenueBookings()" />
-  <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
+    :can-request="isAssignedCoordinator && event.status === 'Planning'" :plan="recommendationPlan"
+    @requested="loadVenueBookings()" />
+  <RouterLink :to="{ name: 'venue-search', query: findVenuesQuery }" class="btn btn-venue-search">
     Find venues
   </RouterLink>
 </div>
@@ -1026,7 +1079,7 @@ onMounted(async () => {
 <!-- E4-8 AC5: this event's venue requests and the state each one is in -->
 <VenueRequestsPanel v-if="isCoordinator && event.status !== 'Rejected'" :bookings="venueBookings"
   :loading="venueBookingsLoading" :load-error="venueBookingsError" :can-withdraw="isAssignedCoordinator"
-  @changed="loadVenueBookings()" />
+  :suitability="suitability?.bookings" @changed="loadVenueBookings()" />
 
 <!-- E3-4: the assigned coordinator submits a Planning event for the Safety Officer's check -->
 <div v-if="isAssignedCoordinator && event.status === 'Planning'" class="details-card">

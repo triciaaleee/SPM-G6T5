@@ -7,6 +7,8 @@ import {
   emptyVenueFilters,
   fetchVenueAvailability,
   fetchVenueFilterOptions,
+  planFromQuery,
+  purposeLabel,
   searchVenues,
   submitVenueBooking,
   timeWindowError,
@@ -66,6 +68,23 @@ function prefillFromEvent(event: EventSummary): void {
 }
 
 /**
+ * E4-17 AC5: opened from a planned booking (its plan rides in the query),
+ * the search is judged on that booking — its headcount as the minimum
+ * capacity and its own needs — not the whole event. A request made from
+ * here records the plan (AC1).
+ */
+const bookingPlan = computed(() => planFromQuery(route.query as Record<string, unknown>));
+
+function prefillFromPlan(): void {
+  const plan = bookingPlan.value;
+  if (!plan) return;
+  filters.value.capacityMin = plan.headcount;
+  filters.value.layouts = [...plan.layouts];
+  filters.value.facilities = [...plan.facilities];
+  filters.value.accessibility = [...plan.accessibility];
+}
+
+/**
  * E4-8: a venue can only be requested for an event, so the action appears
  * only when the search was opened from one (?eventId=) and that event is
  * still in Planning — the only status a booking request may be made in
@@ -88,7 +107,7 @@ async function requestVenue(venueId: number): Promise<void> {
   requestErrorVenueId.value = null;
   requestError.value = "";
   try {
-    await submitVenueBooking(event.id, venueId);
+    await submitVenueBooking(event.id, venueId, bookingPlan.value ?? undefined);
     requestedVenueIds.value = new Set(requestedVenueIds.value).add(venueId);
   } catch (err) {
     requestErrorVenueId.value = venueId;
@@ -238,6 +257,7 @@ onMounted(async () => {
   if (eventResult.status === "fulfilled" && eventResult.value) {
     sourceEvent.value = eventResult.value;
     prefillFromEvent(eventResult.value);
+    prefillFromPlan();
   } else if (eventResult.status === "rejected") {
     sourceEventError.value = "We couldn't load that event, so the search hasn't been pre-filled.";
   }
@@ -271,7 +291,13 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div v-if="sourceEvent" class="context-banner body-small">
+      <div v-if="sourceEvent && bookingPlan" class="context-banner body-small">
+        Searching for <strong>{{ sourceEventName }}</strong> —
+        <strong>{{ purposeLabel(bookingPlan) }} · {{ bookingPlan.headcount }} people</strong>. Pre-filled with the
+        event's date and time, this booking's headcount as the minimum capacity and its own needs. Adjust any filter
+        to widen the search.
+      </div>
+      <div v-else-if="sourceEvent" class="context-banner body-small">
         Searching for <strong>{{ sourceEventName }}</strong> — pre-filled with the event's date and time, and its
         expected attendance as the minimum capacity. Adjust any filter to widen the search.
       </div>

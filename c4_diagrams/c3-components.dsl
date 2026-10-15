@@ -115,6 +115,7 @@ workspace "ConnectSphere - C3 Components" "Level 3 of the C4 model. Component vi
 
                 unavailabilityController = component "Unavailability controller" "Preview, record, edit and remove unavailability periods with a reason (E4-3, E4-14)." "src/routes/unavailability.ts"
 
+                bookingPlanRules = component "Booking plan and suitability" "Each booking's purpose, headcount and required features, and whether its venue suits that booking: capacity at least the headcount and every required feature present. Judged per booking, so one unsuitable venue never affects the event's other bookings (E4-17)." "src/lib/bookingPlan.ts, src/routes/suitability.ts"
                 searchRules = component "Venue search" "Parses filters and matches venues on every criterion, excluding venues whose occupied window clashes (E4-6, E4-16)." "src/lib/venueSearch.ts"
 
                 recommendation = component "Suitability checker" "Turns a booking's own headcount and requirements into search criteria; capacity equal to headcount is suitable. Each venue of a multi-venue event is judged on its own booking (E4-7)." "src/lib/venueRecommendation.ts"

@@ -16,10 +16,14 @@
  * list inside is a single column at every breakpoint.
  */
 import { computed, ref } from "vue";
+import { CheckCircleIcon, XCircleIcon } from "@heroicons/vue/16/solid";
 import {
   describeBookingFailure,
+  describeSuitabilityReasons,
+  purposeLabel,
   releaseVenueBooking,
   withdrawVenueBooking,
+  type BookingSuitability,
   type EventVenueBooking,
 } from "../../lib/venuesApi";
 import { bookingStatusBadgeClass, bookingStatusLabel } from "../../lib/bookingStatus";
@@ -37,7 +41,19 @@ const props = defineProps<{
   loadError: string | null;
   /** E4-9: only the event's assigned coordinator may withdraw or release a booking. */
   canWithdraw?: boolean;
+  /** E4-17: each booking's purpose, headcount and suitability; left out, none is shown. */
+  suitability?: BookingSuitability[];
 }>();
+
+/** E4-17: suitability only matters for bookings still holding or asking for a venue. */
+const SUITABILITY_STATUSES = new Set(["Requested", "On Hold", "Approved", "Replacement Required"]);
+
+const suitabilityById = computed(() => new Map((props.suitability ?? []).map((s) => [s.bookingId, s])));
+
+/** e.g. "Breakout · 60 people". */
+function purposeAndHeadcount(booking: BookingSuitability): string {
+  return booking.headcount === null ? purposeLabel(booking) : `${purposeLabel(booking)} · ${booking.headcount} people`;
+}
 
 const emit = defineEmits<{ changed: [] }>();
 
@@ -138,6 +154,21 @@ async function confirmAction(): Promise<void> {
         <div class="request-venue">
           <p class="body-default request-name">{{ booking.venue?.name ?? "Venue unavailable" }}</p>
           <p v-if="booking.venue" class="body-small muted">{{ booking.venue.location }}</p>
+          <!-- E4-17: what this venue is for, and whether it suits that (AC2–AC4). -->
+          <template v-if="suitabilityById.get(booking.id)">
+            <p class="body-small purpose">{{ purposeAndHeadcount(suitabilityById.get(booking.id)!) }}</p>
+            <p v-if="SUITABILITY_STATUSES.has(booking.status) && suitabilityById.get(booking.id)!.suitability"
+              class="body-small suitability"
+              :class="suitabilityById.get(booking.id)!.suitability!.suitable ? 'suitability--ok' : 'suitability--bad'">
+              <template v-if="suitabilityById.get(booking.id)!.suitability!.suitable">
+                <CheckCircleIcon class="suitability__icon" aria-hidden="true" />Suitable for this booking
+              </template>
+              <template v-else>
+                <XCircleIcon class="suitability__icon" aria-hidden="true" />Unsuitable:
+                {{ describeSuitabilityReasons(suitabilityById.get(booking.id)!.suitability!.reasons).join("; ") }}
+              </template>
+            </p>
+          </template>
           <p class="body-small muted">Requested {{ formatMoment(booking.createdAt) }}</p>
           <p v-if="booking.status === 'On Hold' && booking.holdExpiresAt" class="body-small muted">
             Hold expires {{ formatMoment(booking.holdExpiresAt) }}
@@ -224,6 +255,33 @@ async function confirmAction(): Promise<void> {
 }
 
 .reason {
+  color: var(--color-error-600);
+}
+
+/* E4-17: Style.md 3.1 success/error text for the suitability line. */
+.purpose {
+  color: var(--color-grey-700);
+  font-weight: 700;
+}
+
+.suitability {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-4);
+}
+
+.suitability__icon {
+  flex-shrink: 0;
+  width: var(--spacing-16);
+  height: var(--spacing-16);
+  margin-top: var(--spacing-2);
+}
+
+.suitability--ok {
+  color: var(--color-success-600);
+}
+
+.suitability--bad {
   color: var(--color-error-600);
 }
 

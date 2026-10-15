@@ -4,6 +4,7 @@ import express from "express";
 import { attendeeInfoRouter } from "./routes/attendeeInfo.js";
 import { eventBookingsRouter } from "./routes/eventBookings.js";
 import { staffRouter } from "./routes/staff.js";
+import { suitabilityRouter } from "./routes/suitability.js";
 import { unavailabilityRouter } from "./routes/unavailability.js";
 import { venuesRouter } from "./routes/venues.js";
 import { sweepExpiringHolds } from "./lib/bookingDecisions.js";
@@ -37,6 +38,8 @@ app.use("/api/venues/staff", staffRouter);
 // E4-3: venue staff only, so also mounted ahead of venuesRouter.
 app.use("/api/venues/unavailability", unavailabilityRouter);
 app.use("/api/venues/events", eventBookingsRouter);
+// E4-17: coordinator-only, its own path so it never shadows venuesRouter.
+app.use("/api/venues/suitability", suitabilityRouter);
 // E6: attendees' view of where an event is held — names only, ahead of venuesRouter.
 app.use("/api/venues/attendee-info", attendeeInfoRouter);
 app.use("/api/venues", venuesRouter);

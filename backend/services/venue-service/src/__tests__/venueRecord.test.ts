@@ -232,6 +232,14 @@ describe("findCapacityShortfalls (AC6)", () => {
     expect(findCapacityShortfalls(bookings, 300, 150, today).map((s) => s.bookingId)).toEqual([1, 2]);
   });
 
+  it("E4-17: judges each booking on its own headcount, not the whole event's", () => {
+    const breakout = { ...booking(1, { expectedAttendance: 500 }), headcount: 40 };
+    const tooBig = { ...booking(2, { expectedAttendance: 500 }), headcount: 120 };
+    expect(findCapacityShortfalls([breakout, tooBig], 300, 100, today)).toEqual([
+      expect.objectContaining({ bookingId: 2, expectedAttendance: 120 }),
+    ]);
+  });
+
   it("flags nothing when capacity isn't reduced", () => {
     expect(findCapacityShortfalls([booking(1, { expectedAttendance: 500 })], 300, 300, today)).toEqual([]);
   });

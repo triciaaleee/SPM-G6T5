@@ -25,6 +25,17 @@ import {
 } from "../lib/unavailability.js";
 import { extractRequirements, scheduleQuery, withFeatures } from "../lib/venueRecommendation.js";
 import {
+  BOOKING_PLAN_COLUMNS,
+  MAIN_HOLDING_STATUSES,
+  checkSuitability,
+  eventDefaults,
+  hasPlan,
+  holdsMainProgramme,
+  parseBookingPlan,
+  type BookingPlanColumns,
+  toPlanColumns,
+} from "../lib/bookingPlan.js";
+import {
   buildFilterOptions,
   isRealDate,
   parseVenueSearch,
@@ -256,7 +267,23 @@ venuesRouter.get("/recommendations/:eventId", async (req: AuthedRequest, res) =>
   }
   const venueRows = (venues ?? []) as VenueRow[];
 
-  const requirements = extractRequirements(eventResult.event.submitted_details ?? {}, venueRows);
+  let requirements = extractRequirements(eventResult.event.submitted_details ?? {}, venueRows);
+
+  // E4-17 AC5: recommendations for one planned booking are judged on its
+  // headcount and needs, not the whole event's. Without these params the
+  // event-wide behaviour is unchanged.
+  const query = req.query as Record<string, unknown>;
+  const plan = hasPlan(query)
+    ? parseBookingPlan(query, eventDefaults(eventResult.event.submitted_details ?? {}, venueRows))
+    : null;
+  if (plan && !plan.valid) {
+    res.status(400).json({ error: "Invalid booking plan", fields: plan.fields });
+    return;
+  }
+  if (plan) {
+    requirements = { ...requirements, attendance: plan.plan.headcount, ...plan.plan.requirements };
+  }
+
   const parsed = parseVenueSearch(scheduleQuery(requirements));
   if (!parsed.valid) {
     res.status(422).json({ error: "This event's date, time or attendance is invalid", fields: parsed.fields });
@@ -590,6 +617,16 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // E4-17 AC1/AC6: what this venue is for. Optional for the main programme
+  // — a request without a plan is it, for the whole attendance, as before
+  // E4-17 — but required once the main venue is covered (checked below).
+  const planDefaults = eventDefaults(eventResult.event.submitted_details ?? {}, venueRows);
+  const planResult = parseBookingPlan(req.body as Record<string, unknown>, planDefaults);
+  if (!planResult.valid) {
+    res.status(400).json({ error: "Invalid booking request", fields: planResult.fields });
+    return;
+  }
+
   const { data: existing, error: existingError } = await supabase
     .from("venue_bookings")
     .select("id, status")
@@ -607,6 +644,27 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
       booking: { id: alreadyRequested.id, status: alreadyRequested.status },
     });
     return;
+  }
+
+  // E4-17 AC1: once the main programme has a venue, another booking is for
+  // part of the event and must say what it's for and how many it holds.
+  if (!hasPlan(req.body as Record<string, unknown>)) {
+    const { data: eventBookings, error: eventBookingsError } = await supabase
+      .from("venue_bookings")
+      .select(`id, status, ${BOOKING_PLAN_COLUMNS}`)
+      .eq("event_id", eventId)
+      .in("status", MAIN_HOLDING_STATUSES);
+    if (eventBookingsError) {
+      res.status(500).json({ error: "Failed to check existing bookings" });
+      return;
+    }
+    if (holdsMainProgramme((eventBookings ?? []) as (BookingPlanColumns & { status: string })[], planDefaults)) {
+      res.status(400).json({
+        error: "This event's main venue is already booked. Plan this booking on the event page — its purpose and headcount — then request it.",
+        fields: { purpose: "Choose what this venue is for.", headcount: "Enter how many people this venue is for." },
+      });
+      return;
+    }
   }
 
   const blocking = await loadBlockingWindows(supabase, venueRows, req.headers.authorization!, eventId);
@@ -651,7 +709,13 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
   // AC3: stated outright rather than left to the column default.
   const { data: booking, error: insertError } = await supabase
     .from("venue_bookings")
-    .insert({ venue_id: venueId, event_id: eventId, status: "Requested" })
+    .insert({
+      venue_id: venueId,
+      event_id: eventId,
+      status: "Requested",
+      // E4-17: stored only when sent; a plan-less row reads as the defaults (lib/bookingPlan.ts effectivePlan).
+      ...(hasPlan(req.body as Record<string, unknown>) ? toPlanColumns(planResult.plan) : {}),
+    })
     .select("id, status, created_at")
     .single();
   if (insertError || !booking) {
@@ -676,6 +740,11 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
       status: (booking as { status: BookingStatus }).status,
       createdAt: (booking as { created_at: string }).created_at,
       venue: { id: venue.id, name: venue.name, location: venue.location },
+      // E4-17: what was stored, and whether this venue suits it.
+      purpose: planResult.plan.purpose,
+      purposeDetail: planResult.plan.purposeDetail,
+      headcount: planResult.plan.headcount,
+      suitability: checkSuitability(venue, planResult.plan),
     },
   });
 });
