@@ -79,6 +79,9 @@ async function mountView(requests: EquipmentRequestWithEvent[]) {
 const groupTitles = (wrapper: Awaited<ReturnType<typeof mountView>>) =>
   wrapper.findAll(".group .h4").map((title) => title.text());
 
+/** Data rows only — excludes each group's column-header row. */
+const dataRows = (wrapper: Awaited<ReturnType<typeof mountView>>) => wrapper.findAll(".row:not(.row--header)");
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockedCatalog.mockResolvedValue([
@@ -88,28 +91,40 @@ beforeEach(() => {
 });
 
 describe("TechnicalSupportView", () => {
-  it("groups the queue by equipment with how many are needed and in stock", async () => {
+  it("groups the queue by event, listing each event's equipment needed and in stock", async () => {
     const wrapper = await mountView([
-      makeRequest({ id: 1, offset: 5, items: [{ type: "Projector", quantity: 2 }] }),
-      makeRequest({ id: 2, offset: 6, items: [{ type: "Projector", quantity: 3 }, { type: "Microphones", quantity: 1 }] }),
+      makeRequest({ id: 1, name: "Gala", offset: 5, items: [{ type: "Projector", quantity: 2 }] }),
+      makeRequest({
+        id: 2,
+        name: "Demo Day",
+        offset: 6,
+        items: [
+          { type: "Projector", quantity: 3 },
+          { type: "Microphones", quantity: 1 },
+        ],
+      }),
     ]);
 
-    expect(groupTitles(wrapper)).toEqual(["Projector", "Microphones"]);
-    const [projector, microphones] = wrapper.findAll(".group");
-    expect(projector.find(".count-badge").text()).toBe("5 needed");
-    expect(projector.find(".stock").text()).toBe("3 in stock");
-    expect(projector.findAll(".row")).toHaveLength(2);
-    expect(microphones.find(".count-badge").text()).toBe("1 needed");
-    expect(microphones.find(".stock").text()).toBe("6 in stock");
+    expect(groupTitles(wrapper)).toEqual(["Gala", "Demo Day"]);
+    const [gala, demoDay] = wrapper.findAll(".group");
+
+    expect(gala.find(".count-badge").text()).toBe("2 needed");
+    const galaRows = gala.findAll(".row:not(.row--header)");
+    expect(galaRows).toHaveLength(1);
+    expect(galaRows[0].find(".cell-equipment").text()).toBe("Projector");
+    expect(galaRows[0].find(".cell-stock").text()).toBe("3");
+
+    expect(demoDay.find(".count-badge").text()).toBe("4 needed");
+    expect(demoDay.findAll(".row:not(.row--header)")).toHaveLength(2);
   });
 
-  it("shows the date and the time in separate columns", async () => {
-    const wrapper = await mountView([makeRequest({ start: "09:00", end: "10:00" })]);
+  it("shows the date, time and venue in the group's header", async () => {
+    const wrapper = await mountView([makeRequest({ start: "09:00", end: "10:00", venue: "Grand Ballroom" })]);
 
-    const row = wrapper.find(".row");
-    expect(row.find(".cell-time").text()).toBe("09:00 to 10:00");
-    expect(row.find(".cell-date").text()).not.toContain("09:00");
-    expect(row.find(".cell-date").text()).toMatch(/^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}$/);
+    const meta = wrapper.find(".group-header__meta").text();
+    expect(meta).toContain("09:00 to 10:00");
+    expect(meta).toContain("Grand Ballroom");
+    expect(meta).toMatch(/^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}/);
   });
 
   it("has no sort label, but keeps the soonest-first subheading", async () => {
@@ -119,35 +134,33 @@ describe("TechnicalSupportView", () => {
     expect(wrapper.find(".subheading").text()).toBe("Everything still to arrange, soonest event first");
   });
 
-  it("lists each group's rows by date, then by start time", async () => {
+  it("lists groups (events) by date, then by start time", async () => {
     const wrapper = await mountView([
       makeRequest({ id: 1, name: "Late", offset: 8, start: "09:00" }),
       makeRequest({ id: 2, name: "Evening", offset: 5, start: "19:00" }),
       makeRequest({ id: 3, name: "Morning", offset: 5, start: "08:00" }),
     ]);
 
-    expect(wrapper.findAll(".cell-event").map((cell) => cell.text())).toEqual(["Morning", "Evening", "Late"]);
+    expect(groupTitles(wrapper)).toEqual(["Morning", "Evening", "Late"]);
   });
 
-  it("shows the event, venue and quantity, with a placeholder when the venue is not set", async () => {
+  it("shows the event name and venue in the header, with a placeholder when the venue is not set", async () => {
     const wrapper = await mountView([
       makeRequest({ id: 1, name: "Alumni Gala", offset: 5 }),
       makeRequest({ id: 2, name: "No Venue Event", offset: 6, venue: null, items: [{ type: "Projector", quantity: 1 }] }),
     ]);
 
-    const [first, second] = wrapper.findAll(".row");
-    expect(first.find(".cell-event").text()).toBe("Alumni Gala");
-    expect(first.find(".cell-venue").text()).toBe("Grand Ballroom");
+    const [first, second] = wrapper.findAll(".group");
+    expect(first.find(".h4").text()).toBe("Alumni Gala");
     expect(first.find(".cell-qty").text()).toBe("2×");
-    expect(second.find(".cell-venue").text()).toBe("Venue not set");
-    expect(second.find(".cell-venue").classes()).toContain("cell-venue--empty");
+    expect(second.find(".group-header__meta .cell-venue--empty").text()).toBe("Venue not set");
   });
 
-  it("links every row to its request's details", async () => {
-    const wrapper = await mountView([makeRequest({ id: 4, eventId: 7 })]);
+  it("makes the event title a link to its request's details", async () => {
+    const wrapper = await mountView([makeRequest({ id: 4, eventId: 7, name: "Alumni Gala" })]);
 
-    const link = wrapper.find("a.cell-link");
-    expect(link.text()).toBe("View details");
+    const link = wrapper.find("a.group-title-link");
+    expect(link.text()).toContain("Alumni Gala");
     expect(link.attributes("href")).toBe("/equipment-requests/event/7");
   });
 
@@ -159,10 +172,10 @@ describe("TechnicalSupportView", () => {
 
     const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
     expect(tabs).toEqual(["Requested 2", "Arranged 1", "Partially Fulfilled 0"]);
-    expect(wrapper.findAll(".row")).toHaveLength(2);
+    expect(dataRows(wrapper)).toHaveLength(2);
 
     await wrapper.findAll("[role='tab']")[1].trigger("click");
-    expect(wrapper.findAll(".row")).toHaveLength(1);
+    expect(dataRows(wrapper)).toHaveLength(1);
     expect(wrapper.find(".count-badge").text()).toBe("2 arranged");
   });
 
@@ -193,11 +206,7 @@ describe("TechnicalSupportView", () => {
       const wrapper = await mountView(requests());
 
       expect((wrapper.find("select[aria-label='Date range']").element as HTMLSelectElement).value).toBe("30");
-      expect(wrapper.findAll(".cell-event").map((cell) => cell.text())).toEqual([
-        "Overdue Event",
-        "Soon Event",
-        "Month Event",
-      ]);
+      expect(groupTitles(wrapper)).toEqual(["Overdue Event", "Soon Event", "Month Event"]);
     });
 
     it("narrows to the next 7 days but still shows what is overdue", async () => {
@@ -205,7 +214,7 @@ describe("TechnicalSupportView", () => {
 
       await wrapper.find("select[aria-label='Date range']").setValue("7");
 
-      expect(wrapper.findAll(".cell-event").map((cell) => cell.text())).toEqual(["Overdue Event", "Soon Event"]);
+      expect(groupTitles(wrapper)).toEqual(["Overdue Event", "Soon Event"]);
     });
 
     it("widens to 90 days and to all dates", async () => {
@@ -213,10 +222,10 @@ describe("TechnicalSupportView", () => {
       const select = wrapper.find("select[aria-label='Date range']");
 
       await select.setValue("90");
-      expect(wrapper.findAll(".row")).toHaveLength(4);
+      expect(groupTitles(wrapper)).toHaveLength(4);
 
       await wrapper.find("select[aria-label='Date range']").setValue("all");
-      expect(wrapper.findAll(".row")).toHaveLength(4);
+      expect(groupTitles(wrapper)).toHaveLength(4);
     });
 
     it("updates the tab counts to match the range", async () => {
@@ -229,9 +238,9 @@ describe("TechnicalSupportView", () => {
   });
 
   describe("equipment filter", () => {
-    it("lists the equipment types and narrows to one", async () => {
+    it("lists the equipment types and narrows to the event that has one", async () => {
       const wrapper = await mountView([
-        makeRequest({ id: 1, items: [{ type: "Projector", quantity: 1 }, { type: "Microphones", quantity: 1 }] }),
+        makeRequest({ id: 1, name: "Gala", items: [{ type: "Projector", quantity: 1 }, { type: "Microphones", quantity: 1 }] }),
       ]);
       const select = wrapper.find("select[aria-label='Equipment']");
 
@@ -242,7 +251,9 @@ describe("TechnicalSupportView", () => {
       ]);
 
       await select.setValue("Microphones");
-      expect(groupTitles(wrapper)).toEqual(["Microphones"]);
+      expect(groupTitles(wrapper)).toEqual(["Gala"]);
+      expect(dataRows(wrapper)).toHaveLength(1);
+      expect(dataRows(wrapper)[0].find(".cell-equipment").text()).toBe("Microphones");
     });
   });
 
@@ -277,12 +288,12 @@ describe("TechnicalSupportView", () => {
     expect(wrapper.find(".empty-state").text()).toContain("Nothing to arrange.");
   });
 
-  it("still lists requests when the stock levels cannot be loaded, just without the stock figure", async () => {
+  it("still lists requests when the stock levels cannot be loaded, just without a stock figure", async () => {
     mockedCatalog.mockRejectedValue(new Error("boom"));
     const wrapper = await mountView([makeRequest()]);
 
-    expect(wrapper.findAll(".row")).toHaveLength(1);
-    expect(wrapper.find(".stock").exists()).toBe(false);
+    expect(dataRows(wrapper)).toHaveLength(1);
+    expect(wrapper.find(".cell-stock").text()).toBe("—");
   });
 
   it("shows an error when loading fails", async () => {

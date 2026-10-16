@@ -597,13 +597,15 @@ Grid systems define column structure, gutters, and margins across breakpoints. A
 
 ### 8.1 Elevation (partial)
 
-Only the token below has been defined so far; add others here as they're needed rather than inlining shadows.
+Only the tokens below have been defined so far; add others here as they're needed rather than inlining shadows.
 
 | Token | Value | Use |
 |-------|-------|-----|
+| `shadow-card` | `0 1px 3px` `Grey/900` (`#222222`) at 8% opacity | Resting in-flow cards (event cards, list cards) — a subtle lift, still paired with the existing `Grey/100` border/`Grey/50` fill, not a replacement for them |
+| `shadow-card-hover` | `0 4px 12px` `Grey/900` (`#222222`) at 12% opacity | Hover/lift state for a whole clickable card (e.g. an event card that's itself a link) — a step up from `shadow-card`, still smaller than `shadow-popover` |
 | `shadow-popover` | `0 8px 24px` `Grey/900` (`#222222`) at 12% opacity | Floating surfaces anchored to a trigger — dropdowns, filter popovers, menus |
 
-**AVOID:** Using `shadow-popover` on in-flow cards — cards separate with `Grey/100` borders and `Grey/50` fills instead.
+**AVOID:** Using `shadow-popover` on in-flow cards — cards separate with `Grey/100` borders and `Grey/50` fills, plus `shadow-card` for a small lift, not `shadow-popover`'s larger floating-surface shadow.
 
 ### 8.2 Focus Ring
 

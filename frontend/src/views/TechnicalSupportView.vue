@@ -1,12 +1,11 @@
 <script setup lang="ts">
 /**
  * E5-1 AC1: Technical Support Staff's queue of equipment requests, grouped by
- * the equipment they need to arrange. Each equipment type is a section (with
- * how many are needed and how many are in stock) listing the events that
- * want it, soonest first, with the event's date and time in their own
- * columns. The tabs split the queue by status; the two filters narrow it by
- * date range and by equipment. Opening a row (E5-1 AC1/AC2) shows the full
- * request, which is also where the status is updated (E5-3).
+ * event. Each event is a section (with its date, time and venue, and a link
+ * to its full request) listing the equipment types it still needs, soonest
+ * event first. The tabs split the queue by status; the two filters narrow it
+ * by date range and by equipment. Opening a section's link (E5-1 AC1/AC2)
+ * shows the full request, which is also where the status is updated (E5-3).
  */
 import { computed, onMounted, ref } from "vue";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
@@ -101,8 +100,8 @@ function formatTime(start: string | null, end: string | null): string {
   return start && end ? `${start} to ${end}` : "Time not set";
 }
 
-/** Soonest first: by date, then start time; undated rows last. */
-function compareRows(a: QueueRow, b: QueueRow): number {
+/** Soonest first: by date, then start time; undated rows/groups last. */
+function compareRows(a: { date: string | null; startTime: string | null }, b: { date: string | null; startTime: string | null }): number {
   const byDate = (a.date ?? "9999-12-31").localeCompare(b.date ?? "9999-12-31");
   return byDate !== 0 ? byDate : (a.startTime ?? "").localeCompare(b.startTime ?? "");
 }
@@ -133,10 +132,14 @@ const rowsByTab = computed(() => {
 const equipmentOptions = computed(() => [...new Set(rows.value.map((row) => row.equipmentType))].sort());
 
 interface Group {
-  equipmentType: string;
+  eventId: number;
+  eventName: string;
+  date: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  venue: string | null;
   rows: QueueRow[];
   total: number;
-  inStock: number | null;
 }
 
 /** What the group's badge counts: what is still needed for a partial fulfilment, otherwise the quantity. */
@@ -147,18 +150,32 @@ function groupTotal(groupRows: QueueRow[]): number {
   );
 }
 
+/** Stock on hand for one equipment type, looked up per row now that a group spans several types. */
+function stockFor(equipmentType: string): number | null {
+  return catalog.value.find((item) => item.name === equipmentType)?.availableStock ?? null;
+}
+
 const groups = computed<Group[]>(() => {
-  const byType = new Map<string, QueueRow[]>();
+  const byEvent = new Map<number, QueueRow[]>();
   for (const row of rowsByTab.value[activeTab.value]) {
-    byType.set(row.equipmentType, [...(byType.get(row.equipmentType) ?? []), row]);
+    byEvent.set(row.eventId, [...(byEvent.get(row.eventId) ?? []), row]);
   }
-  return [...byType.entries()]
-    .map(([equipmentType, groupRows]) => {
-      const sorted = [...groupRows].sort(compareRows);
-      const stock = catalog.value.find((item) => item.name === equipmentType);
-      return { equipmentType, rows: sorted, total: groupTotal(sorted), inStock: stock?.availableStock ?? null };
+  return [...byEvent.entries()]
+    .map(([eventId, groupRows]) => {
+      const sorted = [...groupRows].sort((a, b) => a.equipmentType.localeCompare(b.equipmentType));
+      const [first] = groupRows;
+      return {
+        eventId,
+        eventName: first.eventName,
+        date: first.date,
+        startTime: first.startTime,
+        endTime: first.endTime,
+        venue: first.venue,
+        rows: sorted,
+        total: groupTotal(sorted),
+      };
     })
-    .sort((a, b) => compareRows(a.rows[0], b.rows[0]));
+    .sort(compareRows);
 });
 
 const badgeLabel = computed(() => {
@@ -224,37 +241,39 @@ onMounted(async () => {
     <p v-else-if="errorMessage" class="body-default error-text full" role="alert">{{ errorMessage }}</p>
 
     <template v-else>
-      <div class="tabs" role="tablist" aria-label="Request status">
-        <button
-          v-for="tabStatus in EQUIPMENT_REQUEST_STATUSES"
-          :id="`tab-${tabStatus}`"
-          :key="tabStatus"
-          type="button"
-          role="tab"
-          :aria-selected="activeTab === tabStatus"
-          aria-controls="requests-panel"
-          class="tab"
-          :class="{ 'tab--active': activeTab === tabStatus }"
-          @click="activeTab = tabStatus"
-        >
-          {{ tabStatus }}
-          <span class="tab-count">{{ rowsByTab[tabStatus].length }}</span>
-        </button>
-      </div>
-
-      <div class="filters">
-        <div class="select">
-          <select v-model="range" class="select__input" aria-label="Date range">
-            <option v-for="option in RANGES" :key="option.key" :value="option.key">{{ option.label }}</option>
-          </select>
-          <ChevronDownIcon class="select__icon" aria-hidden="true" />
+      <div class="toolbar">
+        <div class="tabs" role="tablist" aria-label="Request status">
+          <button
+            v-for="tabStatus in EQUIPMENT_REQUEST_STATUSES"
+            :id="`tab-${tabStatus}`"
+            :key="tabStatus"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === tabStatus"
+            aria-controls="requests-panel"
+            class="tab"
+            :class="{ 'tab--active': activeTab === tabStatus }"
+            @click="activeTab = tabStatus"
+          >
+            {{ tabStatus }}
+            <span class="tab-count">{{ rowsByTab[tabStatus].length }}</span>
+          </button>
         </div>
-        <div class="select">
-          <select v-model="equipment" class="select__input" aria-label="Equipment">
-            <option :value="ALL_EQUIPMENT">All equipment</option>
-            <option v-for="type in equipmentOptions" :key="type" :value="type">{{ type }}</option>
-          </select>
-          <ChevronDownIcon class="select__icon" aria-hidden="true" />
+
+        <div class="filters">
+          <div class="select">
+            <select v-model="range" class="select__input" aria-label="Date range">
+              <option v-for="option in RANGES" :key="option.key" :value="option.key">{{ option.label }}</option>
+            </select>
+            <ChevronDownIcon class="select__icon" aria-hidden="true" />
+          </div>
+          <div class="select">
+            <select v-model="equipment" class="select__input" aria-label="Equipment">
+              <option :value="ALL_EQUIPMENT">All equipment</option>
+              <option v-for="type in equipmentOptions" :key="type" :value="type">{{ type }}</option>
+            </select>
+            <ChevronDownIcon class="select__icon" aria-hidden="true" />
+          </div>
         </div>
       </div>
 
@@ -266,45 +285,47 @@ onMounted(async () => {
 
         <section
           v-for="group in groups"
-          :key="group.equipmentType"
+          :key="group.eventId"
           class="group"
-          :aria-labelledby="`group-${group.equipmentType}`"
+          :aria-labelledby="`group-${group.eventId}`"
         >
           <div class="group-header">
-            <h2 :id="`group-${group.equipmentType}`" class="h4">{{ group.equipmentType }}</h2>
+            <div class="group-header__title">
+              <RouterLink
+                :to="{ name: 'equipment-request-detail', params: { eventId: group.eventId } }"
+                class="group-title-link"
+              >
+                <h2 :id="`group-${group.eventId}`" class="h4">{{ group.eventName }}</h2>
+                <svg class="group-title-link__chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
+              </RouterLink>
+              <span v-if="urgencyLabel(group.rows[0])" class="urgency">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+                {{ urgencyLabel(group.rows[0]) }}
+              </span>
+            </div>
+            <div class="group-header__meta">
+              <span class="meta-item">
+                <svg class="meta-item__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" /></svg>
+                {{ formatDate(group.date) }} · {{ formatTime(group.startTime, group.endTime) }}
+              </span>
+              <span class="meta-item">
+                <svg class="meta-item__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /><path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" /></svg>
+                <span :class="{ 'cell-venue--empty': !group.venue }">{{ group.venue || "Venue not set" }}</span>
+              </span>
+            </div>
             <span class="count-badge">{{ group.total }} {{ badgeLabel }}</span>
-            <span v-if="group.inStock !== null" class="stock">{{ group.inStock }} in stock</span>
           </div>
 
           <ul class="rows">
             <li class="row row--header" aria-hidden="true">
-              <span class="cell-header">Date</span>
-              <span class="cell-header">Time</span>
-              <span class="cell-header">Event</span>
-              <span class="cell-header">Venue</span>
-              <span class="cell-header">Qty</span>
-              <span class="cell-header">Status</span>
-              <span class="cell-header"></span>
+              <span class="cell-header">Equipment</span>
+              <span class="cell-header">Qty needed</span>
+              <span class="cell-header">In stock</span>
             </li>
             <li v-for="row in group.rows" :key="row.key" class="row">
-              <span class="cell cell-date">{{ formatDate(row.date) }}</span>
-              <span class="cell cell-time">{{ formatTime(row.startTime, row.endTime) }}</span>
-              <span class="cell cell-event">{{ row.eventName }}</span>
-              <span class="cell cell-venue" :class="{ 'cell-venue--empty': !row.venue }">{{ row.venue || "Venue not set" }}</span>
+              <span class="cell cell-equipment">{{ row.equipmentType }}</span>
               <span class="cell cell-qty">{{ quantityLabel(row) }}</span>
-              <span class="cell cell-urgency">
-                <span v-if="urgencyLabel(row)" class="urgency">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
-                  {{ urgencyLabel(row) }}
-                </span>
-              </span>
-              <RouterLink
-                :to="{ name: 'equipment-request-detail', params: { eventId: row.eventId } }"
-                class="cell cell-link"
-              >
-                View details
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
-              </RouterLink>
+              <span class="cell cell-stock">{{ stockFor(row.equipmentType) ?? "—" }}</span>
             </li>
           </ul>
         </section>
@@ -324,8 +345,7 @@ onMounted(async () => {
 
 .page-header,
 .full,
-.tabs,
-.filters,
+.toolbar,
 .panel {
   grid-column: 1 / 13;
 }
@@ -339,8 +359,7 @@ onMounted(async () => {
 
   .page-header,
   .full,
-  .tabs,
-  .filters,
+  .toolbar,
   .panel {
     grid-column: 1 / 7;
   }
@@ -355,8 +374,7 @@ onMounted(async () => {
 
   .page-header,
   .full,
-  .tabs,
-  .filters,
+  .toolbar,
   .panel {
     grid-column: 1 / 5;
   }
@@ -400,12 +418,22 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
+/* Toolbar: tabs and filters share one row, filters pushed to the right. */
+.toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--spacing-16);
+}
+
 /* Tabs --------------------------------------------------------------------- */
 
 .tabs {
   display: flex;
+  flex: 0 1 66.6667%;
   flex-wrap: wrap;
-  gap: var(--spacing-8);
+  gap: var(--spacing-24);
   border-bottom: 1px solid var(--color-grey-100);
 }
 
@@ -414,7 +442,7 @@ onMounted(async () => {
   align-items: center;
   gap: var(--spacing-8);
   min-height: 44px;
-  padding: 0 var(--spacing-12);
+  padding: 0 var(--spacing-8);
   border: none;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
@@ -527,6 +555,58 @@ onMounted(async () => {
   gap: var(--spacing-12);
 }
 
+.group-header__title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+}
+
+.group-header__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-24);
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-600);
+}
+
+.meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-6);
+}
+
+.meta-item__icon {
+  flex-shrink: 0;
+  color: var(--color-grey-500);
+}
+
+.group-title-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.group-title-link:hover .h4,
+.group-title-link:hover .group-title-link__chevron {
+  color: var(--color-purple-600);
+}
+
+.group-title-link:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+.group-title-link__chevron {
+  flex-shrink: 0;
+  color: var(--color-grey-400);
+}
+
 .count-badge {
   display: inline-flex;
   align-items: center;
@@ -538,12 +618,7 @@ onMounted(async () => {
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-}
-
-.stock {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-  color: var(--color-grey-600);
+  margin-left: auto;
 }
 
 .empty-state {
@@ -565,7 +640,7 @@ onMounted(async () => {
   color: var(--color-grey-900);
 }
 
-/* Rows: one bordered list per equipment type, a 7-column table on desktop. */
+/* Rows: one bordered list per event, a 3-column table (equipment, qty, stock). */
 .rows {
   list-style: none;
   margin: 0;
@@ -575,12 +650,15 @@ onMounted(async () => {
   border-radius: var(--radius-sm);
 }
 
+/* Fixed-width columns (not max-content) so Qty/Stock line up at the same
+   x-position across every event's independent table, not just within one. */
 .row {
   display: grid;
-  grid-template-columns: 7.5rem 9.5rem minmax(0, 2fr) minmax(0, 1.2fr) 4.5rem 7rem auto;
-  column-gap: var(--spacing-16);
+  grid-template-columns: 12rem 6rem 6rem;
+  justify-content: start;
+  column-gap: var(--spacing-32);
   align-items: center;
-  padding: var(--spacing-8) var(--spacing-20);
+  padding: var(--spacing-16) var(--spacing-20);
   border-bottom: 1px solid var(--color-grey-100);
 }
 
@@ -612,8 +690,7 @@ onMounted(async () => {
   color: var(--color-grey-600);
 }
 
-.cell-date,
-.cell-event {
+.cell-equipment {
   font-size: 1rem;
   font-weight: 700;
   line-height: 1.25rem;
@@ -644,72 +721,9 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.cell-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-4);
-  min-height: 44px;
-  color: var(--color-purple-600);
-  font-weight: 700;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.cell-link:hover {
-  text-decoration: underline;
-}
-
-.cell-link:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-/* Tablet and mobile: each row folds so nothing has to fit in one line;
-   the column header row no longer lines up with anything, so hide it. */
-@media (max-width: 1024px) {
-  .row--header {
-    display: none;
-  }
-
-  .row {
-    grid-template-columns: auto 1fr auto;
-    grid-template-areas:
-      "date time urgency"
-      "event event event"
-      "venue venue qty"
-      "link link link";
-    row-gap: var(--spacing-4);
-    padding: var(--spacing-12) var(--spacing-16);
-  }
-
-  .cell-date {
-    grid-area: date;
-  }
-
-  .cell-time {
-    grid-area: time;
-  }
-
-  .cell-urgency {
-    grid-area: urgency;
-    justify-self: end;
-  }
-
-  .cell-event {
-    grid-area: event;
-  }
-
-  .cell-venue {
-    grid-area: venue;
-  }
-
-  .cell-qty {
-    grid-area: qty;
-    justify-self: end;
-  }
-
-  .cell-link {
-    grid-area: link;
+@media (max-width: 640px) {
+  .count-badge {
+    margin-left: 0;
   }
 }
 </style>

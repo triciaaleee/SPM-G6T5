@@ -39,6 +39,8 @@ async function mountAs(role: string) {
     global: { plugins: [router], stubs: { NotificationBell: true } },
   });
   await flushPromises();
+  // The role pill now only renders inside the account dropdown, closed by default.
+  await wrapper.find(".account-trigger").trigger("click");
   return wrapper;
 }
 
