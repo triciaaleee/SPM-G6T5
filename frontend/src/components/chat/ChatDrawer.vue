@@ -341,13 +341,13 @@ onBeforeUnmount(() => {
   border: none;
   border-radius: var(--radius-full);
   background: transparent;
-  color: var(--color-purple-600);
+  color: var(--color-grey-700);
   cursor: pointer;
 }
 
 .tab:hover {
-  background: var(--color-purple-100);
-  color: var(--color-purple-700);
+  background: var(--color-grey-75);
+  color: var(--color-grey-800);
 }
 
 .tab:focus-visible {

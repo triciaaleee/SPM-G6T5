@@ -21,6 +21,13 @@ const router = createRouter({
     { path: "/attendee/discover", name: "attendee-discover", component: { render: () => h("div") } },
     { path: "/coordinator", name: "coordinator-workload", component: { render: () => h("div") } },
     { path: "/venue-availability", name: "venue-availability", component: { render: () => h("div") } },
+    { path: "/equipment-requests", name: "equipment-requests", component: { render: () => h("div") } },
+    {
+      path: "/equipment-requests/event/:eventId",
+      name: "equipment-request-detail",
+      component: { render: () => h("div") },
+    },
+    { path: "/equipment-inventory", name: "equipment-inventory", component: { render: () => h("div") } },
   ],
 });
 
@@ -32,6 +39,8 @@ async function mountAs(role: string) {
     global: { plugins: [router], stubs: { NotificationBell: true } },
   });
   await flushPromises();
+  // The role pill now only renders inside the account dropdown, closed by default.
+  await wrapper.find(".account-trigger").trigger("click");
   return wrapper;
 }
 
@@ -69,6 +78,29 @@ describe("role chip in the header", () => {
     const wrapper = await mountAs("mystery");
 
     expect(wrapper.find(".role-pill").classes()).toContain("role-pill--attendee");
+  });
+});
+
+describe("Technical Support's nav links", () => {
+  it("offers Requests and Inventory", async () => {
+    const wrapper = await mountAs("technical_support");
+
+    expect(wrapper.findAll(".nav__tab").map((link) => link.text())).toEqual(["Requests", "Inventory"]);
+  });
+
+  it("marks only the current page's link, and keeps Requests current on a request's detail page", async () => {
+    const wrapper = await mountAs("technical_support");
+
+    await router.push("/equipment-inventory");
+    await flushPromises();
+    expect(wrapper.find(".nav__tab--active").text()).toBe("Inventory");
+    expect(wrapper.findAll(".nav__tab--active")).toHaveLength(1);
+
+    await router.push("/equipment-requests/event/7");
+    await flushPromises();
+    expect(wrapper.find(".nav__tab--active").text()).toBe("Requests");
+    expect(wrapper.find(".nav__tab--active").attributes("aria-current")).toBe("page");
+    expect(wrapper.findAll(".nav__tab--active")).toHaveLength(1);
   });
 });
 
