@@ -24,6 +24,7 @@ interface VenueSummary {
   id: number;
   name: string;
   location: string;
+  capacity: number;
 }
 
 // supabase-js types an embedded table as an array even for a to-one
@@ -59,7 +60,7 @@ eventBookingsRouter.get("/:eventId/bookings", async (req: AuthedRequest, res) =>
 
   const { data, error } = await supabase
     .from("venue_bookings")
-    .select("id, status, hold_expires_at, decision_reason, created_at, venues (id, name, location)")
+    .select("id, status, hold_expires_at, decision_reason, created_at, venues (id, name, location, capacity)")
     .eq("event_id", eventId)
     .order("created_at");
   if (error) {

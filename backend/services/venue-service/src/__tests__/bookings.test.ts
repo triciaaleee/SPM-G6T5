@@ -584,7 +584,7 @@ describe("GET /api/venues/events/:eventId/bookings", () => {
         hold_expires_at: null,
         decision_reason: null,
         created_at: "2026-10-07T00:00:00.000Z",
-        venues: { id: 1, name: "Grand Ballroom", location: "Central Campus" },
+        venues: { id: 1, name: "Grand Ballroom", location: "Central Campus", capacity: 300 },
       },
       {
         id: 901,
@@ -593,7 +593,7 @@ describe("GET /api/venues/events/:eventId/bookings", () => {
         decision_reason: null,
         created_at: "2026-10-07T01:00:00.000Z",
         // supabase-js may hand an embedded to-one back as an array.
-        venues: [{ id: 2, name: "Seminar Room 3-01", location: "North Campus" }],
+        venues: [{ id: 2, name: "Seminar Room 3-01", location: "North Campus", capacity: 80 }],
       },
     ]);
     const res = await request(app)
@@ -609,7 +609,7 @@ describe("GET /api/venues/events/:eventId/bookings", () => {
         holdExpiresAt: null,
         decisionReason: null,
         createdAt: "2026-10-07T00:00:00.000Z",
-        venue: { id: 1, name: "Grand Ballroom", location: "Central Campus" },
+        venue: { id: 1, name: "Grand Ballroom", location: "Central Campus", capacity: 300 },
       },
       {
         id: 901,
@@ -617,7 +617,7 @@ describe("GET /api/venues/events/:eventId/bookings", () => {
         holdExpiresAt: "2026-10-09T00:00:00.000Z",
         decisionReason: null,
         createdAt: "2026-10-07T01:00:00.000Z",
-        venue: { id: 2, name: "Seminar Room 3-01", location: "North Campus" },
+        venue: { id: 2, name: "Seminar Room 3-01", location: "North Campus", capacity: 80 },
       },
     ]);
   });
