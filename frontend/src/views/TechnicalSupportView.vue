@@ -243,18 +243,9 @@ onMounted(async () => {
     <template v-else>
       <div class="toolbar">
         <div class="tabs" role="tablist" aria-label="Request status">
-          <button
-            v-for="tabStatus in EQUIPMENT_REQUEST_STATUSES"
-            :id="`tab-${tabStatus}`"
-            :key="tabStatus"
-            type="button"
-            role="tab"
-            :aria-selected="activeTab === tabStatus"
-            aria-controls="requests-panel"
-            class="tab"
-            :class="{ 'tab--active': activeTab === tabStatus }"
-            @click="activeTab = tabStatus"
-          >
+          <button v-for="tabStatus in EQUIPMENT_REQUEST_STATUSES" :id="`tab-${tabStatus}`" :key="tabStatus"
+            type="button" role="tab" :aria-selected="activeTab === tabStatus" aria-controls="requests-panel" class="tab"
+            :class="{ 'tab--active': activeTab === tabStatus }" @click="activeTab = tabStatus">
             {{ tabStatus }}
             <span class="tab-count">{{ rowsByTab[tabStatus].length }}</span>
           </button>
@@ -283,37 +274,51 @@ onMounted(async () => {
           <p class="body-default muted">{{ emptyMessage }}</p>
         </div>
 
-        <section
-          v-for="group in groups"
-          :key="group.eventId"
-          class="group"
-          :aria-labelledby="`group-${group.eventId}`"
-        >
+        <section v-for="group in groups" :key="group.eventId" class="group" :aria-labelledby="`group-${group.eventId}`">
           <div class="group-header">
             <div class="group-header__title">
-              <RouterLink
-                :to="{ name: 'equipment-request-detail', params: { eventId: group.eventId } }"
-                class="group-title-link"
-              >
+              <RouterLink :to="{ name: 'equipment-request-detail', params: { eventId: group.eventId } }"
+                class="group-title-link">
                 <h2 :id="`group-${group.eventId}`" class="h4">{{ group.eventName }}</h2>
-                <svg class="group-title-link__chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
+                <svg class="group-title-link__chevron" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
+                  aria-hidden="true">
+                  <path d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                </svg>
               </RouterLink>
-              <span v-if="urgencyLabel(group.rows[0])" class="urgency">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
-                {{ urgencyLabel(group.rows[0]) }}
-              </span>
             </div>
-            <div class="group-header__meta">
-              <span class="meta-item">
-                <svg class="meta-item__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" /></svg>
-                {{ formatDate(group.date) }} · {{ formatTime(group.startTime, group.endTime) }}
-              </span>
-              <span class="meta-item">
-                <svg class="meta-item__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /><path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" /></svg>
-                <span :class="{ 'cell-venue--empty': !group.venue }">{{ group.venue || "Venue not set" }}</span>
-              </span>
+            <div class="group-header__row">
+              <div class="group-header__meta">
+                <span class="meta-item">
+                  <svg class="meta-item__icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                    aria-hidden="true">
+                    <path
+                      d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+                  </svg>
+                  {{ formatDate(group.date) }} · {{ formatTime(group.startTime, group.endTime) }}
+                </span>
+                <span class="meta-item">
+                  <svg class="meta-item__icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                    aria-hidden="true">
+                    <path d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    <path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" />
+                  </svg>
+                  <span :class="{ 'cell-venue--empty': !group.venue }">{{ group.venue || "Venue not set" }}</span>
+                </span>
+              </div>
+              <div class="group-header__badges">
+                <span class="count-badge">{{ group.total }} {{ badgeLabel }}</span>
+                <span v-if="urgencyLabel(group.rows[0])" class="urgency">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                  </svg>
+                  {{ urgencyLabel(group.rows[0]) }}
+                </span>
+              </div>
             </div>
-            <span class="count-badge">{{ group.total }} {{ badgeLabel }}</span>
           </div>
 
           <ul class="rows">
@@ -431,10 +436,10 @@ onMounted(async () => {
 
 .tabs {
   display: flex;
-  flex: 0 1 66.6667%;
+  flex: 0 1 75%;
   flex-wrap: wrap;
   gap: var(--spacing-24);
-  border-bottom: 1px solid var(--color-grey-100);
+  border-bottom: 1.5px solid var(--color-grey-100);
 }
 
 .tab {
@@ -539,7 +544,7 @@ onMounted(async () => {
 .panel {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-32);
+  gap: var(--spacing-40);
 }
 
 .group {
@@ -548,11 +553,26 @@ onMounted(async () => {
   gap: var(--spacing-12);
 }
 
+.group:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
 .group-header {
   display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--spacing-8);
+  flex-direction: column;
+}
+
+.group-header__row {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--spacing-12);
+  align-self: stretch;
 }
 
 .group-header__title {
@@ -585,7 +605,7 @@ onMounted(async () => {
 .group-title-link {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-4);
+  gap: var(--spacing-6);
   color: inherit;
   text-decoration: none;
   cursor: pointer;
@@ -604,7 +624,7 @@ onMounted(async () => {
 
 .group-title-link__chevron {
   flex-shrink: 0;
-  color: var(--color-grey-400);
+  color: var(--color-grey-600);
 }
 
 .count-badge {
@@ -618,7 +638,6 @@ onMounted(async () => {
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-  margin-left: auto;
 }
 
 .empty-state {
@@ -654,7 +673,7 @@ onMounted(async () => {
    x-position across every event's independent table, not just within one. */
 .row {
   display: grid;
-  grid-template-columns: 12rem 6rem 6rem;
+  grid-template-columns: 12rem 9rem 6rem;
   justify-content: start;
   column-gap: var(--spacing-32);
   align-items: center;
@@ -721,9 +740,10 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-@media (max-width: 640px) {
-  .count-badge {
-    margin-left: 0;
-  }
+.group-header__badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-12);
 }
 </style>
