@@ -1,81 +1,107 @@
 /** @type {import('tailwindcss').Config} */
-// Colours/radius are mapped straight onto the CSS custom properties in
-// src/styles/tokens.css (sourced from Style.md) so Tailwind utilities and
-// the existing hand-written views stay on the same design tokens. Spacing
-// is intentionally left on Tailwind's default rem scale rather than aliased
-// to --spacing-*, which would silently break the numeric step ordering —
-// use arbitrary values like p-[var(--spacing-24)] where a token value matters.
+// Colours/radius map straight onto the CSS custom properties in
+// src/styles/tokens.css (sourced from Style.md), and `colors`/`borderRadius`
+// replace Tailwind's own theme entirely (not `theme.extend`) — only
+// Style.md's tokens exist as Tailwind utilities, so an off-palette class
+// (e.g. a stray `bg-red-500`) generates nothing instead of silently
+// rendering a wrong, non-token color. Spacing is intentionally left on
+// Tailwind's default rem scale rather than aliased to --spacing-*, which
+// would silently break the numeric step ordering — use arbitrary values
+// like p-[var(--spacing-24)] where a token value matters.
 export default {
   content: ["./index.html", "./src/**/*.{vue,ts}"],
   theme: {
-    extend: {
-      fontFamily: {
-        sans: ["var(--font-family-lato)"],
+    fontFamily: {
+      sans: ["var(--font-family-lato)"],
+    },
+    colors: {
+      transparent: "transparent",
+      current: "currentColor",
+      inherit: "inherit",
+      base: {
+        white: "var(--color-base-white)",
+        black: "var(--color-base-black)",
       },
-      colors: {
-        base: {
-          white: "var(--color-base-white)",
-          black: "var(--color-base-black)",
-        },
-        grey: {
-          25: "var(--color-grey-25)",
-          50: "var(--color-grey-50)",
-          75: "var(--color-grey-75)",
-          100: "var(--color-grey-100)",
-          200: "var(--color-grey-200)",
-          300: "var(--color-grey-300)",
-          400: "var(--color-grey-400)",
-          500: "var(--color-grey-500)",
-          600: "var(--color-grey-600)",
-          700: "var(--color-grey-700)",
-          800: "var(--color-grey-800)",
-          900: "var(--color-grey-900)",
-        },
-        purple: {
-          100: "var(--color-purple-100)",
-          200: "var(--color-purple-200)",
-          300: "var(--color-purple-300)",
-          600: "var(--color-purple-600)",
-          700: "var(--color-purple-700)",
-          800: "var(--color-purple-800)",
-        },
-        blue: {
-          100: "var(--color-blue-100)",
-          200: "var(--color-blue-200)",
-          300: "var(--color-blue-300)",
-          400: "var(--color-blue-400)",
-          500: "var(--color-blue-500)",
-          600: "var(--color-blue-600)",
-          700: "var(--color-blue-700)",
-          800: "var(--color-blue-800)",
-          900: "var(--color-blue-900)",
-        },
-        error: {
-          200: "var(--color-error-200)",
-          600: "var(--color-error-600)",
-        },
-        warning: {
-          100: "var(--color-warning-100)",
-          200: "var(--color-warning-200)",
-          300: "var(--color-warning-300)",
-          400: "var(--color-warning-400)",
-          500: "var(--color-warning-500)",
-          600: "var(--color-warning-600)",
-          700: "var(--color-warning-700)",
-          800: "var(--color-warning-800)",
-          900: "var(--color-warning-900)",
-        },
-        success: {
-          600: "var(--color-success-600)",
-          700: "var(--color-success-700)",
-        },
+      grey: {
+        25: "var(--color-grey-25)",
+        50: "var(--color-grey-50)",
+        75: "var(--color-grey-75)",
+        100: "var(--color-grey-100)",
+        200: "var(--color-grey-200)",
+        300: "var(--color-grey-300)",
+        400: "var(--color-grey-400)",
+        500: "var(--color-grey-500)",
+        600: "var(--color-grey-600)",
+        700: "var(--color-grey-700)",
+        800: "var(--color-grey-800)",
+        900: "var(--color-grey-900)",
       },
-      borderRadius: {
-        xs: "var(--radius-xs)",
-        sm: "var(--radius-sm)",
-        lg: "var(--radius-lg)",
-        full: "var(--radius-full)",
+      purple: {
+        50: "var(--color-purple-50)",
+        100: "var(--color-purple-100)",
+        200: "var(--color-purple-200)",
+        300: "var(--color-purple-300)",
+        400: "var(--color-purple-400)",
+        500: "var(--color-purple-500)",
+        600: "var(--color-purple-600)",
+        700: "var(--color-purple-700)",
+        800: "var(--color-purple-800)",
+        900: "var(--color-purple-900)",
       },
+      blue: {
+        100: "var(--color-blue-100)",
+        200: "var(--color-blue-200)",
+        300: "var(--color-blue-300)",
+        400: "var(--color-blue-400)",
+        500: "var(--color-blue-500)",
+        600: "var(--color-blue-600)",
+        700: "var(--color-blue-700)",
+        800: "var(--color-blue-800)",
+        900: "var(--color-blue-900)",
+      },
+      error: {
+        100: "var(--color-error-100)",
+        200: "var(--color-error-200)",
+        300: "var(--color-error-300)",
+        400: "var(--color-error-400)",
+        500: "var(--color-error-500)",
+        600: "var(--color-error-600)",
+        700: "var(--color-error-700)",
+        800: "var(--color-error-800)",
+        900: "var(--color-error-900)",
+      },
+      warning: {
+        100: "var(--color-warning-100)",
+        200: "var(--color-warning-200)",
+        300: "var(--color-warning-300)",
+        400: "var(--color-warning-400)",
+        500: "var(--color-warning-500)",
+        600: "var(--color-warning-600)",
+        700: "var(--color-warning-700)",
+        800: "var(--color-warning-800)",
+        900: "var(--color-warning-900)",
+      },
+      success: {
+        100: "var(--color-success-100)",
+        200: "var(--color-success-200)",
+        300: "var(--color-success-300)",
+        400: "var(--color-success-400)",
+        500: "var(--color-success-500)",
+        600: "var(--color-success-600)",
+        700: "var(--color-success-700)",
+        800: "var(--color-success-800)",
+        900: "var(--color-success-900)",
+      },
+    },
+    borderRadius: {
+      none: "var(--radius-none)",
+      xs: "var(--radius-xs)",
+      sm: "var(--radius-sm)",
+      md: "var(--radius-md)",
+      lg: "var(--radius-lg)",
+      xl: "var(--radius-xl)",
+      "2xl": "var(--radius-2xl)",
+      full: "var(--radius-full)",
     },
   },
   plugins: [],

@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { getStoredUser } from "../lib/auth";
 import { fetchMyRegistrations, type MyRegistration } from "../lib/registrationApi";
 import { registrationBadgeClass } from "../lib/registrationStatus";
-import { formatCardDate, formatCardTimeRange, isPastRegistration } from "../lib/attendeeEvents";
+import { eventThumbnail, formatCardDate, formatCardTimeRange, isPastRegistration } from "../lib/attendeeEvents";
 
 /**
  * Attendee homepage: the events this attendee has registered for, split into
@@ -120,48 +120,43 @@ onMounted(async () => {
 
         <ul v-else class="card-list">
           <li v-for="registration in visible" :key="registration.registrationId" class="card-item">
-            <article class="card">
-              <!-- A finished event is "Event over" whatever the registration status was. -->
-              <span v-if="activeTab === 'past'" class="badge status-over">Event over</span>
-              <span v-else class="badge" :class="registrationBadgeClass(registration.status)">
-                {{ registration.status }}
-              </span>
+            <RouterLink :to="{ name: 'attendee-event-detail', params: { id: registration.eventId } }" class="card">
+              <img :src="eventThumbnail(registration.eventId)" alt="" class="card-thumbnail" />
 
-              <div class="card-body">
-                <h2 class="card-title">{{ eventTitle(registration) }}</h2>
-                <p v-if="registration.event?.description" class="card-description">
-                  {{ registration.event.description }}
-                </p>
+              <div class="card-content">
+                <!-- A finished event is "Event over" whatever the registration status was. -->
+                <span v-if="activeTab === 'past'" class="badge status-over">Event over</span>
+                <span v-else class="badge" :class="registrationBadgeClass(registration.status)">
+                  {{ registration.status }}
+                </span>
+
+                <div class="card-body">
+                  <h2 class="card-title">{{ eventTitle(registration) }}</h2>
+                  <p v-if="registration.event?.description" class="card-description">
+                    {{ registration.event.description }}
+                  </p>
+                </div>
+
+                <ul class="card-facts">
+                  <li class="fact">
+                    <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" /></svg>
+                    <span>{{ formatCardDate(registration.event?.proposedDate) }}</span>
+                  </li>
+                  <li class="fact">
+                    <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+                    <span>{{ formatCardTimeRange(registration.event?.startTime, registration.event?.endTime) }}</span>
+                  </li>
+                  <li class="fact">
+                    <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /><path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" /></svg>
+                    <span>{{ venueLabel(registration) }}</span>
+                  </li>
+                  <li v-if="registration.event?.accessibility" class="fact fact--accessibility">
+                    <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="4.5" r="1.75" /><path d="M5.5 8.5 12 10l6.5-1.5M12 10v4.5m0 0-3 6m3-6 3 6" /></svg>
+                    <span class="fact__text">{{ registration.event.accessibility }}</span>
+                  </li>
+                </ul>
               </div>
-
-              <ul class="card-facts">
-                <li class="fact">
-                  <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" /></svg>
-                  <span>{{ formatCardDate(registration.event?.proposedDate) }}</span>
-                </li>
-                <li class="fact">
-                  <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
-                  <span>{{ formatCardTimeRange(registration.event?.startTime, registration.event?.endTime) }}</span>
-                </li>
-                <li class="fact">
-                  <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /><path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" /></svg>
-                  <span>{{ venueLabel(registration) }}</span>
-                </li>
-                <li v-if="registration.event?.accessibility" class="fact fact--accessibility">
-                  <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="4.5" r="1.75" /><path d="M5.5 8.5 12 10l6.5-1.5M12 10v4.5m0 0-3 6m3-6 3 6" /></svg>
-                  <span class="fact__text">{{ registration.event.accessibility }}</span>
-                </li>
-              </ul>
-
-              <hr class="card-divider" />
-
-              <RouterLink
-                :to="{ name: 'attendee-event-detail', params: { id: registration.eventId } }"
-                class="btn-secondary"
-              >
-                View details
-              </RouterLink>
-            </article>
+            </RouterLink>
           </li>
         </ul>
       </div>
@@ -315,12 +310,40 @@ onMounted(async () => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-16);
-  padding: var(--spacing-24);
   box-sizing: border-box;
-  background: var(--color-grey-50);
+  background: var(--color-base-white);
   border: 1px solid var(--color-grey-100);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.card-thumbnail {
+  display: block;
+  width: 100%;
+  aspect-ratio: 2 /1;
+  object-fit: cover;
+}
+
+.card-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+  padding: var(--spacing-24);
 }
 
 /* Status badge — no leading dot. */
@@ -416,38 +439,4 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-.card-divider {
-  margin: auto 0 0;
-  border: none;
-  border-top: 1px solid var(--color-grey-100);
-}
-
-/* Secondary button: Style.md 3.4 — outline in Purple 300, label in Purple 600. */
-.btn-secondary {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 0 var(--spacing-24);
-  border: 1px solid var(--color-purple-300);
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-purple-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.btn-secondary:hover {
-  background: var(--color-purple-100);
-}
-
-.btn-secondary:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
 </style>

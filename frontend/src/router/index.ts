@@ -13,6 +13,8 @@ import VenueStaff from "../views/VenueStaff.vue";
 import VenueRequestQueue from "../views/VenueRequestQueue.vue";
 import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
 import TechnicalSupportView from "../views/TechnicalSupportView.vue";
+import EquipmentRequestDetailView from "../views/EquipmentRequestDetailView.vue";
+import EquipmentInventoryView from "../views/EquipmentInventoryView.vue";
 import LeadDashboardView from "../views/LeadDashboardView.vue";
 import SafetyReviewQueueView from "../views/SafetyReviewQueueView.vue";
 import NotificationsView from "../views/NotificationsView.vue";
@@ -114,6 +116,20 @@ export const router = createRouter({
       path: "/equipment-requests",
       name: "equipment-requests",
       component: TechnicalSupportView,
+      meta: { requiresAuth: true, roles: ["technical_support"] },
+    },
+    {
+      // E5-1 AC1/AC2: one event's equipment requests. The backend refuses an event with none.
+      path: "/equipment-requests/event/:eventId",
+      name: "equipment-request-detail",
+      component: EquipmentRequestDetailView,
+      meta: { requiresAuth: true, roles: ["technical_support"] },
+    },
+    {
+      // E5-1 AC3: view and update item records and availability.
+      path: "/equipment-inventory",
+      name: "equipment-inventory",
+      component: EquipmentInventoryView,
       meta: { requiresAuth: true, roles: ["technical_support"] },
     },
     {

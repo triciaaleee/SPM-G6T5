@@ -74,19 +74,19 @@ describe("AttendeeEventsView", () => {
 
     const tabs = wrapper.findAll('[role="tab"]');
     expect(tabs.map((t) => t.text())).toEqual(["Upcoming", "Past", "Withdrawn"]);
-    expect(wrapper.findAll("article")).toHaveLength(2);
+    expect(wrapper.findAll(".card")).toHaveLength(2);
 
     await tabs[1].trigger("click");
 
-    expect(wrapper.findAll("article")).toHaveLength(1);
-    expect(wrapper.find("article").text()).toContain("Event 3");
+    expect(wrapper.findAll(".card")).toHaveLength(1);
+    expect(wrapper.find(".card").text()).toContain("Event 3");
   });
 
   it("shows the event's name, description, date, time and venue on the card", async () => {
     mockedFetch.mockResolvedValue([registration(1)]);
     const wrapper = await mountView();
 
-    const text = wrapper.find("article").text();
+    const text = wrapper.find(".card").text();
     expect(text).toContain("Registered");
     expect(text).toContain("Event 1");
     expect(text).toContain("About event 1");
@@ -118,13 +118,13 @@ describe("AttendeeEventsView", () => {
     const wrapper = await mountView();
     const tabs = wrapper.findAll('[role="tab"]');
 
-    expect(wrapper.findAll("article h2").map((h) => h.text())).toEqual(["Event 1"]);
+    expect(wrapper.findAll(".card h2").map((h) => h.text())).toEqual(["Event 1"]);
 
     await tabs[1].trigger("click");
-    expect(wrapper.findAll("article")).toHaveLength(0);
+    expect(wrapper.findAll(".card")).toHaveLength(0);
 
     await tabs[2].trigger("click");
-    expect(wrapper.findAll("article h2").map((h) => h.text())).toEqual(["Event 2", "Event 3"]);
+    expect(wrapper.findAll(".card h2").map((h) => h.text())).toEqual(["Event 2", "Event 3"]);
     expect(wrapper.findAll(".badge").map((b) => b.text())).toEqual(["Withdrawn", "Withdrawn"]);
     expect(wrapper.find(".status-over").exists()).toBe(false);
   });
@@ -134,11 +134,11 @@ describe("AttendeeEventsView", () => {
     const wrapper = await mountView();
 
     // The Withdrawn tab is a tab, not a card action: no button inside any card.
-    expect(wrapper.findAll("article button")).toHaveLength(0);
+    expect(wrapper.findAll(".card button")).toHaveLength(0);
     for (const tab of wrapper.findAll('[role="tab"]')) {
       await tab.trigger("click");
       for (const badge of wrapper.findAll(".badge")) expect(badge.element.children).toHaveLength(0);
-      expect(wrapper.findAll("article button")).toHaveLength(0);
+      expect(wrapper.findAll(".card button")).toHaveLength(0);
     }
   });
 
@@ -146,7 +146,7 @@ describe("AttendeeEventsView", () => {
     mockedFetch.mockResolvedValue([registration(1), registration(2, {}, { accessibility: null })]);
     const wrapper = await mountView();
 
-    const cards = wrapper.findAll("article");
+    const cards = wrapper.findAll(".card");
     expect(cards[0].find(".fact--accessibility").text()).toBe("Step-free entry and a hearing loop.");
     expect(cards[1].find(".fact--accessibility").exists()).toBe(false);
   });
@@ -158,14 +158,14 @@ describe("AttendeeEventsView", () => {
     ]);
     const wrapper = await mountView();
 
-    expect(wrapper.findAll("article h2").map((h) => h.text())).toEqual(["Event 2", "Event 1"]);
+    expect(wrapper.findAll(".card h2").map((h) => h.text())).toEqual(["Event 2", "Event 1"]);
   });
 
   it("falls back when the venue or event info is missing", async () => {
     mockedFetch.mockResolvedValue([registration(1, {}, { venues: [] }), registration(2, { event: null })]);
     const wrapper = await mountView();
 
-    const cards = wrapper.findAll("article");
+    const cards = wrapper.findAll(".card");
     expect(cards[0].text()).toContain("Venue to be confirmed");
     expect(cards[1].text()).toContain("Event #2");
   });
@@ -174,7 +174,7 @@ describe("AttendeeEventsView", () => {
     mockedFetch.mockResolvedValue([registration(7)]);
     const wrapper = await mountView();
 
-    expect(wrapper.find("article a").attributes("href")).toBe("/attendee/events/7");
+    expect(wrapper.find("a.card").attributes("href")).toBe("/attendee/events/7");
   });
 
   it("shows an empty state for a tab with no events", async () => {

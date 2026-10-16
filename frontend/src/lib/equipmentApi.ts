@@ -31,9 +31,30 @@ export interface EquipmentRequest {
   items: EquipmentItem[];
 }
 
+/**
+ * What Technical Support may see about an event (E5-1 AC1): which event it is
+ * and when and where it happens. Nothing about its people or purpose.
+ */
+export interface SupportEventInfo {
+  id: number;
+  name: string | null;
+  proposedDate: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  venue: string | null;
+}
+
 /** Only present on Technical Support's list (GET with no eventId). */
 export interface EquipmentRequestWithEvent extends EquipmentRequest {
-  event: { id: number; name: string | null; proposedDate: string | null; startTime: string | null; endTime: string | null } | null;
+  event: SupportEventInfo | null;
+}
+
+/** E5-1 AC1: one event's equipment requests with its timing and the organiser's technical requirements. */
+export interface EventEquipmentView {
+  event: SupportEventInfo;
+  /** The organiser's own words on what technical support the event needs; null when none were given. */
+  technicalRequirements: string | null;
+  equipmentRequests: EquipmentRequest[];
 }
 
 /** The fixed catalog Coordinators pick from and Technical Support's stock table reads (migration 0022). */
@@ -89,6 +110,9 @@ export class EquipmentValidationError extends Error {
 }
 
 export class EquipmentRequestError extends Error {}
+
+/** E5-1 AC2: the event has no equipment request (or isn't Technical Support's to open). */
+export class EquipmentAccessDeniedError extends Error {}
 
 /** E5-6 AC2: the PATCH was rejected because not enough equipment is free for the event's window. */
 export interface ReservationShortfall {
@@ -206,4 +230,51 @@ export async function checkEquipmentAvailability(
     throw new EquipmentRequestError(body.error ?? "Failed to check equipment availability");
   }
   return body as EquipmentAvailability;
+}
+
+/**
+ * E5-1 AC1/AC2: open one event's equipment requests. Throws
+ * `EquipmentAccessDeniedError` when the backend refuses it, which includes an
+ * event that has no equipment request.
+ */
+export async function fetchEquipmentRequestsForSupport(eventId: number | string): Promise<EventEquipmentView> {
+  const res = await fetch(`${apiBase}/event/${encodeURIComponent(String(eventId))}`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (res.status === 403) throw new EquipmentAccessDeniedError("You don't have access to this event");
+  if (!res.ok) throw new Error("Failed to load the equipment request");
+  return (await res.json()) as EventEquipmentView;
+}
+
+async function writeCatalog(url: string, method: "POST" | "PATCH", payload: object, failure: string): Promise<EquipmentCatalogItem> {
+  const res = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json", ...authHeader() },
+    body: JSON.stringify(payload),
+  });
+  await redirectIfUnauthenticated(res);
+
+  let body: { equipment?: EquipmentCatalogItem; error?: string; fields?: Record<string, string> } = {};
+  try {
+    body = await res.json();
+  } catch {
+    // No JSON body: fall back to the generic message below.
+  }
+
+  // 400 (bad numbers) and 409 (duplicate name) both carry per-field messages.
+  if ((res.status === 400 || res.status === 409) && body.fields) throw new EquipmentValidationError(body.fields);
+  if (!res.ok || !body.equipment) throw new EquipmentRequestError(body.error ?? failure);
+  return body.equipment;
+}
+
+/** E5-1 AC3: add an item to the inventory. New stock starts fully available. */
+export function createCatalogItem(name: string, totalStock: number): Promise<EquipmentCatalogItem> {
+  return writeCatalog(catalogApiBase, "POST", { name, totalStock }, "Failed to add the equipment item");
+}
+
+/** E5-1 AC3: correct an item's total and/or available stock. */
+export function updateCatalogItem(
+  id: number,
+  changes: { totalStock?: number; availableStock?: number },
+): Promise<EquipmentCatalogItem> {
+  return writeCatalog(`${catalogApiBase}/${id}`, "PATCH", changes, "Failed to update the equipment item");
 }

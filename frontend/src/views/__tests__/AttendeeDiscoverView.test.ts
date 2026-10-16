@@ -53,16 +53,16 @@ describe("AttendeeDiscoverView", () => {
     expect(wrapper.text()).toContain("Showing 2 events");
   });
 
-  it("only offers View details on a card, never Register or any capacity info", async () => {
+  it("makes the whole card a link to the event, never a Register button or capacity info", async () => {
     mockedOpen.mockResolvedValue([openEvent()]);
     const wrapper = await mountView();
 
     expect(wrapper.text()).not.toContain("Register");
+    expect(wrapper.text()).not.toContain("View details");
     expect(wrapper.text()).not.toMatch(/places left|Full/);
     expect(wrapper.find("[role='img']").exists()).toBe(false);
-    const link = wrapper.find("a.btn-secondary");
-    expect(link.text()).toBe("View details");
-    expect(link.attributes("href")).toBe("/attendee/events/1");
+    const card = wrapper.find("a.card");
+    expect(card.attributes("href")).toBe("/attendee/events/1");
   });
 
   it("badges an unregistered event Open and a registered one Registered", async () => {

@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { deleteDraft, fetchMyEvents, getCurrentUser, type EventSummary } from "../lib/eventsApi";
 import { statusBadgeClass, statusLabel } from "../lib/eventStatus";
+import { eventThumbnail, formatCardDate, formatCardTimeRange } from "../lib/attendeeEvents";
 
 const route = useRoute();
 const events = ref<EventSummary[]>([]);
@@ -19,8 +20,8 @@ const isCoordinator = ref(false);
 type EventsTab = "drafts" | "submitted";
 
 const tabs: { key: EventsTab; label: string }[] = [
-  { key: "drafts", label: "Drafts" },
   { key: "submitted", label: "Submitted Requests" },
+  { key: "drafts", label: "Drafts" },
 ];
 
 // E2-4: after saving a draft, the form redirects here with ?tab=drafts so
@@ -55,11 +56,24 @@ function needsClarificationReply(event: EventSummary): boolean {
 
 interface SubmittedEventDetails {
   name?: string;
+  proposedDate?: string;
+  startTime?: string;
+  endTime?: string;
 }
 
 function eventName(event: EventSummary): string {
   const details = event.submitted_details as SubmittedEventDetails;
   return details?.name || `Event #${event.id}`;
+}
+
+function eventDateLabel(event: EventSummary): string {
+  const details = event.submitted_details as SubmittedEventDetails;
+  return formatCardDate(details?.proposedDate);
+}
+
+function eventTimeLabel(event: EventSummary): string {
+  const details = event.submitted_details as SubmittedEventDetails;
+  return formatCardTimeRange(details?.startTime, details?.endTime);
 }
 
 /** E2-4 AC2: opening a draft resumes editing it in the same form used to
@@ -172,37 +186,45 @@ onMounted(async () => {
       <div v-else class="card-grid">
         <RouterLink v-for="event in filteredEvents" :key="event.id" :to="eventLink(event)"
           class="event-card">
-          <div class="card-header">
-            <span class="badge badge-dot" :class="statusBadgeClass(event.status)">
-              <span class="badge__dot" />
-              {{ statusLabel(event.status) }}
-            </span>
-            <span v-if="isRegistrationRequired(event)" class="badge badge-registration">Registration Required</span>
-          </div>
-          <p class="card-title">{{ eventName(event) }}</p>
-          <p class="body-small muted">Created {{ formatCreatedDate(event.created_at) }}</p>
+          <img :src="eventThumbnail(event.id)" alt="" class="card-thumbnail" />
 
-          <hr class="card-divider" />
-
-          <div class="card-footer">
-            <div class="card-footer__coordinator">
-              <span v-if="event.coordinator?.name" class="coordinator-avatar">{{ coordinatorInitial(event) }}</span>
-              <span class="body-small  muted">Coordinator: {{ event.coordinator?.name ?? "Unassigned" }}</span>
+          <div class="card-content">
+            <div class="card-header">
+              <span class="badge badge-dot" :class="statusBadgeClass(event.status)">
+                <span class="badge__dot" />
+                {{ statusLabel(event.status) }}
+              </span>
+              <span v-if="isRegistrationRequired(event)" class="badge badge-registration">Registration Required</span>
             </div>
-            <div class="card-footer__action">
+            <p class="card-title">{{ eventName(event) }}</p>
 
+            <ul class="card-facts">
+              <li class="fact">
+                <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" /></svg>
+                <span>{{ eventDateLabel(event) }}</span>
+              </li>
+              <li class="fact">
+                <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+                <span>{{ eventTimeLabel(event) }}</span>
+              </li>
+            </ul>
+
+            <hr class="card-divider" />
+
+            <div class="card-footer">
+              <div class="card-coordinator">
+                <span v-if="event.coordinator?.name" class="coordinator-avatar">{{ coordinatorInitial(event) }}</span>
+                <span class="body-small muted">Coordinator: {{ event.coordinator?.name ?? "Unassigned" }}</span>
+              </div>
+              <span class="body-small muted">Submitted: {{ formatCreatedDate(event.created_at) }}</span>
+            </div>
+
+            <div v-if="needsClarificationReply(event) || event.status === 'Draft'" class="card-footer-actions">
               <span v-if="needsClarificationReply(event)" class="reply-action">Reply Needed</span>
               <button v-if="event.status === 'Draft'" type="button" class="delete-draft-action"
                 @click="requestDeleteDraft(event, $event)">
                 Delete
               </button>
-              <svg class="card-chevron" :class="{ 'card-chevron--reply': needsClarificationReply(event) }"
-                viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path fill-rule="evenodd"
-                  d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z"
-                  clip-rule="evenodd" />
-              </svg>
-
             </div>
           </div>
         </RouterLink>
@@ -331,7 +353,7 @@ onMounted(async () => {
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(12, 1fr);
   gap: var(--grid-desktop-gutter);
   align-content: start;
 }
@@ -351,23 +373,30 @@ onMounted(async () => {
 .event-card {
   position: relative;
   grid-column: span 4;
-  display: block;
-  background: var(--color-grey-50);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-base-white);
   border: 1px solid var(--color-grey-100);
   border-radius: var(--radius-lg);
-  padding: var(--spacing-24);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
   color: inherit;
 }
 
-/* An odd number of cards leaves the last one alone in its row — span the
-   full grid instead of leaving the other half empty on the right. */
-.event-card:last-child:nth-child(odd) {
-  grid-column: 1 / -1;
+.card-thumbnail {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 1;
+  object-fit: cover;
+}
+
+.card-content {
+  padding: var(--spacing-24);
 }
 
 .event-card:hover {
-  background: var(--color-grey-75);
-  border-color: var(--color-grey-200);
+  border-width: 1.4px;
+  border-color: var(--color-purple-300);
 }
 
 @media (max-width: 1024px) {
@@ -390,6 +419,29 @@ onMounted(async () => {
   line-height: 1.75rem;
   color: var(--color-grey-900);
   margin: var(--spacing-12) 0 var(--spacing-4);
+}
+
+.card-facts {
+  list-style: none;
+  margin: 0 0 var(--spacing-8);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.fact {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-600);
+}
+
+.fact__icon {
+  flex: none;
+  color: var(--color-grey-500);
 }
 
 .card-header {
@@ -462,7 +514,7 @@ onMounted(async () => {
   gap: var(--spacing-8);
 }
 
-.card-footer__coordinator {
+.card-coordinator {
   display: flex;
   align-items: center;
   gap: var(--spacing-8);
@@ -492,22 +544,11 @@ onMounted(async () => {
   padding-bottom: 2px;
 }
 
-.card-footer__action {
-  flex-shrink: 0;
+.card-footer-actions {
   display: flex;
   align-items: center;
-  gap: var(--spacing-4);
-}
-
-.card-chevron {
-  width: 20px;
-  height: 20px;
-  color: var(--color-grey-400);
-  flex-shrink: 0;
-}
-
-.card-chevron--reply {
-  color: var(--color-warning-600);
+  gap: var(--spacing-12);
+  margin-top: var(--spacing-8);
 }
 
 .delete-draft-action {

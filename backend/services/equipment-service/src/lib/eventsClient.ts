@@ -55,6 +55,9 @@ export interface EquipmentBookingInfo {
   startTime: string | null;
   endTime: string | null;
   equipment: string | null;
+  /** The event's venue as the organiser wrote it, and their technical-support notes (E5-1 AC1). */
+  venue?: string | null;
+  technicalSupport?: string | null;
   /**
    * The event's current coordinator. E2-12: a reassignment hands the event's
    * pending equipment requests to the new coordinator, so notifications go
@@ -85,4 +88,31 @@ export async function fetchEventBookingInfo(
 
   const body = (await res.json()) as { events?: EquipmentBookingInfo[] };
   return { status: "ok", events: body.events ?? [] };
+}
+
+/**
+ * What Technical Support may see about an event: when and where it is, and
+ * which event it is. Built as a whitelist, never by deleting fields from the
+ * fuller object, so anything events-service adds later stays private until it
+ * is listed here. No organiser, coordinator, attendance, accessibility or
+ * the organiser's free-text equipment notes.
+ */
+export interface SupportEventInfo {
+  id: number;
+  name: string | null;
+  proposedDate: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  venue: string | null;
+}
+
+export function toSupportEventInfo(info: EquipmentBookingInfo): SupportEventInfo {
+  return {
+    id: info.id,
+    name: info.name ?? null,
+    proposedDate: info.proposedDate ?? null,
+    startTime: info.startTime ?? null,
+    endTime: info.endTime ?? null,
+    venue: info.venue ?? null,
+  };
 }
