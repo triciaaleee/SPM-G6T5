@@ -21,6 +21,7 @@ import {
   describeBookingFailure,
   fetchVenueRecommendations,
   submitVenueBooking,
+  type BookingPlan,
   type VenueRecommendations,
 } from "../../lib/venuesApi";
 
@@ -30,6 +31,13 @@ const props = defineProps<{
   details: unknown;
   /** E4-8: a venue can only be requested while the event is in Planning. */
   canRequest?: boolean;
+  /**
+   * E4-17: the booking being planned. Venues are judged on its headcount and
+   * needs, and a request records it (AC1, AC5). null means the plan isn't
+   * complete yet, so nothing is recommended; left out, the whole event is
+   * judged as before (E4-7).
+   */
+  plan?: BookingPlan | null;
 }>();
 
 const emit = defineEmits<{ requested: [venueId: number] }>();
@@ -47,7 +55,7 @@ async function requestVenue(venueId: number): Promise<void> {
   requestErrorVenueId.value = null;
   requestError.value = "";
   try {
-    await submitVenueBooking(props.eventId, venueId);
+    await submitVenueBooking(props.eventId, venueId, props.plan ?? undefined);
     requestedVenueIds.value = new Set(requestedVenueIds.value).add(venueId);
     emit("requested", venueId);
   } catch (err) {
@@ -86,17 +94,31 @@ const requiredFeatures = computed(() => {
   return r ? [...r.layouts, ...r.facilities, ...r.accessibility] : [];
 });
 
+// E4-17: a plan change can re-load while a previous load is in flight;
+// only the latest may update the cards.
+let loadSeq = 0;
+
 async function load(): Promise<void> {
+  const seq = ++loadSeq;
+  if (props.plan === null) {
+    result.value = null;
+    errorMessage.value = "";
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   errorMessage.value = "";
   try {
-    result.value = await fetchVenueRecommendations(props.eventId);
+    const next = await fetchVenueRecommendations(props.eventId, props.plan ?? undefined);
+    if (seq !== loadSeq) return;
+    result.value = next;
     activeIndex.value = 0;
   } catch (err) {
+    if (seq !== loadSeq) return;
     result.value = null;
     errorMessage.value = err instanceof Error ? err.message : "Failed to load venue recommendations";
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
   // The track only renders once loading ends; start on the first real card.
   await nextTick();
@@ -105,8 +127,13 @@ async function load(): Promise<void> {
 
 onMounted(load);
 watch(
-  () => [props.eventId, JSON.stringify(props.details)],
-  () => void load(),
+  () => [props.eventId, JSON.stringify(props.details), JSON.stringify(props.plan)],
+  () => {
+    // "Requested" belongs to the booking that was planned when it was sent.
+    requestedVenueIds.value = new Set();
+    requestErrorVenueId.value = null;
+    void load();
+  },
 );
 
 let settleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -171,7 +198,9 @@ function matchedFeatures(venue: Venue): string[] {
       <p v-if="venues.length > 0" class="body-small muted">{{ venues.length }} suitable</p>
     </div>
 
-    <p v-if="loading" class="body-small muted">Finding suitable venues…</p>
+    <p v-if="plan === null" class="body-small muted">Complete the booking plan above to see suitable venues.</p>
+
+    <p v-else-if="loading" class="body-small muted">Finding suitable venues…</p>
 
     <p v-else-if="errorMessage" class="body-small error-text">{{ errorMessage }}</p>
 
@@ -193,7 +222,8 @@ function matchedFeatures(venue: Venue): string[] {
       <div v-if="venues.length === 0" class="empty-state" role="status">
         <p class="body-small font-semibold">No suitable venues were found.</p>
         <p class="body-small muted">
-          No venue meets all of this event's main requirements. Try Find venues to loosen the criteria.
+          No venue meets all of {{ plan ? "this booking's" : "this event's main" }} requirements. Try Find venues to
+          loosen the criteria.
         </p>
       </div>
 
@@ -211,7 +241,7 @@ function matchedFeatures(venue: Venue): string[] {
               <VenueIcon name="users" :size="14" />
               Capacity {{ venue.capacity }}
               <template v-if="result.requirements.attendance">
-                · {{ result.requirements.attendance }} expected
+                · {{ result.requirements.attendance }} {{ plan ? "for this booking" : "expected" }}
               </template>
             </p>
             <div v-if="matchedFeatures(venue).length > 0" class="tags">

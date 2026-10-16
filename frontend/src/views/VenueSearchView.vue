@@ -1,19 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { fetchEventById, type EventSummary } from "../lib/eventsApi";
 import {
-  clearCriterion,
   describeBookingFailure,
   emptyVenueFilters,
   fetchVenueAvailability,
   fetchVenueFilterOptions,
+  planFromQuery,
+  purposeLabel,
   searchVenues,
   submitVenueBooking,
   timeWindowError,
   VenueSearchError,
   type AvailabilityTarget,
-  type CriterionKey,
   type RelaxOption,
   type Venue,
   type VenueAvailability,
@@ -33,6 +33,7 @@ interface EventScheduleDetails {
 }
 
 const route = useRoute();
+const router = useRouter();
 
 const filters = ref(emptyVenueFilters());
 const options = ref<VenueFilterOptions | null>(null);
@@ -67,6 +68,43 @@ function prefillFromEvent(event: EventSummary): void {
   if (Number.isInteger(attendance) && attendance > 0) filters.value.capacityMin = attendance;
 }
 
+/** The event page this search was opened from. */
+const sourceEventRoute = computed(() =>
+  sourceEvent.value ? router.resolve({ name: "event-detail", params: { id: sourceEvent.value.id } }) : null,
+);
+
+/**
+ * "Back to <event>" goes *back* when the previous page is that event, rather
+ * than opening it again as a new history entry — otherwise each event →
+ * search → event round trip adds two entries, and the browser's back button
+ * bounces between the two pages before ever reaching the page before them.
+ * Opened any other way (a bookmark, a shared link), it opens the event, the
+ * same fallback EventDetailView's own back button uses.
+ */
+function backToEvent(): void {
+  const target = sourceEventRoute.value;
+  if (!target) return;
+  if (window.history.state?.back === target.fullPath) router.back();
+  else void router.push(target);
+}
+
+/**
+ * E4-17 AC5: opened from a planned booking (its plan rides in the query),
+ * the search is judged on that booking — its headcount as the minimum
+ * capacity and its own needs — not the whole event. A request made from
+ * here records the plan (AC1).
+ */
+const bookingPlan = computed(() => planFromQuery(route.query as Record<string, unknown>));
+
+function prefillFromPlan(): void {
+  const plan = bookingPlan.value;
+  if (!plan) return;
+  filters.value.capacityMin = plan.headcount;
+  filters.value.layouts = [...plan.layouts];
+  filters.value.facilities = [...plan.facilities];
+  filters.value.accessibility = [...plan.accessibility];
+}
+
 /**
  * E4-8: a venue can only be requested for an event, so the action appears
  * only when the search was opened from one (?eventId=) and that event is
@@ -90,7 +128,7 @@ async function requestVenue(venueId: number): Promise<void> {
   requestErrorVenueId.value = null;
   requestError.value = "";
   try {
-    await submitVenueBooking(event.id, venueId);
+    await submitVenueBooking(event.id, venueId, bookingPlan.value ?? undefined);
     requestedVenueIds.value = new Set(requestedVenueIds.value).add(venueId);
   } catch (err) {
     requestErrorVenueId.value = venueId;
@@ -145,10 +183,6 @@ watch(
 );
 
 onBeforeUnmount(() => clearTimeout(debounce));
-
-function relaxFilter(key: CriterionKey): void {
-  clearCriterion(filters.value, key);
-}
 
 function clearAllFilters(): void {
   Object.assign(filters.value, emptyVenueFilters());
@@ -244,6 +278,7 @@ onMounted(async () => {
   if (eventResult.status === "fulfilled" && eventResult.value) {
     sourceEvent.value = eventResult.value;
     prefillFromEvent(eventResult.value);
+    prefillFromPlan();
   } else if (eventResult.status === "rejected") {
     sourceEventError.value = "We couldn't load that event, so the search hasn't been pre-filled.";
   }
@@ -264,11 +299,12 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="content">
-      <RouterLink v-if="sourceEvent" :to="{ name: 'event-detail', params: { id: sourceEvent.id } }"
-        class="back-link body-small">
+      <!-- A real link (so it can still be opened in a new tab), but a plain click goes back — see backToEvent. -->
+      <a v-if="sourceEventRoute" :href="sourceEventRoute.href" class="back-link body-small"
+        @click.exact.prevent="backToEvent">
         <VenueIcon name="chevron-left" :size="16" />
         Back to {{ sourceEventName }}
-      </RouterLink>
+      </a>
 
       <div class="page-header">
         <div>
@@ -277,7 +313,13 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div v-if="sourceEvent" class="context-banner body-small">
+      <div v-if="sourceEvent && bookingPlan" class="context-banner body-small">
+        Searching for <strong>{{ sourceEventName }}</strong> —
+        <strong>{{ purposeLabel(bookingPlan) }} · {{ bookingPlan.headcount }} people</strong>. Pre-filled with the
+        event's date and time, this booking's headcount as the minimum capacity and its own needs. Adjust any filter
+        to widen the search.
+      </div>
+      <div v-else-if="sourceEvent" class="context-banner body-small">
         Searching for <strong>{{ sourceEventName }}</strong> — pre-filled with the event's date and time, and its
         expected attendance as the minimum capacity. Adjust any filter to widen the search.
       </div>

@@ -103,3 +103,15 @@ describe("Technical Support's nav links", () => {
     expect(wrapper.findAll(".nav__tab--active")).toHaveLength(1);
   });
 });
+
+describe("notification bell visibility", () => {
+  // E7-1 (#61) AC2: shown unconditionally, for every role — venue staff
+  // included, since they're notified on E4-9 withdrawals/releases.
+  it.each(["coordinator", "technical_support", "organiser", "venue_staff", "attendee"])(
+    "shows it for %s",
+    async (role) => {
+      const wrapper = await mountAs(role);
+      expect(wrapper.find("notification-bell-stub").exists()).toBe(true);
+    },
+  );
+});

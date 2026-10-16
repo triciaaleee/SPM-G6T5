@@ -24,10 +24,18 @@ const STATUS_GROUPS: StatusGroup[] = [
   { key: "unassigned",    label: "Unassigned",              statuses: ["Unassigned"] },
   { key: "clarification", label: "Clarification Requested", statuses: ["Clarification Requested"] },
   { key: "planning",      label: "Planning",                statuses: ["Planning"] },
+  { key: "safety-review", label: "Safety Review",           statuses: ["Safety Review"] },
   { key: "confirmed",     label: "Confirmed",               statuses: ["Confirmed"] },
   { key: "completed",     label: "Completed",               statuses: ["Completed"] },
   { key: "rejected",      label: "Rejected",                statuses: ["Rejected"] },
+  { key: "cancelled",     label: "Cancelled",               statuses: ["Cancelled"] },
 ];
+
+/**
+ * E3-5 AC1: end states (AGENTS.md §3) leave the coordinator's active list.
+ * They stay under "All" and their own status tab, so the record isn't lost.
+ */
+const CLOSED_STATUSES = new Set(["Completed", "Rejected", "Cancelled"]);
 
 // Statuses that wait on the coordinator: flagged with an accent bar. Unassigned is the Lead's to act on.
 const NEEDS_ACTION_STATUSES = ["Requested"];
@@ -77,23 +85,37 @@ const groupedEvents = computed(() =>
   })).filter((g) => g.events.length > 0),
 );
 
-// Status tabs: "all" shows every event in one flat list (status-priority order, then date);
-// a group key shows only that bucket.
-// A tab whose bucket empties (e.g. after switching My/All) falls back to "all".
-const activeTab = ref<string>("all");
+// Status tabs: "active" (the default) shows every event that isn't closed, "all" shows
+// every event, both in one flat list (status-priority order, then date); a group key
+// shows only that bucket. A tab whose bucket empties (e.g. after switching My/All)
+// falls back to "active".
+const activeTab = ref<string>("active");
+
+function isClosedGroup(group: StatusGroup): boolean {
+  return group.statuses.every((status) => CLOSED_STATUSES.has(status));
+}
+
+const activeEventCount = computed(
+  () => visibleEvents.value.filter((e) => !CLOSED_STATUSES.has(e.status)).length,
+);
 
 const tabs = computed(() => [
+  { key: "active", label: "Active", count: activeEventCount.value },
   { key: "all", label: "All", count: visibleEvents.value.length },
   ...groupedEvents.value.map((g) => ({ key: g.key, label: g.label, count: g.events.length })),
 ]);
 
 const currentTab = computed(() =>
-  tabs.value.some((t) => t.key === activeTab.value) ? activeTab.value : "all",
+  tabs.value.some((t) => t.key === activeTab.value) ? activeTab.value : "active",
 );
 
 const shownEvents = computed(() =>
   groupedEvents.value
-    .filter((g) => currentTab.value === "all" || g.key === currentTab.value)
+    .filter((g) => {
+      if (currentTab.value === "all") return true;
+      if (currentTab.value === "active") return !isClosedGroup(g);
+      return g.key === currentTab.value;
+    })
     .flatMap((g) => g.events),
 );
 
@@ -176,7 +198,10 @@ onMounted(async () => {
         </div>
 
         <div id="coordinator-panel" role="tabpanel" :aria-labelledby="`coordinator-tab-${currentTab}`">
-          <div class="card-grid">
+          <p v-if="shownEvents.length === 0" class="body-default muted">
+            No active events. Completed, rejected and cancelled events are under All.
+          </p>
+          <div v-else class="card-grid">
             <RouterLink
               v-for="event in shownEvents"
               :key="event.id"

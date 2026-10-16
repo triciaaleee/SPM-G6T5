@@ -11,8 +11,9 @@ import {
   type BookingStatus,
 } from "../lib/bookingStatus.js";
 import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "../lib/bookingConflicts.js";
-import { fetchEvent, fetchVenueBookingInfo, type VenueBookingInfo } from "../lib/eventsClient.js";
-import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
+import { fetchEvent, fetchVenueBookingInfo } from "../lib/eventsClient.js";
+import { getPublisher } from "../lib/rabbitPublisher.js";
+import { withdrawBooking, type WithdrawalAction } from "../lib/bookingWithdrawal.js";
 import {
   PERIOD_COLUMNS,
   describePeriod,
@@ -23,6 +24,17 @@ import {
   type PeriodRow,
 } from "../lib/unavailability.js";
 import { extractRequirements, scheduleQuery, withFeatures } from "../lib/venueRecommendation.js";
+import {
+  BOOKING_PLAN_COLUMNS,
+  MAIN_HOLDING_STATUSES,
+  checkSuitability,
+  eventDefaults,
+  hasPlan,
+  holdsMainProgramme,
+  parseBookingPlan,
+  type BookingPlanColumns,
+  toPlanColumns,
+} from "../lib/bookingPlan.js";
 import {
   buildFilterOptions,
   isRealDate,
@@ -255,7 +267,23 @@ venuesRouter.get("/recommendations/:eventId", async (req: AuthedRequest, res) =>
   }
   const venueRows = (venues ?? []) as VenueRow[];
 
-  const requirements = extractRequirements(eventResult.event.submitted_details ?? {}, venueRows);
+  let requirements = extractRequirements(eventResult.event.submitted_details ?? {}, venueRows);
+
+  // E4-17 AC5: recommendations for one planned booking are judged on its
+  // headcount and needs, not the whole event's. Without these params the
+  // event-wide behaviour is unchanged.
+  const query = req.query as Record<string, unknown>;
+  const plan = hasPlan(query)
+    ? parseBookingPlan(query, eventDefaults(eventResult.event.submitted_details ?? {}, venueRows))
+    : null;
+  if (plan && !plan.valid) {
+    res.status(400).json({ error: "Invalid booking plan", fields: plan.fields });
+    return;
+  }
+  if (plan) {
+    requirements = { ...requirements, attendance: plan.plan.headcount, ...plan.plan.requirements };
+  }
+
   const parsed = parseVenueSearch(scheduleQuery(requirements));
   if (!parsed.valid) {
     res.status(422).json({ error: "This event's date, time or attendance is invalid", fields: parsed.fields });
@@ -291,7 +319,7 @@ async function notifyVenueStaff(
   venue: VenueRow,
   eventId: number,
   details: Record<string, unknown>,
-  authorization: string,
+  actorId: string,
 ): Promise<boolean> {
   const { data, error } = await supabase.from("venues").select("staff_id").eq("id", venue.id).maybeSingle();
   const staffId = (data as { staff_id: string | null } | null)?.staff_id;
@@ -303,18 +331,18 @@ async function notifyVenueStaff(
   const endTime = typeof details.endTime === "string" ? details.endTime : null;
   const when = date ? `${date}${startTime && endTime ? `, ${startTime}–${endTime}` : ""}` : "a date to be confirmed";
 
-  const notification: NewNotification = {
-    recipientId: staffId,
-    type: "venue_booking_requested",
-    title: `New booking request for ${venue.name}`,
-    body: `${eventName} has requested ${venue.name} for ${when}. Hold, approve or reject it from your booking requests.`,
-    link: "/venue-requests",
-  };
-
-  return sendNotifications([notification], authorization);
+  // #106 row 1, RabbitMQ.md #15 `booking.requested`.
+  return getPublisher().publish({
+    type: "booking.requested",
+    eventId,
+    actorId,
+    recipients: { userIds: [staffId], roles: [] },
+    data: { eventName, venueName: venue.name, when },
+  });
 }
 
 const VENUE_ID_PATTERN = /^[1-9]\d*$/;
+const BOOKING_ID_PATTERN = /^[1-9]\d*$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -589,6 +617,16 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // E4-17 AC1/AC6: what this venue is for. Optional for the main programme
+  // — a request without a plan is it, for the whole attendance, as before
+  // E4-17 — but required once the main venue is covered (checked below).
+  const planDefaults = eventDefaults(eventResult.event.submitted_details ?? {}, venueRows);
+  const planResult = parseBookingPlan(req.body as Record<string, unknown>, planDefaults);
+  if (!planResult.valid) {
+    res.status(400).json({ error: "Invalid booking request", fields: planResult.fields });
+    return;
+  }
+
   const { data: existing, error: existingError } = await supabase
     .from("venue_bookings")
     .select("id, status")
@@ -606,6 +644,27 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
       booking: { id: alreadyRequested.id, status: alreadyRequested.status },
     });
     return;
+  }
+
+  // E4-17 AC1: once the main programme has a venue, another booking is for
+  // part of the event and must say what it's for and how many it holds.
+  if (!hasPlan(req.body as Record<string, unknown>)) {
+    const { data: eventBookings, error: eventBookingsError } = await supabase
+      .from("venue_bookings")
+      .select(`id, status, ${BOOKING_PLAN_COLUMNS}`)
+      .eq("event_id", eventId)
+      .in("status", MAIN_HOLDING_STATUSES);
+    if (eventBookingsError) {
+      res.status(500).json({ error: "Failed to check existing bookings" });
+      return;
+    }
+    if (holdsMainProgramme((eventBookings ?? []) as (BookingPlanColumns & { status: string })[], planDefaults)) {
+      res.status(400).json({
+        error: "This event's main venue is already booked. Plan this booking on the event page — its purpose and headcount — then request it.",
+        fields: { purpose: "Choose what this venue is for.", headcount: "Enter how many people this venue is for." },
+      });
+      return;
+    }
   }
 
   const blocking = await loadBlockingWindows(supabase, venueRows, req.headers.authorization!, eventId);
@@ -650,7 +709,13 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
   // AC3: stated outright rather than left to the column default.
   const { data: booking, error: insertError } = await supabase
     .from("venue_bookings")
-    .insert({ venue_id: venueId, event_id: eventId, status: "Requested" })
+    .insert({
+      venue_id: venueId,
+      event_id: eventId,
+      status: "Requested",
+      // E4-17: stored only when sent; a plan-less row reads as the defaults (lib/bookingPlan.ts effectivePlan).
+      ...(hasPlan(req.body as Record<string, unknown>) ? toPlanColumns(planResult.plan) : {}),
+    })
     .select("id, status, created_at")
     .single();
   if (insertError || !booking) {
@@ -665,7 +730,7 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
     venue,
     eventId,
     (eventResult.event.submitted_details ?? {}) as Record<string, unknown>,
-    req.headers.authorization!,
+    req.user!.id,
   );
 
   res.status(201).json({
@@ -675,6 +740,63 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
       status: (booking as { status: BookingStatus }).status,
       createdAt: (booking as { created_at: string }).created_at,
       venue: { id: venue.id, name: venue.name, location: venue.location },
+      // E4-17: what was stored, and whether this venue suits it.
+      purpose: planResult.plan.purpose,
+      purposeDetail: planResult.plan.purposeDetail,
+      headcount: planResult.plan.headcount,
+      suitability: checkSuitability(venue, planResult.plan),
     },
   });
 });
+
+/**
+ * E4-9: the coordinator gives up a booking. `/withdraw` drops a pending
+ * request (`Requested`/`On Hold`); `/release` gives up a confirmed one
+ * (`Approved`). Each is refused on the other's statuses and points the
+ * coordinator at the one that applies (AC2). Either way the venue frees up
+ * and other bookings of the same event are untouched (AC1/AC3) — this acts
+ * on exactly the one booking id given.
+ */
+async function endBooking(req: AuthedRequest, res: Response, action: WithdrawalAction): Promise<void> {
+  const rawId = Array.isArray(req.params.bookingId) ? req.params.bookingId[0] : req.params.bookingId;
+  if (!BOOKING_ID_PATTERN.test(rawId)) {
+    res.status(400).json({ error: "Invalid booking id" });
+    return;
+  }
+
+  const result = await withdrawBooking(req.supabase!, {
+    bookingId: Number(rawId),
+    action,
+    coordinatorId: req.user!.id,
+    authorization: req.headers.authorization!,
+  });
+
+  switch (result.status) {
+    case "not_found":
+      res.status(404).json({ error: "Booking not found" });
+      return;
+    case "not_owner":
+      res.status(403).json({ error: `Only the event's assigned coordinator can ${action} this booking` });
+      return;
+    case "blocked":
+      res.status(409).json({ error: result.message });
+      return;
+    case "event_error":
+      res.status(502).json({ error: "Failed to load the booked event" });
+      return;
+    case "error":
+      res.status(500).json({ error: `Failed to ${action} the booking` });
+      return;
+    default:
+      res.json({
+        booking: { id: result.booking.id, status: result.booking.status, venue: result.venue },
+        staffNotified: result.staffNotified,
+      });
+  }
+}
+
+/** AC1: drop a pending request or hold; the venue is free for another one. */
+venuesRouter.post("/bookings/:bookingId/withdraw", (req: AuthedRequest, res) => endBooking(req, res, "withdraw"));
+
+/** AC2: give up a confirmed booking — the only way to undo an Approved one. */
+venuesRouter.post("/bookings/:bookingId/release", (req: AuthedRequest, res) => endBooking(req, res, "release"));

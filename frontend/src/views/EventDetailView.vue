@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { landingRouteForRole } from "../lib/auth";
 import {
@@ -10,6 +10,8 @@ import {
   ValidationError,
   approveEvent,
   assignCoordinator,
+  cancelEvent,
+  completeEvent,
   reassignCoordinator,
   fetchEventById,
   fetchEventHistory,
@@ -17,18 +19,33 @@ import {
   rejectEvent,
   requestClarification,
   updateEventDetails,
+  fetchSafetyChanges,
   type EventHistoryEntry,
+  type SafetyChangeRequest,
   type EventRequestPayload,
   type EventSummary,
 } from "../lib/eventsApi";
-import { statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
+import { formatEventDate, statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
+import { hasEventEnded } from "../lib/eventTiming";
 import EventStatusTracker from "../components/EventStatusTracker.vue";
 import ClarificationPanel from "../components/ClarificationPanel.vue";
 import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
 import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel.vue";
 import VenueRequestsPanel from "../components/venues/VenueRequestsPanel.vue";
+import BookingPlanForm from "../components/venues/BookingPlanForm.vue";
 import SafetyReviewPanel from "../components/SafetyReviewPanel.vue";
-import { fetchEventVenueBookings, type EventVenueBooking } from "../lib/venuesApi";
+import SafetyChangesCard from "../components/SafetyChangesCard.vue";
+import RegistrationsPanel from "../components/RegistrationsPanel.vue";
+import {
+  fetchEventSuitability,
+  fetchEventVenueBookings,
+  fetchVenueFilterOptions,
+  planRouteQuery,
+  type BookingPlan,
+  type EventSuitability,
+  type EventVenueBooking,
+  type VenueFilterOptions,
+} from "../lib/venuesApi";
 import { fetchEquipmentRequestsForEvent, type EquipmentRequest } from "../lib/equipmentApi";
 import { fetchCoordinators, type CoordinatorOption } from "../lib/usersApi";
 
@@ -173,6 +190,47 @@ async function submitPendingAction(): Promise<void> {
         : await requestClarification(event.value.id, text);
     await clarificationPanelRef.value?.refresh();
     cancelPendingAction();
+  } catch (err) {
+    actionError.value = err instanceof ReviewActionError ? err.message : "We couldn't complete that action. Please try again.";
+  } finally {
+    isReviewing.value = false;
+  }
+}
+
+/**
+ * E3-5: the assigned coordinator marks a Confirmed event completed once it
+ * has run (AC1); before its end time the action is blocked (AC2) — the
+ * backend decides, this only mirrors it. `now` ticks every minute so the
+ * button unlocks when the event ends, without a reload. Completed is
+ * terminal, so the action asks for confirmation first.
+ */
+const now = ref(new Date());
+let nowTimer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  nowTimer = setInterval(() => (now.value = new Date()), 60_000);
+});
+onUnmounted(() => clearInterval(nowTimer));
+
+const eventHasEnded = computed(() =>
+  hasEventEnded(event.value?.submitted_details as Record<string, unknown> | undefined, now.value),
+);
+
+const eventEndLabel = computed(() => {
+  const details = asSubmittedDetails(event.value?.submitted_details ?? {});
+  const date = formatEventDate(details.proposedDate);
+  return details.endTime ? `${date} at ${details.endTime}` : date;
+});
+
+const confirmingComplete = ref(false);
+
+async function handleComplete(): Promise<void> {
+  if (!event.value) return;
+  isReviewing.value = true;
+  actionError.value = null;
+  try {
+    event.value = await completeEvent(event.value.id);
+    confirmingComplete.value = false;
+    await loadHistory();
   } catch (err) {
     actionError.value = err instanceof ReviewActionError ? err.message : "We couldn't complete that action. Please try again.";
   } finally {
@@ -346,6 +404,65 @@ async function loadVenueBookings(): Promise<void> {
   } finally {
     venueBookingsLoading.value = false;
   }
+  // E4-17: suitability is read from the same bookings, so it refreshes with them.
+  if (isCoordinator.value) void loadSuitability();
+  // E3-14: a flag clears once its booking changes, so re-check with them.
+  if (isCoordinator.value) void loadSafetyChanges();
+}
+
+/*
+ * E3-14 AC3: the Safety Officer's open change request, if any — re-read
+ * whenever the event's venue bookings or equipment reload, since that's
+ * when a flagged arrangement can have changed.
+ */
+const safetyChanges = ref<SafetyChangeRequest | null>(null);
+let safetyChangesSeq = 0;
+
+async function loadSafetyChanges(): Promise<void> {
+  if (!event.value) return;
+  const seq = ++safetyChangesSeq;
+  try {
+    const result = await fetchSafetyChanges(event.value.id);
+    if (seq === safetyChangesSeq) safetyChanges.value = result;
+  } catch {
+    // Keep what's shown; the next reload tries again.
+  }
+}
+
+/*
+ * E4-17: each venue booking checked against its own purpose and headcount,
+ * plus the plan for the next booking — which drives the recommendations,
+ * the Find venues link and what a request records.
+ */
+const suitability = ref<EventSuitability | null>(null);
+const bookingPlan = ref<BookingPlan | null>(null);
+const venueOptions = ref<VenueFilterOptions | null>(null);
+
+/** Planning the next booking is the assigned coordinator's, while venues may be requested (E4-8). */
+const canPlanBooking = computed(() => isAssignedCoordinator.value && event.value?.status === "Planning");
+
+/** The recommendations' plan: undefined keeps E4-7's whole-event view where no booking is being planned. */
+const recommendationPlan = computed(() =>
+  canPlanBooking.value ? (suitability.value ? bookingPlan.value : null) : undefined,
+);
+
+const findVenuesQuery = computed(() => ({
+  eventId: String(event.value?.id ?? ""),
+  ...(canPlanBooking.value && bookingPlan.value ? planRouteQuery(bookingPlan.value) : {}),
+}));
+
+async function loadSuitability(): Promise<void> {
+  if (!event.value) return;
+  try {
+    suitability.value = await fetchEventSuitability(event.value.id);
+  } catch {
+    // Leave the last result; the requests panel simply shows no suitability line.
+  }
+  if (canPlanBooking.value && !venueOptions.value) {
+    fetchVenueFilterOptions()
+      .then((options) => (venueOptions.value = options))
+      .catch(() => undefined);
+  }
 }
 
 async function loadEquipmentRequests(): Promise<void> {
@@ -355,20 +472,14 @@ async function loadEquipmentRequests(): Promise<void> {
   } catch {
     equipmentRequests.value = [];
   }
+  // E3-14: a flagged equipment reservation clears once it changes.
+  if (isCoordinator.value) void loadSafetyChanges();
 }
 
 function formatHistoryTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
-}
-
-/** "coordinator" -> "Coordinator", "venue_staff" -> "Venue Staff". */
-function formatRoleLabel(role: string): string {
-  return role
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
 }
 
 const NOT_PROVIDED = "Not provided";
@@ -396,6 +507,62 @@ function goBack(): void {
 
 /** §3: no transitions out of these, so no reassignment either (E2-12 AC3). */
 const CLOSED_STATUSES = new Set(["Rejected", "Cancelled", "Completed"]);
+
+/** E3-6 / AGENTS.md §3 transitions table: every active stage the owning
+ * Organiser may cancel from — mirrors the backend's CANCELLABLE_STATUSES. */
+const CANCELLABLE_STATUSES = new Set([
+  "Unassigned",
+  "Requested",
+  "Clarification Requested",
+  "Planning",
+  "Safety Review",
+  "Confirmed",
+]);
+const canCancelEvent = computed(
+  () => isOwnerView.value && !!event.value && CANCELLABLE_STATUSES.has(event.value.status),
+);
+
+const confirmingCancel = ref(false);
+const cancelReason = ref("");
+const cancelling = ref(false);
+const cancelError = ref<string | null>(null);
+
+function openCancel(): void {
+  confirmingCancel.value = true;
+  cancelReason.value = "";
+  cancelError.value = null;
+}
+
+function closeCancel(): void {
+  confirmingCancel.value = false;
+  cancelReason.value = "";
+  cancelError.value = null;
+}
+
+/** E3-6 AC2: cancellation is automatic (no coordinator approval) once the
+ * Organiser confirms it with a reason — the reason is required client-side
+ * too, but the backend is what actually enforces it. */
+async function handleCancel(): Promise<void> {
+  if (!event.value) return;
+  const reason = cancelReason.value.trim();
+  if (!reason) {
+    cancelError.value = "A reason is required to cancel this event.";
+    return;
+  }
+
+  cancelling.value = true;
+  cancelError.value = null;
+  try {
+    event.value = await cancelEvent(event.value.id, reason);
+    confirmingCancel.value = false;
+    cancelReason.value = "";
+    await loadHistory();
+  } catch (err) {
+    cancelError.value = err instanceof ReviewActionError ? err.message : "We couldn't cancel this event. Please try again.";
+  } finally {
+    cancelling.value = false;
+  }
+}
 
 const coordinators = ref<CoordinatorOption[]>([]);
 const coordinatorsLoading = ref(false);
@@ -483,8 +650,15 @@ onMounted(async () => {
     currentUser.value = user;
     await loadHistory();
     if (user.role === "coordinator_lead") await loadCoordinators();
-    // Only an event in Planning shows arrangements or a requests panel.
-    if (eventData.status === "Planning") await Promise.all([loadVenueBookings(), loadEquipmentRequests()]);
+    // Only an event in Planning shows the outstanding arrangements. A
+    // coordinator also sees the venue requests panel at every later stage,
+    // so its bookings load then too — a Completed event's bookings must stay
+    // viewable (E3-5 AC3), not sit on "Loading…".
+    const showsVenueRequests = user.role === "coordinator" && eventData.status !== "Rejected";
+    await Promise.all([
+      eventData.status === "Planning" || showsVenueRequests ? loadVenueBookings() : undefined,
+      eventData.status === "Planning" ? loadEquipmentRequests() : undefined,
+    ]);
   } catch (err) {
     if (err instanceof AccessDeniedError) {
       accessDenied.value = true;
@@ -755,6 +929,27 @@ onMounted(async () => {
                       </div>
                     </div>
                   </template>
+
+  <!-- E3-6: the owning Organiser cancels their own event with a required reason. -->
+  <div v-if="isOwnerView && event.status !== 'Draft'" class="cancel-event-row">
+    <div v-if="event.status === 'Cancelled'" class="cancel-event-row__cancelled-note">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"
+        class="cancel-event-row__icon">
+        <path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+      </svg>
+      <p class="body-default">
+        This event was cancelled{{ event.review_outcome ? `: "${event.review_outcome}"` : "." }}
+      </p>
+    </div>
+    <button v-else-if="canCancelEvent" type="button" class="btn btn-danger cancel-event-row__button"
+      @click="openCancel">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"
+        class="cancel-event-row__icon">
+        <path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+      </svg>
+      Cancel event
+    </button>
+  </div>
 </div>
 
 <EventStatusTracker v-if="event.status === 'Planning'" :status="event.status"
@@ -875,6 +1070,37 @@ onMounted(async () => {
         <p v-else-if="!isAssignedCoordinator" class="body-small muted">
           Only the assigned coordinator can review this request.
         </p>
+        <!-- E3-5: once the event has run, the assigned coordinator closes it -->
+        <template v-else-if="event.status === 'Confirmed'">
+          <p v-if="actionError" class="body-default error-text">{{ actionError }}</p>
+          <p v-if="!eventHasEnded" class="body-small muted review-actions__note" data-testid="complete-blocked">
+            This event is Confirmed. You can mark it completed after it ends ({{ eventEndLabel }}).
+          </p>
+          <div v-if="confirmingComplete" class="review-actions__form">
+            <p class="body-small">
+              Mark this event as completed? This can't be undone. Its details, history, bookings, equipment and
+              registrations stay available.
+            </p>
+            <div class="review-actions__buttons">
+              <button type="button" class="btn btn-primary" :disabled="isReviewing" @click="handleComplete">
+                {{ isReviewing ? "Completing…" : "Confirm" }}
+              </button>
+              <button type="button" class="btn btn-secondary" :disabled="isReviewing"
+                @click="confirmingComplete = false">
+                Cancel
+              </button>
+            </div>
+          </div>
+          <div v-else class="review-actions__buttons">
+            <button type="button" class="btn btn-primary" :disabled="!eventHasEnded || isReviewing"
+              @click="confirmingComplete = true">
+              Mark as completed
+            </button>
+          </div>
+        </template>
+        <p v-else-if="event.status === 'Completed'" class="body-small muted">
+          This event has been completed. Its full record stays available here.
+        </p>
         <template v-else-if="showReviewActions">
                     <p v-if="event.status === 'Planning'" class="body-small muted review-actions__note ">
                       This request has been approved and moved to Planning. You can still ask the organiser a
@@ -930,14 +1156,23 @@ onMounted(async () => {
       </p>
     </div>
   </div>
+
 </div>
+
+<!-- E3-14 AC3: what the Safety Officer asked to change, and which flags have cleared -->
+<SafetyChangesCard v-if="isCoordinator && safetyChanges" :change-request="safetyChanges" />
 
 <!-- Venue search: opens pre-filled with this event's date, time and attendance -->
 <div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
   <h2 class="section-title">Venue Recommendations</h2>
+  <!-- E4-17: what the next booking is for; recommendations and Find venues follow it. Re-keyed after
+       each request so the next booking starts from the right defaults. -->
+  <BookingPlanForm v-if="canPlanBooking && suitability" :key="`${suitability.defaults.hasMainProgramme}-${suitability.defaults.liveBookingCount}`"
+    :defaults="suitability.defaults" :options="venueOptions" @update:plan="bookingPlan = $event" />
   <VenueRecommendations :event-id="event.id" :details="event.submitted_details"
-    :can-request="isAssignedCoordinator && event.status === 'Planning'" @requested="loadVenueBookings()" />
-  <RouterLink :to="{ name: 'venue-search', query: { eventId: event.id } }" class="btn btn-venue-search">
+    :can-request="isAssignedCoordinator && event.status === 'Planning'" :plan="recommendationPlan"
+    @requested="loadVenueBookings()" />
+  <RouterLink :to="{ name: 'venue-search', query: findVenuesQuery }" class="btn btn-venue-search">
     Find venues
   </RouterLink>
 </div>
@@ -951,15 +1186,51 @@ onMounted(async () => {
 
 <!-- E4-8 AC5: this event's venue requests and the state each one is in -->
 <VenueRequestsPanel v-if="isCoordinator && event.status !== 'Rejected'" :bookings="venueBookings"
-  :loading="venueBookingsLoading" :load-error="venueBookingsError" />
+  :loading="venueBookingsLoading" :load-error="venueBookingsError" :can-withdraw="isAssignedCoordinator"
+  :suitability="suitability?.bookings" @changed="loadVenueBookings()" />
 
 <!-- E3-4: the assigned coordinator submits a Planning event for the Safety Officer's check -->
 <div v-if="isAssignedCoordinator && event.status === 'Planning'" class="details-card">
   <SafetyReviewPanel :event-id="event.id" @submitted="(updated) => (event = updated)" />
 </div>
 
+<!-- E3-5 AC3: who registered, read-only — stays viewable once the event is Completed.
+     registration-service only lets the owning organiser and coordinators read it. -->
+<RegistrationsPanel v-if="(isOwnerView || isCoordinator) && asSubmittedDetails(event.submitted_details).registrationNeeded"
+  :event-id="event.id" />
+
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
   :current-user-id="currentUser.id" :read-only="isLead" />
+
+<!-- E3-6: a popup for the mandatory cancellation reason, same pattern as
+     VenueRequestsPanel's withdraw/release confirm dialog. -->
+<div v-if="confirmingCancel" class="modal-overlay" @click.self="closeCancel">
+  <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="cancel-event-title">
+    <p id="cancel-event-title" class="modal-title">Cancel this event?</p>
+    <p class="body-default muted">
+      Cancelling releases every venue booking and equipment reservation, and notifies
+      {{ event.coordinator_id ? "your coordinator" : "the Event Coordinator Leads" }} and anyone registered.
+      <strong class="modal-emphasis">This can't be undone.</strong>
+    </p>
+
+    <label for="cancel-reason" class="body-small muted mb-1 modal-label">
+      Reason for cancellation <span class="modal-required">*</span>
+    </label>
+    <textarea id="cancel-reason" v-model="cancelReason" rows="3" class="review-actions__textarea"
+      placeholder="Let your coordinator and attendees know why this event is being cancelled…" />
+    <p v-if="cancelError" class="body-default error-text" role="alert">{{ cancelError }}</p>
+
+    <div class="modal-actions">
+      <button type="button" class="modal-button modal-button--secondary" :disabled="cancelling" @click="closeCancel">
+        Keep event
+      </button>
+      <button type="button" class="modal-button modal-button--danger" :disabled="cancelling || !cancelReason.trim()"
+        @click="handleCancel">
+        {{ cancelling ? "Cancelling…" : "Confirm cancellation" }}
+      </button>
+    </div>
+  </div>
+</div>
 </div>
 </div>
 </div>
@@ -1504,6 +1775,142 @@ onMounted(async () => {
 
 .btn-reject-outline:not(:disabled):hover {
   background: var(--color-error-200);
+}
+
+/* E3-6: the trigger lives at the bottom-left of the Event Details card,
+   left-aligned like the rest of that card's content rather than
+   right-aligned like a dialog's own action row. */
+.cancel-event-row {
+  margin-top: var(--spacing-24);
+  display: flex;
+  justify-content: flex-start;
+}
+
+.cancel-event-row__button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+}
+
+.cancel-event-row__icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.cancel-event-row__cancelled-note {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  background: var(--color-error-200);
+  border: 1px solid var(--color-error-300);
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-12) var(--spacing-16);
+  color: var(--color-error-600);
+}
+
+.cancel-event-row__cancelled-note p {
+  margin: 0;
+}
+
+.btn-danger {
+  background: var(--color-error-600);
+  color: var(--color-base-white);
+  border-color: var(--color-error-600);
+}
+
+.btn-danger:not(:disabled):hover {
+  filter: brightness(0.9);
+}
+
+.btn-danger:focus-visible {
+  outline: 2px solid var(--color-error-600);
+  outline-offset: 2px;
+}
+
+/* E3-6: the reason popup — same overlay/dialog shell as
+   VenueRequestsPanel's withdraw/release confirm modal, so every
+   "are you sure" dialog in the app looks and behaves the same way. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 40%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-24);
+  z-index: 50;
+}
+
+.modal {
+  background: var(--color-base-white);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-24);
+  max-width: 440px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.modal-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+  margin: 0 0 var(--spacing-8);
+}
+
+.modal-label {
+  margin-top: var(--spacing-16);
+}
+
+.modal-required {
+  color: var(--color-error-600);
+}
+
+.modal-emphasis {
+  color: var(--color-error-600);
+  font-weight: 700;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-8);
+  margin-top: var(--spacing-16);
+}
+
+.modal-button {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  padding: var(--spacing-12) var(--spacing-16);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.modal-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.modal-button--secondary {
+  background: var(--color-grey-100);
+  color: var(--color-grey-900);
+}
+
+.modal-button--secondary:hover:not(:disabled) {
+  background: var(--color-grey-200);
+}
+
+.modal-button--danger {
+  background: var(--color-error-600);
+  color: var(--color-base-white);
+}
+
+.modal-button--danger:hover:not(:disabled) {
+  filter: brightness(0.9);
 }
 
 .venue-search-entry {

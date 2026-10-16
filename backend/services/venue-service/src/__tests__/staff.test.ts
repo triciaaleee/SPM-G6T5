@@ -156,6 +156,15 @@ describe("GET /api/venues/staff/:venueId/bookings", () => {
           layouts: ["Reception (standing)"],
           facilities: ["Outdoor space", "PA system", "Power outlets"],
         },
+        // E4-17: what this booking is set up for. A booking made before
+        // E4-17 is the main programme for the event's whole attendance.
+        setup: {
+          purpose: "Main programme",
+          headcount: 100,
+          layouts: ["Reception (standing)"],
+          facilities: ["Outdoor space", "PA system", "Power outlets"],
+          accessibility: [],
+        },
       },
     ]);
     // Event data is fetched through events-service with the caller's token.

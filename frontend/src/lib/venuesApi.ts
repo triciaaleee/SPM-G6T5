@@ -151,8 +151,13 @@ export interface VenueRecommendations {
   venues: Venue[];
 }
 
-export async function fetchVenueRecommendations(eventId: number): Promise<VenueRecommendations> {
-  const res = await fetch(`${apiBase}/recommendations/${eventId}`, { headers: authHeader() });
+/**
+ * E4-17 AC5: pass a booking plan to judge venues on that booking's own
+ * headcount and needs; without one, the whole event is judged (E4-7).
+ */
+export async function fetchVenueRecommendations(eventId: number, plan?: BookingPlan): Promise<VenueRecommendations> {
+  const query = plan ? `?${planQuery(plan)}` : "";
+  const res = await fetch(`${apiBase}/recommendations/${eventId}${query}`, { headers: authHeader() });
   await redirectIfUnauthenticated(res);
   const body = await res.json();
   if (!res.ok) throw new Error(body.error ?? "Failed to load venue recommendations");
@@ -186,6 +191,8 @@ export interface VenueBooking {
     layouts: string[];
     facilities: string[];
   };
+  /** E4-17: what this booking is set up for. */
+  setup?: BookingSetup;
 }
 
 export async function fetchStaffVenues(): Promise<StaffVenueOption[]> {
@@ -492,11 +499,12 @@ export class BookingRequestError extends Error {
  * the venue is already held or approved for an overlapping period, and
  * carries that window.
  */
-export async function submitVenueBooking(eventId: number, venueId: number): Promise<EventVenueBooking> {
+/** E4-17 AC1: `plan` records what this venue is for; without it, the main programme for everyone (AC6). */
+export async function submitVenueBooking(eventId: number, venueId: number, plan?: BookingPlan): Promise<EventVenueBooking> {
   const res = await fetch(`${apiBase}/bookings`, {
     method: "POST",
     headers: { ...authHeader(), "Content-Type": "application/json" },
-    body: JSON.stringify({ eventId, venueId }),
+    body: JSON.stringify({ eventId, venueId, ...(plan ?? {}) }),
   });
   await redirectIfUnauthenticated(res);
   const body = await res.json();
@@ -541,6 +549,8 @@ export interface PendingVenueRequest {
     layouts: string[];
     facilities: string[];
   };
+  /** E4-17: what this booking is set up for. */
+  setup?: BookingSetup;
 }
 
 /** The booking as it stands after Venue Staff decided on it. */
@@ -610,4 +620,163 @@ export function approveBooking(bookingId: number): Promise<BookingDecisionResult
 /** AC4: refuse it — a reason is required and the coordinator is told it. */
 export function rejectBooking(bookingId: number, reason: string): Promise<BookingDecisionResult> {
   return decideBooking(bookingId, "reject", { reason });
+}
+
+/** E4-9: the booking as it stands after the coordinator withdrew or released it. */
+export interface WithdrawalResult {
+  booking: { id: number; status: BookingStatus; venue: { id: number; name: string; location: string } };
+  staffNotified: boolean;
+}
+
+/**
+ * E4-9: give up a booking — "withdraw" a pending request/hold, or "release"
+ * a confirmed one. A 409 means the action doesn't apply to this booking's
+ * current status (e.g. withdrawing an Approved one) and carries a message
+ * naming the action to use instead.
+ */
+async function endBooking(bookingId: number, action: "withdraw" | "release"): Promise<WithdrawalResult> {
+  const res = await fetch(`${apiBase}/bookings/${bookingId}/${action}`, {
+    method: "POST",
+    headers: { ...authHeader(), "Content-Type": "application/json" },
+  });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new BookingRequestError(body.error ?? `Failed to ${action} this booking`, body.fields ?? {});
+  return body as WithdrawalResult;
+}
+
+/** AC1: drop a pending request or hold; the venue frees up for another request. */
+export function withdrawVenueBooking(bookingId: number): Promise<WithdrawalResult> {
+  return endBooking(bookingId, "withdraw");
+}
+
+/** AC2: give up a confirmed booking — the only way to undo an Approved one. */
+export function releaseVenueBooking(bookingId: number): Promise<WithdrawalResult> {
+  return endBooking(bookingId, "release");
+}
+
+// ---- E4-17: suitability per venue booking --------------------------------
+
+/** Fixed list — matches venue-service lib/bookingPlan.ts and migration 0034. */
+export const BOOKING_PURPOSES = ["Main programme", "Breakout", "Registration", "Catering", "Other"] as const;
+export type BookingPurpose = (typeof BOOKING_PURPOSES)[number];
+
+export type FeatureGroup = "layouts" | "facilities" | "accessibility";
+export type BookingRequirements = Record<FeatureGroup, string[]>;
+
+/** What one venue booking is for. */
+export interface BookingPlan extends BookingRequirements {
+  purpose: BookingPurpose;
+  /** Only for "Other". */
+  purposeDetail?: string;
+  headcount: number;
+}
+
+/** A booking's purpose and needs, as Venue Staff set the room up for it (E4-17 Q5). */
+export interface BookingSetup extends BookingRequirements {
+  /** The purpose, or for Other what was typed. */
+  purpose: string;
+  headcount: number | null;
+}
+
+export type SuitabilityReason =
+  | { kind: "capacity"; capacity: number; headcount: number }
+  | { kind: FeatureGroup; missing: string[] };
+
+export interface Suitability {
+  suitable: boolean;
+  reasons: SuitabilityReason[];
+}
+
+export interface BookingSuitability {
+  bookingId: number;
+  status: BookingStatus;
+  purpose: BookingPurpose;
+  purposeDetail: string | null;
+  headcount: number | null;
+  requirements: BookingRequirements;
+  /** null when the booking's venue no longer exists. */
+  suitability: Suitability | null;
+}
+
+export interface EventSuitability {
+  /** What the event as a whole asks for — pre-fills the plan form. */
+  defaults: {
+    attendance: number | null;
+    requirements: BookingRequirements;
+    /** Bookings still holding or asking for a venue. */
+    liveBookingCount: number;
+    /** Whether a main-programme booking still covers the main venue; if not, the next booking is it. */
+    hasMainProgramme: boolean;
+  };
+  bookings: BookingSuitability[];
+}
+
+/**
+ * A plan as query parameters, for recommendations and the search page. A
+ * group with nothing needed is sent empty (`layouts=`) so it overrides the
+ * event's own requirement rather than falling back to it.
+ */
+export function planQuery(plan: BookingPlan): URLSearchParams {
+  const params = new URLSearchParams({ purpose: plan.purpose, headcount: String(plan.headcount) });
+  if (plan.purpose === "Other" && plan.purposeDetail) params.set("purposeDetail", plan.purposeDetail);
+  for (const group of ["layouts", "facilities", "accessibility"] as const) {
+    if (plan[group].length === 0) params.append(group, "");
+    for (const value of plan[group]) params.append(group, value);
+  }
+  return params;
+}
+
+/** planQuery as a vue-router query object (repeated keys become arrays). */
+export function planRouteQuery(plan: BookingPlan): Record<string, string | string[]> {
+  const query: Record<string, string | string[]> = {};
+  for (const [key, value] of planQuery(plan)) {
+    const existing = query[key];
+    query[key] = existing === undefined ? value : [...(Array.isArray(existing) ? existing : [existing]), value];
+  }
+  return query;
+}
+
+/** The plan carried in a route's query (see planQuery), or null when there isn't a complete one. */
+export function planFromQuery(query: Record<string, unknown>): BookingPlan | null {
+  const one = (value: unknown) => (Array.isArray(value) ? value[0] : value);
+  const list = (value: unknown) =>
+    (Array.isArray(value) ? value : value === undefined ? [] : [value]).filter(
+      (item): item is string => typeof item === "string" && item.trim() !== "",
+    );
+  const purpose = BOOKING_PURPOSES.find((p) => p === one(query.purpose));
+  const headcount = Number(one(query.headcount));
+  if (!purpose || !Number.isInteger(headcount) || headcount < 1) return null;
+  const detail = one(query.purposeDetail);
+  return {
+    purpose,
+    purposeDetail: typeof detail === "string" ? detail : undefined,
+    headcount,
+    layouts: list(query.layouts),
+    facilities: list(query.facilities),
+    accessibility: list(query.accessibility),
+  };
+}
+
+/** "Breakout", or for Other what was typed. */
+export function purposeLabel(plan: { purpose: string; purposeDetail?: string | null }): string {
+  return plan.purpose === "Other" && plan.purposeDetail ? plan.purposeDetail : plan.purpose;
+}
+
+/** Each reason a venue doesn't suit a booking, as one short phrase. */
+export function describeSuitabilityReasons(reasons: SuitabilityReason[]): string[] {
+  return reasons.map((reason) =>
+    reason.kind === "capacity"
+      ? `holds ${reason.capacity}, needs ${reason.headcount}`
+      : `no ${reason.missing.join(", ")}`,
+  );
+}
+
+/** E4-17: every booking of the event checked against its own plan, plus the plan form's defaults. */
+export async function fetchEventSuitability(eventId: number): Promise<EventSuitability> {
+  const res = await fetch(`${apiBase}/suitability/${eventId}`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? "Failed to check venue suitability");
+  return body as EventSuitability;
 }

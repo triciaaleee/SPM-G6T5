@@ -8,13 +8,12 @@
  * Four stages, per the story: Requested -> (Planning | Rejected |
  * Clarification Requested) -> Confirmed -> Completed. Stage 2 is a single
  * slot whose label and colour switch to whichever of the three outcomes
- * actually applies. Confirmed/Completed aren't statuses the backend can
- * set yet (no story has built that transition), so those two stages will
- * always render as upcoming/pending for now — they're shown anyway so the
- * bar depicts the whole lifecycle, and will light up once that work lands.
+ * actually applies. Confirmed is reached when the Safety Officer approves
+ * (E3-12) and Completed when the coordinator closes the event after it has
+ * run (E3-5).
  */
 import { computed } from "vue";
-import { formatEventDate, statusBadgeClass } from "../lib/eventStatus";
+import { formatEventDate } from "../lib/eventStatus";
 import type { EventVenueBooking } from "../lib/venuesApi";
 import type { EquipmentRequest } from "../lib/equipmentApi";
 
@@ -134,8 +133,14 @@ const stage2Label = computed(() => {
 });
 
 /** Rejected is terminal — Confirmed/Completed can never happen after it,
- * so the tracker only shows the two stages that actually occurred. */
+ * so the tracker only shows the two stages that actually occurred.
+ * Cancelled (E3-6) is terminal too, but — unlike Rejected — it can happen
+ * from any active stage (AGENTS.md §3) and nothing here records which one,
+ * so there's no honest step to highlight; the stepper is hidden entirely
+ * and the status note below carries the reason instead. */
 const steps = computed(() => {
+  if (props.status === "Cancelled") return [];
+
   const requested = { key: "requested", label: "Requested", variant: "neutral" as StepVariant };
   const stage2 = { key: "stage2", label: stage2Label.value, variant: STAGE_TWO_VARIANT[props.status] ?? "neutral" };
 
@@ -149,7 +154,9 @@ const steps = computed(() => {
   ];
 });
 
-const trackFillPercent = computed(() => (currentIndex.value / (steps.value.length - 1)) * 100);
+const trackFillPercent = computed(() =>
+  steps.value.length > 1 ? (currentIndex.value / (steps.value.length - 1)) * 100 : 0,
+);
 
 function stepState(index: number): "complete" | "current" | "pending" {
   if (index < currentIndex.value) return "complete";
@@ -167,7 +174,7 @@ function stepState(index: number): "complete" | "current" | "pending" {
         <p class="body-small muted status-summary__date">Last updated {{ formatEventDate(lastChangedAt) }}</p>
       </div>
 
-      <div class="status-tracker" role="list" aria-label="Event progress" :data-status="status">
+      <div v-if="steps.length > 0" class="status-tracker" role="list" aria-label="Event progress" :data-status="status">
         <div class="status-tracker__track">
           <div class="status-tracker__track-fill" :style="{ width: trackFillPercent + '%' }" />
         </div>
@@ -188,6 +195,9 @@ function stepState(index: number): "complete" | "current" | "pending" {
       </p>
       <p v-else-if="status === 'Rejected'" class="body-small status-note status-note--error">
         This request was rejected{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
+      </p>
+      <p v-else-if="status === 'Cancelled'" class="body-small status-note status-note--error">
+        This event was cancelled{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
       </p>
       <p v-else-if="status === 'Safety Review'" class="body-small muted pt-8">
         Submitted for the Safety Officer's Operational Safety Check. The event can't be edited while it's under review.

@@ -107,12 +107,11 @@ async function handleLogout() {
       </RouterLink>
     </nav>
     <div class="account">
-      <!-- E7-1: coordinators (E4-3), technical support (E5-1) and, since
-           E2-15's chat, organisers are notification recipients. -->
-      <NotificationBell
-        v-if="user.role === 'coordinator' || user.role === 'technical_support' || user.role === 'organiser'"
-        :key="user.id"
-      />
+      <!-- E7-1 (#61) AC2: the unread count must be visible from any page,
+           for anyone who can receive a notification — per #104-#107's
+           trigger matrices that's every role, not just coordinator/
+           technical_support/organiser. -->
+      <NotificationBell :key="user.id" />
       <!-- E2-15: a live chat drawer, persistent on every page — only an
            Organiser or Coordinator has one. -->
       <ChatDrawer v-if="user.role === 'organiser' || user.role === 'coordinator'" :key="`chat-${user.id}`" />

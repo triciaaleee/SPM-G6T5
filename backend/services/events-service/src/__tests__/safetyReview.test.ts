@@ -5,15 +5,15 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
 import { findOutstandingArrangements, parseSafetyNotes } from "../lib/safetyReview.js";
 import type { ArrangementBooking, ArrangementEquipmentRequest } from "../lib/arrangementsClient.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
-  return {
-    requireAuth: (req: AuthedRequest, _res: unknown, next: () => void) => {
-      req.user = (globalThis as any).__mockUser;
-      req.supabase = (globalThis as any).__mockSupabase;
-      next();
-    },
+  const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
+    req.user = (globalThis as any).__mockUser;
+    req.supabase = (globalThis as any).__mockSupabase;
+    next();
   };
+  return { requireAuth: applyMock, requireAuthOrInternal: applyMock };
 });
 
 const coordinator = { id: "COORD-0001", role: "coordinator" };
@@ -49,7 +49,7 @@ afterEach(() => {
 function buildApp(
   options: {
     user?: { id: string; role: string };
-    event?: { id: number; status: string; coordinator_id: string | null } | null;
+    event?: { id: number; status: string; coordinator_id: string | null; organiser_id?: string | null } | null;
     bookings?: ArrangementBooking[];
     equipmentRequests?: ArrangementEquipmentRequest[];
     venueServiceFails?: boolean;
@@ -94,10 +94,13 @@ function buildApp(
   });
   vi.stubGlobal("fetch", fetchMock);
 
+  const publish = vi.fn().mockResolvedValue(true);
+  setPublisherForTest({ publish });
+
   const app = express();
   app.use(express.json());
   app.use("/api/events", eventsRouter);
-  return { app, rpc, fetchMock };
+  return { app, rpc, fetchMock, publish };
 }
 
 function submit(app: express.Express, body: unknown = { safetyNotes: notes }) {
@@ -130,6 +133,24 @@ describe("POST /api/events/:id/submit-safety-review (E3-4)", () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/api\/equipment-requests\?eventId=7$/), {
       headers: { Authorization: "Bearer t" },
     });
+  });
+
+  it("AC9: publishes safety.submitted to the organiser and every Safety Officer (#105 row 1)", async () => {
+    const { app, publish } = buildApp({
+      event: { id: 7, status: "Planning", coordinator_id: coordinator.id, organiser_id: "ORG-0001" },
+      bookings: [booking(1, "Approved")],
+    });
+
+    const res = await submit(app);
+
+    expect(res.status).toBe(200);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "safety.submitted",
+        eventId: 7,
+        recipients: { userIds: ["ORG-0001"], roles: ["safety_officer"] },
+      }),
+    );
   });
 
   it("AC2: blocks an event with no approved venue booking", async () => {

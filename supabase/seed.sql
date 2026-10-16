@@ -35,6 +35,7 @@ insert into users (id, name, email, password_hash, role) values
   ('LEAD-0001', 'Coordinator Lead', 'coordinator-lead@example.com', crypt('password123', gen_salt('bf')), 'coordinator_lead'),
   ('VEN-0001', 'Venue Staff One', 'venue-staff-one@example.com', crypt('password123', gen_salt('bf')), 'venue_staff'),
   ('TS-0001', 'Technical Support One', 'tech-support-one@example.com', crypt('password123', gen_salt('bf')), 'technical_support'),
+  ('SAF-0001', 'Safety Officer One', 'safety-officer-one@example.com', crypt('password123', gen_salt('bf')), 'safety_officer'),
   ('ATT-0001', 'Attendee One', 'attendee-one@example.com', crypt('password123', gen_salt('bf')), 'attendee'),
   ('ATT-0002', 'Attendee Two', 'attendee-two@example.com', crypt('password123', gen_salt('bf')), 'attendee'),
   ('ATT-0003', 'Attendee Three', 'attendee-three@example.com', crypt('password123', gen_salt('bf')), 'attendee')
@@ -319,8 +320,10 @@ on conflict (event_id, user_id) do update set
 -- equipment (0025): one row per physical unit, mirroring equipment_catalog's
 -- total_stock above — the same vocabulary coordinators already pick from
 -- in equipment_requests, not a separate inventory. Re-running this file
--- reseeds every unit; equipment_booking has no reservation workflow yet
--- (E5-6), so deleting and recreating the units loses nothing meaningful.
+-- reseeds every unit; deleting and recreating them loses nothing meaningful
+-- since nothing here is a real E5-6 reservation (those are tied to a real
+-- equipment_request_items row via request_item_id, migration 0027 — the
+-- two demo bookings below are plain pre-existing scaffolding, not that).
 delete from equipment_booking where equipment_id in (select id from equipment where type in (select name from equipment_catalog));
 delete from equipment where type in (select name from equipment_catalog);
 

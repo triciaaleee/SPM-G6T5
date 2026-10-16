@@ -16,6 +16,8 @@ import TechnicalSupportView from "../views/TechnicalSupportView.vue";
 import EquipmentRequestDetailView from "../views/EquipmentRequestDetailView.vue";
 import EquipmentInventoryView from "../views/EquipmentInventoryView.vue";
 import LeadDashboardView from "../views/LeadDashboardView.vue";
+import SafetyReviewQueueView from "../views/SafetyReviewQueueView.vue";
+import NotificationsView from "../views/NotificationsView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
 
 export const router = createRouter({
@@ -67,7 +69,11 @@ export const router = createRouter({
       path: "/events/:id",
       name: "event-detail",
       component: EventDetailView,
-      meta: { requiresAuth: true, roles: ["organiser", "coordinator"] },
+      // coordinator_lead: EventDetailView's own `isLead`/`canAssign` (E2-13)
+      // and `canReassign` (E2-12) gate the Lead's assign/reassign panel —
+      // without this role here, the Lead's card click (LeadDashboardView)
+      // never reaches the page at all.
+      meta: { requiresAuth: true, roles: ["organiser", "coordinator", "coordinator_lead"] },
     },
     {
       path: "/coordinator",
@@ -136,6 +142,22 @@ export const router = createRouter({
       component: LeadDashboardView,
       meta: { requiresAuth: true, roles: ["coordinator_lead"] },
     },
+    {
+      // E3-12/13/14: the Safety Officer's landing page.
+      path: "/safety-review",
+      name: "safety-review-queue",
+      component: SafetyReviewQueueView,
+      meta: { requiresAuth: true, roles: ["safety_officer"] },
+    },
+    {
+      // E7-1 (#61): the full notification feed, beyond the bell's 5-item
+      // preview. The bell is now on every role's header (App.vue), so no
+      // role restriction here beyond being signed in.
+      path: "/notifications",
+      name: "notifications",
+      component: NotificationsView,
+      meta: { requiresAuth: true },
+    },
   ],
 });
 
@@ -189,6 +211,12 @@ router.beforeEach((to) => {
   // E1-8: the Lead organises no events — their screen is the queue.
   if (authed && to.name === "events-list" && getStoredUser()?.role === "coordinator_lead") {
     return { name: "lead-dashboard" };
+  }
+
+  // E3-12/13/14: the Safety Officer organises no events — their screen is
+  // the safety review queue.
+  if (authed && to.name === "events-list" && getStoredUser()?.role === "safety_officer") {
+    return { name: "safety-review-queue" };
   }
 
   return true;

@@ -35,6 +35,7 @@
  */
 import type { AuthedRequest } from "../middleware/auth.js";
 import {
+  HOLD_EXPIRY_WARNING_HOURS,
   UNAVAILABLE_BOOKING_STATUSES,
   blocksVenue,
   canTransition,
@@ -42,8 +43,8 @@ import {
   type BookingStatus,
 } from "./bookingStatus.js";
 import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "./bookingConflicts.js";
-import { fetchVenueBookingInfo, type VenueBookingInfo } from "./eventsClient.js";
-import { sendNotifications, type NewNotification } from "./notificationsClient.js";
+import { fetchVenueBookingInfo, fetchVenueBookingInfoInternal, type VenueBookingInfo } from "./eventsClient.js";
+import { getPublisher, type OutboundMessage } from "./rabbitPublisher.js";
 import { describePeriod, findClashingPeriod } from "./unavailability.js";
 import { withVenueLock } from "./venueLock.js";
 import { isLockBusy, withVenueBookingLock } from "./venueBookingLock.js";
@@ -107,24 +108,21 @@ export type DecisionResult =
 /**
  * E4-12, change 4: the coordinator hears about an expiry "before or when it
  * expires" — the system decided, so `decided_by` is null, same as an
- * auto-rejection.
+ * auto-rejection. #106 row 4a, RabbitMQ.md #21 `hold.expired`.
  */
-function expiredNotification(
+function expiredMessage(
   venue: Pick<VenueRow, "id" | "name">,
   booking: BookingRow,
   event: VenueBookingInfo | undefined,
-): NewNotification | null {
+): OutboundMessage | null {
   const coordinatorId = event?.coordinatorId;
   if (!coordinatorId) return null;
-  const eventName = eventLabel(event, booking.event_id);
   return {
-    recipientId: coordinatorId,
-    type: "venue_booking_expired",
-    title: `${venue.name} — hold expired`,
-    body:
-      `The hold on ${venue.name} for ${eventName} expired before it was decided. ` +
-      "You can request another venue or another time.",
-    link: `/events/${booking.event_id}`,
+    type: "hold.expired",
+    eventId: booking.event_id,
+    actorId: null,
+    recipients: { userIds: [coordinatorId], roles: [] },
+    data: { eventName: eventLabel(event, booking.event_id), venueName: venue.name },
   };
 }
 
@@ -154,13 +152,13 @@ export async function expireLapsedHolds(
   const info = await fetchVenueBookingInfo([...new Set(lapsed.map((booking) => booking.event_id))], authorization);
   const eventsById = info.status === "ok" ? new Map(info.events.map((event) => [event.id, event])) : new Map();
 
-  const notifications = lapsed.flatMap((booking) => {
+  const messages = lapsed.flatMap((booking) => {
     const venue = venuesById.get(booking.venue_id);
     if (!venue) return [];
-    const notification = expiredNotification(venue, booking, eventsById.get(booking.event_id));
-    return notification ? [notification] : [];
+    const message = expiredMessage(venue, booking, eventsById.get(booking.event_id));
+    return message ? [message] : [];
   });
-  await notifyDecision(notifications, authorization);
+  await publishAll(messages);
 }
 
 /**
@@ -179,6 +177,67 @@ async function sweepIfExpired(
   if (booking.status !== "On Hold" || blocksVenue(booking, now)) return false;
   await expireLapsedHolds(supabase, [booking], new Map([[venue.id, venue]]), authorization);
   return true;
+}
+
+/**
+ * #106 row 4b: warns a coordinator their hold is about to lapse, once per
+ * booking (dedup via `expiry_warning_sent_at`, migration 0033). Run on a
+ * timer (`src/index.ts`), not inside a request — there's no caller's token
+ * to forward to events-service, so this uses the internal-auth lookup
+ * (`fetchVenueBookingInfoInternal`) instead.
+ */
+export async function sweepExpiringHolds(supabase: Supabase): Promise<void> {
+  const now = new Date();
+  const warnBy = new Date(now.getTime() + HOLD_EXPIRY_WARNING_HOURS * 60 * 60 * 1000);
+
+  const { data, error } = await supabase
+    .from("venue_bookings")
+    .select(BOOKING_COLUMNS)
+    .eq("status", "On Hold")
+    .is("expiry_warning_sent_at", null)
+    .gt("hold_expires_at", now.toISOString())
+    .lte("hold_expires_at", warnBy.toISOString());
+  if (error || !data || data.length === 0) return;
+
+  const rows = data as BookingRow[];
+
+  const { data: venueData, error: venueError } = await supabase
+    .from("venues")
+    .select(VENUE_COLUMNS)
+    .in("id", [...new Set(rows.map((row) => row.venue_id))]);
+  if (venueError) return;
+  const venuesById = new Map(((venueData ?? []) as VenueRow[]).map((venue) => [venue.id, venue]));
+
+  const info = await fetchVenueBookingInfoInternal([...new Set(rows.map((row) => row.event_id))]);
+  const eventsById = info.status === "ok" ? new Map(info.events.map((event) => [event.id, event])) : new Map();
+
+  const messages = rows.flatMap((booking) => {
+    const venue = venuesById.get(booking.venue_id);
+    const event = eventsById.get(booking.event_id);
+    const coordinatorId = event?.coordinatorId;
+    if (!venue || !coordinatorId) return [];
+    const message: OutboundMessage = {
+      type: "hold.expiring",
+      eventId: booking.event_id,
+      actorId: null,
+      recipients: { userIds: [coordinatorId], roles: [] },
+      data: { eventName: eventLabel(event, booking.event_id), venueName: venue.name, expiresAt: booking.hold_expires_at },
+    };
+    return [message];
+  });
+  await Promise.all(messages.map((message) => getPublisher().publish(message)));
+
+  // Stamped for every booking considered, not just the ones that had a
+  // resolvable coordinator or a successful publish — this is a best-effort
+  // notification, and the point of the flag is "don't warn about this
+  // booking again", not "retry until it succeeds".
+  await supabase
+    .from("venue_bookings")
+    .update({ expiry_warning_sent_at: now.toISOString() })
+    .in(
+      "id",
+      rows.map((row) => row.id),
+    );
 }
 
 interface BlockingBookingWindow {
@@ -309,64 +368,71 @@ function eventLabel(event: VenueBookingInfo | undefined, eventId: number): strin
 /**
  * E4-11 AC4: a coordinator whose request lost the venue is told, so they
  * can request another venue or time. `decided_by` is null on these rows —
- * the system made the call — so the notification says why.
+ * the system made the call. RabbitMQ.md #17 `booking.decided` (decision:
+ * auto_rejected), with the fixed reason.
  */
-function autoRejectedNotification(
+function autoRejectedMessage(
   venue: VenueRow,
   loser: { booking: BookingRow; event?: VenueBookingInfo },
-): NewNotification | null {
+): OutboundMessage | null {
   const coordinatorId = loser.event?.coordinatorId;
   if (!coordinatorId) return null;
-  const eventName = eventLabel(loser.event, loser.booking.event_id);
   return {
-    recipientId: coordinatorId,
-    type: "venue_booking_auto_rejected",
-    title: `Venue request for ${eventName} was rejected`,
-    body:
-      `${venue.name} was booked for another event over the same period, so your request for ${eventName} ` +
-      `was rejected: ${AUTO_REJECT_REASON}. You can request another venue or another time.`,
-    link: `/events/${loser.booking.event_id}`,
+    type: "booking.decided",
+    eventId: loser.booking.event_id,
+    actorId: null,
+    recipients: { userIds: [coordinatorId], roles: [] },
+    data: {
+      decision: "auto_rejected",
+      reason: AUTO_REJECT_REASON,
+      eventName: eventLabel(loser.event, loser.booking.event_id),
+      venueName: venue.name,
+    },
   };
 }
 
-/** E4-10: the coordinator hears the decision on their own request. */
-function decidedNotification(
+const DECISION_FIELD: Record<Decision, string> = {
+  "On Hold": "on_hold",
+  Approved: "approved",
+  Rejected: "rejected",
+};
+
+/** E4-10: the coordinator hears the decision on their own request. RabbitMQ.md #16 `booking.decided`. */
+function decidedMessage(
   venue: VenueRow,
   booking: BookingRow,
   event: VenueBookingInfo | undefined,
   decision: Decision,
   reason: string,
-): NewNotification | null {
+  staffId: string,
+): OutboundMessage | null {
   const coordinatorId = event?.coordinatorId;
   if (!coordinatorId) return null;
-  const eventName = eventLabel(event, booking.event_id);
-
-  const outcome =
-    decision === "Approved"
-      ? `is approved for ${eventName}`
-      : decision === "On Hold"
-        ? `is on hold for ${eventName} while arrangements are finalised`
-        : `was rejected for ${eventName}`;
-
   return {
-    recipientId: coordinatorId,
-    type: "venue_booking_decided",
-    title: `${venue.name} — booking ${decision === "Rejected" ? "rejected" : decision.toLowerCase()}`,
-    body: decision === "Rejected" ? `${venue.name} ${outcome}: ${reason}` : `${venue.name} ${outcome}.`,
-    link: `/events/${booking.event_id}`,
+    type: "booking.decided",
+    eventId: booking.event_id,
+    actorId: staffId,
+    recipients: { userIds: [coordinatorId], roles: [] },
+    data: {
+      decision: DECISION_FIELD[decision],
+      reason,
+      eventName: eventLabel(event, booking.event_id),
+      venueName: venue.name,
+    },
   };
 }
 
 /**
- * Sends whatever notifications a decision produced. Best-effort and always
- * after the writes have landed: a slow or failing notification-service must
- * never undo a committed decision or hold the venue lock.
+ * Publishes whatever messages a decision produced. Best-effort and always
+ * after the writes have landed: a slow or failing broker must never undo a
+ * committed decision or hold the venue lock.
  */
-async function notifyDecision(notifications: NewNotification[], authorization: string): Promise<NotifyOutcome> {
-  const recipients = new Set(notifications.map((n) => n.recipientId));
+async function publishAll(messages: OutboundMessage[]): Promise<NotifyOutcome> {
+  const recipients = new Set(messages.flatMap((m) => m.recipients.userIds));
   if (recipients.size === 0) return { coordinatorsNotified: 0, notificationsFailed: false };
-  const sent = await sendNotifications(notifications, authorization);
-  return { coordinatorsNotified: sent ? recipients.size : 0, notificationsFailed: !sent };
+  const results = await Promise.all(messages.map((m) => getPublisher().publish(m)));
+  const allSent = results.every(Boolean);
+  return { coordinatorsNotified: allSent ? recipients.size : 0, notificationsFailed: !allSent };
 }
 
 export interface DecisionInput {
@@ -381,7 +447,7 @@ export interface DecisionInput {
 /** The lock's result: an outcome, plus what still needs notifying afterwards. */
 type GuardedResult =
   | { outcome: DecisionResult; notifications?: never }
-  | { outcome: DecisionResult; notifications: NewNotification[] };
+  | { outcome: DecisionResult; notifications: OutboundMessage[] };
 
 export async function decideBooking(supabase: Supabase, input: DecisionInput): Promise<DecisionResult> {
   const now = new Date();
@@ -427,7 +493,7 @@ export async function decideBooking(supabase: Supabase, input: DecisionInput): P
 
   if (result.outcome.status !== "ok" || !result.notifications) return result.outcome;
 
-  const notified = await notifyDecision(result.notifications, input.authorization);
+  const notified = await publishAll(result.notifications);
   return { ...result.outcome, ...notified };
 }
 
@@ -466,7 +532,7 @@ async function rejectBooking(
   // telling them is best-effort and must not decide whether this succeeds.
   const info = await fetchVenueBookingInfo([booking.event_id], input.authorization);
   const event = info.status === "ok" ? info.events[0] : undefined;
-  const notification = decidedNotification(venue, booking, event, "Rejected", reason);
+  const notification = decidedMessage(venue, booking, event, "Rejected", reason, input.staffId);
 
   return {
     outcome: {
@@ -615,9 +681,9 @@ async function decideUnderLock(
   if (!autoRejected) return { outcome: { status: "error" } };
 
   const notifications = [
-    decidedNotification(venue, booking, event, input.decision, ""),
-    ...autoRejected.losers.map((loser) => autoRejectedNotification(venue, loser)),
-  ].filter((n): n is NewNotification => n !== null);
+    decidedMessage(venue, booking, event, input.decision, "", input.staffId),
+    ...autoRejected.losers.map((loser) => autoRejectedMessage(venue, loser)),
+  ].filter((n): n is OutboundMessage => n !== null);
 
   return {
     outcome: {

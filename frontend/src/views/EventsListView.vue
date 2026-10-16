@@ -128,7 +128,7 @@ onMounted(async () => {
     const [eventsData, user] = await Promise.all([fetchMyEvents(), getCurrentUser()]);
     events.value = eventsData;
     isCoordinator.value = user.role === "coordinator";
-  } catch (err) {
+  } catch {
     errorMessage.value = "We couldn't load your events. Please try again.";
   } finally {
     loading.value = false;

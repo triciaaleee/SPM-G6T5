@@ -103,6 +103,9 @@ export const SAFETY_NOTE_FIELDS: Record<keyof SafetyNotes, string> = {
 
 export const MAX_SAFETY_NOTE_LENGTH = 2000;
 
+/** E3-13: the Safety Officer's reason for rejecting, same cap as a safety note. */
+export const MAX_SAFETY_DECISION_REASON_LENGTH = 2000;
+
 export type SafetyNotesResult = { valid: true; notes: SafetyNotes } | { valid: false; fields: Record<string, string> };
 
 /**

@@ -1,20 +1,32 @@
 import { Router } from "express";
 import type { Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, requireAuthOrInternal } from "../middleware/auth.js";
 import { normaliseDraftEventRequest, validateEventRequest } from "../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../lib/validation.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
-import { sendNotifications, type NewNotification } from "../lib/notificationsClient.js";
-import { fetchCoordinatorLeads, fetchCoordinators } from "../lib/usersClient.js";
+import { getPublisher } from "../lib/rabbitPublisher.js";
+import { fitNotificationBody, sendNotifications } from "../lib/notificationsClient.js";
+import { fetchCoordinators } from "../lib/usersClient.js";
 import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
 import {
   describeOutstanding,
   findOutstandingArrangements,
   hasOutstanding,
+  MAX_SAFETY_DECISION_REASON_LENGTH,
   parseSafetyNotes,
 } from "../lib/safetyReview.js";
+import { eventEndsAt, hasEventEnded } from "../lib/eventTiming.js";
+import {
+  arrangementOptions,
+  combinedReason,
+  currentArrangements,
+  hasChanged,
+  parseChangeRequest,
+  resolveFlags,
+  type StoredFlag,
+} from "../lib/safetyChanges.js";
 
 /**
  * Week 7 change 5: the Event Coordinator Lead oversees incoming requests,
@@ -69,30 +81,31 @@ async function recordEventHistory(
 /**
  * E2-14: a newly-unassigned request waits in the Lead's queue (E1-8) until
  * assigned (E2-13) — notify every Lead so they know there's something to
- * triage. Best-effort: a notification failure never blocks the submission
- * that already committed.
+ * triage, and the submitting organiser with a confirmation (#104 row 1).
+ * Best-effort: a notification failure never blocks the submission that
+ * already committed.
+ *
+ * Lead ids are resolved by notification-service after this publishes
+ * (`recipients.roles`), not fetched from user-service here first — events-
+ * service has no REST dependency on user-service in this path at all.
  */
-async function notifyCoordinatorLeads(
-  authorization: string,
-  eventId: number,
-  eventName: string,
-): Promise<void> {
-  const leads = await fetchCoordinatorLeads(authorization);
-  if (leads.status === "error" || leads.coordinators.length === 0) return;
-
-  await sendNotifications(
-    leads.coordinators.map((lead) => ({
-      recipientId: lead.id,
-      type: "event_unassigned",
-      title: "New request in the unassigned queue",
-      body: `"${eventName}" needs a coordinator assigned.`,
-      link: `/events/${eventId}`,
-    })),
-    authorization,
-  );
+async function notifyCoordinatorLeads(eventId: number, eventName: string, actorId: string): Promise<void> {
+  await getPublisher().publish({
+    type: "request.submitted",
+    eventId,
+    actorId,
+    recipients: { userIds: [actorId], roles: ["coordinator_lead"] },
+    data: { eventName, organiserId: actorId },
+  });
 }
 
 export const eventsRouter = Router();
+
+// Registered ahead of the blanket requireAuth below: venue-service's
+// scheduled expiring-hold sweep (#106 row 4b) has no end-user token to
+// forward, so this one route accepts an internal token too. Every other
+// route keeps requireAuth only.
+eventsRouter.get("/venue-booking-info", requireAuthOrInternal, venueBookingInfoHandler);
 
 eventsRouter.use(requireAuth);
 
@@ -166,11 +179,7 @@ eventsRouter.post("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  await notifyCoordinatorLeads(
-    req.headers.authorization!,
-    data.id,
-    eventDisplayName(data as unknown as AssignmentEventRow),
-  );
+  await notifyCoordinatorLeads(data.id, eventDisplayName(data as unknown as AssignmentEventRow), user.id);
 
   res.status(201).json({ event: data, message: "Your event request has been submitted." });
 });
@@ -401,16 +410,24 @@ const VENUE_BOOKING_INFO_ROLES = new Set(["venue_staff", "coordinator", "technic
  * read as an event id. Drafts are never returned: a draft can't have been
  * booked, and it isn't anyone's business but the organiser's.
  */
-eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
+/**
+ * A hoisted function declaration (not registered inline) so it can be
+ * referenced by the early, internal-auth-aware route registration above
+ * requireAuth — see the comment there. `user` is absent for a trusted
+ * internal caller (venue-service's sweep); that skips the role check
+ * entirely rather than rejecting it, same reasoning as user-service's
+ * requireAuthOrInternal routes.
+ */
+async function venueBookingInfoHandler(req: AuthedRequest, res: Response): Promise<void> {
   const { supabase, user } = req;
-  if (!supabase || !user) {
+  if (!supabase) {
     res.status(401).json({ error: "Unauthenticated" });
     return;
   }
 
   const rawIds = typeof req.query.ids === "string" ? req.query.ids : "";
 
-  if (!VENUE_BOOKING_INFO_ROLES.has(user.role)) {
+  if (user && !VENUE_BOOKING_INFO_ROLES.has(user.role)) {
     await recordAccessDenial(supabase, user.id, rawIds, "venue_booking_info_role_not_allowed");
     res.status(403).json({ error: "Access denied" });
     return;
@@ -455,7 +472,7 @@ eventsRouter.get("/venue-booking-info", async (req: AuthedRequest, res) => {
   });
 
   res.json({ events });
-});
+}
 
 /**
  * E6: the only fields an Attendee may see about an event — what is safe to
@@ -487,17 +504,14 @@ const MAX_ATTENDEE_INFO_IDS = 100;
  * "Open for registration": the event is Confirmed (safety-approved, so it
  * will go ahead), the organiser asked for registration, and it hasn't
  * ended yet. Lives here, with the event data, so registration-service
- * doesn't re-derive it. Date/time are the event's local wall-clock values.
+ * doesn't re-derive it. When it ends is worked out in Singapore time (see
+ * lib/eventTiming.ts), the same rule E3-5 completion uses.
  */
 function isOpenForRegistration(status: string, details: Record<string, unknown>, now: Date = new Date()): boolean {
   if (status !== "Confirmed" || details.registrationNeeded !== true) return false;
 
-  const date = typeof details.proposedDate === "string" ? details.proposedDate : null;
-  const endTime = typeof details.endTime === "string" ? details.endTime : "23:59";
-  if (!date) return false;
-
-  const endsAt = new Date(`${date}T${endTime}`);
-  return Number.isNaN(endsAt.getTime()) ? false : endsAt.getTime() > now.getTime();
+  const endsAt = eventEndsAt(details);
+  return endsAt !== null && endsAt.getTime() > now.getTime();
 }
 
 /**
@@ -640,6 +654,105 @@ eventsRouter.get("/unassigned", async (req: AuthedRequest, res) => {
 });
 
 /**
+ * E1-10: the Safety Officer's queue — every event awaiting an Operational
+ * Safety Check, with the coordinator's safety notes from their latest
+ * submission (E3-4), so the Safety Officer can assess without a second
+ * request. Any Safety Officer sees every event in Safety Review — there's
+ * no per-officer assignment. Declared before GET /:id so
+ * "safety-review-queue" isn't read as an event id.
+ */
+eventsRouter.get("/safety-review-queue", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  if (user.role !== "safety_officer") {
+    await recordAccessDenial(supabase, user.id, "safety_review_queue", "safety_review_queue_role_not_allowed");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const { data: events, error } = await supabase
+    .from("events")
+    .select(EVENT_COLUMNS)
+    .eq("status", EVENT_STATUS.SafetyReview)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load the safety review queue" });
+    return;
+  }
+
+  const eventIds = (events ?? []).map((event) => event.id);
+  const { data: submissions, error: submissionsError } = await supabase
+    .from("event_safety_submissions")
+    .select("event_id, equipment_placement, crowd_movement, emergency_access, venue_restrictions, submitted_at")
+    .in("event_id", eventIds.length > 0 ? eventIds : [-1])
+    .order("submitted_at", { ascending: false });
+
+  if (submissionsError) {
+    res.status(500).json({ error: "Failed to load safety notes" });
+    return;
+  }
+
+  // Keep only the latest submission per event — resubmission after a
+  // reject/changes-requested gets fresh notes and the earlier ones no
+  // longer apply (E3-12 AC4).
+  const latestByEvent = new Map<number, (typeof submissions)[number]>();
+  for (const submission of submissions ?? []) {
+    if (!latestByEvent.has(submission.event_id)) latestByEvent.set(submission.event_id, submission);
+  }
+
+  // E3-14: each event's venue bookings and equipment, so the Safety Officer
+  // can pick which ones must change (AC1), and — for an event resubmitted
+  // after a change request — which of those flags were addressed (AC3).
+  // Read with the officer's own token; null when a service couldn't answer,
+  // so the rest of the queue still loads.
+  const authorization = req.headers.authorization!;
+  const extras = await Promise.all(
+    (events ?? []).map(async (event) => {
+      try {
+        const [bookings, equipment, changeRequest] = await Promise.all([
+          fetchEventVenueBookings(event.id, authorization),
+          fetchEventEquipmentRequests(event.id, authorization),
+          loadChangeRequest(supabase, event.id, authorization),
+        ]);
+        return {
+          arrangements:
+            bookings.status === "ok" && equipment.status === "ok"
+              ? arrangementOptions(bookings.value, equipment.value)
+              : null,
+          changeRequest: changeRequest.status === "ok" ? changeRequest.value : null,
+        };
+      } catch {
+        // One event's extras failing must not take the whole queue down.
+        return { arrangements: null, changeRequest: null };
+      }
+    }),
+  );
+
+  const result = (events ?? []).map((event, index) => {
+    const submission = latestByEvent.get(event.id);
+    return {
+      ...event,
+      safetyNotes: submission
+        ? {
+            equipmentPlacement: submission.equipment_placement,
+            crowdMovement: submission.crowd_movement,
+            emergencyAccess: submission.emergency_access,
+            venueRestrictions: submission.venue_restrictions,
+          }
+        : null,
+      ...extras[index],
+    };
+  });
+
+  res.json({ events: result });
+});
+
+/**
  * Fetch a single event by id. The service-role client returns any row
  * regardless of ownership, so ownership/role is checked explicitly here;
  * a non-owner (and non-coordinator) request is treated the same as
@@ -678,8 +791,13 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   const isOwner = data?.organiser_id === user.id;
   const isCoordinator = user.role === "coordinator";
   const isLead = user.role === COORDINATOR_LEAD_ROLE && data?.status !== EVENT_STATUS.Draft;
+  // E3-14: read-only, for events the Safety Officer reviews — ones that
+  // have been submitted for safety review. venue-service and
+  // equipment-service defer to this check, which is how the officer can
+  // see the bookings and equipment they may flag.
+  const isSafetyOfficer = user.role === "safety_officer" && !!data && (await hasSafetySubmission(supabase, data.id));
 
-  if (!data || (!isOwner && !isCoordinator && !isLead)) {
+  if (!data || (!isOwner && !isCoordinator && !isLead && !isSafetyOfficer)) {
     await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
     res.status(403).json({ error: "Access denied" });
     return;
@@ -887,17 +1005,184 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
         console.error("Failed to record clarification response reply", { eventId: existing.id, error: replyError });
       }
     }
+
+    // #104 row 6: the organiser's response goes to whoever is currently
+    // assigned — read fresh from `existing`, not cached from when the
+    // clarification was first requested, so a reassignment in between is
+    // respected.
+    if (existing.coordinator_id) {
+      await getPublisher().publish({
+        type: "clarification.answered",
+        eventId: data.id,
+        actorId: user.id,
+        recipients: { userIds: [existing.coordinator_id], roles: [] },
+        data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow) },
+      });
+    }
   }
 
   if (isDraftSubmit) {
-    await notifyCoordinatorLeads(
-      req.headers.authorization!,
-      data.id,
-      eventDisplayName(data as unknown as AssignmentEventRow),
-    );
+    await notifyCoordinatorLeads(data.id, eventDisplayName(data as unknown as AssignmentEventRow), user.id);
+  }
+
+  if (isDirectEdit) {
+    // #104 row 2 / AC4: the assigned coordinator, or every Lead if the
+    // event is still Unassigned (no coordinator to address).
+    const eventName = eventDisplayName(data as unknown as AssignmentEventRow);
+    if (existing.coordinator_id) {
+      await getPublisher().publish({
+        type: "request.edited",
+        eventId: data.id,
+        actorId: user.id,
+        recipients: { userIds: [existing.coordinator_id], roles: [] },
+        data: { eventName },
+      });
+    } else {
+      // No REST lookup — notification-service resolves the Lead ids itself.
+      await getPublisher().publish({
+        type: "request.edited",
+        eventId: data.id,
+        actorId: user.id,
+        recipients: { userIds: [], roles: ["coordinator_lead"] },
+        data: { eventName },
+      });
+    }
   }
 
   res.json({ event: data });
+});
+
+/**
+ * E3-6 / AGENTS.md §3 transitions table: every active stage the owning
+ * Organiser may cancel from — everything except `Draft` (delete it
+ * instead) and the three terminal statuses, which are already excluded by
+ * this being an allowlist.
+ */
+const CANCELLABLE_STATUSES = new Set<string>([
+  EVENT_STATUS.Unassigned,
+  EVENT_STATUS.Requested,
+  EVENT_STATUS.ClarificationRequested,
+  EVENT_STATUS.Planning,
+  EVENT_STATUS.SafetyReview,
+  EVENT_STATUS.Confirmed,
+]);
+
+/**
+ * E3-6: the owning Organiser cancels their own event with a required
+ * reason. AC1: automatic — no coordinator approval (the customer's answer
+ * to PRD Q2) — the assigned coordinator is just notified with the reason,
+ * or every Event Coordinator Lead if the event is still Unassigned (AC1,
+ * AGENTS.md §3). AC2-AC5 (releasing venue bookings and equipment,
+ * notifying attendees) are each handled in the service that owns that
+ * data: this route only flips the status and publishes `event.cancelled`
+ * (RabbitMQ.md #14); venue-service, equipment-service and
+ * registration-service each consume that same message and publish their
+ * own follow-up (RabbitMQ.md section 3.3-3.5, #33/#34/#35). AC6: nothing
+ * here deletes anything, so the cancelled event's record and history stay
+ * viewable exactly like every other closed event.
+ *
+ * The update only matches while the event is still in the status just
+ * checked, so a concurrent decision (e.g. a Safety Officer rejecting it)
+ * between the checks and the write loses the race cleanly with a 409
+ * instead of cancelling a status that no longer applies.
+ */
+eventsRouter.post("/:id/cancel", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const { data: existing, error: fetchError } = await supabase
+    .from("events")
+    .select("id, status, organiser_id, coordinator_id")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (fetchError) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+  if (!existing) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+  if (existing.organiser_id !== user.id) {
+    await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  if (!CANCELLABLE_STATUSES.has(existing.status)) {
+    res.status(409).json({
+      error:
+        existing.status === EVENT_STATUS.Draft
+          ? "This is still a draft — delete it instead of cancelling it."
+          : `This event is ${existing.status} and can no longer be cancelled.`,
+    });
+    return;
+  }
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required to cancel an event" });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .update({
+      status: EVENT_STATUS.Cancelled,
+      review_outcome: reason,
+      decided_at: new Date().toISOString(),
+      decided_by: user.id,
+    })
+    .eq("id", existing.id)
+    .eq("status", existing.status)
+    .select(EVENT_COLUMNS)
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to cancel this event" });
+    return;
+  }
+  if (!data) {
+    res.status(409).json({ error: "This event changed while you were cancelling it. Refresh and try again." });
+    return;
+  }
+
+  await recordEventHistory(
+    supabase,
+    existing.id,
+    [
+      { field: "Status", oldValue: existing.status, newValue: EVENT_STATUS.Cancelled },
+      { field: "Cancellation reason", oldValue: null, newValue: reason },
+    ],
+    user.id,
+  );
+
+  const eventName = eventDisplayName(data as unknown as AssignmentEventRow);
+
+  // RabbitMQ.md #14: the organiser's own confirmation, and whoever is
+  // notified with the reason — the assigned coordinator, or every Lead if
+  // nobody is assigned yet.
+  const published = await getPublisher().publish({
+    type: "event.cancelled",
+    eventId: existing.id,
+    actorId: user.id,
+    recipients: existing.coordinator_id
+      ? { userIds: [user.id, existing.coordinator_id], roles: [] }
+      : { userIds: [user.id], roles: ["coordinator_lead"] },
+    data: { eventName, reason },
+  });
+
+  res.json({ event: data, notificationsFailed: !published });
 });
 
 /**
@@ -923,6 +1208,32 @@ eventsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
   }
 
   res.json({ history: data ?? [] });
+});
+
+/**
+ * E3-12/13/14: every Operational Safety Check decision on this event,
+ * oldest first — outcome, reason, the Safety Officer and when. Lets the
+ * coordinator see why an event came back to Planning without relying on
+ * the notification. Same visibility as the edit history.
+ */
+eventsRouter.get("/:id/safety-reviews", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await loadEventForClarification(req, res, eventId);
+  if (!event) return;
+
+  const { supabase } = req as Required<Pick<AuthedRequest, "supabase">>;
+  const { data, error } = await supabase
+    .from("event_safety_reviews")
+    .select("id, outcome, reason, submission_id, officer:officer_id(name), created_at")
+    .eq("event_id", event.id)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load safety reviews" });
+    return;
+  }
+
+  res.json({ safetyReviews: data ?? [] });
 });
 
 /**
@@ -957,6 +1268,7 @@ interface ReviewEventRow {
   id: number;
   status: string;
   coordinator_id: string | null;
+  organiser_id: string | null;
 }
 
 /**
@@ -994,7 +1306,7 @@ async function authorizeCoordinatorReview(
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, status, coordinator_id")
+    .select("id, status, coordinator_id, organiser_id")
     .eq("id", Number(eventId))
     .maybeSingle();
 
@@ -1082,6 +1394,17 @@ eventsRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // #104 row 7: the organiser is the only recipient of the decision.
+  if (event.organiser_id) {
+    await getPublisher().publish({
+      type: "request.decided",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.organiser_id], roles: [] },
+      data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow), decision: "approved" },
+    });
+  }
+
   res.json({ event: data });
 });
 
@@ -1125,6 +1448,92 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // #104 row 7: the organiser is the only recipient of the decision.
+  if (event.organiser_id) {
+    await getPublisher().publish({
+      type: "request.decided",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.organiser_id], roles: [] },
+      data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow), decision: "rejected", reason },
+    });
+  }
+
+  res.json({ event: data });
+});
+
+/**
+ * E3-5: the assigned coordinator marks an event completed once it has run
+ * (Confirmed -> Completed, AGENTS.md §3). AC1: only from Confirmed, which
+ * every event reaches through the Safety Officer's approval. AC2: blocked
+ * until the event's end time has passed (Singapore time, lib/eventTiming.ts).
+ * AC3: nothing is deleted or released — the event's details, history,
+ * venue bookings, equipment reservations and registrations all stay as
+ * they are, so its full record remains viewable. decided_at/decided_by are
+ * left alone (they hold the coordinator's original review decision); who
+ * completed it and when goes into the event history instead.
+ *
+ * The update only matches while the event is still Confirmed and still
+ * assigned to the caller, so a concurrent reassignment, cancellation or
+ * re-review between the checks and the write makes it a 409 instead.
+ */
+eventsRouter.post("/:id/complete", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeCoordinatorReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.Confirmed) {
+    res.status(409).json({ error: "Only a Confirmed event can be marked completed" });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data: detailsRow, error: detailsError } = await supabase
+    .from("events")
+    .select("submitted_details")
+    .eq("id", event.id)
+    .single();
+  if (detailsError) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+
+  const details = (detailsRow?.submitted_details ?? {}) as Record<string, unknown>;
+  if (!hasEventEnded(details)) {
+    const endsAt = eventEndsAt(details);
+    res.status(409).json({
+      error: endsAt
+        ? `This event hasn't finished yet. It can be marked completed after it ends (${details.proposedDate} ${details.endTime ?? "end of day"}).`
+        : "This event has no valid date and end time, so it can't be marked completed.",
+    });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .update({ status: EVENT_STATUS.Completed })
+    .eq("id", event.id)
+    .eq("status", EVENT_STATUS.Confirmed)
+    .eq("coordinator_id", user.id)
+    .select(EVENT_COLUMNS)
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to mark the event completed" });
+    return;
+  }
+  if (!data) {
+    res.status(409).json({ error: "This event is no longer Confirmed or no longer assigned to you" });
+    return;
+  }
+
+  await recordEventHistory(
+    supabase,
+    event.id,
+    [{ field: "Status", oldValue: EVENT_STATUS.Confirmed, newValue: EVENT_STATUS.Completed }],
+    user.id,
+  );
+
   res.json({ event: data });
 });
 
@@ -1139,7 +1548,7 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
  * submit_event_for_safety_review (migration 0026). A resubmission after the
  * Safety Officer rejects or requests changes takes the same path, since
  * both return the event to Planning (AC8), and gets a fresh submission row.
- * Notifying the Safety Officer and Organiser is deferred to E7 (AC9).
+ * AC9: every Safety Officer and the Organiser are notified (#105 row 1).
  */
 eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) => {
   const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
@@ -1199,7 +1608,429 @@ eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) =
     return;
   }
 
+  // #105 row 1 (E7-2b): every Safety Officer and the organiser, closing the
+  // gap this route's own AC9 comment used to defer to E7.
+  if (event.organiser_id) {
+    await getPublisher().publish({
+      type: "safety.submitted",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.organiser_id], roles: ["safety_officer"] },
+      data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow) },
+    });
+  }
+
   res.json({ event: data, submissionId });
+});
+
+interface SafetyReviewEventRow {
+  id: number;
+  status: string;
+  coordinator_id: string | null;
+  organiser_id: string | null;
+}
+
+/**
+ * E3-12/13/14: shared entry checks for the Safety Officer's decision
+ * routes. Unlike authorizeCoordinatorReview, there's no per-event
+ * assignment to check — any Safety Officer may act on any event in Safety
+ * Review (E1-10 AC4/AC5).
+ */
+async function authorizeSafetyOfficerReview(
+  req: AuthedRequest,
+  res: Response,
+  eventId: string,
+): Promise<SafetyReviewEventRow | null> {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return null;
+  }
+
+  if (user.role !== "safety_officer") {
+    res.status(403).json({ error: "Only the Safety Officer can decide an Operational Safety Check" });
+    return null;
+  }
+
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, status, coordinator_id, organiser_id")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to load event" });
+    return null;
+  }
+
+  if (!data) {
+    res.status(404).json({ error: "Event not found" });
+    return null;
+  }
+
+  return data as SafetyReviewEventRow;
+}
+
+/**
+ * E3-12: the Safety Officer approves the Operational Safety Check (Safety
+ * Review -> Confirmed, AGENTS.md §3). The decision and status change land
+ * together in approve_event_safety_review (migration 0028), which also
+ * links the decision to the submission it answers. The assigned
+ * coordinator and Organiser are notified (AC1); a failure to notify never
+ * blocks the already-committed decision.
+ */
+eventsRouter.post("/:id/safety-review/approve", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeSafetyOfficerReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.SafetyReview) {
+    res.status(409).json({ error: "Only an event in Safety Review can be approved" });
+    return;
+  }
+
+  const reason = typeof req.body?.reason === "string" && req.body.reason.trim() ? req.body.reason.trim() : null;
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data: reviewId, error: approveError } = await supabase.rpc("approve_event_safety_review", {
+    p_event_id: event.id,
+    p_officer_id: user.id,
+    p_reason: reason,
+  });
+  if (approveError) {
+    res.status(500).json({ error: "Failed to approve the safety review" });
+    return;
+  }
+  if (reviewId === null) {
+    res.status(409).json({ error: "This event is no longer in Safety Review" });
+    return;
+  }
+
+  const { data, error } = await supabase.from("events").select(EVENT_COLUMNS).eq("id", event.id).single();
+  if (error) {
+    res.status(500).json({ error: "Approved, but failed to reload the event" });
+    return;
+  }
+
+  const recipients = [event.coordinator_id, event.organiser_id].filter(
+    (id): id is string => typeof id === "string",
+  );
+  const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
+
+  // Migrated to RabbitMQ (ARD section 1.1, RabbitMQ.md #9 "safety.decided").
+  await getPublisher().publish({
+    type: "safety.decided",
+    eventId: event.id,
+    actorId: user.id,
+    recipients: { userIds: recipients, roles: [] },
+    data: { outcome: "approved", eventName: typeof eventName === "string" ? eventName : null },
+  });
+
+  res.json({ event: data, reviewId });
+});
+
+/**
+ * E3-13: the Safety Officer rejects the Operational Safety Check (Safety
+ * Review -> Planning, AGENTS.md §3). A reason is required (AC2). The
+ * decision and status change land together in reject_event_safety_review
+ * (migration 0029); the event's venue bookings and equipment reservations
+ * are left as they are, for the coordinator to rework. Only the assigned
+ * coordinator is notified, with the reason (AC1); a failure to notify
+ * never blocks the already-committed decision.
+ */
+eventsRouter.post("/:id/safety-review/reject", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeSafetyOfficerReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.SafetyReview) {
+    res.status(409).json({ error: "Only an event in Safety Review can be rejected" });
+    return;
+  }
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required to reject a safety review" });
+    return;
+  }
+  if (reason.length > MAX_SAFETY_DECISION_REASON_LENGTH) {
+    res.status(400).json({ error: `Keep the reason under ${MAX_SAFETY_DECISION_REASON_LENGTH} characters` });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const { data: reviewId, error: rejectError } = await supabase.rpc("reject_event_safety_review", {
+    p_event_id: event.id,
+    p_officer_id: user.id,
+    p_reason: reason,
+  });
+  if (rejectError) {
+    res.status(500).json({ error: "Failed to reject the safety review" });
+    return;
+  }
+  if (reviewId === null) {
+    res.status(409).json({ error: "This event is no longer in Safety Review" });
+    return;
+  }
+
+  const { data, error } = await supabase.from("events").select(EVENT_COLUMNS).eq("id", event.id).single();
+  if (error) {
+    res.status(500).json({ error: "Rejected, but failed to reload the event" });
+    return;
+  }
+
+  if (event.coordinator_id) {
+    const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
+    await sendNotifications(
+      [
+        {
+          recipientId: event.coordinator_id,
+          type: "event_safety_rejected",
+          title: "Safety review rejected",
+          body: fitNotificationBody(
+            `"${typeof eventName === "string" ? eventName : "Your event"}" failed its Operational Safety Check and is back in Planning. Reason: ${reason}`,
+          ),
+          link: `/events/${event.id}`,
+        },
+      ],
+      req.headers.authorization!,
+    );
+  }
+
+  res.json({ event: data, reviewId });
+});
+
+/**
+ * E3-14: the Safety Officer requests specific changes, short of rejecting
+ * (Safety Review -> Planning, AGENTS.md §3). At least one venue booking or
+ * equipment reservation must be picked, each with what must change about it,
+ * plus an optional general note (AC1, AC2). The picked arrangements are read from the services that own
+ * them — so only this event's live ones can be flagged — and snapshotted,
+ * so each flag can clear once its arrangement changes (AC3). The status
+ * change, decision and flags land together in request_event_safety_changes
+ * (migration 0035). Only the assigned coordinator is notified (AC1); a
+ * failure to notify never blocks the already-committed decision.
+ */
+eventsRouter.post("/:id/safety-review/request-changes", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeSafetyOfficerReview(req, res, eventId);
+  if (!event) return;
+
+  if (event.status !== EVENT_STATUS.SafetyReview) {
+    res.status(409).json({ error: "Changes can only be requested for an event in Safety Review" });
+    return;
+  }
+
+  const parsed = parseChangeRequest(req.body);
+  if (!parsed.valid) {
+    res.status(400).json({ error: "Pick what must change and say what for each", fields: parsed.fields });
+    return;
+  }
+
+  const authorization = req.headers.authorization!;
+  const [bookings, equipment] = await Promise.all([
+    fetchEventVenueBookings(event.id, authorization),
+    fetchEventEquipmentRequests(event.id, authorization),
+  ]);
+  if (bookings.status === "error" || equipment.status === "error") {
+    res.status(502).json({ error: "Couldn't load this event's venue bookings and equipment. Try again." });
+    return;
+  }
+
+  const resolved = resolveFlags(parsed.request.arrangements, bookings.value, equipment.value);
+  if (!resolved.ok) {
+    res.status(400).json({
+      error: "Some of the selected arrangements aren't this event's current venue bookings or equipment",
+      fields: { arrangements: "Pick from this event's current venue bookings and equipment." },
+      unknown: resolved.unknown,
+    });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const reason = combinedReason(resolved.flags, parsed.request.generalNote);
+  const { data: reviewId, error: requestError } = await supabase.rpc("request_event_safety_changes", {
+    p_event_id: event.id,
+    p_officer_id: user.id,
+    p_reason: reason,
+    p_general_note: parsed.request.generalNote,
+    p_flags: resolved.flags,
+  });
+  if (requestError) {
+    res.status(500).json({ error: "Failed to request changes" });
+    return;
+  }
+  if (reviewId === null) {
+    res.status(409).json({ error: "This event is no longer in Safety Review" });
+    return;
+  }
+
+  const { data, error } = await supabase.from("events").select(EVENT_COLUMNS).eq("id", event.id).single();
+  if (error) {
+    res.status(500).json({ error: "Changes requested, but failed to reload the event" });
+    return;
+  }
+
+  if (event.coordinator_id) {
+    const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
+    await sendNotifications(
+      [
+        {
+          recipientId: event.coordinator_id,
+          type: "event_safety_changes_requested",
+          title: "Safety changes requested",
+          body: fitNotificationBody(
+            `"${typeof eventName === "string" ? eventName : "Your event"}" is back in Planning. The Safety Officer asked for changes — ${reason}`,
+          ),
+          link: `/events/${event.id}`,
+        },
+      ],
+      authorization,
+    );
+  }
+
+  res.json({ event: data, reviewId });
+});
+
+/** Whether the event has ever been submitted for safety review (E3-4). */
+async function hasSafetySubmission(supabase: NonNullable<AuthedRequest["supabase"]>, eventId: number): Promise<boolean> {
+  const { data } = await supabase
+    .from("event_safety_submissions")
+    .select("id")
+    .eq("event_id", eventId)
+    .limit(1)
+    .maybeSingle();
+  return data !== null && data !== undefined;
+}
+
+interface SafetyChangeRequestView {
+  reviewId: number;
+  officerName: string | null;
+  requestedAt: string;
+  /** Every note combined, as recorded on the decision. */
+  reason: string;
+  generalNote: string | null;
+  flags: { type: string; id: number; label: string; note: string; clearedAt: string | null }[];
+  /** false when the arrangements couldn't be read, so changes weren't checked this time. */
+  arrangementsChecked: boolean;
+}
+
+/**
+ * E3-14 AC3: the event's open change request — only while the latest
+ * safety decision is "Changes Requested" (a later approval or rejection
+ * supersedes it). Each flag is compared with its arrangement's current
+ * state, read with the caller's token from the owning service; a flag
+ * whose arrangement changed is cleared for good. If the arrangements
+ * can't be read, the flags are returned as stored.
+ */
+async function loadChangeRequest(
+  supabase: NonNullable<AuthedRequest["supabase"]>,
+  eventId: number,
+  authorization: string,
+): Promise<{ status: "ok"; value: SafetyChangeRequestView | null } | { status: "error" }> {
+  const { data: latest, error: latestError } = await supabase
+    .from("event_safety_reviews")
+    .select("id, outcome, reason, general_note, created_at, officer:officer_id(name)")
+    .eq("event_id", eventId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestError) return { status: "error" };
+  if (!latest || latest.outcome !== "Changes Requested") return { status: "ok", value: null };
+
+  const { data: flagRows, error: flagsError } = await supabase
+    .from("event_safety_review_flags")
+    .select("id, arrangement_type, arrangement_id, label, note, snapshot, cleared_at")
+    .eq("review_id", latest.id)
+    .order("id");
+  if (flagsError) return { status: "error" };
+  const flags = (flagRows ?? []) as (StoredFlag & { id: number; label: string; note: string; cleared_at: string | null })[];
+
+  const [bookings, equipment] = await Promise.all([
+    fetchEventVenueBookings(eventId, authorization),
+    fetchEventEquipmentRequests(eventId, authorization),
+  ]);
+  const arrangementsChecked = bookings.status === "ok" && equipment.status === "ok";
+  if (bookings.status === "ok" && equipment.status === "ok") {
+    const states = currentArrangements(bookings.value, equipment.value);
+    const changed = flags.filter((flag) => !flag.cleared_at && hasChanged(flag, states));
+    if (changed.length > 0) {
+      const clearedAt = new Date().toISOString();
+      const { error: clearError } = await supabase
+        .from("event_safety_review_flags")
+        .update({ cleared_at: clearedAt })
+        .in("id", changed.map((flag) => flag.id))
+        .is("cleared_at", null);
+      // A failed write only means the flags show as open until the next look.
+      if (!clearError) for (const flag of changed) flag.cleared_at = clearedAt;
+    }
+  }
+
+  const officer = latest.officer as { name?: string } | { name?: string }[] | null;
+  return {
+    status: "ok",
+    value: {
+      reviewId: latest.id,
+      officerName: (Array.isArray(officer) ? officer[0]?.name : officer?.name) ?? null,
+      requestedAt: latest.created_at,
+      reason: latest.reason ?? "",
+      generalNote: latest.general_note ?? null,
+      flags: flags.map((flag) => ({
+        type: flag.arrangement_type,
+        id: Number(flag.arrangement_id),
+        label: flag.label,
+        note: flag.note,
+        clearedAt: flag.cleared_at,
+      })),
+      arrangementsChecked,
+    },
+  };
+}
+
+/**
+ * E3-14 AC3: the coordinator sees the flagged arrangements and the Safety
+ * Officer's notes when they open the event; the Safety Officer and the
+ * Coordinator Lead may read it too. `changeRequest` is null when there's
+ * no open change request.
+ */
+eventsRouter.get("/:id/safety-changes", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+  if (!["coordinator", COORDINATOR_LEAD_ROLE, "safety_officer"].includes(user.role)) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const { data: event, error } = await supabase.from("events").select("id").eq("id", Number(eventId)).maybeSingle();
+  if (error) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+  if (!event) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const result = await loadChangeRequest(supabase, event.id, req.headers.authorization!);
+  if (result.status === "error") {
+    res.status(500).json({ error: "Failed to load the requested safety changes" });
+    return;
+  }
+  res.json({ changeRequest: result.value });
 });
 
 /**
@@ -1263,6 +2094,18 @@ eventsRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) 
 
   if (threadError) {
     console.error("Failed to record clarification thread entry", { eventId: event.id, error: threadError });
+  }
+
+  // #104 row 5: the organiser is the only recipient — there's always one,
+  // since only an organiser can submit a request in the first place.
+  if (event.organiser_id) {
+    await getPublisher().publish({
+      type: "clarification.requested",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.organiser_id], roles: [] },
+      data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow), message },
+    });
   }
 
   res.json({ event: data });
@@ -1653,28 +2496,24 @@ eventsRouter.post("/:id/assign", async (req: AuthedRequest, res) => {
   );
 
   const eventName = eventDisplayName(event);
-  const link = `/events/${event.id}`;
-  const notified = await sendNotifications(
-    [
-      {
-        recipientId: coordinator.id,
-        type: "event_assigned",
-        title: "New event assigned to you",
-        body: `"${eventName}" has been assigned to you. You are now its coordinator.`,
-        link,
-      },
-      {
-        recipientId: event.organiser_id,
-        type: "event_coordinator_assigned",
-        title: "Your event has a coordinator",
-        body: `${coordinator.name} is now the coordinator for "${eventName}".`,
-        link,
-      },
-    ],
-    req.headers.authorization!,
-  );
 
-  res.json({ event: data, notificationsFailed: !notified });
+  // Migrated to RabbitMQ (ARD section 1.1): notification-service's
+  // existing consumer renders this into the coordinator's and organiser's
+  // notifications (notification-service/src/lib/messageTemplates.ts).
+  const published = await getPublisher().publish({
+    type: "coordinator.assigned",
+    eventId: event.id,
+    actorId: user.id,
+    recipients: { userIds: [coordinator.id, event.organiser_id], roles: [] },
+    data: {
+      eventName,
+      coordinatorId: coordinator.id,
+      coordinatorName: coordinator.name,
+      organiserId: event.organiser_id,
+    },
+  });
+
+  res.json({ event: data, notificationsFailed: !published });
 });
 
 /**
@@ -1747,31 +2586,22 @@ eventsRouter.post("/:id/reassign", async (req: AuthedRequest, res) => {
   );
 
   const eventName = eventDisplayName(event);
-  const link = `/events/${event.id}`;
-  const notifications: NewNotification[] = [
-    {
-      recipientId: event.organiser_id,
-      type: "event_coordinator_reassigned",
-      title: "Your event has a new coordinator",
-      body: `${coordinator.name} is now the coordinator for "${eventName}", taking over from ${previousCoordinatorName}.`,
-      link,
-    },
-    {
-      recipientId: previousCoordinatorId,
-      type: "event_reassigned_away",
-      title: "Event reassigned",
-      body: `"${eventName}" has been reassigned to ${coordinator.name}. You can still view it, but you can no longer act on it.`,
-      link,
-    },
-    {
-      recipientId: coordinator.id,
-      type: "event_assigned",
-      title: "Event reassigned to you",
-      body: `"${eventName}" has been reassigned to you from ${previousCoordinatorName}. You are now its coordinator.`,
-      link,
-    },
-  ];
-  const notified = await sendNotifications(notifications, req.headers.authorization!);
 
-  res.json({ event: data, notificationsFailed: !notified });
+  // Migrated to RabbitMQ (ARD section 1.1, RabbitMQ.md #4 "coordinator.reassigned").
+  const published = await getPublisher().publish({
+    type: "coordinator.reassigned",
+    eventId: event.id,
+    actorId: user.id,
+    recipients: { userIds: [event.organiser_id, previousCoordinatorId, coordinator.id], roles: [] },
+    data: {
+      eventName,
+      organiserId: event.organiser_id,
+      newCoordinatorId: coordinator.id,
+      newCoordinatorName: coordinator.name,
+      previousCoordinatorId,
+      previousCoordinatorName,
+    },
+  });
+
+  res.json({ event: data, notificationsFailed: !published });
 });

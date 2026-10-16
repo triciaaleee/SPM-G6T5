@@ -1,3 +1,5 @@
+import { signInternalToken } from "./internalAuth.js";
+
 /**
  * Reads events through events-service's REST API — venue-service never
  * queries the events table itself (events-service owns it). The caller's
@@ -84,25 +86,41 @@ export async function fetchVenueBookingInfo(
   eventIds: number[],
   authorization: string,
 ): Promise<FetchVenueBookingInfoResult> {
+  return fetchVenueBookingInfoWithHeaders(eventIds, { Authorization: authorization });
+}
+
+/**
+ * Same lookup, for callers with no end-user token to forward — the
+ * scheduled expiring-hold sweep (#106 row 4b), which runs on a timer, not
+ * inside a request. Signs a fresh internal token itself.
+ */
+export async function fetchVenueBookingInfoInternal(eventIds: number[]): Promise<FetchVenueBookingInfoResult> {
+  return fetchVenueBookingInfoWithHeaders(eventIds, { "X-Internal-Auth": signInternalToken("venue-service") });
+}
+
+async function fetchVenueBookingInfoWithHeaders(
+  eventIds: number[],
+  headers: Record<string, string>,
+): Promise<FetchVenueBookingInfoResult> {
   if (eventIds.length === 0) return { status: "ok", events: [] };
 
   const batches: number[][] = [];
   for (let i = 0; i < eventIds.length; i += VENUE_BOOKING_INFO_BATCH) {
     batches.push(eventIds.slice(i, i + VENUE_BOOKING_INFO_BATCH));
   }
-  const results = await Promise.all(batches.map((batch) => fetchVenueBookingInfoBatch(batch, authorization)));
+  const results = await Promise.all(batches.map((batch) => fetchVenueBookingInfoBatch(batch, headers)));
   if (results.some((result) => result.status === "error")) return { status: "error" };
   return { status: "ok", events: results.flatMap((result) => (result.status === "ok" ? result.events : [])) };
 }
 
 async function fetchVenueBookingInfoBatch(
   eventIds: number[],
-  authorization: string,
+  headers: Record<string, string>,
 ): Promise<FetchVenueBookingInfoResult> {
   let res: Response;
   try {
     res = await fetch(`${eventsServiceUrl()}/api/events/venue-booking-info?ids=${eventIds.join(",")}`, {
-      headers: { Authorization: authorization },
+      headers,
     });
   } catch {
     return { status: "error" };

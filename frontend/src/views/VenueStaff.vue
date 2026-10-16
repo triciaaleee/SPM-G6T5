@@ -143,11 +143,6 @@ const dayHeading = computed(() => {
   return `${dayMonth}, ${weekday}`;
 });
 
-const dayCount = computed(() => {
-  const n = dayBookings.value.length;
-  return `${n} ${activeTabConfig.value.noun}${n === 1 ? "" : "s"}`;
-});
-
 function formatLongDate(key: string): string {
   return fromKey(key).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 }
@@ -553,21 +548,26 @@ onMounted(async () => {
                   <dt class="detail__label">Start – end time</dt>
                   <dd class="detail__value">{{ formatTimeRange(booking.startTime, booking.endTime) }}</dd>
                 </div>
+                <!-- E4-17: set up for this booking's own session, not the whole event. -->
                 <div class="detail detail--half">
-                  <dt class="detail__label">Expected attendance</dt>
-                  <dd class="detail__value">{{ formatAttendance(booking.event.expectedAttendance) }}</dd>
+                  <dt class="detail__label">{{ booking.setup ? `${booking.setup.purpose} · headcount` : "Expected attendance" }}</dt>
+                  <dd class="detail__value">
+                    {{ formatAttendance(booking.setup ? booking.setup.headcount : booking.event.expectedAttendance) }}
+                  </dd>
                 </div>
                 <div class="detail">
                   <dt class="detail__label">Layout</dt>
-                  <dd v-if="booking.event.layouts.length > 0" class="detail__value">
-                    {{ booking.event.layouts.join(", ") }}
+                  <dd v-if="(booking.setup ?? booking.event).layouts.length > 0" class="detail__value">
+                    {{ (booking.setup ?? booking.event).layouts.join(", ") }}
                   </dd>
                   <dd v-else class="body-small muted">Not specified</dd>
                 </div>
                 <div class="detail">
                   <dt class="detail__label">Facility requirements</dt>
-                  <dd v-if="booking.event.facilities.length > 0" class="tags">
-                    <span v-for="facility in booking.event.facilities" :key="facility" class="tag">{{ facility }}</span>
+                  <dd v-if="(booking.setup ?? booking.event).facilities.length > 0" class="tags">
+                    <span v-for="facility in (booking.setup ?? booking.event).facilities" :key="facility" class="tag">
+                      {{ facility }}
+                    </span>
                   </dd>
                   <dd v-else class="body-small muted">None specified</dd>
                 </div>

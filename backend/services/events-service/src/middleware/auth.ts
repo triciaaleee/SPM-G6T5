@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { supabaseAdmin } from "../lib/supabaseAdmin.js";
 import { TokenExpiredError, verifyToken } from "../lib/jwt.js";
+import { verifyInternalToken } from "../lib/internalAuth.js";
 
 export interface AuthedRequest extends Request {
   user?: { id: string; role: string };
@@ -40,4 +41,30 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
     }
     res.status(401).json({ error: "Invalid token", code: "invalid_token" });
   }
+}
+
+/**
+ * For routes a sibling service calls with no end-user token to forward
+ * (e.g. venue-service's scheduled expiring-hold sweep reading
+ * venue-booking-info). Tries the internal `X-Internal-Auth` header first —
+ * a valid one is a trusted system call, so it skips `req.user` entirely and
+ * the route must treat its absence as "caller is trusted, not scoped to a
+ * role". Falls back to normal `requireAuth` so existing user-initiated
+ * callers are unaffected.
+ */
+export function requireAuthOrInternal(req: AuthedRequest, res: Response, next: NextFunction): void {
+  const internalToken = req.headers["x-internal-auth"];
+  if (typeof internalToken === "string" && internalToken) {
+    try {
+      verifyInternalToken(internalToken);
+      req.supabase = supabaseAdmin;
+      next();
+      return;
+    } catch {
+      res.status(401).json({ error: "Invalid internal token", code: "invalid_internal_token" });
+      return;
+    }
+  }
+
+  requireAuth(req, res, next);
 }

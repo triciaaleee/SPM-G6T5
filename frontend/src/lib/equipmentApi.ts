@@ -1,5 +1,11 @@
 import { authHeader, redirectIfUnauthenticated } from "./eventsApi";
 
+/** E5-6 AC3: whether this item's claimed units no longer hold, re-checked on every view. */
+export interface ReservationFlag {
+  flagged: boolean;
+  reason: string | null;
+}
+
 /** E5-1: one line item on an equipment request — type and quantity. */
 export interface EquipmentItem {
   id: number;
@@ -7,6 +13,8 @@ export interface EquipmentItem {
   quantity: number;
   /** E5-3: how much of this item is currently taken off the shelf for this request. */
   quantityFulfilled: number;
+  /** E5-6 AC1/AC3: set once this item has been Arranged/Partially Fulfilled. */
+  reservationFlag: ReservationFlag;
 }
 
 /** E5-3: the real values status can take on, fixed by that story. */
@@ -106,6 +114,21 @@ export class EquipmentRequestError extends Error {}
 /** E5-1 AC2: the event has no equipment request (or isn't Technical Support's to open). */
 export class EquipmentAccessDeniedError extends Error {}
 
+/** E5-6 AC2: the PATCH was rejected because not enough equipment is free for the event's window. */
+export interface ReservationShortfall {
+  equipmentType: string;
+  availableCount: number;
+  shortfall: number;
+}
+
+export class EquipmentReservationShortfallError extends Error {
+  shortfalls: Record<string, ReservationShortfall>;
+  constructor(message: string, shortfalls: Record<string, ReservationShortfall>) {
+    super(message);
+    this.shortfalls = shortfalls;
+  }
+}
+
 /** The equipment catalog, for the request form's dropdown and Technical Support's stock table. */
 export async function fetchEquipmentCatalog(): Promise<EquipmentCatalogItem[]> {
   const res = await fetch(catalogApiBase, { headers: authHeader() });
@@ -180,6 +203,9 @@ export async function updateEquipmentRequestStatus(
 
   if (res.status === 400) {
     throw new EquipmentValidationError(body.fields ?? {});
+  }
+  if (res.status === 409 && body.shortfalls) {
+    throw new EquipmentReservationShortfallError(body.error ?? "Not enough equipment available for this change.", body.shortfalls);
   }
   if (!res.ok) {
     throw new EquipmentRequestError(body.error ?? "Failed to update the equipment request");

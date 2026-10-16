@@ -7,6 +7,7 @@ import type { RegistrationStatus } from "../lib/registrationStatus.js";
 import { canViewEvent, fetchAttendeeEvents, fetchOpenEvents } from "../lib/eventsClient.js";
 import { fetchVenueNames } from "../lib/venuesClient.js";
 import { fetchUserNames } from "../lib/usersClient.js";
+import { getPublisher } from "../lib/rabbitPublisher.js";
 
 /**
  * E6: attendee registration. This service owns the `registrations` table and
@@ -300,6 +301,14 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
       res.status(500).json({ error: "Failed to register" });
       return;
     }
+    // E6-3 / #105 row 6: confirms the attendee's own registration.
+    await getPublisher().publish({
+      type: "registration.confirmed",
+      eventId,
+      actorId: user!.id,
+      recipients: { userIds: [user!.id], roles: [] },
+      data: { eventName: event.name },
+    });
     res.json({ registration: toRegistration(updated as RegistrationRow) });
     return;
   }
@@ -325,6 +334,15 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
     res.status(500).json({ error: "Failed to register" });
     return;
   }
+
+  // E6-3 / #105 row 6: confirms the attendee's own registration.
+  await getPublisher().publish({
+    type: "registration.confirmed",
+    eventId,
+    actorId: user!.id,
+    recipients: { userIds: [user!.id], roles: [] },
+    data: { eventName: event.name },
+  });
 
   res.status(201).json({ registration: toRegistration(created as RegistrationRow) });
 });
@@ -369,6 +387,15 @@ registrationsRouter.patch("/event/:eventId/withdraw", async (req: AuthedRequest,
     res.status(500).json({ error: "Failed to withdraw" });
     return;
   }
+
+  // E6-4 / #105 row 7: confirms the attendee's own withdrawal.
+  await getPublisher().publish({
+    type: "registration.withdrawn",
+    eventId,
+    actorId: user!.id,
+    recipients: { userIds: [user!.id], roles: [] },
+    data: {},
+  });
 
   res.json({ registration: toRegistration(updated as RegistrationRow) });
 });

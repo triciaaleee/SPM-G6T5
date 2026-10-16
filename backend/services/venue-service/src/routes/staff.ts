@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
-import { blocksVenue, type BookingStatus } from "../lib/bookingStatus.js";
+import { blocksVenue } from "../lib/bookingStatus.js";
 import {
   BOOKING_COLUMNS,
   decideBooking,
@@ -11,8 +11,9 @@ import {
   type Decision,
 } from "../lib/bookingDecisions.js";
 import { assignedVenueIds, NOT_ASSIGNED_MESSAGE } from "../lib/venueStaff.js";
-import { fetchVenueBookingInfo } from "../lib/eventsClient.js";
+import { fetchVenueBookingInfo, type VenueBookingInfo } from "../lib/eventsClient.js";
 import { extractLayoutAndFacilities } from "../lib/venueRecommendation.js";
+import { BOOKING_PLAN_COLUMNS, effectivePlan, purposeLabel, type BookingPlanColumns } from "../lib/bookingPlan.js";
 import { buildFilterOptions, isRealDate, type VenueRow } from "../lib/venueSearch.js";
 import {
   VENUE_RECORD_COLUMNS,
@@ -31,7 +32,7 @@ import {
   toPublicImpact,
   type VenueChangeImpact,
 } from "../lib/venueChanges.js";
-import { sendNotifications } from "../lib/notificationsClient.js";
+import { getPublisher } from "../lib/rabbitPublisher.js";
 
 /**
  * E1-5: venue staff's view of what's booked at a venue. Staff see enough
@@ -63,11 +64,33 @@ const MAX_RANGE_DAYS = 42;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** A venue_bookings row: a venue-to-event link plus its approval status (venue_booking_status enum). */
-interface BookingRow {
+interface BookingRow extends Partial<BookingPlanColumns> {
   id: number;
   event_id: number;
   /** venue_status — e.g. Replacement Required after a block-out (E4-3). */
   status: string;
+}
+
+/**
+ * E4-17 (Q5): what staff set this venue up for — the booking's own purpose,
+ * headcount and needs, so a breakout room is prepared for its session, not
+ * the whole event. A booking made before E4-17 reads as the main programme
+ * for the event's full attendance and the event's own needs.
+ */
+function bookingSetup(booking: Partial<BookingPlanColumns>, event: VenueBookingInfo, venue: VenueRow) {
+  const fromEvent = extractLayoutAndFacilities(event, [venue]);
+  const attendance = Number(event.expectedAttendance);
+  const plan = effectivePlan(booking, {
+    attendance: Number.isFinite(attendance) && attendance > 0 ? Math.ceil(attendance) : null,
+    requirements: { ...fromEvent, accessibility: [] },
+  });
+  return {
+    purpose: purposeLabel(plan),
+    headcount: plan.headcount,
+    layouts: plan.requirements.layouts,
+    facilities: plan.requirements.facilities,
+    accessibility: plan.requirements.accessibility,
+  };
 }
 
 /** Times may arrive as "HH:MM:SS"; the UI shows "HH:MM". */
@@ -238,14 +261,15 @@ staffRouter.patch("/venues/:venueId", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const notifications = impactNotifications(next.name, impact, next.capacity);
-  const sent = await sendNotifications(notifications, req.headers.authorization!);
+  const messages = impactNotifications(next.name, impact, next.capacity, venue.staff_id);
+  const results = await Promise.all(messages.map((m) => getPublisher().publish(m)));
+  const allSent = results.every(Boolean);
 
   res.json({
     venue: toVenueRecord(data as VenueRecordRow),
     ...toPublicImpact(impact),
-    coordinatorsNotified: sent ? new Set(notifications.map((n) => n.recipientId)).size : 0,
-    notificationsFailed: !sent,
+    coordinatorsNotified: allSent ? new Set(messages.flatMap((m) => m.recipients.userIds)).size : 0,
+    notificationsFailed: !allSent,
   });
 });
 
@@ -299,7 +323,7 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
   // sort happen here rather than in the query.
   const { data: bookingData, error: bookingsError } = await supabase
     .from("venue_bookings")
-    .select("id, event_id, status")
+    .select(`id, event_id, status, ${BOOKING_PLAN_COLUMNS}`)
     .eq("venue_id", venue.id);
 
   if (bookingsError) {
@@ -341,6 +365,7 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
         expectedAttendance: event.expectedAttendance,
         ...extractLayoutAndFacilities(event, [venue as VenueRow]),
       },
+      setup: bookingSetup(booking, event, venue as VenueRow),
     })),
   });
 });
@@ -371,7 +396,7 @@ staffRouter.get("/requests", async (req: AuthedRequest, res) => {
 
   const { data: bookingData, error: bookingsError } = await supabase
     .from("venue_bookings")
-    .select(BOOKING_COLUMNS)
+    .select(`${BOOKING_COLUMNS}, ${BOOKING_PLAN_COLUMNS}`)
     .in("venue_id", assigned.venueIds)
     .in("status", ["Requested", "On Hold"]);
   if (bookingsError) {
@@ -440,6 +465,7 @@ staffRouter.get("/requests", async (req: AuthedRequest, res) => {
         expectedAttendance: event.expectedAttendance,
         ...extractLayoutAndFacilities(event, [venue]),
       },
+      setup: bookingSetup(booking as Partial<BookingPlanColumns>, event, venue),
     })),
   });
 });

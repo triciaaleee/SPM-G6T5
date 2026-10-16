@@ -1,0 +1,387 @@
+import type { InboundMessage } from "./rabbitConsumer.js";
+
+export interface RenderedNotification {
+  title: string;
+  body: string;
+  link: string | null;
+}
+
+/**
+ * Most triggers notify everyone with the same text. A few (e.g.
+ * `coordinator.assigned`, where the coordinator and the organiser read
+ * different sentences about the same event) need to know which recipient
+ * is being rendered for — `recipientId` is that recipient's id, always
+ * passed, ignored by templates that don't need it.
+ */
+type Template = (msg: InboundMessage, recipientId: string) => RenderedNotification;
+
+function eventLink(msg: InboundMessage): string | null {
+  return msg.eventId !== null ? `/events/${msg.eventId}` : null;
+}
+
+/**
+ * One entry per message type notification-service is ready to render
+ * (RabbitMQ.md section 3). A representative subset for the initial
+ * idle-ready consumer — add the rest as their publishers come online
+ * (ARD section 1.1: triggers move over one at a time).
+ */
+const TEMPLATES: Record<string, Template> = {
+  /**
+   * #18/#33 in RabbitMQ.md section 3.3. The coordinator-driven reasons
+   * (E4-9: `coordinator_withdrew`/`coordinator_released`) and the E3-6
+   * cancellation reason (`event_cancelled`) each read differently; #19's
+   * `replaced` still falls back to generic "withdrawn" wording, since
+   * that publisher hasn't landed.
+   */
+  "booking.withdrawn": (msg) => {
+    const venueName = String(msg.data.venueName ?? "A venue");
+    const eventName = String(msg.data.eventName ?? "your event");
+    const link = eventLink(msg);
+    if (msg.data.reason === "event_cancelled") {
+      return {
+        title: `${venueName} — booking released`,
+        body: `${eventName} was cancelled, so its booking for ${venueName} was released and the venue is free again.`,
+        link,
+      };
+    }
+    const released = msg.data.reason === "coordinator_released";
+    const verb = released ? "released" : "withdrawn";
+    return {
+      title: `${venueName} — booking ${verb}`,
+      body: `${venueName}'s booking for ${eventName} was ${verb}. The venue is free for this period again.`,
+      link,
+    };
+  },
+  /** #106 rows 2/3, RabbitMQ.md #16/#17 — `data.decision` is on_hold/approved/rejected/auto_rejected. */
+  "booking.decided": (msg) => {
+    const venueName = String(msg.data.venueName ?? "The venue");
+    const eventName = String(msg.data.eventName ?? "your event");
+    const reason = msg.data.reason ? ` ${msg.data.reason}` : "";
+    const decision = msg.data.decision;
+
+    if (decision === "approved") {
+      return { title: `${venueName} — booking approved`, body: `${venueName} is approved for ${eventName}.`, link: eventLink(msg) };
+    }
+    if (decision === "on_hold") {
+      return {
+        title: `${venueName} — booking on hold`,
+        body: `${venueName} is on hold for ${eventName} while arrangements are finalised.`,
+        link: eventLink(msg),
+      };
+    }
+    if (decision === "auto_rejected") {
+      return {
+        title: `Venue request for ${eventName} was rejected`,
+        body:
+          `${venueName} was booked for another event over the same period, so your request for ${eventName} ` +
+          `was rejected:${reason} You can request another venue or another time.`,
+        link: eventLink(msg),
+      };
+    }
+    // "rejected"
+    return {
+      title: `${venueName} — booking rejected`,
+      body: `${venueName} was rejected for ${eventName}:${reason}`,
+      link: eventLink(msg),
+    };
+  },
+  /** #14 in RabbitMQ.md section 3.2 (E3-6) — the organiser's confirmation and the notified coordinator/leads read the same text. */
+  "event.cancelled": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    return {
+      title: "Event cancelled",
+      body: `${eventName} was cancelled${msg.data.reason ? ` (${msg.data.reason})` : ""}.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /**
+   * #104 (E7-2a): first trigger migrated off direct REST (ARD section
+   * 1.1) — events-service's `POST /:id/assign` now publishes this instead
+   * of calling notification-service's API directly. The coordinator and
+   * organiser read different text about the same assignment, so this
+   * templates per recipientId rather than once for everyone.
+   */
+  "coordinator.assigned": (msg, recipientId) => {
+    const eventName = String(msg.data.eventName ?? "an event");
+    const coordinatorName = String(msg.data.coordinatorName ?? "a coordinator");
+    const link = eventLink(msg);
+
+    if (recipientId === msg.data.coordinatorId) {
+      return {
+        title: "New event assigned to you",
+        body: `"${eventName}" has been assigned to you. You are now its coordinator.`,
+        link,
+      };
+    }
+    return {
+      title: "Your event has a coordinator",
+      body: `${coordinatorName} is now the coordinator for "${eventName}".`,
+      link,
+    };
+  },
+
+  /**
+   * #1 in RabbitMQ.md section 3.1. The organiser's confirmation and the
+   * leads' triage notice are different sentences about the same
+   * submission, told apart by comparing recipientId to data.organiserId
+   * (#104 row 1).
+   */
+  "request.submitted": (msg, recipientId) => {
+    const eventName = String(msg.data.eventName ?? "A request");
+    const link = eventLink(msg);
+    if (recipientId === msg.data.organiserId) {
+      return {
+        title: "Request submitted",
+        body: `Your request for "${eventName}" has been submitted and is waiting for a coordinator.`,
+        link,
+      };
+    }
+    return {
+      title: "New request in the unassigned queue",
+      body: `"${eventName}" needs a coordinator assigned.`,
+      link,
+    };
+  },
+
+  /** #4 in RabbitMQ.md section 3.1 — three different readers, same message. */
+  "coordinator.reassigned": (msg, recipientId) => {
+    const eventName = String(msg.data.eventName ?? "an event");
+    const newCoordinatorName = String(msg.data.newCoordinatorName ?? "a coordinator");
+    const previousCoordinatorName = String(msg.data.previousCoordinatorName ?? "the previous coordinator");
+    const link = eventLink(msg);
+
+    if (recipientId === msg.data.previousCoordinatorId) {
+      return {
+        title: "Event reassigned",
+        body: `"${eventName}" has been reassigned to ${newCoordinatorName}. You can still view it, but you can no longer act on it.`,
+        link,
+      };
+    }
+    if (recipientId === msg.data.newCoordinatorId) {
+      return {
+        title: "Event reassigned to you",
+        body: `"${eventName}" has been reassigned to you from ${previousCoordinatorName}. You are now its coordinator.`,
+        link,
+      };
+    }
+    return {
+      title: "Your event has a new coordinator",
+      body: `${newCoordinatorName} is now the coordinator for "${eventName}", taking over from ${previousCoordinatorName}.`,
+      link,
+    };
+  },
+
+  /**
+   * #9 in RabbitMQ.md section 3.2. Only the "approved" outcome publishes
+   * today (events-service's reject/changes-requested path isn't built —
+   * #105); the fallback keeps this forward-compatible rather than
+   * silently mis-rendering if that lands later.
+   */
+  "safety.decided": (msg) => {
+    const eventName = String(msg.data.eventName ?? "Your event");
+    if (msg.data.outcome === "approved") {
+      return {
+        title: "Safety review approved",
+        body: `"${eventName}" passed its Operational Safety Check and is now Confirmed.`,
+        link: eventLink(msg),
+      };
+    }
+    return {
+      title: "Safety review decision",
+      body: `"${eventName}" received a safety review decision.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** #2 in RabbitMQ.md section 3.1 (#104 row 2). Same text whether it's sent to the one assigned coordinator or every Lead. */
+  "request.edited": (msg) => ({
+    title: "Request edited",
+    body: `The organiser edited "${msg.data.eventName ?? "a request"}".`,
+    link: eventLink(msg),
+  }),
+
+  /** #5 in RabbitMQ.md section 3.1 (#104 row 5) — to the organiser only. */
+  "clarification.requested": (msg) => ({
+    title: "Clarification requested",
+    body: `Your coordinator has a question about "${msg.data.eventName ?? "your request"}": ${msg.data.message ?? ""}`,
+    link: eventLink(msg),
+  }),
+
+  /** #6 in RabbitMQ.md section 3.1 (#104 row 6) — to the assigned coordinator only. */
+  "clarification.answered": (msg) => ({
+    title: "Organiser responded to your question",
+    body: `The organiser answered your question about "${msg.data.eventName ?? "the request"}".`,
+    link: eventLink(msg),
+  }),
+
+  /** #7 in RabbitMQ.md section 3.1 (#104 row 7) — to the organiser only. */
+  "request.decided": (msg) => {
+    const eventName = String(msg.data.eventName ?? "Your request");
+    if (msg.data.decision === "approved") {
+      return {
+        title: "Request approved",
+        body: `"${eventName}" was approved and has moved into Planning.`,
+        link: eventLink(msg),
+      };
+    }
+    return {
+      title: "Request rejected",
+      body: `"${eventName}" was rejected${msg.data.reason ? `: ${msg.data.reason}` : "."}`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** #8 in RabbitMQ.md section 3.2 (#105 row 1) — same text for the organiser and every Safety Officer. */
+  "safety.submitted": (msg) => ({
+    title: "Submitted for safety review",
+    body: `"${msg.data.eventName ?? "An event"}" has been submitted for its Operational Safety Check.`,
+    link: eventLink(msg),
+  }),
+
+  /** #31 in RabbitMQ.md section 3.5 (#105 row 6) — to the registering attendee. registration-service's first broker publisher, built straight onto RabbitMQ (no REST step to migrate off). */
+  "registration.confirmed": (msg) => ({
+    title: "Registration confirmed",
+    body: `Your registration for "${msg.data.eventName ?? "this event"}" is confirmed.`,
+    link: eventLink(msg),
+  }),
+
+  /** #32 in RabbitMQ.md section 3.5 (#105 row 7) — to the withdrawing attendee. No eventName: the withdraw route doesn't fetch the event, so this falls back to generic wording. */
+  "registration.withdrawn": (msg) => ({
+    title: "Registration withdrawn",
+    body: `You have withdrawn your registration${msg.data.eventName ? ` for "${msg.data.eventName}"` : ""}.`,
+    link: eventLink(msg),
+  }),
+
+  /** #15 in RabbitMQ.md section 3.3 (#106 row 1) — to the venue's assigned staff member. */
+  "booking.requested": (msg) => ({
+    title: `New booking request for ${msg.data.venueName ?? "a venue"}`,
+    body: `${msg.data.eventName ?? "An event"} has requested ${msg.data.venueName ?? "a venue"} for ${
+      msg.data.when ?? "a date to be confirmed"
+    }. Hold, approve or reject it from your booking requests.`,
+    link: "/venue-requests",
+  }),
+
+  /** #21 in RabbitMQ.md section 3.3 (#106 row 4a) — to the assigned coordinator. */
+  "hold.expired": (msg) => ({
+    title: `${msg.data.venueName ?? "The venue"} — hold expired`,
+    body:
+      `The hold on ${msg.data.venueName ?? "the venue"} for ${msg.data.eventName ?? "your event"} expired before it was decided. ` +
+      "You can request another venue or another time.",
+    link: eventLink(msg),
+  }),
+
+  /** #20 in RabbitMQ.md section 3.3 (#106 row 4b) — to the assigned coordinator, before the hold lapses. */
+  "hold.expiring": (msg) => ({
+    title: `${msg.data.venueName ?? "The venue"} — hold expiring soon`,
+    body:
+      `The hold on ${msg.data.venueName ?? "the venue"} for ${msg.data.eventName ?? "your event"} expires at ` +
+      `${msg.data.expiresAt ?? "soon"}. Decide or it will be released automatically.`,
+    link: eventLink(msg),
+  }),
+
+  /** #22 in RabbitMQ.md section 3.3 (#107 row 1) — an Approved booking lost its venue. */
+  "booking.replacement_required": (msg) => {
+    const eventName = String(msg.data.eventName ?? "Your event");
+    const venueName = String(msg.data.venueName ?? "The venue");
+    return {
+      title: `Alternative venue needed for ${eventName}`,
+      body: `${venueName} is unavailable ${msg.data.period ?? ""}: ${msg.data.reason ?? ""}. ${eventName} on ${msg.data.date ?? ""} needs a replacement venue.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** #23 in RabbitMQ.md section 3.3 (#107 row 1) — a pending booking clashes but keeps its status. */
+  "booking.unavailability_clash": (msg) => {
+    const eventName = String(msg.data.eventName ?? "your request");
+    const venueName = String(msg.data.venueName ?? "The venue");
+    return {
+      title: `Venue request for ${eventName} can't be met`,
+      body:
+        `${venueName} is unavailable ${msg.data.period ?? ""}: ${msg.data.reason ?? ""}. Your pending request for ${eventName} on ${msg.data.date ?? ""} ` +
+        "clashes with it — consider requesting another venue or time.",
+      link: eventLink(msg),
+    };
+  },
+
+  /**
+   * #24 in RabbitMQ.md section 3.3 (#107 row 2) — the venue staff member
+   * gets a neutral notice; each coordinator reads the existing wording
+   * naming the other event. Told apart by comparing recipientId to
+   * data.venueStaffId (same pattern as coordinator.assigned).
+   */
+  "booking.setup_conflict": (msg, recipientId) => {
+    const venueName = String(msg.data.venueName ?? "The venue");
+    if (recipientId === msg.data.venueStaffId && msg.data.first && msg.data.second) {
+      const first = msg.data.first as { eventName: string | null; window: string };
+      const second = msg.data.second as { eventName: string | null; window: string };
+      return {
+        title: `${venueName}'s setup/turnaround change created a conflict`,
+        body: `${first.eventName ?? "One booking"} (${first.window}) now overlaps ${second.eventName ?? "another booking"} (${second.window}). Neither booking has been removed.`,
+        link: eventLink(msg),
+      };
+    }
+    const eventName = String(msg.data.eventName ?? "Your event");
+    const otherEventName = String(msg.data.otherEventName ?? "another event");
+    return {
+      title: `${venueName} booking now overlaps another`,
+      body: `${venueName}'s setup or turnaround time changed. ${eventName} now needs the venue ${msg.data.window ?? ""}, which overlaps ${otherEventName} (${msg.data.otherWindow ?? ""}). Neither booking has been removed.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** #25 in RabbitMQ.md section 3.3 (#107 row 3) — to each affected coordinator. */
+  "venue.capacity_reduced": (msg) => {
+    const venueName = String(msg.data.venueName ?? "The venue");
+    const eventName = String(msg.data.eventName ?? "your event");
+    return {
+      title: `${venueName} capacity reduced`,
+      body: `${venueName} now holds at most ${msg.data.capacity ?? "fewer"} people, but ${eventName} on ${msg.data.date ?? ""} expects ${msg.data.expectedAttendance ?? "more"}. Check whether the event still fits or request another venue.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** #26 in RabbitMQ.md section 3.4 (#107 row 4, "raised") — to every Technical Support Staff member. */
+  "equipment.requested": (msg) => {
+    const count = Number(msg.data.itemCount ?? 1);
+    return {
+      title: "New equipment request",
+      body: `${msg.data.eventName ?? "An event"} needs ${count} equipment item${count === 1 ? "" : "s"} arranged.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** #34 in RabbitMQ.md section 3.4 (E3-6 AC3) — to every Technical Support Staff member. */
+  "equipment.released": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    return {
+      title: "Equipment reservations released",
+      body: `${eventName} was cancelled, so its equipment reservations were released back to inventory.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** #35 in RabbitMQ.md section 3.5 (E3-6 AC4) — to each attendee who held a place. */
+  "registration.cancelled_by_event": (msg) => ({
+    title: "Event cancelled",
+    body: `Your registration${msg.data.eventName ? ` for "${msg.data.eventName}"` : ""} was cancelled because the event itself was cancelled.`,
+    link: eventLink(msg),
+  }),
+
+  /** #28 in RabbitMQ.md section 3.4 (#107 row 5) — to the assigned coordinator. */
+  "equipment.status_changed": (msg) => {
+    const status = String(msg.data.status ?? "updated");
+    const eventName = String(msg.data.eventName ?? "Your event");
+    const body =
+      status === "Partially Fulfilled"
+        ? `${eventName}'s equipment request is only partially fulfilled: ${msg.data.note ?? ""}`
+        : `${eventName}'s equipment request is now ${status}.`;
+    return { title: `Equipment request ${status.toLowerCase()}`, body, link: eventLink(msg) };
+  },
+};
+
+/** `null` for a type with no template yet — the caller logs and skips it. */
+export function renderNotification(msg: InboundMessage, recipientId: string): RenderedNotification | null {
+  const template = TEMPLATES[msg.type];
+  return template ? template(msg, recipientId) : null;
+}
