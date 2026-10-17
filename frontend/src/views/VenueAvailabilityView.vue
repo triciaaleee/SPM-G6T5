@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../components/ui/AppButton.vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/vue/16/solid";
@@ -447,8 +448,8 @@ const minToDate = computed(() => draft.fromDate || undefined);
 
         <!-- Bottom right of the controls box; submits the target form via form="target-form". -->
         <div class="controls__actions">
-          <button v-if="appliedTarget" type="button" class="btn-ghost" @click="clearTarget">Clear target</button>
-          <button type="submit" form="target-form" class="btn-primary">Show free slots</button>
+          <AppButton variant="ghost" v-if="appliedTarget" type="button" @click="clearTarget">Clear target</AppButton>
+          <AppButton variant="primary" type="submit" form="target-form">Show free slots</AppButton>
         </div>
       </section>
 
@@ -495,7 +496,7 @@ const minToDate = computed(() => draft.fromDate || undefined);
 
       <div class="toolbar full-row">
         <div class="toolbar__nav">
-          <button type="button" class="btn-outline" @click="goToday">Today</button>
+          <AppButton variant="outline" type="button" @click="goToday">Today</AppButton>
           <button type="button" class="icon-btn" :aria-label="view === 'month' ? 'Previous month' : 'Previous week'"
             @click="step(-1)">
             <ChevronLeftIcon class="icon" aria-hidden="true" />
@@ -780,49 +781,6 @@ const minToDate = computed(() => draft.fromDate || undefined);
 
 /* ---- Buttons (Style.md 3.4: one solid button per view) ---- */
 
-.btn-primary,
-.btn-outline,
-.btn-ghost {
-  height: 40px;
-  padding: 0 var(--spacing-16);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn-primary {
-  border: none;
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn-primary:hover {
-  background: var(--color-purple-500);
-}
-
-.btn-outline {
-  border: 1px solid var(--color-purple-300);
-  background: transparent;
-  color: var(--color-purple-600);
-}
-
-.btn-outline:hover {
-  background: var(--color-purple-100);
-}
-
-.btn-ghost {
-  border: none;
-  background: transparent;
-  color: var(--color-purple-600);
-}
-
-.btn-ghost:hover {
-  background: var(--color-purple-100);
-}
-
 .btn-link {
   padding: 0;
   border: none;
@@ -860,9 +818,6 @@ const minToDate = computed(() => draft.fromDate || undefined);
   height: var(--spacing-16);
 }
 
-.btn-primary:focus-visible,
-.btn-outline:focus-visible,
-.btn-ghost:focus-visible,
 .btn-link:focus-visible,
 .icon-btn:focus-visible,
 .toggle-btn:focus-visible,

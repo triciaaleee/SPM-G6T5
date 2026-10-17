@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../components/ui/AppButton.vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
@@ -425,18 +426,18 @@ onMounted(async () => {
       <!-- Style.md 3.4: one solid action per view, so "Go to booking requests" is it; the rest are outline. -->
       <div class="header-actions">
         <div class="venue-actions">
-        <button type="button" class="btn-outline" @click="openAddVenue">Add new venue</button>
+        <AppButton variant="outline" type="button" @click="openAddVenue">Add new venue</AppButton>
         <!--
           E4-1: opens on hover (pointer devices) and on click/Enter (touch and keyboard), listing only the
           venues this staff member looks after.
         -->
         <div ref="editMenu" class="edit-menu" @mouseenter="editMenuOpen = true" @mouseleave="editMenuOpen = false"
           @keydown="onMenuKeydown">
-          <button type="button" class="btn-outline edit-menu__trigger" aria-haspopup="true"
+          <AppButton variant="outline" type="button" class="edit-menu__trigger" aria-haspopup="true"
             :aria-expanded="editMenuOpen" aria-controls="edit-venue-menu" @click="editMenuOpen = true">
             Edit venue
             <ChevronDownIcon class="edit-menu__chevron" aria-hidden="true" />
-          </button>
+          </AppButton>
           <div v-if="editMenuOpen" id="edit-venue-menu" class="edit-menu__popover">
             <p class="edit-menu__heading">Your venues</p>
             <p v-if="myVenuesError" class="edit-menu__empty">We couldn't load your venues.</p>
@@ -456,11 +457,11 @@ onMounted(async () => {
         </div>
         <div class="main-actions">
           <!-- E4-3: secondary action. -->
-          <button v-if="venueId !== null" type="button" class="btn-outline" @click="openBlockOut()">
+          <AppButton variant="outline" v-if="venueId !== null" type="button" @click="openBlockOut()">
             Block out time
-          </button>
+          </AppButton>
           <!-- E4-10: decisions are made in the queue, which orders by event date. It is the page's one primary action. -->
-          <RouterLink :to="{ name: 'venue-requests' }" class="btn-primary">Go to booking requests</RouterLink>
+          <AppButton variant="primary" :to="{ name: 'venue-requests' }">Go to booking requests</AppButton>
         </div>
       </div>
     </div>
@@ -969,61 +970,6 @@ onMounted(async () => {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--spacing-16);
-}
-
-.btn-primary,
-.btn-outline {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  text-decoration: none;
-}
-
-.btn-outline {
-  height: 40px;
-  padding: 0 var(--spacing-16);
-  border: 1px solid var(--color-purple-300);
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-purple-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn-outline:hover {
-  background: var(--color-purple-100);
-}
-
-.btn-outline:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.btn-primary {
-  height: 40px;
-  padding: 0 var(--spacing-16);
-  border: none;
-  border-radius: var(--radius-xs);
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn-primary:hover {
-  background: var(--color-purple-500);
-}
-
-.btn-primary:focus-visible,
-.btn-outline:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
 }
 
 /* "Add new venue" and "Edit venue" side by side, with "Block out time" and "Go to booking requests" beneath them. */

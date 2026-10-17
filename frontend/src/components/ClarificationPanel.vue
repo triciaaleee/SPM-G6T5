@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "./ui/AppButton.vue";
 import { computed, onMounted, ref } from "vue";
 import {
   ClarificationActionError,
@@ -205,12 +206,12 @@ onMounted(refresh);
       />
       <p v-if="newQuestionError" class="clarification-panel__error">{{ newQuestionError }}</p>
       <div class="clarification-panel__row-buttons">
-        <button type="button" class="btn btn-primary" :disabled="submittingQuestion" @click="submitNewQuestion">
+        <AppButton variant="primary" type="button" :disabled="submittingQuestion" @click="submitNewQuestion">
           {{ submittingQuestion ? "Submitting…" : "Submit" }}
-        </button>
-        <button type="button" class="btn btn-secondary" :disabled="submittingQuestion" @click="cancelNewQuestion">
+        </AppButton>
+        <AppButton variant="outline" type="button" :disabled="submittingQuestion" @click="cancelNewQuestion">
           Cancel
-        </button>
+        </AppButton>
       </div>
     </div>
 
@@ -292,12 +293,12 @@ onMounted(refresh);
                 <textarea v-model="replyText" rows="2" class="clarification-panel__textarea" placeholder="Write a reply…" />
                 <p v-if="replyError" class="clarification-panel__error">{{ replyError }}</p>
                 <div class="clarification-panel__row-buttons">
-                  <button type="button" class="btn btn-primary" :disabled="submittingReply" @click="submitReply(q.id)">
+                  <AppButton variant="primary" type="button" :disabled="submittingReply" @click="submitReply(q.id)">
                     {{ submittingReply ? "Sending…" : "Send" }}
-                  </button>
-                  <button type="button" class="btn btn-secondary" :disabled="submittingReply" @click="cancelReply">
+                  </AppButton>
+                  <AppButton variant="outline" type="button" :disabled="submittingReply" @click="cancelReply">
                     Cancel
-                  </button>
+                  </AppButton>
                 </div>
               </div>
               <button v-else type="button" class="clarification-thread__reply-btn" @click="openReplyBox(q.id)">
@@ -573,36 +574,4 @@ onMounted(refresh);
   color: var(--color-grey-500);
 }
 
-.btn {
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-8) var(--spacing-16);
-  font-size: 0.875rem;
-  font-weight: 700;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.btn-secondary {
-  background: var(--color-grey-75);
-  color: var(--color-grey-900);
-  border-color: var(--color-grey-200);
-}
-
-.btn-secondary:not(:disabled):hover {
-  background: var(--color-grey-100);
-}
-
-.btn-primary {
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn-primary:not(:disabled):hover {
-  background: var(--color-purple-700, var(--color-purple-600));
-}
 </style>

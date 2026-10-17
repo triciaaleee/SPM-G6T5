@@ -2,7 +2,8 @@
 import { computed, onMounted, ref } from "vue";
 import { fetchOpenEvents, type OpenEvent } from "../lib/registrationApi";
 import { registrationBadgeClass } from "../lib/registrationStatus";
-import { eventThumbnail, formatCardDate, formatCardTimeRange } from "../lib/attendeeEvents";
+import EventCard, { type CardFact } from "../components/ui/EventCard.vue";
+import { eventThumbnail, formatCardDate, formatCardTimeRange, slotsLabel } from "../lib/attendeeEvents";
 
 /**
  * Attendee "Discover events": every event open for registration. Each card
@@ -30,6 +31,18 @@ const filtered = computed(() => {
     `${event.name ?? ""} ${event.description ?? ""}`.toLowerCase().includes(needle),
   );
 });
+
+/** Date and time share one line; places left and any accessibility note follow. */
+function cardFacts(event: OpenEvent): CardFact[] {
+  const facts: CardFact[] = [
+    { icon: "calendar", text: `${formatCardDate(event.proposedDate)} · ${formatCardTimeRange(event.startTime, event.endTime)}` },
+  ];
+  if (event.slotsLeft != null) {
+    facts.push({ icon: "people", text: slotsLabel(event.slotsLeft) ?? "", alert: event.slotsLeft === 0, testid: "slots-left" });
+  }
+  if (event.accessibility) facts.push({ icon: "accessibility", text: event.accessibility, clamp: true });
+  return facts;
+}
 
 function eventTitle(event: OpenEvent): string {
   return event.name || `Event #${event.id}`;
@@ -81,36 +94,17 @@ onMounted(async () => {
 
           <ul class="card-list">
             <li v-for="event in filtered" :key="event.id" class="card-item">
-            <RouterLink :to="{ name: 'attendee-event-detail', params: { id: event.id } }" class="card">
-              <img :src="eventThumbnail(event.id)" alt="" class="card-thumbnail" />
-
-              <div class="card-content">
-                <span v-if="event.registrationStatus" class="badge" :class="registrationBadgeClass(event.registrationStatus)">
-                  {{ event.registrationStatus }}
-                </span>
-                <span v-else class="badge status-open">Open</span>
-
-                <div class="card-body">
-                  <h2 class="card-title">{{ eventTitle(event) }}</h2>
-                  <p v-if="event.description" class="card-description">{{ event.description }}</p>
-                </div>
-
-                <ul class="card-facts">
-                  <li class="fact">
-                    <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" /></svg>
-                    <span>{{ formatCardDate(event.proposedDate) }}</span>
-                  </li>
-                  <li class="fact">
-                    <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
-                    <span>{{ formatCardTimeRange(event.startTime, event.endTime) }}</span>
-                  </li>
-                  <li v-if="event.accessibility" class="fact fact--accessibility">
-                    <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="4.5" r="1.75" /><path d="M5.5 8.5 12 10l6.5-1.5M12 10v4.5m0 0-3 6m3-6 3 6" /></svg>
-                    <span class="fact__text">{{ event.accessibility }}</span>
-                  </li>
-                </ul>
-              </div>
-            </RouterLink>
+            <EventCard
+              :to="{ name: 'attendee-event-detail', params: { id: event.id } }"
+              :thumbnail="eventThumbnail(event.id)"
+              :title="eventTitle(event)"
+              :description="event.description"
+              :status-label="event.registrationStatus ?? 'Open'"
+              :status-class="event.registrationStatus ? registrationBadgeClass(event.registrationStatus) : 'status-open'"
+              :facts="cardFacts(event)"
+              person-label="Organiser"
+              :person-name="event.organiserName"
+            />
           </li>
           </ul>
         </template>
@@ -299,137 +293,12 @@ onMounted(async () => {
   }
 }
 
-.card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  overflow: hidden;
-  color: inherit;
-  text-decoration: none;
-  transition: box-shadow 0.15s ease, transform 0.15s ease;
-}
-
-.card:hover {
-  box-shadow: var(--shadow-card-hover);
-  transform: translateY(-2px);
-}
-
-.card:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.card-thumbnail {
-  display: block;
-  width: 100%;
-  aspect-ratio: 2 / 1;
-  object-fit: cover;
-}
-
-.card-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-16);
-  padding: var(--spacing-24);
-}
-
 /* Status badge — no leading dot. */
-.badge {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  height: var(--spacing-24);
-  padding: 0 var(--spacing-12);
-  border-radius: var(--radius-full);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-}
-
-.status-success {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: var(--color-warning-100);
-  color: var(--color-warning-900);
-}
 
 /* Open for registration, not registered yet: the Secondary Blue badge fill. */
-.status-open {
-  background: var(--color-blue-200);
-  color: var(--color-blue-800);
-}
 
-.card-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-8);
-}
-
-.card-title {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.75rem;
-  color: var(--color-grey-900);
-}
-
-.card-description {
-  margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-  color: var(--color-grey-700);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.card-facts {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-8);
-}
-
-.fact {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-  color: var(--color-grey-600);
-}
-
-.fact__icon {
-  flex: none;
-  color: var(--color-grey-500);
-}
+/* No places left: the error text colour (Style.md UI state), icon included. */
 
 /* Accessibility notes can run long: top-align the icon and keep cards even. */
-.fact--accessibility {
-  align-items: flex-start;
-}
-
-.fact--accessibility .fact__icon {
-  margin-top: var(--spacing-2);
-}
-
-.fact__text {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
 
 </style>

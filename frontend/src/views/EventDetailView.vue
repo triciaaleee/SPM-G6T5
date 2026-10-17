@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../components/ui/AppButton.vue";
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { landingRouteForRole } from "../lib/auth";
@@ -878,27 +879,25 @@ onMounted(async () => {
                     <div class="field">
                       <label class="body-small muted mb-1">Registration Needs (Where relevant)</label>
                       <div class="flex gap-2" role="group" aria-label="Registration needed">
-                        <button type="button" class="btn"
-                          :class="editForm.registrationNeeded ? 'btn-primary' : 'btn-secondary'"
+                        <AppButton :variant="editForm.registrationNeeded ? 'primary' : 'outline'"
                           :aria-pressed="editForm.registrationNeeded" @click="editForm.registrationNeeded = true">
                           Yes
-                        </button>
-                        <button type="button" class="btn"
-                          :class="!editForm.registrationNeeded ? 'btn-primary' : 'btn-secondary'"
+                        </AppButton>
+                        <AppButton :variant="!editForm.registrationNeeded ? 'primary' : 'outline'"
                           :aria-pressed="!editForm.registrationNeeded" @click="editForm.registrationNeeded = false">
                           No
-                        </button>
+                        </AppButton>
                       </div>
                     </div>
                     <div class="edit-actions">
-                      <button type="button" class="btn btn-primary" :disabled="submittingEdit"
+                      <AppButton variant="primary" type="button" :disabled="submittingEdit"
                         @click="submitEditedDetails">
                         {{ submittingEdit ? "Submitting…" : "Submit response" }}
-                      </button>
-                      <button type="button" class="btn btn-secondary" :disabled="submittingEdit"
+                      </AppButton>
+                      <AppButton variant="outline" type="button" :disabled="submittingEdit"
                         @click="cancelEditingDetails">
                         Cancel
-                      </button>
+                      </AppButton>
                     </div>
                   </template>
 <template v-else>
@@ -941,14 +940,14 @@ onMounted(async () => {
         This event was cancelled{{ event.review_outcome ? `: "${event.review_outcome}"` : "." }}
       </p>
     </div>
-    <button v-else-if="canCancelEvent" type="button" class="btn btn-danger cancel-event-row__button"
+    <AppButton variant="danger" v-else-if="canCancelEvent" type="button" class="cancel-event-row__button"
       @click="openCancel">
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"
         class="cancel-event-row__icon">
         <path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
       </svg>
       Cancel event
-    </button>
+    </AppButton>
   </div>
 </div>
 
@@ -1037,22 +1036,22 @@ onMounted(async () => {
               will keep read access but can no longer act on this event.
             </p>
             <div class="lead-panel__buttons">
-              <button type="button" class="btn btn-assign" :disabled="assigning" @click="submitAssignment">
+              <AppButton variant="primary" block type="button" :disabled="assigning" @click="submitAssignment">
                 {{ assigning ? "Reassigning…" : "Confirm reassignment" }}
-              </button>
-              <button type="button" class="btn btn-lead-cancel" :disabled="assigning"
+              </AppButton>
+              <AppButton variant="outline" block type="button" :disabled="assigning"
                 @click="confirmingReassign = false">
                 Cancel
-              </button>
+              </AppButton>
             </div>
           </div>
-          <button v-else-if="canAssign" type="button" class="btn btn-assign" :disabled="assigning"
+          <AppButton variant="primary" block v-else-if="canAssign" type="button" :disabled="assigning"
             @click="submitAssignment">
             {{ assigning ? "Assigning…" : "Assign coordinator" }}
-          </button>
-          <button v-else type="button" class="btn btn-assign" :disabled="assigning" @click="startReassign">
+          </AppButton>
+          <AppButton variant="primary" block v-else type="button" :disabled="assigning" @click="startReassign">
             Reassign
-          </button>
+          </AppButton>
         </template>
       </template>
       <!-- E2-12 AC3 -->
@@ -1082,20 +1081,20 @@ onMounted(async () => {
               registrations stay available.
             </p>
             <div class="review-actions__buttons">
-              <button type="button" class="btn btn-primary" :disabled="isReviewing" @click="handleComplete">
+              <AppButton variant="primary" type="button" :disabled="isReviewing" @click="handleComplete">
                 {{ isReviewing ? "Completing…" : "Confirm" }}
-              </button>
-              <button type="button" class="btn btn-secondary" :disabled="isReviewing"
+              </AppButton>
+              <AppButton variant="outline" type="button" :disabled="isReviewing"
                 @click="confirmingComplete = false">
                 Cancel
-              </button>
+              </AppButton>
             </div>
           </div>
           <div v-else class="review-actions__buttons">
-            <button type="button" class="btn btn-primary" :disabled="!eventHasEnded || isReviewing"
+            <AppButton variant="primary" type="button" :disabled="!eventHasEnded || isReviewing"
               @click="confirmingComplete = true">
               Mark as completed
-            </button>
+            </AppButton>
           </div>
         </template>
         <p v-else-if="event.status === 'Completed'" class="body-small muted">
@@ -1118,36 +1117,34 @@ onMounted(async () => {
                       </label>
                       <textarea id="action-text" v-model="actionText" rows="3" class="review-actions__textarea" />
                       <div class="review-actions__buttons">
-                        <button type="button" class="btn btn-primary" :disabled="isReviewing"
+                        <AppButton variant="primary" type="button" :disabled="isReviewing"
                           @click="submitPendingAction">
                           {{ isReviewing ? "Submitting…" : "Confirm" }}
-                        </button>
-                        <button type="button" class="btn btn-secondary" :disabled="isReviewing"
+                        </AppButton>
+                        <AppButton variant="outline" type="button" :disabled="isReviewing"
                           @click="cancelPendingAction">
                           Cancel
-                        </button>
+                        </AppButton>
                       </div>
                     </div>
 
                     <div v-else class="review-actions__buttons">
                       <template v-if="event.status !== 'Planning'">
-                        <button type="button" class="btn btn-primary" :disabled="!canApprove || isReviewing"
+                        <AppButton variant="primary" type="button" :disabled="!canApprove || isReviewing"
                           @click="handleApprove">
                           Accept
-                        </button>
+                        </AppButton>
                       </template>
 
-        <button type="button" class="btn"
-          :class="event.status === 'Clarification Requested' ? 'btn-clarify--requested' : 'btn-clarify'"
-          :disabled="!canAskClarification || isReviewing" @click="openClarify">
+        <AppButton variant="outline" :disabled="!canAskClarification || isReviewing" @click="openClarify">
           {{ event.status === "Clarification Requested" ? "Clarification Requested" : "Request Clarification" }}
-        </button>
+        </AppButton>
 
         <template v-if="event.status !== 'Planning'">
-                        <button type="button" class="btn btn-reject-outline" :disabled="!canReject || isReviewing"
+                        <AppButton variant="danger" type="button" :disabled="!canReject || isReviewing"
                           @click="openReject">
                           Reject
-                        </button>
+                        </AppButton>
                       </template>
       </div>
       </template>
@@ -1172,9 +1169,9 @@ onMounted(async () => {
   <VenueRecommendations :event-id="event.id" :details="event.submitted_details"
     :can-request="isAssignedCoordinator && event.status === 'Planning'" :plan="recommendationPlan"
     @requested="loadVenueBookings()" />
-  <RouterLink :to="{ name: 'venue-search', query: findVenuesQuery }" class="btn btn-venue-search">
+  <AppButton variant="outline" block :to="{ name: 'venue-search', query: findVenuesQuery }">
     Find venues
-  </RouterLink>
+  </AppButton>
 </div>
 
 <!-- E5-1: equipment requirements, recorded by the assigned coordinator while Planning -->
@@ -1221,13 +1218,13 @@ onMounted(async () => {
     <p v-if="cancelError" class="body-default error-text" role="alert">{{ cancelError }}</p>
 
     <div class="modal-actions">
-      <button type="button" class="modal-button modal-button--secondary" :disabled="cancelling" @click="closeCancel">
+      <AppButton variant="outline" type="button" :disabled="cancelling" @click="closeCancel">
         Keep event
-      </button>
-      <button type="button" class="modal-button modal-button--danger" :disabled="cancelling || !cancelReason.trim()"
+      </AppButton>
+      <AppButton variant="danger-solid" type="button" :disabled="cancelling || !cancelReason.trim()"
         @click="handleCancel">
         {{ cancelling ? "Cancelling…" : "Confirm cancellation" }}
-      </button>
+      </AppButton>
     </div>
   </div>
 </div>
@@ -1429,7 +1426,6 @@ onMounted(async () => {
   border-radius: var(--radius-lg);
   padding: var(--spacing-32);
 }
-
 
 .divider {
   border: none;
@@ -1643,33 +1639,8 @@ onMounted(async () => {
 }
 
 /* Style.md 3.4: the one solid action in the Lead's panel. */
-.btn-assign {
-  width: 100%;
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn-assign:not(:disabled):hover {
-  background: var(--color-purple-500);
-}
 
 /* Style.md 3.4: outline Purple Primary for the secondary action. */
-.btn-lead-cancel {
-  width: 100%;
-  background: transparent;
-  color: var(--color-purple-600);
-  border-color: var(--color-purple-300);
-}
-
-.btn-lead-cancel:not(:disabled):hover {
-  background: var(--color-purple-100);
-}
-
-.btn-assign:focus-visible,
-.btn-lead-cancel:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
 
 /* E1-4.2: coordinator review actions */
 .review-actions {
@@ -1712,20 +1683,6 @@ onMounted(async () => {
   resize: vertical;
 }
 
-.btn {
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-12) var(--spacing-16);
-  font-size: 0.875rem;
-  font-weight: 700;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
 .btn-icon {
   display: inline-flex;
   align-items: center;
@@ -1749,32 +1706,6 @@ onMounted(async () => {
 .btn-icon__svg {
   width: 18px;
   height: 18px;
-}
-
-.btn-clarify {
-  background: transparent;
-  color: var(--color-warning-700);
-  border-color: var(--color-warning-700);
-}
-
-.btn-clarify:not(:disabled):hover {
-  background: var(--color-warning-300);
-}
-
-.btn-clarify--requested {
-  background: transparent;
-  color: var(--color-grey-600);
-  border-color: var(--color-grey-300);
-}
-
-.btn-reject-outline {
-  background: transparent;
-  color: var(--color-error-600);
-  border-color: var(--color-error-600);
-}
-
-.btn-reject-outline:not(:disabled):hover {
-  background: var(--color-error-200);
 }
 
 /* E3-6: the trigger lives at the bottom-left of the Event Details card,
@@ -1811,21 +1742,6 @@ onMounted(async () => {
 
 .cancel-event-row__cancelled-note p {
   margin: 0;
-}
-
-.btn-danger {
-  background: var(--color-error-600);
-  color: var(--color-base-white);
-  border-color: var(--color-error-600);
-}
-
-.btn-danger:not(:disabled):hover {
-  filter: brightness(0.9);
-}
-
-.btn-danger:focus-visible {
-  outline: 2px solid var(--color-error-600);
-  outline-offset: 2px;
 }
 
 /* E3-6: the reason popup — same overlay/dialog shell as
@@ -1880,39 +1796,6 @@ onMounted(async () => {
   margin-top: var(--spacing-16);
 }
 
-.modal-button {
-  appearance: none;
-  border: none;
-  cursor: pointer;
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-12) var(--spacing-16);
-  font-size: 0.875rem;
-  font-weight: 700;
-}
-
-.modal-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.modal-button--secondary {
-  background: var(--color-grey-100);
-  color: var(--color-grey-900);
-}
-
-.modal-button--secondary:hover:not(:disabled) {
-  background: var(--color-grey-200);
-}
-
-.modal-button--danger {
-  background: var(--color-error-600);
-  color: var(--color-base-white);
-}
-
-.modal-button--danger:hover:not(:disabled) {
-  filter: brightness(0.9);
-}
-
 .venue-search-entry {
   display: flex;
   flex-direction: column;
@@ -1920,35 +1803,5 @@ onMounted(async () => {
 }
 
 /* Style.md 3.4 outline button — the solid slot in this card belongs to Approve. */
-.btn-venue-search {
-  display: block;
-  text-align: center;
-  background: transparent;
-  color: var(--color-purple-600);
-  border-color: var(--color-purple-300);
-}
 
-.btn-venue-search:hover {
-  background: var(--color-purple-100);
-  color: var(--color-purple-700);
-}
-
-.btn-secondary {
-  background: var(--color-grey-75);
-  color: var(--color-grey-900);
-  border-color: var(--color-grey-200);
-}
-
-.btn-secondary:not(:disabled):hover {
-  background: var(--color-grey-100);
-}
-
-.btn-primary {
-  background: var(--color-grey-300);
-  color: var(--color-grey-600);
-}
-
-.btn-primary:not(:disabled):hover {
-  background: var(--color-purple-700, var(--color-purple-600));
-}
 </style>

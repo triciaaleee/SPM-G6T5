@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../components/ui/AppButton.vue";
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import {
@@ -98,9 +99,9 @@ onMounted(loadFirstPage);
     </ul>
 
     <div v-if="nextCursor !== null" class="feed__footer">
-      <button type="button" class="btn-ghost" :disabled="loadingMore" @click="loadMore">
+      <AppButton variant="ghost" type="button" :disabled="loadingMore" @click="loadMore">
         {{ loadingMore ? "Loading…" : "Load more" }}
-      </button>
+      </AppButton>
     </div>
   </div>
 </template>
@@ -187,33 +188,6 @@ onMounted(loadFirstPage);
   display: flex;
   justify-content: center;
   padding: var(--spacing-16) 0;
-}
-
-.btn-ghost {
-  padding: var(--spacing-8) var(--spacing-16);
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-purple-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn-ghost:hover {
-  background: var(--color-purple-100);
-}
-
-.btn-ghost:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.btn-ghost:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
 }
 
 .body-small {

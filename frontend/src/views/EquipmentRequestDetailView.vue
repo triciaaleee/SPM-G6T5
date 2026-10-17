@@ -11,6 +11,7 @@
  * fulfilment (AC2). E5-4: each item's availability is checked against the
  * event's own date and time before a decision is made.
  */
+import AppButton from "../components/ui/AppButton.vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { getStoredUser, landingRouteForRole } from "../lib/auth";
@@ -342,9 +343,9 @@ onMounted(async () => {
 
             <!-- E5-3: update this request's status as arrangements are made. -->
             <div class="status-editor">
-              <button v-if="!editFor(r).expanded" type="button" class="btn btn-secondary" @click="openEditor(r)">
+              <AppButton variant="outline" v-if="!editFor(r).expanded" type="button" @click="openEditor(r)">
                 Update status
-              </button>
+              </AppButton>
 
               <div v-else class="status-form">
                 <div class="status-pills" role="radiogroup" aria-label="Status">
@@ -370,12 +371,12 @@ onMounted(async () => {
                 <p v-if="editFor(r).error" class="body-small error-text" role="alert">{{ editFor(r).error }}</p>
 
                 <div class="status-form-actions">
-                  <button type="button" class="btn btn-primary" :disabled="editFor(r).saving" @click="saveStatus(r)">
+                  <AppButton variant="primary" type="button" :disabled="editFor(r).saving" @click="saveStatus(r)">
                     {{ editFor(r).saving ? "Saving…" : "Save" }}
-                  </button>
-                  <button type="button" class="btn btn-secondary" :disabled="editFor(r).saving" @click="cancelEdit(r)">
+                  </AppButton>
+                  <AppButton variant="outline" type="button" :disabled="editFor(r).saving" @click="cancelEdit(r)">
                     Cancel
-                  </button>
+                  </AppButton>
                 </div>
               </div>
 
@@ -702,8 +703,7 @@ onMounted(async () => {
   color: var(--color-base-white);
 }
 
-.status-pill:focus-visible,
-.btn:focus-visible {
+.status-pill:focus-visible{
   outline: 2px solid var(--ring-brand);
   outline-offset: 2px;
 }
@@ -728,41 +728,6 @@ onMounted(async () => {
 }
 
 /* Style.md 3.4: Save is the one solid button; Update status and Cancel are outline. */
-.btn {
-  min-height: 44px;
-  padding: 0 var(--spacing-24);
-  border: 1px solid transparent;
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.btn-primary {
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn-primary:not(:disabled):hover {
-  background: var(--color-purple-500);
-}
-
-.btn-secondary {
-  background: transparent;
-  border-color: var(--color-purple-300);
-  color: var(--color-purple-600);
-}
-
-.btn-secondary:not(:disabled):hover {
-  background: var(--color-purple-100);
-}
 
 .status-notice {
   padding: var(--spacing-8) var(--spacing-12);

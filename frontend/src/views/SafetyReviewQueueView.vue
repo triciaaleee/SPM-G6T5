@@ -10,6 +10,7 @@
  * change request shows which of those flags were addressed (AC3).
  * Matches VenueRequestQueue.vue's layout and styling.
  */
+import AppButton from "../components/ui/AppButton.vue";
 import { computed, onMounted, ref } from "vue";
 import {
   approveSafetyReview,
@@ -327,12 +328,12 @@ function formatMoment(value: string): string {
               :maxlength="MAX_SAFETY_REJECT_REASON_LENGTH" placeholder="The coordinator is sent this." />
             <p v-if="rejectReasonError" class="body-small error-text">{{ rejectReasonError }}</p>
             <div class="actions">
-              <button type="button" class="btn-danger" :disabled="busyId === event.id" @click="confirmReject(event)">
+              <AppButton variant="danger" type="button" :disabled="busyId === event.id" @click="confirmReject(event)">
                 {{ busyId === event.id ? "Rejecting…" : "Confirm rejection" }}
-              </button>
-              <button type="button" class="btn-secondary" :disabled="busyId === event.id" @click="cancelReject">
+              </AppButton>
+              <AppButton variant="outline" type="button" :disabled="busyId === event.id" @click="cancelReject">
                 Cancel
-              </button>
+              </AppButton>
             </div>
           </div>
 
@@ -373,25 +374,25 @@ function formatMoment(value: string): string {
               placeholder="Anything that isn't about one arrangement, e.g. send an updated crowd plan." />
             <p v-if="changesErrors.generalNote" class="body-small error-text">{{ changesErrors.generalNote }}</p>
             <div class="actions">
-              <button type="button" class="btn-primary" :disabled="busyId === event.id" @click="confirmChanges(event)">
+              <AppButton variant="primary" type="button" :disabled="busyId === event.id" @click="confirmChanges(event)">
                 {{ busyId === event.id ? "Sending…" : "Send to coordinator" }}
-              </button>
-              <button type="button" class="btn-secondary" :disabled="busyId === event.id" @click="cancelChanges">
+              </AppButton>
+              <AppButton variant="outline" type="button" :disabled="busyId === event.id" @click="cancelChanges">
                 Cancel
-              </button>
+              </AppButton>
             </div>
           </div>
 
           <div v-else class="actions">
-            <button type="button" class="btn-primary" :disabled="busyId === event.id" @click="approve(event)">
+            <AppButton variant="primary" type="button" :disabled="busyId === event.id" @click="approve(event)">
               {{ busyId === event.id ? "Approving…" : "Approve" }}
-            </button>
-            <button type="button" class="btn-outline" :disabled="busyId === event.id" @click="openChanges(event)">
+            </AppButton>
+            <AppButton variant="outline" type="button" :disabled="busyId === event.id" @click="openChanges(event)">
               Request changes
-            </button>
-            <button type="button" class="btn-danger" :disabled="busyId === event.id" @click="openReject(event)">
+            </AppButton>
+            <AppButton variant="danger" type="button" :disabled="busyId === event.id" @click="openReject(event)">
               Reject
-            </button>
+            </AppButton>
           </div>
 
           <p v-if="rowError?.id === event.id" class="body-small error-text" role="alert">{{ rowError.message }}</p>
@@ -556,47 +557,8 @@ function formatMoment(value: string): string {
 }
 
 /* Style.md 3.4 Button Hierarchy; 7 radius-xs; 8.2 focus ring. Same set as VenueRequestQueue.vue. */
-.btn-primary,
-.btn-secondary,
-.btn-outline,
-.btn-danger {
-  padding: var(--spacing-8) var(--spacing-16);
-  border-radius: var(--radius-xs);
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
-  border: 1px solid transparent;
-}
-
-.btn-primary {
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: var(--color-purple-700);
-}
-
-.btn-secondary {
-  background: var(--color-base-white);
-  border-color: var(--color-grey-200);
-  color: var(--color-grey-900);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: var(--color-grey-50);
-}
 
 /* Style.md 3.4: outline purple — the secondary action beside the solid Approve. */
-.btn-outline {
-  background: transparent;
-  border-color: var(--color-purple-300);
-  color: var(--color-purple-600);
-}
-
-.btn-outline:hover:not(:disabled) {
-  background: var(--color-purple-100);
-}
 
 /* E3-14: the arrangements to flag, and a resubmitted event's earlier request. */
 .arrangements {
@@ -679,32 +641,6 @@ function formatMoment(value: string): string {
 
 .flag-state--open {
   color: var(--color-warning-900);
-}
-
-.btn-danger {
-  background: var(--color-base-white);
-  border-color: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-.btn-danger:hover:not(:disabled) {
-  background: var(--color-error-200);
-}
-
-.btn-primary:focus-visible,
-.btn-secondary:focus-visible,
-.btn-outline:focus-visible,
-.btn-danger:focus-visible {
-  outline: 2px solid var(--color-purple-600);
-  outline-offset: 2px;
-}
-
-.btn-primary:disabled,
-.btn-secondary:disabled,
-.btn-outline:disabled,
-.btn-danger:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 
 .reject-box {

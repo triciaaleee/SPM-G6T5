@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
+import AppButton from "../components/ui/AppButton.vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import {
   fetchEventById,
@@ -141,12 +142,9 @@ onMounted(async () => {
           Your event request has been created with status <span class="font-bold text-grey-700">Requested</span>.
           You'll see it in your events list along with its submission date.
         </p>
-        <RouterLink
-          :to="{ name: 'event-detail', params: { id: submittedEventId } }"
-          class="mt-6 inline-block rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700"
-        >
+        <AppButton variant="primary" :to="{ name: 'event-detail', params: { id: submittedEventId } }" class="mt-6">
           View request
-        </RouterLink>
+        </AppButton>
         <RouterLink to="/" class="ml-4 text-sm font-bold text-purple-600 hover:text-purple-700">
           Back to my events
         </RouterLink>
@@ -331,32 +329,20 @@ onMounted(async () => {
                   </th>
                   <td class="px-3 py-3">
                     <div class="flex gap-2" role="group" aria-label="Registration needed">
-                      <button
-                        type="button"
-                        class="rounded-xs border px-4 py-2 text-sm font-bold"
-                        :class="
-                          form.registrationNeeded
-                            ? 'border-purple-600 bg-purple-600 text-base-white'
-                            : 'border-grey-200 bg-base-white text-grey-700 hover:bg-grey-75'
-                        "
+                      <AppButton
+                        :variant="form.registrationNeeded ? 'primary' : 'outline'"
                         :aria-pressed="form.registrationNeeded"
                         @click="form.registrationNeeded = true"
                       >
                         Yes
-                      </button>
-                      <button
-                        type="button"
-                        class="rounded-xs border px-4 py-2 text-sm font-bold"
-                        :class="
-                          !form.registrationNeeded
-                            ? 'border-purple-600 bg-purple-600 text-base-white'
-                            : 'border-grey-200 bg-base-white text-grey-700 hover:bg-grey-75'
-                        "
+                      </AppButton>
+                      <AppButton
+                        :variant="!form.registrationNeeded ? 'primary' : 'outline'"
                         :aria-pressed="!form.registrationNeeded"
                         @click="form.registrationNeeded = false"
                       >
                         No
-                      </button>
+                      </AppButton>
                     </div>
                   </td>
                 </tr>
@@ -366,22 +352,13 @@ onMounted(async () => {
         </div>
 
         <div class="mt-8 flex gap-4">
-          <button
-            type="button"
-            :disabled="submitting || savingDraft"
-            class="rounded-xs border border-purple-600 px-6 py-3 text-sm font-bold text-purple-600 hover:bg-purple-100 disabled:cursor-not-allowed disabled:border-grey-200 disabled:text-grey-400"
-            @click="handleSaveDraft"
-          >
+          <AppButton variant="outline" :disabled="submitting || savingDraft" @click="handleSaveDraft">
             {{ savingDraft ? "Saving…" : "Save as Draft" }}
-          </button>
+          </AppButton>
 
-          <button
-            type="submit"
-            :disabled="submitting || savingDraft"
-            class="rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-grey-200 disabled:text-grey-400"
-          >
+          <AppButton variant="primary" type="submit" :disabled="submitting || savingDraft">
             {{ submitting ? "Submitting…" : "Submit request" }}
-          </button>
+          </AppButton>
         </div>
       </form>
     </div>

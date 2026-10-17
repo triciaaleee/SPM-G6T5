@@ -9,6 +9,7 @@
  * as read-only reference text above a blank item row rather than guessed
  * at by parsing it.
  */
+import AppButton from "../ui/AppButton.vue";
 import { onMounted, reactive, ref } from "vue";
 import {
   EquipmentRequestError,
@@ -147,9 +148,9 @@ function statusBadgeClass(status: string): string {
       <p v-else class="body-small muted">No equipment requirements recorded yet.</p>
 
       <div v-if="canSubmit" class="eq-action">
-        <button v-if="!formOpen" type="button" class="btn btn-secondary" @click="openForm">
+        <AppButton variant="outline" v-if="!formOpen" type="button" @click="openForm">
           Record equipment requirements
-        </button>
+        </AppButton>
 
         <div v-else class="eq-form">
           <p v-if="organiserNote" class="body-small muted eq-reference">
@@ -192,10 +193,10 @@ function statusBadgeClass(status: string): string {
           <button type="button" class="eq-add" @click="addItem">+ Add another item</button>
 
           <div class="eq-form-actions">
-            <button type="button" class="btn btn-primary" :disabled="submitting" @click="submit">
+            <AppButton variant="primary" type="button" :disabled="submitting" @click="submit">
               {{ submitting ? "Submitting…" : "Submit request" }}
-            </button>
-            <button type="button" class="btn btn-secondary" :disabled="submitting" @click="closeForm">Cancel</button>
+            </AppButton>
+            <AppButton variant="outline" type="button" :disabled="submitting" @click="closeForm">Cancel</AppButton>
           </div>
         </div>
 
@@ -389,39 +390,6 @@ function statusBadgeClass(status: string): string {
 .eq-form-actions {
   display: flex;
   gap: var(--spacing-8);
-}
-
-.btn {
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-12) var(--spacing-16);
-  font-size: 0.875rem;
-  font-weight: 700;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.btn-primary {
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn-primary:not(:disabled):hover {
-  background: var(--color-purple-700, var(--color-purple-600));
-}
-
-.btn-secondary {
-  background: var(--color-grey-75);
-  color: var(--color-grey-900);
-  border-color: var(--color-grey-200);
-}
-
-.btn-secondary:not(:disabled):hover {
-  background: var(--color-grey-100);
 }
 
 .eq-notice {

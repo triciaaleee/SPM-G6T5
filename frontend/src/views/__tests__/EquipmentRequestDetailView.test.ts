@@ -168,9 +168,9 @@ describe("EquipmentRequestDetailView", () => {
     });
     const wrapper = await mountView();
 
-    await wrapper.find(".status-editor .btn-secondary").trigger("click");
+    await wrapper.find(".status-editor .btn--outline").trigger("click");
     await wrapper.findAll(".status-pill")[1].trigger("click");
-    await wrapper.find(".btn-primary").trigger("click");
+    await wrapper.find(".btn--primary").trigger("click");
     await flushPromises();
 
     expect(mockedUpdate).toHaveBeenCalledWith(55, "Arranged", undefined, undefined);
@@ -186,13 +186,13 @@ describe("EquipmentRequestDetailView", () => {
     });
     const wrapper = await mountView();
 
-    await wrapper.find(".status-editor .btn-secondary").trigger("click");
+    await wrapper.find(".status-editor .btn--outline").trigger("click");
     await wrapper.findAll(".status-pill")[2].trigger("click");
 
     // Only 1 of the 3 Microphones is in stock; all 2 Projectors are.
     expect(wrapper.find(".outstanding-preview").text()).toBe("2 Microphones outstanding");
 
-    await wrapper.find(".btn-primary").trigger("click");
+    await wrapper.find(".btn--primary").trigger("click");
     await flushPromises();
 
     expect(mockedUpdate).toHaveBeenCalledWith(55, "Partially Fulfilled", "2 Microphones outstanding", [

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../components/ui/AppButton.vue";
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
@@ -206,9 +207,9 @@ async function handleSubmit() {
 
         <p v-if="formError" class="body-small error-text" role="alert">{{ formError }}</p>
 
-        <button type="submit" class="btn-primary" :disabled="submitting">
+        <AppButton variant="primary" type="submit" :disabled="submitting">
           {{ submitting ? "Creating account…" : "Sign up" }}
-        </button>
+        </AppButton>
       </div>
 
       <p class="body-small muted signup-hint">
@@ -405,28 +406,6 @@ async function handleSubmit() {
 
 .muted {
   color: var(--color-grey-500);
-}
-
-.btn-primary {
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-base-white);
-  background: var(--color-purple-600);
-  border: none;
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-12) var(--spacing-24);
-  cursor: pointer;
-}
-
-.btn-primary:hover {
-  background: var(--color-purple-700);
-}
-
-.btn-primary:disabled {
-  background: var(--color-grey-200);
-  color: var(--color-grey-400);
-  cursor: not-allowed;
 }
 
 .signup-hint {

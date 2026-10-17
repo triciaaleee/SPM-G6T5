@@ -2139,7 +2139,12 @@ describe("attendee access (E6)", () => {
   describe("GET /api/events/attendee-info", () => {
     it("returns only the whitelisted attendee-facing fields", async () => {
       const supabase = buildAttendeeInfoSupabase([
-        { id: 1, status: "Confirmed", submitted_details: confirmedDetails },
+        {
+          id: 1,
+          status: "Confirmed",
+          submitted_details: confirmedDetails,
+          organiser: { name: "Pat Organiser", email: "pat@example.com", id: "ORG-0001" },
+        },
       ]);
       const app = buildApp(supabase, attendee);
 
@@ -2152,6 +2157,8 @@ describe("attendee access (E6)", () => {
           registrationNeeded: true,
           open: true,
           accessibility: validPayload.accessibility,
+          capacity: 50,
+          organiserName: "Pat Organiser",
           name: validPayload.name,
           description: "Campus tour and icebreakers",
           proposedDate: "2099-01-01",
@@ -2160,7 +2167,28 @@ describe("attendee access (E6)", () => {
         },
       ]);
       expect(JSON.stringify(res.body)).not.toContain("INTERNAL");
+      // Of the organiser only the display name is returned: never their id or email.
+      expect(JSON.stringify(res.body)).not.toMatch(/pat@example\.com|ORG-0001/);
       expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
+    });
+
+    it("returns the organiser's name, tolerating an embedded array and a missing or blank organiser", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", submitted_details: confirmedDetails, organiser: [{ name: "  Array Organiser " }] },
+        { id: 2, status: "Confirmed", submitted_details: confirmedDetails, organiser: null },
+        { id: 3, status: "Confirmed", submitted_details: confirmedDetails, organiser: { name: "   " } },
+        { id: 4, status: "Confirmed", submitted_details: confirmedDetails },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1,2,3,4");
+
+      expect(res.body.events.map((e: { organiserName: string | null }) => e.organiserName)).toEqual([
+        "Array Organiser",
+        null,
+        null,
+        null,
+      ]);
     });
 
     it("returns the accessibility note trimmed, and null for blank or NA/None answers", async () => {
@@ -2178,6 +2206,30 @@ describe("attendee access (E6)", () => {
 
       expect(res.body.events.map((e: { accessibility: string | null }) => e.accessibility)).toEqual([
         "Step-free entry and a hearing loop.",
+        null,
+        null,
+        null,
+        null,
+      ]);
+    });
+
+    it("returns the expected attendance as capacity, and null when it is missing or not a positive whole number", async () => {
+      const withAttendance = (expectedAttendance: unknown) => ({ ...confirmedDetails, expectedAttendance });
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", submitted_details: withAttendance(120) },
+        { id: 2, status: "Confirmed", submitted_details: withAttendance("80") },
+        { id: 3, status: "Confirmed", submitted_details: withAttendance(null) },
+        { id: 4, status: "Confirmed", submitted_details: withAttendance(0) },
+        { id: 5, status: "Confirmed", submitted_details: withAttendance(2.5) },
+        { id: 6, status: "Confirmed", submitted_details: withAttendance(undefined) },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1,2,3,4,5,6");
+
+      expect(res.body.events.map((e: { capacity: number | null }) => e.capacity)).toEqual([
+        120,
+        80,
         null,
         null,
         null,
@@ -2240,6 +2292,32 @@ describe("attendee access (E6)", () => {
       const res = await request(app).get("/api/events/open-for-registration");
 
       expect(res.body.events[0].accessibility).toBe(validPayload.accessibility);
+    });
+
+    it("includes the organiser's name, and nothing else about the organiser, on open events", async () => {
+      const supabase = buildOpenSupabase([
+        {
+          id: 1,
+          status: "Confirmed",
+          submitted_details: confirmedDetails,
+          organiser: { name: "Pat Organiser", email: "pat@example.com" },
+        },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.body.events[0].organiserName).toBe("Pat Organiser");
+      expect(JSON.stringify(res.body)).not.toContain("pat@example.com");
+    });
+
+    it("includes the capacity on open events", async () => {
+      const supabase = buildOpenSupabase([{ id: 1, status: "Confirmed", submitted_details: confirmedDetails }]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.body.events[0].capacity).toBe(50);
     });
 
     it("lists only open events, with the whitelisted fields", async () => {

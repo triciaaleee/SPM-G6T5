@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AppButton from "../ui/AppButton.vue";
+import AppButton from "../ui/AppButton.vue";
 import { computed } from "vue";
 import VenueIcon from "./VenueIcon.vue";
 import type { UnavailabilityPeriod } from "../../lib/unavailabilityApi";
@@ -42,10 +44,10 @@ const range = computed(() => {
       <p v-if="range" class="block-card__range">{{ range }}</p>
     </div>
     <div class="block-card__actions">
-      <button type="button" class="btn-ghost" :disabled="removing" @click="$emit('edit')">Edit</button>
-      <button type="button" class="btn-ghost btn-ghost--danger" :disabled="removing" @click="$emit('remove')">
+      <AppButton variant="ghost" type="button" :disabled="removing" @click="$emit('edit')">Edit</AppButton>
+      <AppButton variant="danger" type="button" :disabled="removing" @click="$emit('remove')">
         {{ removing ? "Removing…" : "Remove" }}
-      </button>
+      </AppButton>
     </div>
   </div>
 </template>
@@ -113,42 +115,6 @@ const range = computed(() => {
   display: flex;
   flex-shrink: 0;
   gap: var(--spacing-8);
-}
-
-.btn-ghost {
-  min-height: var(--spacing-48);
-  padding: var(--spacing-4) var(--spacing-16);
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-purple-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn-ghost:hover:not(:disabled) {
-  background: var(--color-purple-100);
-}
-
-.btn-ghost--danger {
-  color: var(--color-error-600);
-}
-
-.btn-ghost--danger:hover:not(:disabled) {
-  background: var(--color-grey-50);
-}
-
-.btn-ghost:disabled {
-  cursor: default;
-  color: var(--color-grey-300);
-}
-
-.btn-ghost:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
 }
 
 @media (max-width: 640px) {
