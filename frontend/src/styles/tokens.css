@@ -16,6 +16,8 @@
   --color-grey-700: #454545;
   --color-grey-800: #2F2F2F;
   --color-grey-900: #222222;
+  /* Grey/40% Dark #454545 (Style.md 2.3) — modal/drawer scrim. */
+  --color-grey-alpha-40-dark: rgba(69, 69, 69, 0.4);
 
   /* Purple Primary */
   --color-purple-50: #F9F4FE;
@@ -27,14 +29,18 @@
   --color-purple-600: #701EC2;
   --color-purple-700: #5A04AF;
   --color-purple-800: #3F037A;
+  --color-purple-900: #230244;
 
   /* Semantic */
+  --color-error-100: #FFF6F5;
   --color-error-200: #FFE3E0;
   --color-error-300: #FFA199;
   --color-error-400: #FF5444;
-  /* Grey/40% Dark #454545 (Style.md 2.3) — modal/drawer scrim. */
-  --color-grey-alpha-40-dark: rgba(69, 69, 69, 0.4);
+  --color-error-500: #EE3424;
   --color-error-600: #CC1000;
+  --color-error-700: #B31000;
+  --color-error-800: #970C00;
+  --color-error-900: #520600;
   --color-warning-100: #FEF5E7;
   --color-warning-200: #FCE1B6;
   --color-warning-300: #F9C26C;
@@ -47,8 +53,12 @@
   --color-success-100: #F3F9F3;
   --color-success-200: #DAEDD9;
   --color-success-300: #BBE2C1;
+  --color-success-400: #48BB78;
+  --color-success-500: #369F62;
   --color-success-600: #008545;
-  --color-success-700: #006E3A;
+  --color-success-700: #017031;
+  --color-success-800: #026529;
+  --color-success-900: #005C30;
 
   /* Orchid — role chip only (Style.md Section 2.9) */
   --color-orchid-50: #FAF1FA;
@@ -92,9 +102,13 @@
   --grid-mobile-gutter: 16px;
 
   /* Radius */
+  --radius-none: 0px;
   --radius-xs: 4px;
   --radius-sm: 8px;
+  --radius-md: 12px;
   --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
   --radius-full: 128px;
 
   /* Focus rings */
@@ -103,5 +117,7 @@
   --ring-error: #FFE3E0;
 
   /* Elevation (Style.md Section 8.1) */
+  --shadow-card: 0 1px 3px rgba(34, 34, 34, 0.08);
+  --shadow-card-hover: 0 4px 12px rgba(34, 34, 34, 0.12);
   --shadow-popover: 0 8px 24px rgba(34, 34, 34, 0.12);
 }

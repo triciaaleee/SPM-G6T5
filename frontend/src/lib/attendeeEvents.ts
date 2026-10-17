@@ -1,4 +1,17 @@
 import type { MyRegistration } from "./registrationApi";
+import thumb1 from "../assets/event_thumbnail_1.jpg";
+import thumb2 from "../assets/event_thumbnail_2.jpg";
+import thumb3 from "../assets/event_thumbnail_3.jpg";
+import thumb4 from "../assets/event_thumbnail_4.jpg";
+import thumb5 from "../assets/event_thumbnail_5.jpg";
+import thumb6 from "../assets/event_thumbnail_6.jpg";
+
+const EVENT_THUMBNAILS = [thumb1, thumb2, thumb3, thumb4, thumb5, thumb6];
+
+/** Deterministic per event (same event always shows the same picture) rather than re-randomized on every render. */
+export function eventThumbnail(eventId: number): string {
+  return EVENT_THUMBNAILS[eventId % EVENT_THUMBNAILS.length];
+}
 
 /** "2026-11-14" → "14 Nov 2026". Parsed as a local date so it never slips a day. */
 export function formatCardDate(value: string | null | undefined): string {

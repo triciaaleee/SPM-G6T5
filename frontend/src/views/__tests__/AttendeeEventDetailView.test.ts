@@ -86,7 +86,10 @@ describe("AttendeeEventDetailView", () => {
     expect(details).toContain("10:00 AM to 4:00 PM");
     expect(details).toContain("Great Lawn");
     expect(details).toContain("Sports Hall (rain site)");
-    expect(details).toContain("Step-free entry and a hearing loop.");
+    // Accessibility sits in its own container, outside the Date/Time/Venue strip.
+    expect(details).not.toContain("Step-free entry");
+    expect(wrapper.find(".accessibility-note").text()).toContain("Step-free entry and a hearing loop.");
+    expect(wrapper.find(".details").element.contains(wrapper.find(".accessibility-note").element)).toBe(false);
   });
 
   it("shows the attendee's own status in a badge with no dot", async () => {
@@ -103,7 +106,7 @@ describe("AttendeeEventDetailView", () => {
     mockedView.mockResolvedValue(eventView({ accessibility: null, venues: [] }));
     const wrapper = await mountView();
 
-    expect(wrapper.find(".details").text()).not.toContain("Accessibility");
+    expect(wrapper.find(".accessibility-note").exists()).toBe(false);
     expect(wrapper.find(".details").text()).toContain("Venue to be confirmed");
   });
 

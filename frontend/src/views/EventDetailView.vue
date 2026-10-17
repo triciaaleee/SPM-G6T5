@@ -19,11 +19,16 @@ import {
   rejectEvent,
   requestClarification,
   updateEventDetails,
+  submitChangeRequest,
+  fetchChangeRequests,
   fetchSafetyChanges,
   type EventHistoryEntry,
   type SafetyChangeRequest,
   type EventRequestPayload,
   type EventSummary,
+  type ChangeRequestResult,
+  type ChangeRequestEntry,
+  type ChangeRequestFieldEntry,
 } from "../lib/eventsApi";
 import { formatEventDate, statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
 import { hasEventEnded } from "../lib/eventTiming";
@@ -262,9 +267,11 @@ const canEditDirectly = computed(
       event.value?.status === "Unassigned" ||
       event.value?.status === "Planning"),
 );
-/** AC2: once Confirmed (or otherwise past pending-review/Planning/
- * clarification), editing is blocked — shown as a message rather than a
- * real "change request" flow, which doesn't exist yet. */
+/** E3-9: once Confirmed, direct edits are blocked but the organiser can
+ * raise a change request instead — the only edit path left at this
+ * status. */
+const canRequestChange = computed(() => isOwnerView.value && event.value?.status === "Confirmed");
+/** Past Confirmed (Completed/Cancelled/etc.) there's no edit path at all. */
 const editBlockedMessage = computed(() => {
   if (!isOwnerView.value || !event.value) return null;
   const status = event.value.status;
@@ -272,10 +279,11 @@ const editBlockedMessage = computed(() => {
     status === "Requested" ||
     status === "Unassigned" ||
     status === "Planning" ||
-    status === "Clarification Requested"
+    status === "Clarification Requested" ||
+    status === "Confirmed"
   )
     return null;
-  return "This request has already been confirmed and can no longer be edited directly. Contact your coordinator to request a change.";
+  return "This request can no longer be edited or changed at this stage.";
 });
 /** E3-7 AC1/AC3: the assigned coordinator can edit non-critical fields
  * while the event is in Planning — separate from the organiser paths
@@ -303,9 +311,13 @@ const editForm = reactive<EventRequestPayload>({
 const editFieldErrors = ref<Record<string, string>>({});
 const editGeneralError = ref<string | null>(null);
 const submittingEdit = ref(false);
+/** E3-9: shown once a change request is submitted, summarising what applied
+ * immediately versus what's now held for the coordinator's review. */
+const changeRequestResult = ref<ChangeRequestResult | null>(null);
 
 function startEditingDetails(): void {
   if (!event.value) return;
+  changeRequestResult.value = null;
   const details = asSubmittedDetails(event.value.submitted_details);
   editForm.name = details.name ?? "";
   editForm.purpose = details.purpose ?? "";
@@ -319,6 +331,20 @@ function startEditingDetails(): void {
   editForm.equipment = details.equipment ?? "";
   editForm.technicalSupport = details.technicalSupport ?? "";
   editForm.registrationNeeded = details.registrationNeeded ?? false;
+
+  // E3-9: a field already held in a Pending request is pre-filled with
+  // its *requested* value, not the committed one — otherwise simply
+  // reopening this form and resubmitting untouched fields would read as
+  // reverting every held field back to its original value (the backend
+  // diffs against whatever's shown here).
+  if (canRequestChange.value && pendingChangeRequest.value) {
+    for (const field of pendingChangeRequest.value.fields) {
+      if (!field.isCritical) continue;
+      (editForm as unknown as Record<string, unknown>)[field.field] =
+        field.field === "expectedAttendance" ? Number(field.newValue) : field.newValue;
+    }
+  }
+
   editFieldErrors.value = {};
   editGeneralError.value = null;
   isEditingDetails.value = true;
@@ -339,6 +365,16 @@ async function submitEditedDetails(): Promise<void> {
   editGeneralError.value = null;
   editFieldErrors.value = {};
   try {
+    if (canRequestChange.value) {
+      // E3-9/E3-8: the backend applies non-critical fields immediately and
+      // holds critical ones for the coordinator — refetch so the organiser
+      // sees exactly what actually changed, not just what they submitted.
+      changeRequestResult.value = await submitChangeRequest(event.value.id, editForm);
+      event.value = await fetchEventById(String(event.value.id));
+      isEditingDetails.value = false;
+      await Promise.all([loadHistory(), loadChangeRequests()]);
+      return;
+    }
     event.value = await updateEventDetails(event.value.id, editForm);
     isEditingDetails.value = false;
     await Promise.all([clarificationPanelRef.value?.refresh(), loadHistory()]);
@@ -346,7 +382,9 @@ async function submitEditedDetails(): Promise<void> {
     if (err instanceof ValidationError) {
       editFieldErrors.value = err.fields;
     } else {
-      editGeneralError.value = "We couldn't save your response. Please try again.";
+      editGeneralError.value = canRequestChange.value
+        ? "We couldn't submit your change request. Please try again."
+        : "We couldn't save your response. Please try again.";
     }
   } finally {
     submittingEdit.value = false;
@@ -369,6 +407,100 @@ async function loadHistory(): Promise<void> {
   } finally {
     historyLoading.value = false;
   }
+}
+
+/** E3-9: every change request the organiser has raised on this event,
+ * most recent first — persists across reloads, unlike changeRequestResult
+ * (which only covers the submission that just happened). */
+const changeRequests = ref<ChangeRequestEntry[]>([]);
+
+async function loadChangeRequests(): Promise<void> {
+  // E3-8 AC2/AC4: the assigned coordinator sees the same list, with impact
+  // data attached to a Pending request (the backend scopes that itself).
+  if (!event.value || !(isOwnerView.value || isAssignedCoordinator.value)) return;
+  try {
+    changeRequests.value = await fetchChangeRequests(event.value.id);
+  } catch {
+    // Non-critical — the rest of the page still works without this.
+    changeRequests.value = [];
+  }
+}
+
+/** The most recent change request, if any — what the highlighted form below reflects. */
+const latestChangeRequest = computed(() => changeRequests.value[0] ?? null);
+/** E3-8 AC2/AC4: the open request the assigned coordinator reviews. */
+const pendingChangeRequest = computed(() => changeRequests.value.find((r) => r.status === "Pending") ?? null);
+/**
+ * E3-9: an Approved request with decided_by null was resolved by the
+ * system, not a coordinator (E3-11 isn't built, so there's no other way
+ * to become Approved yet) — but "withdrawn" (every held field reverted)
+ * and "auto-applied" (nothing critical was ever touched) read very
+ * differently, and both would otherwise show as a bare, ambiguous
+ * "Approved". The backend stamps decisionReason with one of two fixed
+ * prefixes so both sides can tell which happened.
+ */
+function isWithdrawn(request: ChangeRequestEntry | null): boolean {
+  return !!request && request.status === "Auto-Withdrawn";
+}
+/**
+ * Unlike withdrawal, "Approved" is accurate here regardless of who/what
+ * approved it — decided_by (null vs set) already tells system from a
+ * future coordinator decision (E3-11), so this stays a reason-text check
+ * rather than its own status.
+ */
+function isAutoApplied(request: ChangeRequestEntry | null): boolean {
+  return !!request && request.status === "Approved" && !!request.decisionReason?.startsWith("Applied automatically");
+}
+/**
+ * The coordinator's card shows the open request, or — only while it's
+ * still the most recent one — a request the system just resolved on its
+ * own (withdrawn or auto-applied), so it doesn't silently vanish without
+ * the coordinator ever knowing it happened.
+ */
+const coordinatorChangeRequest = computed(() => {
+  if (pendingChangeRequest.value) return pendingChangeRequest.value;
+  const latest = latestChangeRequest.value;
+  return isWithdrawn(latest) || isAutoApplied(latest) ? latest : null;
+});
+const changedFieldMap = computed(() => {
+  const map = new Map<string, ChangeRequestFieldEntry>();
+  for (const field of latestChangeRequest.value?.fields ?? []) map.set(field.field, field);
+  return map;
+});
+
+/** Same fields as the edit form, labelled for a read-only display. */
+const CHANGE_REQUEST_FIELD_LABELS: Record<keyof EventRequestPayload, string> = {
+  name: "Title",
+  purpose: "Purpose",
+  description: "Description",
+  proposedDate: "Proposed date",
+  startTime: "Start time",
+  endTime: "End time",
+  expectedAttendance: "Expected attendance",
+  venue: "Venue Requirements",
+  accessibility: "Accessibility Needs",
+  equipment: "Equipment Requirements",
+  technicalSupport: "Technical Support",
+  registrationNeeded: "Registration Needs",
+};
+
+function changeRequestBadgeClass(request: ChangeRequestEntry): string {
+  if (request.status === "Auto-Withdrawn") return "badge-neutral";
+  if (request.status === "Approved") return "status-success";
+  if (request.status === "Rejected") return "status-error";
+  return "status-warning"; // Pending
+}
+
+/** "Auto-Withdrawn" reads friendlier to the user as plain "Withdrawn". */
+function changeRequestBadgeLabel(request: ChangeRequestEntry): string {
+  return request.status === "Auto-Withdrawn" ? "Withdrawn" : request.status;
+}
+
+function changeRequestFieldDisplayValue(field: string): string {
+  const details = asSubmittedDetails(event.value!.submitted_details);
+  const value = (details as Record<string, unknown>)[field];
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return value === undefined || value === null || value === "" ? "—" : String(value);
 }
 
 /**
@@ -648,7 +780,7 @@ onMounted(async () => {
     const [eventData, user] = await Promise.all([fetchEventById(id), getCurrentUser()]);
     event.value = eventData;
     currentUser.value = user;
-    await loadHistory();
+    await Promise.all([loadHistory(), loadChangeRequests()]);
     if (user.role === "coordinator_lead") await loadCoordinators();
     // Only an event in Planning shows the outstanding arrangements. A
     // coordinator also sees the venue requests panel at every later stage,
@@ -721,9 +853,9 @@ onMounted(async () => {
                 <div class="details-card">
                   <div class="section-header">
                     <h2 class="section-title">Event Details</h2>
-                    <button v-if="(canRespondToClarification || canEditDirectly || canCoordinatorEdit) && !isEditingDetails" type="button"
-                      class="btn-icon" :title="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
-                      :aria-label="canRespondToClarification ? 'Edit & respond' : 'Edit request'"
+                    <button v-if="(canRespondToClarification || canEditDirectly || canCoordinatorEdit || canRequestChange) && !isEditingDetails" type="button"
+                      class="btn-icon" :title="canRespondToClarification ? 'Edit & respond' : canRequestChange ? 'Request a change' : 'Edit request'"
+                      :aria-label="canRespondToClarification ? 'Edit & respond' : canRequestChange ? 'Request a change' : 'Edit request'"
                       @click="startEditingDetails">
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
                         stroke="currentColor" class="btn-icon__svg">
@@ -735,6 +867,25 @@ onMounted(async () => {
                   <p v-if="editBlockedMessage && !isEditingDetails" class="body-small muted edit-blocked-note">
                     {{ editBlockedMessage }}
                   </p>
+                  <p v-if="canRequestChange && !isEditingDetails && !changeRequestResult" class="body-small muted edit-blocked-note">
+                    This event is Confirmed. Use the edit icon to request a change — non-critical fields apply
+                    immediately, critical fields (date/time, attendance, venue, equipment, accessibility) are held for
+                    your coordinator to review.
+                  </p>
+                  <div v-if="changeRequestResult" class="change-request-result">
+                    <p v-if="changeRequestResult.applied.length > 0" class="body-small">
+                      Applied immediately: <strong>{{ changeRequestResult.applied.join(", ") }}</strong>
+                    </p>
+                    <p v-if="changeRequestResult.held.length > 0" class="body-small">
+                      Held for your coordinator's review: <strong>{{ changeRequestResult.held.join(", ") }}</strong>
+                    </p>
+                    <p v-if="changeRequestResult.reverted.length > 0" class="body-small">
+                      No longer pending (back to how it was): <strong>{{ changeRequestResult.reverted.join(", ") }}</strong>
+                    </p>
+                    <p v-if="changeRequestResult.autoResolved" class="body-small muted">
+                      Nothing is pending on this event anymore.
+                    </p>
+                  </div>
                   <div class="field-row field-row-3">
                     <div class="field">
                       <p class="body-small muted mb-1">Event Requestor</p>
@@ -893,7 +1044,7 @@ onMounted(async () => {
                     <div class="edit-actions">
                       <button type="button" class="btn btn-primary" :disabled="submittingEdit"
                         @click="submitEditedDetails">
-                        {{ submittingEdit ? "Submitting…" : "Submit response" }}
+                        {{ submittingEdit ? "Submitting…" : canRequestChange ? "Submit change request" : "Submit response" }}
                       </button>
                       <button type="button" class="btn btn-secondary" :disabled="submittingEdit"
                         @click="cancelEditingDetails">
@@ -950,6 +1101,106 @@ onMounted(async () => {
       Cancel event
     </button>
   </div>
+</div>
+
+<!-- E3-9: the organiser's own change requests on this event — the entire
+     form as submitted, with whatever the latest request touched
+     highlighted. Not the coordinator's decision screen (E3-11). -->
+<div v-if="isOwnerView && latestChangeRequest" class="details-card change-request-card">
+  <div class="section-header">
+    <h2 class="section-title">Change request</h2>
+    <span class="badge" :class="changeRequestBadgeClass(latestChangeRequest)">{{ changeRequestBadgeLabel(latestChangeRequest) }}</span>
+  </div>
+  <p class="body-small muted mb-1">Submitted {{ formatDate(latestChangeRequest.createdAt) }}</p>
+  <p v-if="isWithdrawn(latestChangeRequest)" class="body-small muted change-request-card__note">
+    Automatically withdrawn — you took every held field back to how it was before your coordinator reviewed it, so
+    there's nothing pending anymore.
+  </p>
+  <p v-else-if="isAutoApplied(latestChangeRequest)" class="body-small muted change-request-card__note">
+    Applied automatically — none of the changed fields needed your coordinator's review.
+  </p>
+  <p v-else-if="latestChangeRequest.status === 'Pending'" class="body-small muted change-request-card__note">
+    Fields below marked <em>Requested</em> are still awaiting your coordinator's review; everything else already
+    applied.
+  </p>
+  <p v-else-if="latestChangeRequest.status === 'Rejected'" class="body-small error-text change-request-card__note">
+    Rejected{{ latestChangeRequest.decisionReason ? `: ${latestChangeRequest.decisionReason}` : "." }}
+  </p>
+  <div class="change-request-grid">
+    <div v-for="(label, field) in CHANGE_REQUEST_FIELD_LABELS" :key="field" class="field"
+      :class="{ 'field-changed': changedFieldMap.has(field) }">
+      <p class="body-small muted mb-1">{{ label }}</p>
+      <p class="body-default field-value">{{ changeRequestFieldDisplayValue(field) }}</p>
+      <p v-if="changedFieldMap.get(field)?.isCritical && latestChangeRequest.status === 'Pending'"
+        class="body-small change-request-card__requested">
+        Requested: {{ changedFieldMap.get(field)!.newValue }}
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- E3-8 AC2/AC4: the assigned coordinator's read-only review of a held
+     change request — affected bookings/equipment/registrations, and a
+     capacity conflict if the requested attendance exceeds a booked
+     venue's capacity. No approve/reject here (E3-11, not built). -->
+<div v-if="isAssignedCoordinator && coordinatorChangeRequest" class="details-card change-request-card">
+  <div class="section-header">
+    <h2 class="section-title">
+      {{ pendingChangeRequest ? "Change request pending your review" : "Change request" }}
+    </h2>
+    <span class="badge" :class="changeRequestBadgeClass(coordinatorChangeRequest)">{{ changeRequestBadgeLabel(coordinatorChangeRequest) }}</span>
+  </div>
+  <p class="body-small muted mb-1">Submitted {{ formatDate(coordinatorChangeRequest.createdAt) }}</p>
+
+  <template v-if="isWithdrawn(coordinatorChangeRequest)">
+    <p class="body-small muted change-request-card__note">
+      {{ coordinatorChangeRequest.decisionReason }} Nothing is pending on this event anymore.
+    </p>
+  </template>
+  <template v-else-if="isAutoApplied(coordinatorChangeRequest)">
+    <p class="body-small muted change-request-card__note">
+      {{ coordinatorChangeRequest.decisionReason }} Nothing needed your review.
+    </p>
+  </template>
+  <template v-else>
+    <div class="change-request-grid">
+      <div v-for="field in coordinatorChangeRequest.fields.filter((f) => f.isCritical)" :key="field.field" class="field">
+        <p class="body-small muted mb-1">{{ CHANGE_REQUEST_FIELD_LABELS[field.field as keyof EventRequestPayload] ?? field.field }}</p>
+        <p class="body-default field-value">{{ field.oldValue ?? "—" }} → {{ field.newValue }}</p>
+      </div>
+    </div>
+    <template v-if="coordinatorChangeRequest.impact">
+      <hr class="divider" />
+      <p v-if="coordinatorChangeRequest.impact.capacityConflict" class="body-small error-text change-request-card__note">
+        Capacity conflict: {{ coordinatorChangeRequest.impact.capacityConflict.venueName }} holds
+        {{ coordinatorChangeRequest.impact.capacityConflict.capacity }}, but
+        {{ coordinatorChangeRequest.impact.capacityConflict.requestedAttendance }} is requested.
+      </p>
+      <p class="body-small muted mb-1">
+        Registrations: {{ coordinatorChangeRequest.impact.registrations.registeredCount }} registered of
+        {{ coordinatorChangeRequest.impact.registrations.total }} total.
+      </p>
+      <p class="body-small muted mb-1">
+        Venue booking(s):
+        <span v-if="coordinatorChangeRequest.impact.bookings.length === 0">none.</span>
+        <span v-else>
+          <span v-for="(booking, index) in coordinatorChangeRequest.impact.bookings" :key="booking.id">
+            {{ booking.venue?.name ?? "Unknown venue" }} ({{ booking.status }}){{ index < coordinatorChangeRequest.impact.bookings.length - 1 ? ", " : "" }}
+          </span>
+        </span>
+      </p>
+      <p class="body-small muted">
+        Equipment reservation(s):
+        <span v-if="coordinatorChangeRequest.impact.equipmentReservations.length === 0">none.</span>
+        <span v-else>
+          <span v-for="(reservation, index) in coordinatorChangeRequest.impact.equipmentReservations" :key="reservation.id">
+            Request #{{ reservation.id }} ({{ reservation.status }}){{ index < coordinatorChangeRequest.impact.equipmentReservations.length - 1 ? ", " : "" }}
+          </span>
+        </span>
+      </p>
+    </template>
+    <p v-else class="body-small muted">Affected arrangements couldn't be loaded right now.</p>
+  </template>
 </div>
 
 <EventStatusTracker v-if="event.status === 'Planning'" :status="event.status"
@@ -1466,6 +1717,42 @@ onMounted(async () => {
 
 .edit-blocked-note {
   margin: 0 0 var(--spacing-16);
+}
+
+.change-request-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin: 0 0 var(--spacing-16);
+  padding: var(--spacing-12);
+  border-radius: var(--radius-sm);
+  background: var(--color-grey-50);
+}
+
+.change-request-card .section-header {
+  margin-bottom: var(--spacing-4);
+}
+
+.change-request-card__note {
+  margin: 0 0 var(--spacing-16);
+}
+
+.change-request-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-16) var(--spacing-24);
+}
+
+.field-changed {
+  padding: var(--spacing-8);
+  margin: calc(var(--spacing-8) * -1);
+  border-radius: var(--radius-xs);
+  background: var(--color-warning-100);
+}
+
+.change-request-card__requested {
+  color: var(--color-warning-800);
+  margin: var(--spacing-4) 0 0;
 }
 
 .history-card {

@@ -506,10 +506,25 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
       items: [
         { id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0 },
       ],
-      bookingInfoEvents: [{ id: 7, name: "Alumni Gala", proposedDate: "2026-02-01", equipment: "2 projectors" }],
+      bookingInfoEvents: [
+        {
+          id: 7,
+          name: "Alumni Gala",
+          proposedDate: "2026-02-01",
+          startTime: "18:00",
+          endTime: "21:00",
+          venue: "Grand Ballroom",
+          equipment: "2 projectors",
+          technicalSupport: "Wireless mics",
+          coordinatorId: "COORD-0001",
+          expectedAttendance: 300,
+          organiser: { name: "Pat Organiser" },
+        },
+      ],
     });
     const res = await request(app).get("/api/equipment-requests");
     expect(res.status).toBe(200);
+    // E5-1 AC1: only the event's name, date, time and venue reach Technical Support.
     expect(res.body.equipmentRequests).toEqual([
       {
         id: 55,
@@ -518,7 +533,14 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
         items: [{ id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
-        event: { id: 7, name: "Alumni Gala", proposedDate: "2026-02-01", equipment: "2 projectors" },
+        event: {
+          id: 7,
+          name: "Alumni Gala",
+          proposedDate: "2026-02-01",
+          startTime: "18:00",
+          endTime: "21:00",
+          venue: "Grand Ballroom",
+        },
       },
     ]);
   });
@@ -562,6 +584,108 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
     const res = await request(app).get("/api/equipment-requests");
     expect(res.status).toBe(200);
     expect(res.body.equipmentRequests[0].items[0].reservationFlag).toEqual(NO_FLAG);
+  });
+});
+
+describe("GET /api/equipment-requests/event/:eventId (E5-1 AC1, AC2)", () => {
+  const infoEvent = {
+    id: 7,
+    name: "Alumni Gala",
+    proposedDate: "2026-02-01",
+    startTime: "18:00",
+    endTime: "21:00",
+    venue: "Grand Ballroom",
+    equipment: "2 projectors",
+    technicalSupport: "  Wireless mics and a lectern mic.  ",
+    coordinatorId: "COORD-0001",
+    expectedAttendance: 300,
+    accessibility: "Step-free entry",
+  };
+  const requestRow = { id: 55, event_id: 7, status: "Requested", created_at: "2026-01-01T00:00:00Z" };
+  const itemRow = { id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0 };
+
+  it("shows the equipment, quantities, technical requirements and only the event's name, date, time and venue", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      requests: [requestRow],
+      items: [itemRow],
+      bookingInfoEvents: [infoEvent],
+    });
+    const res = await request(app).get("/api/equipment-requests/event/7");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      event: {
+        id: 7,
+        name: "Alumni Gala",
+        proposedDate: "2026-02-01",
+        startTime: "18:00",
+        endTime: "21:00",
+        venue: "Grand Ballroom",
+      },
+      technicalRequirements: "Wireless mics and a lectern mic.",
+      equipmentRequests: [
+        {
+          id: 55,
+          eventId: 7,
+          status: "Requested",
+          fulfillmentNote: null,
+          createdAt: "2026-01-01T00:00:00Z",
+          items: [{ id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
+        },
+      ],
+    });
+    // Nothing else about the event or its people leaks through.
+    expect(JSON.stringify(res.body)).not.toMatch(/COORD-0001|expectedAttendance|accessibility|Step-free/);
+  });
+
+  it("has no technical requirements when the organiser wrote none", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      requests: [requestRow],
+      items: [itemRow],
+      bookingInfoEvents: [{ ...infoEvent, technicalSupport: "   " }],
+    });
+    const res = await request(app).get("/api/equipment-requests/event/7");
+
+    expect(res.status).toBe(200);
+    expect(res.body.technicalRequirements).toBeNull();
+  });
+
+  it("denies access to an event with no equipment request", async () => {
+    const { app } = buildApp({ user: technicalSupport, requests: [], bookingInfoEvents: [infoEvent] });
+    const res = await request(app).get("/api/equipment-requests/event/7");
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "Access denied" });
+  });
+
+  it("denies a malformed event id", async () => {
+    const { app } = buildApp({ user: technicalSupport });
+    const res = await request(app).get("/api/equipment-requests/event/abc");
+
+    expect(res.status).toBe(403);
+  });
+
+  it.each([
+    ["coordinator", coordinator],
+    ["organiser", { id: "ORG-0001", role: "organiser" }],
+    ["venue_staff", { id: "VEN-0001", role: "venue_staff" }],
+  ])("is for Technical Support only: denies %s", async (_role, user) => {
+    const { app } = buildApp({ user, requests: [requestRow], items: [itemRow], bookingInfoEvents: [infoEvent] });
+    const res = await request(app).get("/api/equipment-requests/event/7");
+
+    expect(res.status).toBe(403);
+  });
+
+  it("502s when events-service can't be reached for the event's timing", async () => {
+    const { app, fetchMock } = buildApp({ user: technicalSupport, requests: [requestRow], items: [itemRow] });
+    fetchMock.mockImplementation(async () => {
+      throw new Error("down");
+    });
+    const res = await request(app).get("/api/equipment-requests/event/7");
+
+    expect(res.status).toBe(502);
   });
 });
 

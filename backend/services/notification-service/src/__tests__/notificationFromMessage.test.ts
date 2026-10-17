@@ -262,6 +262,58 @@ describe("handleInboundMessage", () => {
     expect(insert).toHaveBeenCalledWith([expect.objectContaining({ recipient_id: "COORD-0001", title: "Request edited" })]);
   });
 
+  it("renders change.requested with the affected fields", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "change.requested",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: { eventName: "Nut Festival", changeRequestId: 55, fields: ["venue", "description"] },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "Change request raised",
+        body: expect.stringContaining("venue, description"),
+      }),
+    ]);
+  });
+
+  it("renders change.withdrawn differently for the organiser and the coordinator", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "change.withdrawn",
+        eventId: 7,
+        actorId: "ORG-0001",
+        recipients: { userIds: ["ORG-0001", "COORD-0001"], roles: [] },
+        data: { eventName: "Nut Festival", changeRequestId: 55, fields: ["venue"] },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "ORG-0001",
+        title: "Change request withdrawn",
+        body: expect.stringContaining("Your requested change"),
+      }),
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "Change request withdrawn",
+        body: expect.stringContaining("The organiser's requested change"),
+      }),
+    ]);
+  });
+
   it("renders clarification.requested with the message", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();

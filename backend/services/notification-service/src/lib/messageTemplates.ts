@@ -390,6 +390,44 @@ const TEMPLATES: Record<string, Template> = {
         : `${eventName}'s equipment request is now ${status}.`;
     return { title: `Equipment request ${status.toLowerCase()}`, body, link: eventLink(msg) };
   },
+
+  /** RabbitMQ.md #12 (E3-9 AC1) — to the assigned coordinator. */
+  "change.requested": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    const fields = Array.isArray(msg.data.fields) ? (msg.data.fields as string[]) : [];
+    const fieldList = fields.length > 0 ? fields.join(", ") : "its details";
+    return {
+      title: "Change request raised",
+      body: `The organiser of "${eventName}" requested a change to ${fieldList}.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /**
+   * E3-9: a pending change request auto-resolved because every held field
+   * was reverted back to its committed value — nothing's left for the
+   * coordinator to decide. Organiser and coordinator read different
+   * sentences about the same event.
+   */
+  "change.withdrawn": (msg, recipientId) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    const fields = Array.isArray(msg.data.fields) ? (msg.data.fields as string[]) : [];
+    const fieldList = fields.length > 0 ? fields.join(", ") : "its fields";
+    const link = eventLink(msg);
+
+    if (recipientId === msg.actorId) {
+      return {
+        title: "Change request withdrawn",
+        body: `Your requested change to ${fieldList} on "${eventName}" is back to how it was — nothing is pending anymore.`,
+        link,
+      };
+    }
+    return {
+      title: "Change request withdrawn",
+      body: `The organiser's requested change to ${fieldList} on "${eventName}" was reverted — there's nothing left for you to review.`,
+      link,
+    };
+  },
 };
 
 /** `null` for a type with no template yet — the caller logs and skips it. */

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
-import { fetchEvent, fetchEventBookingInfo, type EquipmentBookingInfo } from "../lib/eventsClient.js";
+import { fetchEvent, fetchEventBookingInfo, toSupportEventInfo, type EquipmentBookingInfo } from "../lib/eventsClient.js";
 import { claimUnits, recordClaims, releaseUnitsForItem } from "../lib/equipmentConflicts.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { computeReservationFlags, type ReservationFlag } from "../lib/reservationFlags.js";
@@ -347,8 +347,90 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
   res.json({
     equipmentRequests: (requests as RequestRow[]).map((r) => ({
       ...toRequest(r, allItems, flagsByItemId),
-      event: eventsById.get(r.event_id) ?? null,
+      // Whitelisted: only the event's name, date, time and venue reach the browser.
+      event: eventsById.has(r.event_id) ? toSupportEventInfo(eventsById.get(r.event_id)!) : null,
     })),
+  });
+});
+
+/**
+ * E5-1 AC1/AC2: Technical Support open one event's equipment requests. They
+ * see the requested equipment, quantities and the organiser's technical
+ * requirements, plus the event's name, date, time and venue, and nothing
+ * else about the event. An event with no equipment request is refused the
+ * same way an unknown one is, so this route can't be used to look at events
+ * that have nothing to do with Technical Support. Declared before
+ * PATCH /:id only for readability; the paths don't overlap.
+ */
+equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+  if (user.role !== "technical_support") {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const rawEventId = Array.isArray(req.params.eventId) ? req.params.eventId[0] : req.params.eventId;
+  if (!isPositiveInteger(rawEventId)) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+  const eventId = Number(rawEventId);
+
+  const { data: requests, error: requestsError } = await supabase
+    .from("equipment_requests")
+    .select("id, event_id, status, fulfillment_note, created_at")
+    .eq("event_id", eventId)
+    .order("created_at", { ascending: true });
+
+  if (requestsError || !requests) {
+    res.status(500).json({ error: "Failed to load equipment requests" });
+    return;
+  }
+
+  // AC2: nothing requested for this event, so there is nothing for Technical Support to open.
+  if (requests.length === 0) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const requestIds = (requests as RequestRow[]).map((r) => r.id);
+  const { data: itemRows, error: itemRowsError } = await supabase
+    .from("equipment_request_items")
+    .select(ITEM_COLUMNS)
+    .in("request_id", requestIds);
+
+  if (itemRowsError) {
+    res.status(500).json({ error: "Failed to load equipment items" });
+    return;
+  }
+
+  const infoResult = await fetchEventBookingInfo([eventId], req.headers.authorization!);
+  if (infoResult.status === "error") {
+    res.status(502).json({ error: "Failed to load the event" });
+    return;
+  }
+  const info = infoResult.events.find((event) => event.id === eventId);
+  if (!info) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  // AC3: same re-check as the other GET handlers above.
+  const eventWindow = windowOf(info);
+  const allEventItems = (itemRows ?? []) as ItemRow[];
+  const itemEventIds = new Map(allEventItems.map((item) => [item.id, eventId]));
+  const knownWindows = eventWindow ? new Map([[eventId, eventWindow]]) : new Map<number, OccupiedWindow>();
+  const flagsByItemId = await computeReservationFlags(supabase, itemEventIds, knownWindows, req.headers.authorization!);
+
+  res.json({
+    event: toSupportEventInfo(info),
+    // The organiser's own words on what technical support the event needs (AC1).
+    technicalRequirements: info.technicalSupport?.trim() ? info.technicalSupport.trim() : null,
+    equipmentRequests: (requests as RequestRow[]).map((r) => toRequest(r, allEventItems, flagsByItemId)),
   });
 });
 
