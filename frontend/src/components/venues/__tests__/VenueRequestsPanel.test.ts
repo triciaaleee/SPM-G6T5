@@ -96,12 +96,13 @@ describe("VenueRequestsPanel", () => {
       ["Requested", "Withdraw"],
       ["On Hold", "Withdraw"],
       ["Approved", "Release"],
+      ["Replacement Required", "Release"],
     ] as const)("shows %s", async (status, label) => {
       const wrapper = mountPanel({ bookings: [makeBooking({ status })], canWithdraw: true });
       expect(wrapper.find(".action-btn").text()).toBe(label);
     });
 
-    it.each(["Rejected", "Expired", "Withdrawn", "Replacement Required"] as const)(
+    it.each(["Rejected", "Expired", "Withdrawn"] as const)(
       "offers no action for a %s booking",
       (status) => {
         const wrapper = mountPanel({ bookings: [makeBooking({ status })], canWithdraw: true });
@@ -124,6 +125,14 @@ describe("VenueRequestsPanel", () => {
       await wrapper.find(".action-btn").trigger("click");
 
       expect(wrapper.find(".modal-title").text()).toBe("Release this booking?");
+    });
+
+    it("E4-15 AC3: shows replacement-specific wording for a Replacement Required booking's dialog", async () => {
+      const wrapper = mountPanel({ bookings: [makeBooking({ status: "Replacement Required" })], canWithdraw: true });
+      await wrapper.find(".action-btn").trigger("click");
+
+      expect(wrapper.find(".modal-title").text()).toBe("Release this booking?");
+      expect(wrapper.text()).toContain("no longer available");
     });
 
     it("closes the dialog without acting when Cancel is clicked", async () => {
@@ -158,6 +167,21 @@ describe("VenueRequestsPanel", () => {
         .spyOn(venuesApi, "releaseVenueBooking")
         .mockResolvedValue({ booking: { id: 900, status: "Withdrawn", venue: null as never }, staffNotified: true });
       const wrapper = mountPanel({ bookings: [makeBooking({ status: "Approved" })], canWithdraw: true });
+      await wrapper.find(".action-btn").trigger("click");
+
+      await wrapper.find(".modal-button--danger").trigger("click");
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(release).toHaveBeenCalledWith(900);
+      expect(wrapper.emitted("changed")).toHaveLength(1);
+    });
+
+    it("E4-15 AC3: releases a Replacement Required booking once confirmed", async () => {
+      const release = vi
+        .spyOn(venuesApi, "releaseVenueBooking")
+        .mockResolvedValue({ booking: { id: 900, status: "Withdrawn", venue: null as never }, staffNotified: true });
+      const wrapper = mountPanel({ bookings: [makeBooking({ status: "Replacement Required" })], canWithdraw: true });
       await wrapper.find(".action-btn").trigger("click");
 
       await wrapper.find(".modal-button--danger").trigger("click");

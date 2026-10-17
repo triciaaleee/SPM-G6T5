@@ -5,9 +5,11 @@
  * not interchangeable:
  *  - "withdraw" — a pending request (`Requested` or `On Hold`) is dropped.
  *    Any hold is released and another venue can be requested for the event.
- *  - "release" — a confirmed (`Approved`) booking is given up. Attempting
- *    to *withdraw* an Approved booking is refused and the coordinator is
- *    pointed at "release" instead (AC2); the reverse also holds.
+ *  - "release" — a confirmed (`Approved`) booking is given up, or a
+ *    `Replacement Required` one is given up once the coordinator has found
+ *    a replacement venue (E4-15 AC3). Attempting to *withdraw* an Approved
+ *    booking is refused and the coordinator is pointed at "release" instead
+ *    (AC2); the reverse also holds.
  *
  * Other bookings of the same event are untouched (AC3): this only ever
  * updates the one row by id.
@@ -64,7 +66,7 @@ function checkAction(action: WithdrawalAction, status: BookingRow["status"]): st
   }
 
   // action === "release"
-  if (status === "Approved") return null;
+  if (status === "Approved" || status === "Replacement Required") return null;
   if (status === "Requested" || status === "On Hold") {
     return "This booking isn't Approved yet — withdraw the request instead of releasing it.";
   }
