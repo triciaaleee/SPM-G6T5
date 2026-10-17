@@ -293,16 +293,24 @@ describe("POST /api/venues/bookings/:bookingId/release", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it.each(["Rejected", "Expired", "Withdrawn", "Replacement Required"])(
-    "refuses to release a %s booking",
-    async (status) => {
-      const { app, update } = buildApp({ booking: { status } });
-      const res = await release(app);
+  it.each(["Rejected", "Expired", "Withdrawn"])("refuses to release a %s booking", async (status) => {
+    const { app, update } = buildApp({ booking: { status } });
+    const res = await release(app);
 
-      expect(res.status).toBe(409);
-      expect(update).not.toHaveBeenCalled();
-    },
-  );
+    expect(res.status).toBe(409);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("AC3: releases a Replacement Required booking once a replacement is requested", async () => {
+    const { app, update } = buildApp({ booking: { status: "Replacement Required" } });
+    const res = await release(app);
+
+    expect(res.status).toBe(200);
+    expect(res.body.booking).toMatchObject({ id: 900, status: "Withdrawn" });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Withdrawn", hold_expires_at: null }),
+    );
+  });
 
   it("rejects a coordinator who isn't assigned to the event", async () => {
     const { app } = buildApp({ booking: { status: "Approved" }, eventCoordinatorId: "COORD-0002" });
