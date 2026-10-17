@@ -72,10 +72,14 @@ function formatMoment(value: string | null): string {
   });
 }
 
-/** AC1 vs AC2: a pending request/hold is withdrawn; a confirmed one is released. */
+/**
+ * AC1 vs AC2: a pending request/hold is withdrawn; a confirmed one is
+ * released. E4-15 AC3: a Replacement Required booking is also released,
+ * once the coordinator has requested a replacement venue.
+ */
 function actionFor(status: string): "withdraw" | "release" | null {
   if (status === "Requested" || status === "On Hold") return "withdraw";
-  if (status === "Approved") return "release";
+  if (status === "Approved" || status === "Replacement Required") return "release";
   return null;
 }
 
@@ -93,11 +97,11 @@ const pendingActionKind = computed(() => (pendingAction.value ? actionFor(pendin
 const pendingActionCopy = computed(() => {
   const venueName = pendingAction.value?.venue?.name ?? "this venue";
   if (pendingActionKind.value === "release") {
-    return {
-      title: "Release this booking?",
-      body: `${venueName} is Approved for this event. Releasing it frees the venue for other requests — this cannot be undone.`,
-      confirmLabel: "Release",
-    };
+    const body =
+      pendingAction.value?.status === "Replacement Required"
+        ? `${venueName} is no longer available for this event. Releasing it clears the booking now that a replacement has been requested — this cannot be undone.`
+        : `${venueName} is Approved for this event. Releasing it frees the venue for other requests — this cannot be undone.`;
+    return { title: "Release this booking?", body, confirmLabel: "Release" };
   }
   return {
     title: "Withdraw this request?",
