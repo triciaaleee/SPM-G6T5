@@ -9,7 +9,11 @@
 export interface ArrangementBooking {
   id: number;
   status: string;
-  venue: { id: number; name: string } | null;
+  // E3-8 AC4: capacity is only on the venue since Week 7 change 1 (venue-
+  // service's eventBookings route) — null if that service's response
+  // doesn't have it (e.g. a rolling deploy), so capacity checks degrade
+  // rather than throw.
+  venue: { id: number; name: string; capacity?: number | null } | null;
 }
 
 export interface ArrangementEquipmentItem {
@@ -54,7 +58,14 @@ export async function fetchEventVenueBookings(
     `${venueServiceUrl()}/api/venues/events/${eventId}/bookings`,
     authorization,
   );
-  return result.status === "ok" ? { status: "ok", value: result.value.bookings ?? [] } : result;
+  if (result.status !== "ok") return result;
+  return {
+    status: "ok",
+    value: (result.value.bookings ?? []).map((booking) => ({
+      ...booking,
+      venue: booking.venue ? { ...booking.venue, capacity: booking.venue.capacity ?? null } : null,
+    })),
+  };
 }
 
 /** Every equipment request recorded for the event, with its items. */

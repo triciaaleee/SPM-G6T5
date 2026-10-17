@@ -184,6 +184,89 @@ export async function updateEventDetails(id: number, payload: EventRequestPayloa
   return body.event as EventSummary;
 }
 
+export interface ChangeRequestResult {
+  changeRequestId: number | null;
+  /** Non-critical fields — written immediately. */
+  applied: string[];
+  /** Critical fields newly held or overwritten this submission (for the coordinator to decide, E3-11 not built yet). */
+  held: string[];
+  /** Critical fields put back to their committed value, no longer held. */
+  reverted: string[];
+  /** True when reverting emptied the request out entirely — it's now Approved, nothing pending. */
+  autoResolved: boolean;
+  notificationsFailed: boolean;
+}
+
+/**
+ * E3-9: raises a change request once an event is Confirmed — PATCH /:id
+ * is blocked past Planning, so this is the only edit path left. Only the
+ * fields present in `fields` are sent; E3-8 decides server-side which of
+ * them apply immediately and which are held for the coordinator.
+ */
+export async function submitChangeRequest(
+  id: number,
+  fields: Partial<EventRequestPayload>,
+): Promise<ChangeRequestResult> {
+  const res = await fetch(`${apiBase}/${id}/change-requests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify(fields),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json();
+
+  if (res.status === 400) {
+    throw new ValidationError(body.fields ?? {});
+  }
+  if (!res.ok) {
+    throw new Error(body.error ?? "We couldn't submit your change request. Please try again.");
+  }
+
+  return body as ChangeRequestResult;
+}
+
+export interface ChangeRequestFieldEntry {
+  field: string;
+  oldValue: string | null;
+  newValue: string;
+  isCritical: boolean;
+}
+
+export interface ChangeRequestImpact {
+  bookings: { id: number; status: string; venue: { id: number; name: string } | null }[];
+  equipmentReservations: { id: number; status: string; items: { id: number; equipmentType: string; quantity: number; quantityFulfilled: number }[] }[];
+  registrations: { registeredCount: number; total: number };
+  capacityConflict: { bookingId: number; venueName: string; capacity: number; requestedAttendance: number } | null;
+}
+
+export interface ChangeRequestEntry {
+  id: number;
+  /** "Auto-Withdrawn": every held field got reverted before anyone decided — nothing was actually approved. */
+  status: "Pending" | "Approved" | "Rejected" | "Auto-Withdrawn";
+  decidedAt: string | null;
+  decisionReason: string | null;
+  createdAt: string;
+  fields: ChangeRequestFieldEntry[];
+  /** E3-8 AC2/AC4: only present (non-null) for a Pending request. */
+  impact: ChangeRequestImpact | null;
+}
+
+/**
+ * E3-9: the organiser's own view of every change request they've raised on
+ * this event. E3-8 AC2/AC4: the assigned coordinator gets the same list,
+ * with an impact assessment attached to each Pending request — not E3-10's
+ * own assessment screen (not built), just enough to satisfy those two ACs.
+ */
+export async function fetchChangeRequests(id: number): Promise<ChangeRequestEntry[]> {
+  const res = await fetch(`${apiBase}/${id}/change-requests`, { headers: await authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) throw new Error("Failed to load change requests");
+  const body = await res.json();
+  return body.changeRequests as ChangeRequestEntry[];
+}
+
 export interface EventHistoryEntry {
   id: number;
   field: string;
