@@ -8,8 +8,8 @@
  * this isn't scoped to one booking or gated by who owns it — the
  * organiser already decided to cancel the whole event, so every booking
  * still active (not already Rejected/Expired/Withdrawn) is released in
- * one pass, including `Replacement Required` (which bookingWithdrawal.ts
- * never releases on its own).
+ * one pass, including `Replacement Required` (which a coordinator can
+ * also release individually via bookingWithdrawal.ts, E4-15 AC3).
  */
 import type { AuthedRequest } from "../middleware/auth.js";
 import { BOOKING_COLUMNS, type BookingRow } from "./bookingDecisions.js";
