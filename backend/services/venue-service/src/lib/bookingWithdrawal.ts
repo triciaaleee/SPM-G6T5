@@ -22,6 +22,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { BOOKING_COLUMNS, type BookingRow } from "./bookingDecisions.js";
 import { fetchEvent } from "./eventsClient.js";
 import { getPublisher, type OutboundMessage } from "./rabbitPublisher.js";
+import { reconcileBufferOverlapsSafely } from "./bufferOverlapReview.js";
 
 type Supabase = NonNullable<AuthedRequest["supabase"]>;
 
@@ -154,6 +155,14 @@ export async function withdrawBooking(supabase: Supabase, input: WithdrawalInput
   const eventName = typeof details.name === "string" && details.name ? details.name : `Event #${booking.event_id}`;
   const message = withdrawalMessage(venue, updated, input.action, input.coordinatorId, eventName);
   const staffNotified = message ? await getPublisher().publish(message) : false;
+
+  // E4-13 AC3: a withdrawn/released booking leaves UNAVAILABLE_BOOKING_STATUSES,
+  // which can resolve an overlap it was part of. Best-effort and after the
+  // write above has already landed — same stance as the publish just above.
+  await reconcileBufferOverlapsSafely(supabase, booking.venue_id, input.authorization, {
+    venueName: venue.name,
+    venueStaffId: venue.staff_id,
+  });
 
   return {
     status: "ok",
