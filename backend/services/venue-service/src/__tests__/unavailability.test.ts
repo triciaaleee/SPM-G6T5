@@ -59,6 +59,8 @@ function buildApp(
     eventsStatus?: number;
     notificationsStatus?: number;
     deleted?: { id: number }[];
+    /** E4-13: rows already in venue_buffer_overlaps before the call. */
+    storedOverlaps?: { id: number; venue_id: number; booking_id_a: number; booking_id_b: number }[];
   } = {},
 ) {
   const venueQuery = query({ data: options.venue === undefined ? venue : options.venue, error: null });
@@ -76,6 +78,29 @@ function buildApp(
     query({ data: { id: options.existing?.id ?? 1, venue_id: options.existing?.venue_id ?? 6, ...row }, error: null }),
   );
 
+  // E4-13 AC2/AC3: an in-memory venue_buffer_overlaps, read/written by
+  // reconcileBufferOverlapsSafely after a block-out save flags an Approved
+  // booking Replacement Required.
+  let overlapRows = [...(options.storedOverlaps ?? [])];
+  const overlapsTable = {
+    select: vi.fn(() => {
+      let venueId: unknown;
+      const q: any = { eq: vi.fn((_c: string, v: unknown) => { venueId = v; return q; }), order: vi.fn(() => q) };
+      q.then = (resolve: (v: unknown) => void) => resolve({ data: overlapRows.filter((r) => r.venue_id === venueId), error: null });
+      return q;
+    }),
+    insert: vi.fn((rows: any[]) => {
+      overlapRows = [...overlapRows, ...rows.map((r, i) => ({ ...r, id: 8000 + i }))];
+      return { then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }) };
+    }),
+    delete: vi.fn(() => ({
+      in: vi.fn((_c: string, ids: number[]) => {
+        overlapRows = overlapRows.filter((r) => !ids.includes(r.id));
+        return { then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }) };
+      }),
+    })),
+  };
+
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === "venues") return { select: venueQuery.select };
@@ -83,6 +108,7 @@ function buildApp(
         return { select: periodsQuery.select, insert, update: periodUpdate, delete: vi.fn(() => deleteQuery) };
       }
       if (table === "venue_bookings") return { select: bookingsQuery.select, update };
+      if (table === "venue_buffer_overlaps") return overlapsTable;
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -106,7 +132,20 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/venues/unavailability", unavailabilityRouter);
-  return { app, supabase, periodsQuery, bookingsQuery, updateQuery, insert, update, periodUpdate, fetchMock, publish };
+  return {
+    app,
+    supabase,
+    periodsQuery,
+    bookingsQuery,
+    updateQuery,
+    insert,
+    update,
+    periodUpdate,
+    fetchMock,
+    publish,
+    overlapsTable,
+    getOverlapRows: () => overlapRows,
+  };
 }
 
 afterEach(() => {
@@ -373,6 +412,37 @@ describe("POST /api/venues/unavailability (AC1 + AC2)", () => {
     expect(res.body.affected.map((b: { replacementRequired: boolean }) => b.replacementRequired)).toEqual([false, false]);
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: "booking.unavailability_clash", eventId: 1 }));
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: "booking.unavailability_clash", eventId: 2 }));
+  });
+
+  describe("E4-13 AC3: flagging Replacement Required reconciles the persisted buffer-overlap review list", () => {
+    it("removes a stale pair at the venue once the flagging update commits", async () => {
+      // A pair stored earlier for this venue that no longer matches
+      // anything findAllBufferOverlaps would compute now (the booking ids
+      // referenced aren't even in this call's live-bookings fixture).
+      const stale = { id: 7000, venue_id: 6, booking_id_a: 100, booking_id_b: 101 };
+      const { app, getOverlapRows } = buildApp({
+        storedOverlaps: [stale],
+        bookings: [{ id: 1, event_id: 1, status: "Approved" }],
+        events: [eventInfo(1, "2026-10-13", "10:00", "12:00")],
+      });
+
+      const res = await request(app).post("/api/venues/unavailability").send(fullDays);
+
+      expect(res.status).toBe(201);
+      expect(getOverlapRows()).toEqual([]);
+    });
+
+    it("never reconciles (no venue_buffer_overlaps write) when nothing was flagged", async () => {
+      const { app, overlapsTable } = buildApp({
+        bookings: [{ id: 7, event_id: 1, status: "Requested" }],
+        events: [eventInfo(1, "2026-10-13", "10:00", "12:00")],
+      });
+
+      const res = await request(app).post("/api/venues/unavailability").send(fullDays);
+
+      expect(res.status).toBe(201);
+      expect(overlapsTable.select).not.toHaveBeenCalled();
+    });
   });
 
   it("still saves, but reports it, when notification-service can't be reached", async () => {

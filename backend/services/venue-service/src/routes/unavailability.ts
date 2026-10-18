@@ -17,6 +17,7 @@ import {
   type VenueBuffers,
 } from "../lib/unavailability.js";
 import { isRealDate } from "../lib/venueSearch.js";
+import { reconcileBufferOverlapsSafely } from "../lib/bufferOverlapReview.js";
 
 /**
  * E4-3: venue staff block out periods when a venue can't be used.
@@ -208,6 +209,7 @@ async function flagAndNotify(
   period: PeriodInput,
   affected: AffectedBooking[],
   actorId: string,
+  authorization: string,
 ): Promise<{ flagged: boolean; coordinatorsNotified: number; notificationsFailed: boolean }> {
   const toFlag = affected.filter(needsReplacement).map((b) => b.bookingId);
   if (toFlag.length > 0) {
@@ -217,6 +219,13 @@ async function flagAndNotify(
       .in("id", toFlag)
       .eq("status", BOOKING_STATUS.approved);
     if (error) return { flagged: false, coordinatorsNotified: 0, notificationsFailed: false };
+
+    // E4-13 AC3: an Approved booking just flagged Replacement Required
+    // leaves UNAVAILABLE_BOOKING_STATUSES, which can resolve an overlap it
+    // was part of. Best-effort and after the write above has committed; no
+    // extra notification here since `buildMessage` below already tells
+    // this booking's coordinator about the block-out itself.
+    await reconcileBufferOverlapsSafely(supabase, venue.id, authorization);
   }
 
   const messages = affected
@@ -362,7 +371,7 @@ unavailabilityRouter.post("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const outcome = await flagAndNotify(supabase, venue, period, affected, req.user!.id);
+  const outcome = await flagAndNotify(supabase, venue, period, affected, req.user!.id, req.headers.authorization!);
   if (!outcome.flagged) {
     res.status(500).json({
       error: "The period was saved, but the affected bookings couldn't be flagged. Please try again.",
@@ -442,7 +451,7 @@ unavailabilityRouter.put("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const outcome = await flagAndNotify(supabase, venue, period, affected, req.user!.id);
+  const outcome = await flagAndNotify(supabase, venue, period, affected, req.user!.id, req.headers.authorization!);
   if (!outcome.flagged) {
     res.status(500).json({
       error: "The period was saved, but the affected bookings couldn't be flagged. Please try again.",
