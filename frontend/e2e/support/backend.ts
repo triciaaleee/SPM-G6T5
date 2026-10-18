@@ -3,6 +3,7 @@ import {
   EQUIPMENT_CATALOG_URL,
   EQUIPMENT_URL,
   EVENTS_URL,
+  NOTIFICATIONS_URL,
   REGISTRATION_URL,
   SEEDED_PASSWORD,
   VENUES_URL,
@@ -46,6 +47,21 @@ export function uniqueName(label: string): string {
 
 function uniqueEmail(label: string): string {
   return `${uniqueName(label)}@e2e.example.com`;
+}
+
+/**
+ * A far-future date that's different on every call, so two tests that each
+ * book a venue (AGENTS.md §3a: first to reach On Hold/Approved for an
+ * overlapping window wins, and the loser is rejected) never collide on the
+ * exact same event date purely because they both used eventDetails()'s
+ * fixed default. Random within a wide range rather than incrementing, so
+ * concurrent test workers can't still collide by racing the same counter.
+ */
+export function uniqueFutureDate(): string {
+  const year = 2090 + Math.floor(Math.random() * 9); // 2090–2098
+  const month = 1 + Math.floor(Math.random() * 12);
+  const day = 1 + Math.floor(Math.random() * 28); // every month has at least 28 days
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 class ApiError extends Error {
@@ -264,6 +280,20 @@ export async function searchVenues(coordinator: Session): Promise<VenueRow[]> {
   return body.venues;
 }
 
+/**
+ * The signed-in Venue Staff's own venues (`venues.staff_id`, AGENTS.md §3a
+ * "Who may decide"). The dev database has more than one venue_staff
+ * account with venues split between them (seed migration 0015 only backs
+ * every *unassigned* venue onto the first seeded account — a later one
+ * created through the UI keeps its own), so a test that both requests a
+ * booking as a coordinator and approves it as `signInAsVenueStaff()` must
+ * pick a venue from here, not just the first coordinator search result.
+ */
+export async function fetchMyVenues(venueStaff: Session): Promise<VenueRow[]> {
+  const { venues } = await call<{ venues: VenueRow[] }>("GET", `${VENUES_URL}/staff/my-venues`, venueStaff.token);
+  return venues;
+}
+
 /** Assigned coordinator requests a venue for an event's main programme. */
 export async function requestVenueBooking(
   coordinator: Session,
@@ -335,4 +365,27 @@ export async function registerForEvent(attendee: Session, eventId: number): Prom
     { eventId },
   );
   return registration;
+}
+
+// ---- notification-service -------------------------------------------------------
+
+export interface NotificationRow {
+  id: number;
+  type: string;
+  title: string;
+  body: string;
+  link: string | null;
+  eventId: number | null;
+  read: boolean;
+  createdAt: string;
+}
+
+/** The caller's own in-app notification feed (E7-1), newest first — used to confirm an action notified someone. */
+export async function fetchMyNotifications(session: Session, limit = 20): Promise<NotificationRow[]> {
+  const { notifications } = await call<{ notifications: NotificationRow[] }>(
+    "GET",
+    `${NOTIFICATIONS_URL}?limit=${limit}`,
+    session.token,
+  );
+  return notifications;
 }
