@@ -9,6 +9,7 @@
  */
 import { computed, onMounted, ref } from "vue";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
+import DataTable from "../components/ui/DataTable.vue";
 import {
   EQUIPMENT_REQUEST_STATUSES,
   fetchAllEquipmentRequests,
@@ -17,6 +18,12 @@ import {
   type EquipmentRequestStatus,
   type EquipmentRequestWithEvent,
 } from "../lib/equipmentApi";
+
+const TABLE_COLUMNS = [
+  { key: "equipment", label: "Equipment" },
+  { key: "qty", label: "Qty needed" },
+  { key: "stock", label: "In stock" },
+];
 
 /** One line of the queue: a single item of a request, with its event's timing. */
 interface QueueRow {
@@ -321,18 +328,22 @@ onMounted(async () => {
             </div>
           </div>
 
-          <ul class="rows">
-            <li class="row row--header" aria-hidden="true">
-              <span class="cell-header">Equipment</span>
-              <span class="cell-header">Qty needed</span>
-              <span class="cell-header">In stock</span>
-            </li>
-            <li v-for="row in group.rows" :key="row.key" class="row">
-              <span class="cell cell-equipment">{{ row.equipmentType }}</span>
-              <span class="cell cell-qty">{{ quantityLabel(row) }}</span>
-              <span class="cell cell-stock">{{ stockFor(row.equipmentType) ?? "—" }}</span>
-            </li>
-          </ul>
+          <DataTable
+            :columns="TABLE_COLUMNS"
+            column-widths="12rem 9rem 6rem"
+            :rows="group.rows"
+            :row-key="(row) => row.key"
+          >
+            <template #cell-equipment="{ row }">
+              <span class="cell-equipment">{{ row.equipmentType }}</span>
+            </template>
+            <template #cell-qty="{ row }">
+              <span class="cell-qty">{{ quantityLabel(row) }}</span>
+            </template>
+            <template #cell-stock="{ row }">
+              <span class="cell-stock">{{ stockFor(row.equipmentType) ?? "—" }}</span>
+            </template>
+          </DataTable>
         </section>
       </div>
     </template>
@@ -657,56 +668,6 @@ onMounted(async () => {
   font-weight: 700;
   line-height: 1.75rem;
   color: var(--color-grey-900);
-}
-
-/* Rows: one bordered list per event, a 3-column table (equipment, qty, stock). */
-.rows {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-sm);
-}
-
-/* Fixed-width columns (not max-content) so Qty/Stock line up at the same
-   x-position across every event's independent table, not just within one. */
-.row {
-  display: grid;
-  grid-template-columns: 12rem 9rem 6rem;
-  justify-content: start;
-  column-gap: var(--spacing-32);
-  align-items: center;
-  padding: var(--spacing-16) var(--spacing-20);
-  border-bottom: 1px solid var(--color-grey-100);
-}
-
-.row:last-child {
-  border-bottom: none;
-}
-
-/* Column header row: same grid as the data rows, so labels line up. */
-.row--header {
-  background: var(--color-grey-50);
-  padding-top: var(--spacing-12);
-  padding-bottom: var(--spacing-12);
-}
-
-.cell-header {
-  min-width: 0;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  color: var(--color-grey-500);
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
-
-.cell {
-  min-width: 0;
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-  color: var(--color-grey-600);
 }
 
 .cell-equipment {

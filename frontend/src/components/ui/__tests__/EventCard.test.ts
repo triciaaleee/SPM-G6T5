@@ -85,13 +85,13 @@ describe("EventCard", () => {
     expect(wrapper.findAll(".fact")[1].classes()).toContain("fact--clamp");
   });
 
-  it("puts an aside (places left) at the right end of the title row, outside the facts", () => {
+  it("puts an aside (places left) in the header row beside the status badge, outside the facts", () => {
     const wrapper = mountCard({
       facts: [{ icon: "calendar", text: "14 Nov 2026" }],
       titleAside: { icon: "people", text: "Full", alert: true, testid: "slots-left" },
     });
 
-    const aside = wrapper.find(".card-title-row [data-testid='slots-left']");
+    const aside = wrapper.find(".card-header [data-testid='slots-left']");
     expect(aside.text()).toBe("Full");
     expect(aside.classes()).toContain("card-aside--alert");
     expect(wrapper.find(".card-title-row .card-title").exists()).toBe(true);

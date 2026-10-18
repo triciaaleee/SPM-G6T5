@@ -2,7 +2,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { h } from "vue";
-import AttendeeEventsView from "../AttendeeEventsView.vue";
+import AttendeeEventsView from "../AttendeeHomeView.vue";
 import { fetchMyRegistrations, type MyRegistration } from "../../lib/registrationApi";
 
 vi.mock("../../lib/registrationApi", () => ({ fetchMyRegistrations: vi.fn() }));
@@ -156,13 +156,12 @@ describe("AttendeeEventsView", () => {
     expect(facts.slice(0, 2)).toEqual(["1 Jan 2099", "10:00 AM to 4:00 PM"]);
   });
 
-  it("shows the accessibility note on the card, and nothing when there is none", async () => {
-    mockedFetch.mockResolvedValue([registration(1), registration(2, {}, { accessibility: null })]);
+  it("does not show the accessibility note on the card: it is on the event details page only", async () => {
+    mockedFetch.mockResolvedValue([registration(1)]);
     const wrapper = await mountView();
 
-    const cards = wrapper.findAll(".event-card");
-    expect(cards[0].find(".fact--clamp").text()).toBe("Step-free entry and a hearing loop.");
-    expect(cards[1].find(".fact--clamp").exists()).toBe(false);
+    expect(wrapper.find(".event-card").text()).not.toContain("Step-free entry");
+    expect(wrapper.find(".event-card .fact--clamp").exists()).toBe(false);
   });
 
   it("lists upcoming events soonest first", async () => {

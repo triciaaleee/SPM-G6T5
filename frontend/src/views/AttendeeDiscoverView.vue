@@ -32,13 +32,12 @@ const filtered = computed(() => {
   );
 });
 
-/** Date and time each get their own line; any accessibility note follows. */
+/** Date and time each get their own line. The accessibility note is on the event page only. */
 function cardFacts(event: OpenEvent): CardFact[] {
   const facts: CardFact[] = [
     { icon: "calendar", text: formatCardDate(event.proposedDate) },
     { icon: "clock", text: formatCardTimeRange(event.startTime, event.endTime) },
   ];
-  if (event.accessibility) facts.push({ icon: "accessibility", text: event.accessibility, clamp: true });
   return facts;
 }
 

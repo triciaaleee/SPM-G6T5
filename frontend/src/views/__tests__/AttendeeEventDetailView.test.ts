@@ -131,6 +131,15 @@ describe("AttendeeEventDetailView", () => {
     expect(unregistered.find(".badge").exists()).toBe(false);
   });
 
+  it("makes Register an extra-large button", async () => {
+    mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
+    const wrapper = await mountView();
+
+    const button = wrapper.find(".actions button");
+    expect(button.text()).toBe("Register");
+    expect(button.classes()).toContain("btn--xl");
+  });
+
   it("registers and flips the badge and button in place", async () => {
     mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
     mockedRegister.mockResolvedValue(undefined);

@@ -69,6 +69,13 @@ describe("AttendeeDiscoverView", () => {
     expect(second.find(".card-person").exists()).toBe(false);
   });
 
+  it("does not show the accessibility note on the card: it is on the event details page only", async () => {
+    mockedOpen.mockResolvedValue([openEvent({ accessibility: "Step-free entry and a hearing loop." })]);
+    const wrapper = await mountView();
+
+    expect(wrapper.find(".event-card").text()).not.toContain("Step-free entry");
+  });
+
   it("makes the whole card a link to the event, never a Register button", async () => {
     mockedOpen.mockResolvedValue([openEvent()]);
     const wrapper = await mountView();

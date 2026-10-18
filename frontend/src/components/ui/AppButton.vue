@@ -11,8 +11,8 @@ const props = withDefaults(
   defineProps<{
     /** primary: the view's one solid action; outline/ghost: lower emphasis; danger*: destructive. */
     variant?: "primary" | "outline" | "ghost" | "danger" | "danger-solid";
-    /** md is the 44px touch target; sm (36px) is for dense toolbars only. */
-    size?: "md" | "sm";
+    /** md is the 44px touch target; sm (36px) is for dense toolbars only; xl is a larger, wider call to action. */
+    size?: "md" | "sm" | "xl";
     /** Stretch to the full width of its container. */
     block?: boolean;
     /** Navigate instead of acting: renders a RouterLink. */
@@ -62,6 +62,15 @@ const classes = computed(() => [
 .btn--md {
   min-height: 44px; /* touch-target minimum */
   padding: 0 var(--spacing-24);
+}
+
+/* xl: the page's main call to action (e.g. Register), taller, wider and in larger type. */
+.btn--xl {
+  min-height: 52px;
+  min-width: 12.5rem;
+  padding: 0 var(--spacing-48);
+  font-size: 1rem;
+  line-height: 1.25rem;
 }
 
 .btn--sm {

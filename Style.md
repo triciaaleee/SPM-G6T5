@@ -360,7 +360,7 @@ Every button in the app is the one `AppButton` component (`frontend/src/componen
 | `danger` | Transparent, 1px `Red Error/300` border, `Red Error/600` text. Hover `Red Error/200` fill. Focus: border `Red Error/600` plus a 2px `ring-error` outline. | A destructive action that is not the view's main action (withdraw, remove, reject). |
 | `danger-solid` | `Red Error/600` fill, `Base/White` text. Hover darkens the fill with `brightness(0.9)`. Focus: a 2px `ring-error` outline. | The confirming button of a destructive modal only (a modal is its own button group). |
 
-**Size:** `md` is `min-height` 44px (the touch-target minimum), horizontal padding `spacing-24`, text `0.875rem` / 700, `radius-xs`. `sm` is `min-height` 36px with `spacing-16` padding, for dense toolbars only.  
+**Size:** `md` is `min-height` 44px (the touch-target minimum), horizontal padding `spacing-24`, text `0.875rem` / 700, `radius-xs`. `sm` is `min-height` 36px with `spacing-16` padding, for dense toolbars only. `xl` is `min-height` 52px, `min-width` 12.5rem, `spacing-48` horizontal padding and `1rem` / 700 text, for a page's one main call to action (e.g. Register on an event page).  
 **Disabled:** `Grey/25` fill, `Grey/100` border, `Grey/300` text, `not-allowed` cursor (Section 3.1).  
 **Focus:** 2px `ring-brand` outline with a 2px offset (Section 8.2); the two danger variants use `ring-error` instead.  
 **RULE:** A link that looks like a button (`to` prop) is still an `AppButton`, so navigation and actions share one look.

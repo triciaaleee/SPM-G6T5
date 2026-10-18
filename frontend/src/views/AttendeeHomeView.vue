@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { getStoredUser } from "../lib/auth";
-import { fetchMyRegistrations, type MyRegistration } from "../lib/registrationApi";
-import { registrationBadgeClass } from "../lib/registrationStatus";
+import { getStoredUser } from "../lib/auth.ts";
+import { fetchMyRegistrations, type MyRegistration } from "../lib/registrationApi.ts";
+import { registrationBadgeClass } from "../lib/registrationStatus.ts";
 import EventCard, { type CardFact } from "../components/ui/EventCard.vue";
-import { eventThumbnail, formatCardDate, formatCardTimeRange, isPastRegistration } from "../lib/attendeeEvents";
+import { eventThumbnail, formatCardDate, formatCardTimeRange, isPastRegistration } from "../lib/attendeeEvents.ts";
 
 /**
  * Attendee homepage: the events this attendee has registered for, split into
@@ -62,7 +62,7 @@ function eventTitle(registration: MyRegistration): string {
   return registration.event?.name || `Event #${registration.eventId}`;
 }
 
-/** Date and time each get their own line; the venue and any accessibility note follow. */
+/** Date and time each get their own line, then the venue. The accessibility note is on the event page only. */
 function cardFacts(registration: MyRegistration): CardFact[] {
   const event = registration.event;
   const facts: CardFact[] = [
@@ -70,7 +70,6 @@ function cardFacts(registration: MyRegistration): CardFact[] {
     { icon: "clock", text: formatCardTimeRange(event?.startTime, event?.endTime) },
     { icon: "pin", text: venueLabel(registration) },
   ];
-  if (event?.accessibility) facts.push({ icon: "accessibility", text: event.accessibility, clamp: true });
   return facts;
 }
 

@@ -32,6 +32,10 @@ describe("AppButton", () => {
     expect(mountButton({ variant }).classes()).toContain(`btn--${variant}`);
   });
 
+  it("has an extra-large size for a page's main call to action", () => {
+    expect(mountButton({ size: "xl" }).classes()).toContain("btn--xl");
+  });
+
   it("supports the small size and block width", () => {
     const wrapper = mountButton({ size: "sm", block: true });
 

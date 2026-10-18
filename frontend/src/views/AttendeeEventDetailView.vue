@@ -170,10 +170,10 @@ onMounted(async () => {
         </div>
 
         <div v-if="canRegister && isFull" class="actions">
-          <AppButton variant="primary" class="action-button" disabled>Event full</AppButton>
+          <AppButton variant="primary" size="xl" class="action-button" disabled>Event full</AppButton>
         </div>
         <div v-else-if="canRegister" class="actions">
-          <AppButton variant="primary" class="action-button" :disabled="registering" @click="handleRegister">
+          <AppButton variant="primary" size="xl" class="action-button" :disabled="registering" @click="handleRegister">
             {{ registering ? "Registering…" : "Register" }}
           </AppButton>
         </div>
