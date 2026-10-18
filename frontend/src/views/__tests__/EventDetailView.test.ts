@@ -6,10 +6,13 @@ import EventDetailView from "../EventDetailView.vue";
 import {
   cancelEvent,
   completeEvent,
+  fetchChangeRequests,
   fetchEventById,
   fetchEventHistory,
   getCurrentUser,
   ReviewActionError,
+  submitChangeRequest,
+  type ChangeRequestEntry,
   type EventSummary,
 } from "../../lib/eventsApi";
 import { fetchEventVenueBookings } from "../../lib/venuesApi";
@@ -23,6 +26,8 @@ vi.mock("../../lib/eventsApi", async () => {
     fetchEventHistory: vi.fn(),
     completeEvent: vi.fn(),
     cancelEvent: vi.fn(),
+    fetchChangeRequests: vi.fn(),
+    submitChangeRequest: vi.fn(),
   };
 });
 
@@ -42,6 +47,8 @@ const mockedHistory = vi.mocked(fetchEventHistory);
 const mockedComplete = vi.mocked(completeEvent);
 const mockedCancel = vi.mocked(cancelEvent);
 const mockedBookings = vi.mocked(fetchEventVenueBookings);
+const mockedChangeRequests = vi.mocked(fetchChangeRequests);
+const mockedSubmitChangeRequest = vi.mocked(submitChangeRequest);
 
 const coordinator = { id: "COORD-0001", role: "coordinator" };
 
@@ -110,6 +117,7 @@ beforeEach(() => {
   vi.setSystemTime(AFTER_END);
   mockedHistory.mockResolvedValue([]);
   mockedBookings.mockResolvedValue([]);
+  mockedChangeRequests.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -317,5 +325,277 @@ describe("EventDetailView — registrations (E3-5 AC3)", () => {
 
   it("doesn't show them for an event that didn't ask for registration", async () => {
     expect(hasRegistrations(await mountPage(makeEvent({ status: "Completed" })))).toBe(false);
+  });
+});
+
+describe("EventDetailView — change requests (E3-9)", () => {
+  const organiser = { id: "ORG-0001", role: "organiser" };
+
+  function changeRequest(overrides: Partial<ChangeRequestEntry> = {}): ChangeRequestEntry {
+    return {
+      id: 55,
+      status: "Pending",
+      decidedAt: null,
+      decisionReason: null,
+      createdAt: "2026-10-16T00:00:00.000Z",
+      fields: [{ field: "venue", oldValue: "Grand Ballroom", newValue: "Seminar Room 3-01", isCritical: true }],
+      impact: null,
+      ...overrides,
+    };
+  }
+
+  it("shows nothing when the organiser has never raised one", async () => {
+    mockedChangeRequests.mockResolvedValue([]);
+    const wrapper = await mountPage(makeEvent(), organiser);
+    expect(wrapper.text()).not.toContain("Change request");
+  });
+
+  it("shows the section with a highlighted field for a pending critical change", async () => {
+    mockedChangeRequests.mockResolvedValue([changeRequest()]);
+    const wrapper = await mountPage(makeEvent(), organiser);
+
+    expect(wrapper.text()).toContain("Pending");
+    expect(wrapper.text()).toContain("Requested: Seminar Room 3-01");
+    const highlighted = wrapper.find(".field-changed");
+    expect(highlighted.exists()).toBe(true);
+    expect(highlighted.text()).toContain("Venue Requirements");
+  });
+
+  it("shows a rejected request with its reason, and no 'Requested' line", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      changeRequest({ status: "Rejected", decisionReason: "Venue too small for the new headcount" }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), organiser);
+
+    expect(wrapper.text()).toContain("Rejected");
+    expect(wrapper.text()).toContain("Venue too small for the new headcount");
+    expect(wrapper.text()).not.toContain("Requested: Seminar Room 3-01");
+  });
+
+  it("shows a Withdrawn badge, not Approved, for an auto-resolved request", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      changeRequest({
+        status: "Auto-Withdrawn",
+        decisionReason: "The requested change to venue was reverted before it was reviewed.",
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), organiser);
+
+    expect(wrapper.text()).toContain("Withdrawn");
+    expect(wrapper.text()).not.toContain("Approved");
+    expect(wrapper.text()).toContain("there's nothing pending anymore");
+  });
+
+  it("doesn't call out a plain Approved request (purely non-critical) as withdrawn", async () => {
+    mockedChangeRequests.mockResolvedValue([changeRequest({ status: "Approved", decisionReason: null })]);
+    const wrapper = await mountPage(makeEvent(), organiser);
+
+    expect(wrapper.text()).toContain("Approved");
+    expect(wrapper.text()).not.toContain("Withdrawn");
+  });
+
+  it("explains an auto-applied request as automatic, not a coordinator decision", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      changeRequest({
+        status: "Approved",
+        decisionReason: "Applied automatically — description",
+        fields: [{ field: "description", oldValue: "old", newValue: "new", isCritical: false }],
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), organiser);
+
+    expect(wrapper.text()).toContain("Approved");
+    expect(wrapper.text()).not.toContain("Withdrawn");
+    expect(wrapper.text()).toContain("Applied automatically");
+    expect(wrapper.text()).toContain("none of the changed fields needed your coordinator's review");
+  });
+});
+
+describe("EventDetailView — submitting a change request (E3-9 merge)", () => {
+  const organiser = { id: "ORG-0001", role: "organiser" };
+
+  function changeRequest(overrides: Partial<ChangeRequestEntry> = {}): ChangeRequestEntry {
+    return {
+      id: 55,
+      status: "Pending",
+      decidedAt: null,
+      decisionReason: null,
+      createdAt: "2026-10-16T00:00:00.000Z",
+      fields: [{ field: "venue", oldValue: "Grand Ballroom", newValue: "Seminar Room 3-01", isCritical: true }],
+      impact: null,
+      ...overrides,
+    };
+  }
+
+  function eventWithVenue(venue: string) {
+    return makeEvent({
+      submitted_details: {
+        name: "Spring Gala",
+        purpose: "Celebration",
+        description: "A gala",
+        proposedDate: "2026-11-10",
+        startTime: "10:00",
+        endTime: "18:00",
+        expectedAttendance: 200,
+        venue,
+        accessibility: "Step-free access",
+        equipment: "Stage",
+        technicalSupport: "AV crew",
+        registrationNeeded: false,
+      },
+    });
+  }
+
+  it("pre-fills a held field with its requested value, not the committed one", async () => {
+    mockedChangeRequests.mockResolvedValue([changeRequest()]);
+    const wrapper = await mountPage(eventWithVenue("Grand Ballroom"), organiser);
+
+    await wrapper.find('[title="Request a change"]').trigger("click");
+
+    const venueInput = wrapper.get("#edit-venue");
+    expect((venueInput.element as HTMLTextAreaElement).value).toBe("Seminar Room 3-01");
+  });
+
+  it("shows reverted fields and the auto-resolved note after a response says so", async () => {
+    mockedChangeRequests.mockResolvedValue([changeRequest()]);
+    mockedSubmitChangeRequest.mockResolvedValue({
+      changeRequestId: 55,
+      applied: [],
+      held: [],
+      reverted: ["venue"],
+      autoResolved: true,
+      notificationsFailed: false,
+    });
+    const wrapper = await mountPage(eventWithVenue("Grand Ballroom"), organiser);
+
+    await wrapper.find('[title="Request a change"]').trigger("click");
+    await wrapper.get("#edit-venue").setValue("Grand Ballroom");
+    await button(wrapper, "Submit change request")!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("No longer pending (back to how it was)");
+    expect(wrapper.text()).toContain("venue");
+    expect(wrapper.text()).toContain("Nothing is pending on this event anymore.");
+  });
+});
+
+describe("EventDetailView — change request impact for the coordinator (E3-8 AC2/AC4)", () => {
+  function impact(overrides: Partial<NonNullable<ChangeRequestEntry["impact"]>> = {}) {
+    return {
+      bookings: [{ id: 900, status: "Approved", venue: { id: 1, name: "Grand Ballroom" } }],
+      equipmentReservations: [{ id: 50, status: "Arranged", items: [] }],
+      registrations: { registeredCount: 3, total: 5 },
+      capacityConflict: null,
+      ...overrides,
+    };
+  }
+
+  function pendingRequest(overrides: Partial<ChangeRequestEntry> = {}): ChangeRequestEntry {
+    return {
+      id: 55,
+      status: "Pending",
+      decidedAt: null,
+      decisionReason: null,
+      createdAt: "2026-10-16T00:00:00.000Z",
+      fields: [{ field: "expectedAttendance", oldValue: "200", newValue: "350", isCritical: true }],
+      impact: impact(),
+      ...overrides,
+    };
+  }
+
+  it("shows the pending request with its held field and impact to the assigned coordinator", async () => {
+    mockedChangeRequests.mockResolvedValue([pendingRequest()]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+
+    expect(wrapper.text()).toContain("Change request pending your review");
+    expect(wrapper.text()).toContain("200");
+    expect(wrapper.text()).toContain("350");
+    expect(wrapper.text()).toContain("Grand Ballroom");
+    expect(wrapper.text()).toContain("3 registered of");
+  });
+
+  it("shows an explicit capacity conflict banner", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      pendingRequest({
+        impact: impact({
+          capacityConflict: { bookingId: 900, venueName: "Grand Ballroom", capacity: 300, requestedAttendance: 350 },
+        }),
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+
+    expect(wrapper.text()).toContain("Capacity conflict");
+    expect(wrapper.text()).toContain("Grand Ballroom holds");
+  });
+
+  it("never offers an approve/reject action (E3-11 is not built)", async () => {
+    mockedChangeRequests.mockResolvedValue([pendingRequest()]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+
+    expect(button(wrapper, "Approve")).toBeUndefined();
+    expect(button(wrapper, "Reject")).toBeUndefined();
+  });
+
+  it("doesn't show it to a coordinator who isn't assigned to this event", async () => {
+    mockedChangeRequests.mockResolvedValue([pendingRequest()]);
+    const wrapper = await mountPage(makeEvent(), { id: "COORD-0002", role: "coordinator" });
+
+    expect(wrapper.text()).not.toContain("Change request pending your review");
+    expect(mockedChangeRequests).not.toHaveBeenCalled();
+  });
+
+  it("stays hidden when there's nothing pending", async () => {
+    mockedChangeRequests.mockResolvedValue([]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+    expect(wrapper.text()).not.toContain("Change request pending your review");
+  });
+
+  it("shows the withdrawn reason instead of silently disappearing once the organiser reverts it", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      pendingRequest({
+        status: "Auto-Withdrawn",
+        decisionReason: "The requested change to expectedAttendance was reverted before it was reviewed.",
+        fields: [],
+        impact: null,
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+
+    expect(wrapper.text()).toContain("Withdrawn");
+    expect(wrapper.text()).toContain("Nothing is pending on this event anymore.");
+    expect(wrapper.text()).not.toContain("pending your review");
+    expect(button(wrapper, "Approve")).toBeUndefined();
+  });
+
+  it("doesn't resurface an old withdrawal once something newer exists", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      pendingRequest({ id: 56, status: "Approved", decisionReason: null, fields: [], impact: null }),
+      pendingRequest({
+        id: 55,
+        status: "Auto-Withdrawn",
+        decisionReason: "The requested change to expectedAttendance was reverted before it was reviewed.",
+        fields: [],
+        impact: null,
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+
+    expect(wrapper.text()).not.toContain("Withdrawn");
+  });
+
+  it("tells the coordinator a purely non-critical submission applied automatically, not that it's pending their review", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      pendingRequest({
+        status: "Approved",
+        decisionReason: "Applied automatically — description",
+        fields: [{ field: "description", oldValue: "old", newValue: "new", isCritical: false }],
+        impact: null,
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+
+    expect(wrapper.text()).toContain("Applied automatically");
+    expect(wrapper.text()).not.toContain("pending your review");
+    expect(button(wrapper, "Approve")).toBeUndefined();
   });
 });

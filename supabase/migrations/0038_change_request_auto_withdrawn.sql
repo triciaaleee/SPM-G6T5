@@ -1,0 +1,20 @@
+-- E3-9: a request that auto-resolves because every held field was
+-- reverted before anyone decided on it was never actually "Approved" —
+-- nothing was approved, the request just evaporated. Reusing Approved
+-- (plus a text-prefixed decision_reason) to mean that was a stopgap;
+-- this gives it its own real status instead.
+--
+-- Named "Auto-Withdrawn" rather than plain "Withdrawn" because there is no
+-- manual withdraw-this-request action anywhere in the system yet — if one
+-- is ever built, it gets its own plain "Withdrawn" value then, with no
+-- collision. The parallel "Applied automatically" case (a purely
+-- non-critical submission) keeps using Approved + decision_reason: unlike
+-- this one, "Approved" is actually true there regardless of who/what
+-- approved it, and decided_by (null vs set) already tells apart system
+-- vs a future coordinator decision (E3-11) — nothing to fix.
+--
+-- A single statement, alone in its own migration: ALTER TYPE ... ADD
+-- VALUE can't safely share a transaction with statements that use the
+-- new value (matches migration 0016's precedent for this same enum
+-- pattern).
+alter type change_request_status add value if not exists 'Auto-Withdrawn';

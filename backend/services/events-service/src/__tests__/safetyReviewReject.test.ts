@@ -3,6 +3,7 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
   const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
@@ -53,30 +54,24 @@ function buildApp(
   };
   (globalThis as any).__mockUser = options.user ?? safetyOfficer;
 
-  // Only notification-service may be called: a rejection must not touch
-  // venue-service or equipment-service (bookings and reservations stay).
+  // Nothing else should be called: a rejection must not touch venue-service
+  // or equipment-service (bookings and reservations stay).
   const fetchMock = vi.fn().mockImplementation(async (url: string) => {
-    if (url.includes("/api/notifications")) {
-      return { ok: !options.notificationsFail, status: options.notificationsFail ? 500 : 200, json: async () => ({}) };
-    }
     throw new Error(`unexpected fetch ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
 
+  const publish = vi.fn().mockResolvedValue(!options.notificationsFail);
+  setPublisherForTest({ publish });
+
   const app = express();
   app.use(express.json());
   app.use("/api/events", eventsRouter);
-  return { app, rpc, fetchMock };
+  return { app, rpc, fetchMock, publish };
 }
 
 function reject(app: express.Express, id: number | string = 7, body: unknown = { reason: "Fire exit blocked by staging" }) {
   return request(app).post(`/api/events/${id}/safety-review/reject`).set("Authorization", "Bearer t").send(body as object);
-}
-
-function sentNotifications(fetchMock: ReturnType<typeof vi.fn>): { recipientId: string; type: string; body: string }[] {
-  return fetchMock.mock.calls
-    .filter(([url]) => String(url).includes("/api/notifications"))
-    .flatMap(([, init]) => JSON.parse((init as { body: string }).body).notifications);
 }
 
 describe("POST /api/events/:id/safety-review/reject (E3-13)", () => {
@@ -95,14 +90,21 @@ describe("POST /api/events/:id/safety-review/reject (E3-13)", () => {
   });
 
   it("AC1: notifies only the assigned coordinator, with the reason", async () => {
-    const { app, fetchMock } = buildApp();
+    const { app, publish } = buildApp();
     await reject(app);
 
-    const notifications = sentNotifications(fetchMock);
-    expect(notifications).toHaveLength(1);
-    expect(notifications[0]).toMatchObject({ recipientId: "COORD-0001", type: "event_safety_rejected" });
-    expect(notifications[0].body).toContain("Spring Gala");
-    expect(notifications[0].body).toContain("Fire exit blocked by staging");
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "safety.decided",
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: expect.objectContaining({
+          outcome: "rejected",
+          reason: "Fire exit blocked by staging",
+          eventName: "Spring Gala",
+        }),
+      }),
+    );
   });
 
   it("trims the reason before recording it", async () => {
@@ -112,16 +114,15 @@ describe("POST /api/events/:id/safety-review/reject (E3-13)", () => {
     expect(rpc).toHaveBeenCalledWith("reject_event_safety_review", expect.objectContaining({ p_reason: "Crowd plan missing" }));
   });
 
-  it("keeps the notification within notification-service's body limit for a long reason", async () => {
-    const { app, rpc, fetchMock } = buildApp();
+  it("publishes the full reason without truncation for a long reason", async () => {
+    const { app, rpc, publish } = buildApp();
     const longReason = "x".repeat(2000);
     await reject(app, 7, { reason: longReason });
 
-    // The full reason is recorded; only the notification text is shortened.
     expect(rpc).toHaveBeenCalledWith("reject_event_safety_review", expect.objectContaining({ p_reason: longReason }));
-    const [notification] = sentNotifications(fetchMock);
-    expect(notification.body.length).toBeLessThanOrEqual(1000);
-    expect(notification.body.endsWith("…")).toBe(true);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ reason: longReason }) }),
+    );
   });
 
   it.each([{}, { reason: "" }, { reason: "   " }, { reason: 42 }])("AC2: blocks a rejection without a reason (%j)", async (body) => {

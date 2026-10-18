@@ -176,6 +176,55 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders the rejected outcome for safety.decided", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "safety.decided",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: { outcome: "rejected", reason: "Fire exit blocked by staging", eventName: "Spring Gala" },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "Safety review rejected",
+        body: expect.stringContaining("Fire exit blocked by staging"),
+      }),
+    ]);
+  });
+
+  it("renders the changes_requested outcome for safety.decided", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "safety.decided",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: {
+          outcome: "changes_requested",
+          reason: "Seminar Room 3-01: Exits are blocked by the stage.",
+          eventName: "Spring Gala",
+        },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        body: expect.stringContaining("Seminar Room 3-01: Exits are blocked by the stage."),
+      }),
+    ]);
+  });
+
   it("tells the organiser's confirmation apart from the leads' notice for request.submitted", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();
@@ -211,6 +260,58 @@ describe("handleInboundMessage", () => {
     );
 
     expect(insert).toHaveBeenCalledWith([expect.objectContaining({ recipient_id: "COORD-0001", title: "Request edited" })]);
+  });
+
+  it("renders change.requested with the affected fields", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "change.requested",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: { eventName: "Nut Festival", changeRequestId: 55, fields: ["venue", "description"] },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "Change request raised",
+        body: expect.stringContaining("venue, description"),
+      }),
+    ]);
+  });
+
+  it("renders change.withdrawn differently for the organiser and the coordinator", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "change.withdrawn",
+        eventId: 7,
+        actorId: "ORG-0001",
+        recipients: { userIds: ["ORG-0001", "COORD-0001"], roles: [] },
+        data: { eventName: "Nut Festival", changeRequestId: 55, fields: ["venue"] },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "ORG-0001",
+        title: "Change request withdrawn",
+        body: expect.stringContaining("Your requested change"),
+      }),
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "Change request withdrawn",
+        body: expect.stringContaining("The organiser's requested change"),
+      }),
+    ]);
   });
 
   it("renders clarification.requested with the message", async () => {

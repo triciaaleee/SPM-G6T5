@@ -172,25 +172,37 @@ const TEMPLATES: Record<string, Template> = {
     };
   },
 
-  /**
-   * #9 in RabbitMQ.md section 3.2. Only the "approved" outcome publishes
-   * today (events-service's reject/changes-requested path isn't built —
-   * #105); the fallback keeps this forward-compatible rather than
-   * silently mis-rendering if that lands later.
-   */
+  /** #9/#10 in RabbitMQ.md section 3.2 (#105). All three outcomes (approved/rejected/changes_requested) now publish. */
   "safety.decided": (msg) => {
     const eventName = String(msg.data.eventName ?? "Your event");
+    const link = eventLink(msg);
+    const reason = msg.data.reason ? ` ${msg.data.reason}` : "";
+
     if (msg.data.outcome === "approved") {
       return {
         title: "Safety review approved",
         body: `"${eventName}" passed its Operational Safety Check and is now Confirmed.`,
-        link: eventLink(msg),
+        link,
+      };
+    }
+    if (msg.data.outcome === "rejected") {
+      return {
+        title: "Safety review rejected",
+        body: `"${eventName}" failed its Operational Safety Check and is back in Planning. Reason:${reason}`,
+        link,
+      };
+    }
+    if (msg.data.outcome === "changes_requested") {
+      return {
+        title: "Safety changes requested",
+        body: `"${eventName}" is back in Planning. The Safety Officer asked for changes —${reason}`,
+        link,
       };
     }
     return {
       title: "Safety review decision",
       body: `"${eventName}" received a safety review decision.`,
-      link: eventLink(msg),
+      link,
     };
   },
 
@@ -377,6 +389,44 @@ const TEMPLATES: Record<string, Template> = {
         ? `${eventName}'s equipment request is only partially fulfilled: ${msg.data.note ?? ""}`
         : `${eventName}'s equipment request is now ${status}.`;
     return { title: `Equipment request ${status.toLowerCase()}`, body, link: eventLink(msg) };
+  },
+
+  /** RabbitMQ.md #12 (E3-9 AC1) — to the assigned coordinator. */
+  "change.requested": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    const fields = Array.isArray(msg.data.fields) ? (msg.data.fields as string[]) : [];
+    const fieldList = fields.length > 0 ? fields.join(", ") : "its details";
+    return {
+      title: "Change request raised",
+      body: `The organiser of "${eventName}" requested a change to ${fieldList}.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /**
+   * E3-9: a pending change request auto-resolved because every held field
+   * was reverted back to its committed value — nothing's left for the
+   * coordinator to decide. Organiser and coordinator read different
+   * sentences about the same event.
+   */
+  "change.withdrawn": (msg, recipientId) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    const fields = Array.isArray(msg.data.fields) ? (msg.data.fields as string[]) : [];
+    const fieldList = fields.length > 0 ? fields.join(", ") : "its fields";
+    const link = eventLink(msg);
+
+    if (recipientId === msg.actorId) {
+      return {
+        title: "Change request withdrawn",
+        body: `Your requested change to ${fieldList} on "${eventName}" is back to how it was — nothing is pending anymore.`,
+        link,
+      };
+    }
+    return {
+      title: "Change request withdrawn",
+      body: `The organiser's requested change to ${fieldList} on "${eventName}" was reverted — there's nothing left for you to review.`,
+      link,
+    };
   },
 };
 

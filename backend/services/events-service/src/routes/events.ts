@@ -3,13 +3,17 @@ import type { Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth, requireAuthOrInternal } from "../middleware/auth.js";
 import { normaliseDraftEventRequest, validateEventRequest } from "../lib/validateEventRequest.js";
+import type { ValidatedEventRequest } from "../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../lib/validation.js";
 import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/diffSubmittedDetails.js";
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
+import { committedFieldValue, validateChangeRequestFields, withHeldValues } from "../lib/changeRequestFields.js";
+import { AUTO_APPLIED_REASON_PREFIX, CHANGE_REQUEST_STATUS } from "../lib/changeRequestStatus.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
-import { fitNotificationBody, sendNotifications } from "../lib/notificationsClient.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
 import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
+import type { ArrangementEquipmentItem } from "../lib/arrangementsClient.js";
+import { fetchEventRegistrations } from "../lib/registrationsClient.js";
 import {
   describeOutstanding,
   findOutstandingArrangements,
@@ -942,10 +946,13 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // E2-7 AC1/AC2: direct edits are allowed while still pending review
   // (Requested/Unassigned), while still in Planning (per AGENTS.md §3 the
   // lifecycle only truly locks down once Confirmed), or, per E2-10, while
-  // responding to an outstanding clarification. Anything past that
-  // (Confirmed, Completed, Rejected) is blocked — there's no "raise a
-  // change request" flow built yet, so this is a block + message, not a
-  // real alternate workflow.
+  // responding to an outstanding clarification. Anything past that is
+  // blocked. E3-9 AC2: once Confirmed, that block points at the change
+  // request endpoint (POST /:id/change-requests) rather than telling the
+  // organiser to contact their coordinator — that's now a dead end, since
+  // the change request flow exists. Safety Review, Completed, Rejected and
+  // Cancelled have no edit path at all (Safety Review has no direct-edit
+  // or change-request route; the other three are terminal).
   const isClarificationResponse = existing.status === "Clarification Requested";
   const isDirectEdit = ORGANISER_DIRECT_EDIT_STATUSES.has(existing.status);
   // E2-4 AC3: editing a draft here means submitting it — same E2-1
@@ -955,7 +962,9 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   if (!isClarificationResponse && !isDirectEdit && !isDraftSubmit) {
     res.status(409).json({
       error:
-        "This request has already been approved and can no longer be edited directly. Contact your coordinator to request a change.",
+        existing.status === EVENT_STATUS.Confirmed
+          ? "This event is Confirmed and can no longer be edited directly. Raise a change request instead."
+          : "This request can no longer be edited or changed at this stage.",
     });
     return;
   }
@@ -1211,6 +1220,491 @@ eventsRouter.post("/:id/cancel", async (req: AuthedRequest, res) => {
   });
 
   res.json({ event: data, notificationsFailed: !published });
+});
+
+/**
+ * E3-9: the only edit path once an event is Confirmed — PATCH /:id above
+ * already blocks direct edits past Planning. E3-8: critical fields
+ * (schedule, attendance, venue, equipment, accessibility) are held as a
+ * `change_requests`/`change_request_fields` row for the assigned
+ * coordinator to decide (E3-11, not built here); everything else is
+ * written straight to submitted_details.
+ *
+ * Deciding a held request — approving/rejecting, applying its values,
+ * returning the event to Planning — belongs to E3-11 (#36) and has no
+ * route yet. Assessing impact (affected bookings/reservations/
+ * registrations, capacity conflicts) is E3-10 (#35), also not built here.
+ */
+eventsRouter.post("/:id/change-requests", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const { data: existing, error: fetchError } = await supabase
+    .from("events")
+    .select("id, status, organiser_id, coordinator_id, submitted_details")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (fetchError) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+  if (!existing) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+  if (existing.organiser_id !== user.id) {
+    await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  // E3-9 AC3: Completed/Cancelled block outright. Every other non-Confirmed
+  // status (Draft, Unassigned, Requested, Clarification Requested,
+  // Planning, Safety Review) already has a direct-edit or other path, so a
+  // change request only ever makes sense from Confirmed.
+  if (existing.status !== EVENT_STATUS.Confirmed) {
+    res.status(409).json({
+      error: "Change requests can only be raised once the event is Confirmed.",
+    });
+    return;
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const current = (existing.submitted_details ?? {}) as Partial<ValidatedEventRequest>;
+
+  // Merge with whatever's already open (at most one Pending request per
+  // event — enforced by a unique index too, migration 0037) so a second
+  // submission updates it instead of piling up a parallel one.
+  const { data: openRequest, error: openRequestError } = await supabase
+    .from("change_requests")
+    .select("id")
+    .eq("event_id", existing.id)
+    .eq("status", CHANGE_REQUEST_STATUS.Pending)
+    .maybeSingle();
+
+  if (openRequestError) {
+    res.status(500).json({ error: "Failed to load the event's open change request" });
+    return;
+  }
+
+  let openFields: { id: number; field: string; old_value: string | null; new_value: string; is_critical: boolean }[] = [];
+  if (openRequest) {
+    const { data, error } = await supabase
+      .from("change_request_fields")
+      .select("id, field, old_value, new_value, is_critical")
+      .eq("request_id", openRequest.id);
+    if (error) {
+      res.status(500).json({ error: "Failed to load the event's open change request" });
+      return;
+    }
+    openFields = data ?? [];
+  }
+  const heldCritical = openFields.filter((field) => field.is_critical);
+
+  // Diff against "what the organiser would see if they reopened the
+  // form" — the committed baseline with any already-held values overlaid
+  // — so resubmitting an untouched held field is a true no-op, not a
+  // spurious re-hold every time.
+  const effectiveBaseline = withHeldValues(
+    current,
+    heldCritical.map((field) => ({ field: field.field, newValue: field.new_value })),
+  );
+  const result = validateChangeRequestFields(body, effectiveBaseline);
+
+  if (!result.valid) {
+    res.status(400).json({ error: "Validation failed", fields: result.fields });
+    return;
+  }
+
+  if (result.changes.length === 0) {
+    res.status(400).json({ error: "No field changes were submitted." });
+    return;
+  }
+
+  const nonCriticalChanges = result.changes.filter((change) => !change.isCritical);
+
+  // A critical change against the held value is either a revert — the
+  // organiser took it back to what's actually committed, so it's un-held
+  // — or a genuine overwrite/fresh hold.
+  const revertedFields: string[] = [];
+  const upsertedCritical: { field: string; oldValue: string | null; newValue: string }[] = [];
+  for (const change of result.changes.filter((c) => c.isCritical)) {
+    const trueBaseline = committedFieldValue(current, change.field);
+    const wasHeld = heldCritical.some((field) => field.field === change.field);
+    if (wasHeld && change.newValue === (trueBaseline ?? "")) {
+      revertedFields.push(change.field);
+    } else {
+      upsertedCritical.push({ field: change.field, oldValue: trueBaseline, newValue: change.newValue });
+    }
+  }
+
+  const willHoldSomething = upsertedCritical.length > 0 || heldCritical.some((f) => !revertedFields.includes(f.field));
+
+  // Create a row only if nothing's open yet and this submission needs
+  // one — a Pending request if it's holding anything, else an already-
+  // resolved Approved one for a purely non-critical/pure-revert touch.
+  let targetRequestId = openRequest?.id ?? null;
+  if (!targetRequestId && (upsertedCritical.length > 0 || nonCriticalChanges.length > 0)) {
+    const isAutoApplied = upsertedCritical.length === 0;
+    const { data: created, error: createError } = await supabase
+      .from("change_requests")
+      .insert({
+        event_id: existing.id,
+        organiser_id: user.id,
+        status: isAutoApplied ? CHANGE_REQUEST_STATUS.Approved : CHANGE_REQUEST_STATUS.Pending,
+        decided_at: isAutoApplied ? new Date().toISOString() : null,
+        // E3-8 AC3: nothing critical was touched, so there's nothing for a
+        // coordinator to review — flagged as automatic (not a coordinator's
+        // decision) so both sides can tell it apart from a real approval.
+        decision_reason: isAutoApplied
+          ? `${AUTO_APPLIED_REASON_PREFIX}${nonCriticalChanges.map((c) => c.field).join(", ")}`
+          : null,
+      })
+      .select("id")
+      .single();
+
+    if (createError || !created) {
+      res.status(500).json({ error: "Failed to raise change request" });
+      return;
+    }
+    targetRequestId = created.id;
+  }
+
+  if (revertedFields.length > 0 && targetRequestId) {
+    const { error: deleteError } = await supabase
+      .from("change_request_fields")
+      .delete()
+      .eq("request_id", targetRequestId)
+      .in("field", revertedFields);
+    if (deleteError) {
+      res.status(500).json({ error: "Failed to raise change request" });
+      return;
+    }
+  }
+
+  const rowsToUpsert = [
+    ...upsertedCritical.map((change) => ({ ...change, isCritical: true })),
+    ...nonCriticalChanges.map((change) => ({ field: change.field, oldValue: change.oldValue, newValue: change.newValue, isCritical: false })),
+  ];
+  if (rowsToUpsert.length > 0 && targetRequestId) {
+    const { error: upsertError } = await supabase.from("change_request_fields").upsert(
+      rowsToUpsert.map((change) => ({
+        request_id: targetRequestId,
+        field: change.field,
+        old_value: change.oldValue,
+        new_value: change.newValue,
+        is_critical: change.isCritical,
+      })),
+      { onConflict: "request_id,field" },
+    );
+    if (upsertError) {
+      res.status(500).json({ error: "Failed to raise change request" });
+      return;
+    }
+  }
+
+  // Non-critical fields apply immediately (E3-8 AC3) — written straight to
+  // submitted_details, same as any other direct edit.
+  if (nonCriticalChanges.length > 0) {
+    const updatedDetails: Record<string, unknown> = { ...current };
+    for (const change of nonCriticalChanges) {
+      updatedDetails[change.field] =
+        change.field === "registrationNeeded" ? body.registrationNeeded === true || body.registrationNeeded === "true" : String(body[change.field]).trim();
+    }
+
+    const { error: updateError } = await supabase
+      .from("events")
+      .update({ submitted_details: updatedDetails })
+      .eq("id", existing.id);
+
+    if (updateError) {
+      res.status(500).json({ error: "Failed to apply change request" });
+      return;
+    }
+
+    await recordEventHistory(
+      supabase,
+      existing.id,
+      nonCriticalChanges.map((change) => ({ field: change.field, oldValue: change.oldValue, newValue: change.newValue })),
+      user.id,
+    );
+  }
+
+  // Critical fields are held, not applied (E3-8 AC1) — already recorded
+  // above in change_request_fields; just the pending-review event_history
+  // entry is left to do here. E3-11 is what later writes decided_by/
+  // decided_at/decision_reason and applies these values.
+  if (upsertedCritical.length > 0) {
+    // Logged as a pending request, not a value change — nothing has been
+    // applied yet, so the old value hasn't moved. Covers both a fresh
+    // hold and an overwrite of an already-held value — same wording,
+    // since either way the committed value is unchanged until decided.
+    await recordEventHistory(
+      supabase,
+      existing.id,
+      upsertedCritical.map((change) => ({
+        field: change.field,
+        oldValue: change.oldValue,
+        newValue: `requested: ${change.newValue} (pending coordinator review)`,
+      })),
+      user.id,
+    );
+  }
+
+  if (revertedFields.length > 0) {
+    await recordEventHistory(
+      supabase,
+      existing.id,
+      revertedFields.map((field) => {
+        const discarded = heldCritical.find((f) => f.field === field)!;
+        return {
+          field,
+          oldValue: discarded.new_value,
+          newValue: `reverted to ${committedFieldValue(current, field) ?? "—"} (no longer pending)`,
+        };
+      }),
+      user.id,
+    );
+  }
+
+  const eventName = eventDisplayName(existing as unknown as AssignmentEventRow);
+  let notificationsFailed = false;
+  let autoResolved = false;
+
+  if (targetRequestId && upsertedCritical.length === 0 && !willHoldSomething && revertedFields.length > 0) {
+    // Every held field just got reverted — nothing left to decide. Close
+    // the request out rather than leaving it "Pending" with no fields,
+    // and tell both sides it resolved itself rather than staying silent.
+    autoResolved = true;
+    // Its own status (migration 0038) — nothing was actually approved,
+    // the request just evaporated, so Approved would be the wrong word.
+    // decision_reason is still set as the human-readable explanation.
+    const { error: resolveError } = await supabase
+      .from("change_requests")
+      .update({
+        status: CHANGE_REQUEST_STATUS.AutoWithdrawn,
+        decided_at: new Date().toISOString(),
+        decided_by: null,
+        decision_reason: `The requested change to ${revertedFields.join(", ")} was reverted before it was reviewed.`,
+      })
+      .eq("id", targetRequestId);
+    if (resolveError) {
+      res.status(500).json({ error: "Failed to raise change request" });
+      return;
+    }
+
+    const recipients = existing.coordinator_id ? [user.id, existing.coordinator_id] : [user.id];
+    const published = await getPublisher().publish({
+      type: "change.withdrawn",
+      eventId: existing.id,
+      actorId: user.id,
+      recipients: { userIds: recipients, roles: [] },
+      data: { eventName, changeRequestId: targetRequestId, fields: revertedFields },
+    });
+    notificationsFailed = !published;
+  } else if (existing.coordinator_id) {
+    const published = await getPublisher().publish({
+      type: "change.requested",
+      eventId: existing.id,
+      actorId: user.id,
+      recipients: { userIds: [existing.coordinator_id], roles: [] },
+      data: {
+        eventName,
+        changeRequestId: targetRequestId,
+        fields: result.changes.map((change) => change.field),
+      },
+    });
+    notificationsFailed = !published;
+  }
+
+  res.status(201).json({
+    changeRequestId: targetRequestId,
+    applied: nonCriticalChanges.map((change) => change.field),
+    held: upsertedCritical.map((change) => change.field),
+    reverted: revertedFields,
+    autoResolved,
+    notificationsFailed,
+  });
+});
+
+/**
+ * E3-8 AC2/AC4: what a held critical change would affect — the event's
+ * current venue bookings, equipment reservations and registrations, plus
+ * whether the requested attendance would exceed a booked venue's capacity.
+ * Pure read: nothing here writes anything, matching AC4's "the booking is
+ * not released automatically". Not E3-10's own assessment screen (that
+ * story still owns its own workflow) — just enough to satisfy E3-8's two
+ * ACs for the assigned coordinator reviewing a Pending request.
+ */
+interface ChangeRequestImpact {
+  bookings: { id: number; status: string; venue: { id: number; name: string } | null }[];
+  equipmentReservations: { id: number; status: string; items: ArrangementEquipmentItem[] }[];
+  registrations: { registeredCount: number; total: number };
+  capacityConflict: { bookingId: number; venueName: string; capacity: number; requestedAttendance: number } | null;
+}
+
+async function loadChangeRequestImpact(
+  eventId: number,
+  requestedAttendance: number | null,
+  authorization: string,
+): Promise<ChangeRequestImpact | null> {
+  const [bookingsResult, equipmentResult, registrationsResult] = await Promise.all([
+    fetchEventVenueBookings(eventId, authorization),
+    fetchEventEquipmentRequests(eventId, authorization),
+    fetchEventRegistrations(eventId, authorization),
+  ]);
+
+  if (bookingsResult.status !== "ok" || equipmentResult.status !== "ok" || registrationsResult.status !== "ok") {
+    return null;
+  }
+
+  const bookings = bookingsResult.value;
+  const registrations = registrationsResult.value;
+
+  let capacityConflict: ChangeRequestImpact["capacityConflict"] = null;
+  if (requestedAttendance !== null) {
+    const overCapacity = bookings.find(
+      (booking) => typeof booking.venue?.capacity === "number" && booking.venue.capacity < requestedAttendance,
+    );
+    if (overCapacity?.venue) {
+      capacityConflict = {
+        bookingId: overCapacity.id,
+        venueName: overCapacity.venue.name,
+        capacity: overCapacity.venue.capacity as number,
+        requestedAttendance,
+      };
+    }
+  }
+
+  return {
+    bookings: bookings.map((booking) => ({
+      id: booking.id,
+      status: booking.status,
+      venue: booking.venue ? { id: booking.venue.id, name: booking.venue.name } : null,
+    })),
+    equipmentReservations: equipmentResult.value.map((request) => ({
+      id: request.id,
+      status: request.status,
+      items: request.items,
+    })),
+    registrations: {
+      registeredCount: registrations.filter((r) => r.status === "Registered").length,
+      total: registrations.length,
+    },
+    capacityConflict,
+  };
+}
+
+/**
+ * E3-9: the organiser's own view of every change request they've raised on
+ * this event. E3-8 AC2/AC4: the assigned coordinator gets the same list,
+ * plus an `impact` assessment attached to each `Pending` request. Owner or
+ * assigned coordinator only, read-only, most recent first.
+ */
+eventsRouter.get("/:id/change-requests", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const { data: event, error: eventError } = await supabase
+    .from("events")
+    .select("id, organiser_id, coordinator_id")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+
+  if (eventError) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+  if (!event) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const isOwner = event.organiser_id === user.id;
+  const isAssignedCoordinator = user.role === "coordinator" && event.coordinator_id === user.id;
+  if (!isOwner && !isAssignedCoordinator) {
+    await recordAccessDenial(supabase, user.id, eventId, "not_found_or_not_owner");
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const { data: requests, error: requestsError } = await supabase
+    .from("change_requests")
+    .select("id, status, decided_at, decision_reason, created_at")
+    .eq("event_id", event.id)
+    .order("created_at", { ascending: false });
+
+  if (requestsError) {
+    res.status(500).json({ error: "Failed to load change requests" });
+    return;
+  }
+
+  const requestIds = (requests ?? []).map((request) => request.id);
+  const { data: fieldRows, error: fieldsError } = await supabase
+    .from("change_request_fields")
+    .select("request_id, field, old_value, new_value, is_critical")
+    .in("request_id", requestIds.length > 0 ? requestIds : [-1]);
+
+  if (fieldsError) {
+    res.status(500).json({ error: "Failed to load change requests" });
+    return;
+  }
+
+  const fieldsByRequest = new Map<number, typeof fieldRows>();
+  for (const field of fieldRows ?? []) {
+    const list = fieldsByRequest.get(field.request_id) ?? [];
+    list.push(field);
+    fieldsByRequest.set(field.request_id, list);
+  }
+
+  const authorization = req.headers.authorization!;
+  const impactByRequest = new Map<number, ChangeRequestImpact | null>();
+  for (const request of requests ?? []) {
+    if (request.status !== CHANGE_REQUEST_STATUS.Pending) continue;
+    const fields = fieldsByRequest.get(request.id) ?? [];
+    const attendanceField = fields.find((field) => field.field === "expectedAttendance");
+    const requestedAttendance = attendanceField ? Number(attendanceField.new_value) : null;
+    impactByRequest.set(
+      request.id,
+      await loadChangeRequestImpact(event.id, Number.isFinite(requestedAttendance) ? requestedAttendance : null, authorization),
+    );
+  }
+
+  res.json({
+    changeRequests: (requests ?? []).map((request) => ({
+      id: request.id,
+      status: request.status,
+      decidedAt: request.decided_at,
+      decisionReason: request.decision_reason,
+      createdAt: request.created_at,
+      fields: (fieldsByRequest.get(request.id) ?? []).map((field) => ({
+        field: field.field,
+        oldValue: field.old_value,
+        newValue: field.new_value,
+        isCritical: field.is_critical,
+      })),
+      impact: impactByRequest.has(request.id) ? impactByRequest.get(request.id) : null,
+    })),
+  });
 });
 
 /**
@@ -1814,20 +2308,15 @@ eventsRouter.post("/:id/safety-review/reject", async (req: AuthedRequest, res) =
 
   if (event.coordinator_id) {
     const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
-    await sendNotifications(
-      [
-        {
-          recipientId: event.coordinator_id,
-          type: "event_safety_rejected",
-          title: "Safety review rejected",
-          body: fitNotificationBody(
-            `"${typeof eventName === "string" ? eventName : "Your event"}" failed its Operational Safety Check and is back in Planning. Reason: ${reason}`,
-          ),
-          link: `/events/${event.id}`,
-        },
-      ],
-      req.headers.authorization!,
-    );
+    // Migrated to RabbitMQ (ARD section 1.1, RabbitMQ.md #9 "safety.decided"),
+    // same type the approve route already publishes.
+    await getPublisher().publish({
+      type: "safety.decided",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.coordinator_id], roles: [] },
+      data: { outcome: "rejected", reason, eventName: typeof eventName === "string" ? eventName : null },
+    });
   }
 
   res.json({ event: data, reviewId });
@@ -1906,20 +2395,15 @@ eventsRouter.post("/:id/safety-review/request-changes", async (req: AuthedReques
 
   if (event.coordinator_id) {
     const eventName = ((data.submitted_details ?? {}) as Record<string, unknown>).name;
-    await sendNotifications(
-      [
-        {
-          recipientId: event.coordinator_id,
-          type: "event_safety_changes_requested",
-          title: "Safety changes requested",
-          body: fitNotificationBody(
-            `"${typeof eventName === "string" ? eventName : "Your event"}" is back in Planning. The Safety Officer asked for changes — ${reason}`,
-          ),
-          link: `/events/${event.id}`,
-        },
-      ],
-      authorization,
-    );
+    // Migrated to RabbitMQ (ARD section 1.1, RabbitMQ.md #9 "safety.decided"),
+    // same type the approve/reject routes already publish.
+    await getPublisher().publish({
+      type: "safety.decided",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [event.coordinator_id], roles: [] },
+      data: { outcome: "changes_requested", reason, eventName: typeof eventName === "string" ? eventName : null },
+    });
   }
 
   res.json({ event: data, reviewId });
