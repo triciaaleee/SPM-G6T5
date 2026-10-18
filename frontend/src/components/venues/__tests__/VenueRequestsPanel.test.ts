@@ -140,7 +140,7 @@ describe("VenueRequestsPanel", () => {
       const wrapper = mountPanel({ bookings: [makeBooking({ status: "Requested" })], canWithdraw: true });
       await wrapper.find(".action-btn").trigger("click");
 
-      await wrapper.find(".modal-button--secondary").trigger("click");
+      await wrapper.find(".modal-actions .btn--outline").trigger("click");
 
       expect(wrapper.find(".modal-overlay").exists()).toBe(false);
       expect(withdraw).not.toHaveBeenCalled();
@@ -153,7 +153,7 @@ describe("VenueRequestsPanel", () => {
       const wrapper = mountPanel({ bookings: [makeBooking({ status: "Requested" })], canWithdraw: true });
       await wrapper.find(".action-btn").trigger("click");
 
-      await wrapper.find(".modal-button--danger").trigger("click");
+      await wrapper.find(".modal-actions .btn--danger-solid").trigger("click");
       await Promise.resolve();
       await Promise.resolve();
 
@@ -169,7 +169,7 @@ describe("VenueRequestsPanel", () => {
       const wrapper = mountPanel({ bookings: [makeBooking({ status: "Approved" })], canWithdraw: true });
       await wrapper.find(".action-btn").trigger("click");
 
-      await wrapper.find(".modal-button--danger").trigger("click");
+      await wrapper.find(".modal-actions .btn--danger-solid").trigger("click");
       await Promise.resolve();
       await Promise.resolve();
 
@@ -199,7 +199,7 @@ describe("VenueRequestsPanel", () => {
       const wrapper = mountPanel({ bookings: [makeBooking({ status: "Requested" })], canWithdraw: true });
       await wrapper.find(".action-btn").trigger("click");
 
-      await wrapper.find(".modal-button--danger").trigger("click");
+      await wrapper.find(".modal-actions .btn--danger-solid").trigger("click");
       await Promise.resolve();
       await Promise.resolve();
 

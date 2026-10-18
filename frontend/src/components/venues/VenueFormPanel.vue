@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../ui/AppButton.vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ExclamationTriangleIcon, XMarkIcon } from "@heroicons/vue/20/solid";
 import {
@@ -385,9 +386,9 @@ onBeforeUnmount(() => {
             <input v-model="extra[group.key]" type="text" class="input add-row__input" maxlength="60"
               :placeholder="group.placeholder" :aria-label="`Add another option to ${group.label.toLowerCase()}`"
               @keydown.enter.prevent="addExtra(group.key)" />
-            <button type="button" class="btn btn--ghost" :disabled="!extra[group.key].trim()" @click="addExtra(group.key)">
+            <AppButton variant="ghost" type="button" :disabled="!extra[group.key].trim()" @click="addExtra(group.key)">
               Add
-            </button>
+            </AppButton>
           </div>
           <span v-if="fieldErrors[group.key]" class="field__error">{{ fieldErrors[group.key] }}</span>
         </fieldset>
@@ -436,8 +437,8 @@ onBeforeUnmount(() => {
         <p v-else-if="saveError" class="body-small error-text field--full" role="alert">{{ saveError }}</p>
 
         <div class="actions field--full">
-          <button type="button" class="btn btn--outline" :disabled="saving" @click="emit('close')">Cancel</button>
-          <button type="submit" class="btn btn--solid" :disabled="saving">{{ submitLabel }}</button>
+          <AppButton variant="outline" type="button" :disabled="saving" @click="emit('close')">Cancel</AppButton>
+          <AppButton variant="primary" type="submit" :disabled="saving">{{ submitLabel }}</AppButton>
         </div>
       </form>
     </aside>
@@ -684,57 +685,6 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   gap: var(--spacing-12);
   padding-top: var(--spacing-8);
-}
-
-.btn {
-  height: 40px;
-  padding: 0 var(--spacing-16);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.btn:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.btn--solid {
-  border: none;
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn--solid:hover:not(:disabled) {
-  background: var(--color-purple-500);
-}
-
-.btn--outline {
-  border: 1px solid var(--color-purple-300);
-  background: transparent;
-  color: var(--color-purple-600);
-}
-
-.btn--outline:hover:not(:disabled) {
-  background: var(--color-purple-100);
-}
-
-.btn--ghost {
-  border: none;
-  background: transparent;
-  color: var(--color-purple-600);
-}
-
-.btn--ghost:hover:not(:disabled) {
-  background: var(--color-purple-100);
 }
 
 /* Booking impact of an edit — same warning treatment as BlockOutPanel. */

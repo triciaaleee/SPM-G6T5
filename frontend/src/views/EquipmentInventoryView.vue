@@ -6,6 +6,7 @@
  * checks that and says which field is wrong. Request status changes keep
  * moving available stock on their own, so an edit here is a correction.
  */
+import AppButton from "../components/ui/AppButton.vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import {
   EquipmentRequestError,
@@ -165,9 +166,9 @@ onMounted(async () => {
               :aria-invalid="!!addErrors.totalStock" aria-describedby="new-total-error" />
             <p id="new-total-error" class="field-error" role="alert">{{ addErrors.totalStock }}</p>
           </div>
-          <button type="submit" class="btn btn-primary" :disabled="!canAdd">
+          <AppButton variant="primary" type="submit" class="add-button" :disabled="!canAdd">
             {{ adding ? "Adding…" : "Add item" }}
-          </button>
+          </AppButton>
         </form>
         <p v-if="addError" class="field-error" role="alert">{{ addError }}</p>
       </section>
@@ -205,10 +206,10 @@ onMounted(async () => {
                   <p class="field-error" role="alert">{{ draftFor(item).fieldErrors.availableStock }}</p>
                 </td>
                 <td class="row-actions">
-                  <button type="button" class="btn btn-secondary" :aria-label="`Save ${item.name}`"
+                  <AppButton variant="outline" type="button" :aria-label="`Save ${item.name}`"
                     :disabled="!isDirty(item) || draftFor(item).saving" @click="saveRow(item)">
                     {{ draftFor(item).saving ? "Saving…" : "Save" }}
-                  </button>
+                  </AppButton>
                   <p v-if="draftFor(item).saved" class="row-note" role="status">Saved</p>
                   <p v-if="draftFor(item).error" class="field-error" role="alert">{{ draftFor(item).error }}</p>
                 </td>
@@ -439,49 +440,10 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-/* Buttons: Style.md 3.4. Add item is the one solid button; Save per row is outline. */
-.btn {
-  min-height: 44px;
-  padding: 0 var(--spacing-24);
-  border: 1px solid transparent;
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn:disabled {
-  border-color: var(--color-grey-100);
-  background: var(--color-grey-25);
-  color: var(--color-grey-300);
-  cursor: not-allowed;
-}
-
-.btn:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.btn-primary {
+/* Add item is the one solid button; lined up with the inputs beside it (label height + gap). */
+.add-button {
   align-self: flex-start;
   margin-top: calc(var(--spacing-20) + var(--spacing-4));
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
 }
 
-.btn-primary:not(:disabled):hover {
-  background: var(--color-purple-500);
-}
-
-.btn-secondary {
-  background: transparent;
-  border-color: var(--color-purple-300);
-  color: var(--color-purple-600);
-}
-
-.btn-secondary:not(:disabled):hover {
-  background: var(--color-purple-100);
-}
 </style>

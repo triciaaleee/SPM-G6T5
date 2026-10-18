@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../ui/AppButton.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { BellIcon } from "@heroicons/vue/24/outline";
@@ -207,7 +208,7 @@ onBeforeUnmount(() => {
       </ul>
 
       <div class="dropdown__footer">
-        <button type="button" class="btn-ghost" @click="viewAll">See more</button>
+        <AppButton variant="ghost" size="sm" type="button" @click="viewAll">See more</AppButton>
       </div>
     </div>
 
@@ -217,7 +218,7 @@ onBeforeUnmount(() => {
         <div class="toast__content">
           <p class="toast__title">{{ toast.title }}</p>
           <p class="toast__body">{{ toast.body }}</p>
-          <button type="button" class="btn-ghost toast__action" @click="viewFromToast">View</button>
+          <AppButton variant="ghost" size="sm" type="button" class="toast__action" @click="viewFromToast">View</AppButton>
         </div>
         <button type="button" class="toast__close" aria-label="Dismiss" @click="toast = null">
           <XMarkIcon class="toast__close-icon" aria-hidden="true" />
@@ -392,28 +393,6 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding: var(--spacing-8);
   border-top: 1px solid var(--color-grey-100);
-}
-
-.btn-ghost {
-  padding: var(--spacing-4) var(--spacing-12);
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-purple-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn-ghost:hover {
-  background: var(--color-purple-100);
-}
-
-.btn-ghost:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
 }
 
 /* Style.md 3.5: toast. */

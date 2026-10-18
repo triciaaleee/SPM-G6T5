@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AppButton from "../components/ui/AppButton.vue";
+import EventCard, { type CardFact } from "../components/ui/EventCard.vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { deleteDraft, fetchMyEvents, getCurrentUser, type EventSummary } from "../lib/eventsApi";
@@ -44,10 +46,6 @@ function formatCreatedDate(value: string): string {
   return `${day}/${month}/${date.getFullYear()}`;
 }
 
-function coordinatorInitial(event: EventSummary): string {
-  return event.coordinator?.name?.charAt(0).toUpperCase() ?? "";
-}
-
 /** Organiser-only flag: a coordinator has asked a clarification question
  * on this event and it's still awaiting the Organiser's reply. */
 function needsClarificationReply(event: EventSummary): boolean {
@@ -69,6 +67,14 @@ function eventName(event: EventSummary): string {
 function eventDateLabel(event: EventSummary): string {
   const details = event.submitted_details as SubmittedEventDetails;
   return formatCardDate(details?.proposedDate);
+}
+
+/** Date and time each get their own line on the card. */
+function cardFacts(event: EventSummary): CardFact[] {
+  return [
+    { icon: "calendar", text: eventDateLabel(event) },
+    { icon: "clock", text: eventTimeLabel(event) },
+  ];
 }
 
 function eventTimeLabel(event: EventSummary): string {
@@ -156,14 +162,12 @@ onMounted(async () => {
             {{ isCoordinator ? "All events in the pipeline." : "Only events you created appear here." }}
           </p>
         </div>
-        <RouterLink v-if="!isCoordinator" :to="{ name: 'new-event-request' }"
-          class="shrink-0 rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700">
+        <AppButton v-if="!isCoordinator" variant="primary" :to="{ name: 'new-event-request' }" class="shrink-0">
           New event request
-        </RouterLink>
-        <RouterLink v-else :to="{ name: 'venue-search' }"
-          class="shrink-0 rounded-xs bg-purple-600 px-6 py-3 text-sm font-bold text-base-white hover:bg-purple-700">
+        </AppButton>
+        <AppButton v-else variant="primary" :to="{ name: 'venue-search' }" class="shrink-0">
           Find venues
-        </RouterLink>
+        </AppButton>
       </div>
 
       <div v-if="!isCoordinator && !loading && !errorMessage" class="tabs" role="tablist">
@@ -184,50 +188,29 @@ onMounted(async () => {
       </p>
 
       <div v-else class="card-grid">
-        <RouterLink v-for="event in filteredEvents" :key="event.id" :to="eventLink(event)"
-          class="event-card">
-          <img :src="eventThumbnail(event.id)" alt="" class="card-thumbnail" />
-
-          <div class="card-content">
-            <div class="card-header">
-              <span class="badge badge-dot" :class="statusBadgeClass(event.status)">
-                <span class="badge__dot" />
-                {{ statusLabel(event.status) }}
-              </span>
-              <span v-if="isRegistrationRequired(event)" class="badge badge-registration">Registration Required</span>
-            </div>
-            <p class="card-title">{{ eventName(event) }}</p>
-
-            <ul class="card-facts">
-              <li class="fact">
-                <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" /></svg>
-                <span>{{ eventDateLabel(event) }}</span>
-              </li>
-              <li class="fact">
-                <svg class="fact__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
-                <span>{{ eventTimeLabel(event) }}</span>
-              </li>
-            </ul>
-
-            <hr class="card-divider" />
-
-            <div class="card-footer">
-              <div class="card-coordinator">
-                <span v-if="event.coordinator?.name" class="coordinator-avatar">{{ coordinatorInitial(event) }}</span>
-                <span class="body-small muted">Coordinator: {{ event.coordinator?.name ?? "Unassigned" }}</span>
-              </div>
-              <span class="body-small muted">Submitted: {{ formatCreatedDate(event.created_at) }}</span>
-            </div>
-
-            <div v-if="needsClarificationReply(event) || event.status === 'Draft'" class="card-footer-actions">
+        <div v-for="event in filteredEvents" :key="event.id" class="card-cell">
+          <EventCard
+            :to="eventLink(event)"
+            :thumbnail="eventThumbnail(event.id)"
+            :title="eventName(event)"
+            :status-label="statusLabel(event.status)"
+            :status-class="statusBadgeClass(event.status)"
+            :extra-badges="isRegistrationRequired(event) ? ['Registration Required'] : []"
+            :facts="cardFacts(event)"
+            person-label="Coordinator"
+            :person-name="event.coordinator?.name"
+            person-empty="Unassigned"
+            :meta="`Submitted: ${formatCreatedDate(event.created_at)}`"
+          >
+            <template v-if="needsClarificationReply(event) || event.status === 'Draft'" #footer-actions>
               <span v-if="needsClarificationReply(event)" class="reply-action">Reply Needed</span>
               <button v-if="event.status === 'Draft'" type="button" class="delete-draft-action"
                 @click="requestDeleteDraft(event, $event)">
                 Delete
               </button>
-            </div>
-          </div>
-        </RouterLink>
+            </template>
+          </EventCard>
+        </div>
       </div>
     </div>
 
@@ -239,14 +222,14 @@ onMounted(async () => {
         </p>
         <p v-if="deleteError" class="body-small error-text">{{ deleteError }}</p>
         <div class="modal-actions">
-          <button type="button" class="modal-button modal-button--secondary" :disabled="deleting"
+          <AppButton variant="outline" type="button" :disabled="deleting"
             @click="cancelDeleteDraft">
             Cancel
-          </button>
-          <button type="button" class="modal-button modal-button--danger" :disabled="deleting"
+          </AppButton>
+          <AppButton variant="danger-solid" type="button" :disabled="deleting"
             @click="confirmDeleteDraft">
             {{ deleting ? "Deleting…" : "Delete" }}
-          </button>
+          </AppButton>
         </div>
       </div>
     </div>
@@ -370,169 +353,28 @@ onMounted(async () => {
   }
 }
 
-.event-card {
-  position: relative;
+/* Each card sits in a cell that carries the 12/6/4 column spans. */
+.card-cell {
   grid-column: span 4;
-  display: flex;
-  flex-direction: column;
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  overflow: hidden;
-  color: inherit;
-}
-
-.card-thumbnail {
-  display: block;
-  width: 100%;
-  aspect-ratio: 3 / 1;
-  object-fit: cover;
-}
-
-.card-content {
-  padding: var(--spacing-24);
-}
-
-.event-card:hover {
-  border-width: 1.4px;
-  border-color: var(--color-purple-300);
 }
 
 @media (max-width: 1024px) {
-  /* 6 columns / span 3 = 2 per row, matching desktop's 8/4 split instead
-     of the mismatched span 4 leaving a gap on every row at this width. */
-  .event-card {
+  /* 6 columns / span 3 = 2 per row, matching desktop's 12/4 split. */
+  .card-cell {
     grid-column: span 3;
   }
 }
 
 @media (max-width: 640px) {
-  .event-card {
+  .card-cell {
     grid-column: span 4;
   }
 }
 
-.card-title {
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.75rem;
-  color: var(--color-grey-900);
-  margin: var(--spacing-12) 0 var(--spacing-4);
-}
-
-.card-facts {
-  list-style: none;
-  margin: 0 0 var(--spacing-8);
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-}
-
-.fact {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-  color: var(--color-grey-600);
-}
-
-.fact__icon {
-  flex: none;
-  color: var(--color-grey-500);
-}
-
-.card-header {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacing-8);
-}
-
-.badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-full);
-}
-
-.badge-dot {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-4);
-}
-
-
-.badge__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: currentColor;
-  flex-shrink: 0;
-}
-
-.badge-registration {
-  background: var(--color-purple-100);
-  color: var(--color-purple-700);
-  white-space: nowrap;
-}
-
-.status-success {
-  background: #e5eee5;
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: #FEF5E7;
-  color: var(--color-warning-600);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-.status-info {
-  background: var(--color-warning-200);
-  color: var(--color-warning-700);
-}
-
-.card-divider {
-  border: none;
-  border-top: 1px solid var(--color-grey-100);
-  margin: 40px 0 16px 0;
-}
-
-.card-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-8);
-}
-
-.card-coordinator {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  min-width: 0;
-}
-
-.coordinator-avatar {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--color-purple-200);
-  color: var(--color-purple-600);
-  font-size: 0.75rem;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+@media (max-width: 1024px) {
+  /* 6 columns / span 3 = 2 per row, matching desktop's 8/4 split instead
+     of the mismatched span 4 leaving a gap on every row at this width. */
+  
 }
 
 .reply-action {
@@ -542,13 +384,6 @@ onMounted(async () => {
   font-weight: 600;
   white-space: nowrap;
   padding-bottom: 2px;
-}
-
-.card-footer-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-12);
-  margin-top: var(--spacing-8);
 }
 
 .delete-draft-action {
@@ -600,36 +435,4 @@ onMounted(async () => {
   margin-top: var(--spacing-24);
 }
 
-.modal-button {
-  appearance: none;
-  border: none;
-  cursor: pointer;
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-8) var(--spacing-16);
-  font-size: 0.875rem;
-  font-weight: 700;
-}
-
-.modal-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.modal-button--secondary {
-  background: var(--color-grey-100);
-  color: var(--color-grey-900);
-}
-
-.modal-button--secondary:hover:not(:disabled) {
-  background: var(--color-grey-200);
-}
-
-.modal-button--danger {
-  background: var(--color-error-600);
-  color: var(--color-base-white);
-}
-
-.modal-button--danger:hover:not(:disabled) {
-  filter: brightness(0.9);
-}
 </style>

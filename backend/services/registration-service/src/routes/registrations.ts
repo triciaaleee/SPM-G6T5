@@ -5,6 +5,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { REGISTRATION_STATUS } from "../lib/registrationStatus.js";
 import type { RegistrationStatus } from "../lib/registrationStatus.js";
 import { canViewEvent, fetchAttendeeEvents, fetchOpenEvents } from "../lib/eventsClient.js";
+import type { AttendeeEventInfo } from "../lib/eventsClient.js";
 import { fetchVenueNames } from "../lib/venuesClient.js";
 import { fetchUserNames } from "../lib/usersClient.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
@@ -66,6 +67,40 @@ function parseEventId(raw: unknown): number | null {
   return typeof text === "string" && /^[1-9]\d*$/.test(text) ? Number(text) : null;
 }
 
+/**
+ * How many Registered places each event has, across every attendee. Only
+ * the count leaves this service — never who holds the places.
+ */
+async function countRegistered(
+  supabase: NonNullable<AuthedRequest["supabase"]>,
+  eventIds: number[],
+): Promise<{ ok: true; counts: Map<number, number> } | { ok: false }> {
+  const counts = new Map<number, number>();
+  if (eventIds.length === 0) return { ok: true, counts };
+
+  const { data, error } = await supabase
+    .from("registrations")
+    .select("event_id")
+    .eq("status", REGISTRATION_STATUS.registered)
+    .in("event_id", eventIds);
+  if (error) return { ok: false };
+
+  for (const { event_id } of (data ?? []) as { event_id: number }[]) {
+    counts.set(event_id, (counts.get(event_id) ?? 0) + 1);
+  }
+  return { ok: true, counts };
+}
+
+/** Places still free; null when the event has no cap. */
+function slotsLeft(capacity: number | null | undefined, registered: number): number | null {
+  return capacity == null ? null : Math.max(0, capacity - registered);
+}
+
+/** Ids of the events that have a cap — the only ones worth counting. */
+function cappedEventIds(events: AttendeeEventInfo[]): number[] {
+  return events.filter((event) => event.capacity != null).map((event) => event.id);
+}
+
 /** undefined/null → no info; a plain object within the size cap → itself; anything else → invalid. */
 function parseAdditionalInfo(raw: unknown): { ok: true; value: Record<string, unknown> | null } | { ok: false } {
   if (raw === undefined || raw === null) return { ok: true, value: null };
@@ -106,8 +141,20 @@ registrationsRouter.get("/open-events", async (req: AuthedRequest, res) => {
     }
   }
 
+  const registered = await countRegistered(supabase!, cappedEventIds(open.events));
+  if (!registered.ok) {
+    res.status(500).json({ error: "Failed to load registrations" });
+    return;
+  }
+
   res.json({
-    events: open.events.map((event) => ({ ...event, registrationStatus: statusByEvent.get(event.id) ?? null })),
+    events: open.events.map((event) => ({
+      ...event,
+      organiserName: event.organiserName ?? null,
+      capacity: event.capacity ?? null,
+      slotsLeft: slotsLeft(event.capacity, registered.counts.get(event.id) ?? 0),
+      registrationStatus: statusByEvent.get(event.id) ?? null,
+    })),
   });
 });
 
@@ -171,6 +218,7 @@ registrationsRouter.get("/user/:userId", async (req: AuthedRequest, res) => {
               endTime: event.endTime,
               venues: venues.venuesByEvent.get(row.event_id) ?? [],
               accessibility: event.accessibility,
+              organiserName: event.organiserName ?? null,
             }
           : null,
       };
@@ -280,12 +328,28 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
   const alreadyRegistered = () =>
     res.status(409).json({ error: "You are already registered for this event", code: "already_registered" });
 
-  if (existing) {
-    if ((existing as RegistrationRow).status === REGISTRATION_STATUS.registered) {
-      alreadyRegistered();
+  if ((existing as RegistrationRow | null)?.status === REGISTRATION_STATUS.registered) {
+    alreadyRegistered();
+    return;
+  }
+
+  // Full events take no more registrations. The count and the write below
+  // are separate steps, not one transaction, so two attendees registering
+  // for the last place at the same instant could both get in — accepted,
+  // the same trade-off as the rest of this service's application-level checks.
+  if (event.capacity != null) {
+    const registered = await countRegistered(supabase!, [eventId]);
+    if (!registered.ok) {
+      res.status(500).json({ error: "Failed to register" });
       return;
     }
+    if (slotsLeft(event.capacity, registered.counts.get(eventId) ?? 0) === 0) {
+      res.status(409).json({ error: "This event is full", code: "event_full" });
+      return;
+    }
+  }
 
+  if (existing) {
     // Re-registering after a withdrawal: same row, back to Registered. New
     // additional_info replaces the old; leaving it out keeps what was there.
     const { data: updated, error: updateError } = await supabase!
@@ -453,6 +517,12 @@ registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) 
     return;
   }
 
+  const registered = await countRegistered(supabase!, cappedEventIds([event]));
+  if (!registered.ok) {
+    res.status(500).json({ error: "Failed to load the event" });
+    return;
+  }
+
   res.json({
     event: {
       id: event.id,
@@ -463,6 +533,9 @@ registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) 
       endTime: event.endTime,
       venues: venues.venuesByEvent.get(eventId) ?? [],
       accessibility: event.accessibility,
+      organiserName: event.organiserName ?? null,
+      capacity: event.capacity ?? null,
+      slotsLeft: slotsLeft(event.capacity, registered.counts.get(eventId) ?? 0),
       registrationStatus,
       open: event.open,
     },

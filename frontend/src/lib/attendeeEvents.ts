@@ -37,6 +37,13 @@ export function formatCardTimeRange(start: string | null | undefined, end: strin
   return "Time to be confirmed";
 }
 
+/** 0 → "Full", 1 → "1 slot left", 12 → "12 slots left". Null (no cap) has no label. */
+export function slotsLabel(slotsLeft: number | null | undefined): string | null {
+  if (slotsLeft == null) return null;
+  if (slotsLeft <= 0) return "Full";
+  return `${slotsLeft} ${slotsLeft === 1 ? "slot" : "slots"} left`;
+}
+
 /**
  * Past = the event has ended. An event with no usable date can't be placed
  * in time, so it stays under Upcoming rather than disappearing into Past.

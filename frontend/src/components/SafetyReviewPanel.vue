@@ -12,6 +12,7 @@
  * doesn't have to rely on the notification while reworking the
  * arrangements.
  */
+import AppButton from "./ui/AppButton.vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import {
   fetchSafetyReviews,
@@ -156,9 +157,9 @@ async function submit(): Promise<void> {
       Officer's Operational Safety Check. The event can't be edited while it's under review.
     </p>
 
-    <button v-if="!formOpen" type="button" class="btn btn-primary sr-open" @click="openForm">
+    <AppButton variant="primary" v-if="!formOpen" type="button" class="sr-open" @click="openForm">
       Submit for safety review
-    </button>
+    </AppButton>
 
     <form v-else class="sr-form" novalidate @submit.prevent="submit">
       <div v-if="outstanding" class="sr-outstanding" role="alert">
@@ -195,10 +196,10 @@ async function submit(): Promise<void> {
       </div>
 
       <div class="sr-actions">
-        <button type="submit" class="btn btn-primary" :disabled="submitting">
+        <AppButton variant="primary" type="submit" :disabled="submitting">
           {{ submitting ? "Submitting…" : "Submit for safety review" }}
-        </button>
-        <button type="button" class="btn btn-secondary" :disabled="submitting" @click="closeForm">Cancel</button>
+        </AppButton>
+        <AppButton variant="outline" type="button" :disabled="submitting" @click="closeForm">Cancel</AppButton>
       </div>
     </form>
   </section>
@@ -315,36 +316,4 @@ async function submit(): Promise<void> {
   gap: var(--spacing-8);
 }
 
-.btn {
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-12) var(--spacing-16);
-  font-size: 0.875rem;
-  font-weight: 700;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.btn-primary {
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn-primary:not(:disabled):hover {
-  background: var(--color-purple-700, var(--color-purple-600));
-}
-
-.btn-secondary {
-  background: var(--color-grey-75);
-  color: var(--color-grey-900);
-  border-color: var(--color-grey-200);
-}
-
-.btn-secondary:not(:disabled):hover {
-  background: var(--color-grey-100);
-}
 </style>

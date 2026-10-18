@@ -143,8 +143,8 @@ describe("VenueAvailabilityView", () => {
     const { wrapper } = await mountView();
     const actions = wrapper.find(".controls__actions");
     expect(actions.exists()).toBe(true);
-    expect(wrapper.find("form.target").find(".btn-primary").exists()).toBe(false);
-    expect(actions.find(".btn-primary").attributes()).toMatchObject({ type: "submit", form: "target-form" });
+    expect(wrapper.find("form.target").find(".btn--primary").exists()).toBe(false);
+    expect(actions.find(".btn--primary").attributes()).toMatchObject({ type: "submit", form: "target-form" });
   });
 
   it("flags an invalid target without calling the API", async () => {

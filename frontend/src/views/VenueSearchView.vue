@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../components/ui/AppButton.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { fetchEventById, type EventSummary } from "../lib/eventsApi";
@@ -369,10 +370,10 @@ onMounted(async () => {
               <p v-if="requestedVenueIds.has(selectedVenue.id)" class="body-small requested-note" role="status">
                 Requested — awaiting Venue Staff
               </p>
-              <button v-else type="button" class="request-btn" :disabled="requestingVenueId === selectedVenue.id"
+              <AppButton variant="primary" size="sm" class="request-btn" v-else type="button" :disabled="requestingVenueId === selectedVenue.id"
                 @click="requestVenue(selectedVenue.id)">
                 {{ requestingVenueId === selectedVenue.id ? "Requesting…" : "Request this venue" }}
-              </button>
+              </AppButton>
             </template>
           </div>
           <p v-if="requestErrorVenueId === selectedVenueId" class="body-small error-text" role="alert">
@@ -390,9 +391,9 @@ onMounted(async () => {
             <p class="empty-state__title">No results found</p>
             <p class="body-default muted">No venue matches all of your filters.</p>
 
-            <button type="button" class="btn btn--ghost empty-state__clear" @click="clearAllFilters">
+            <AppButton variant="ghost" type="button" class="empty-state__clear" @click="clearAllFilters">
               Clear all filters
-            </button>
+            </AppButton>
           </div>
 
           <template v-else>
@@ -445,10 +446,10 @@ onMounted(async () => {
                   <p v-if="requestedVenueIds.has(venue.id)" class="body-small requested-note" role="status">
                     Requested — awaiting Venue Staff
                   </p>
-                  <button v-else type="button" class="request-btn" :disabled="requestingVenueId === venue.id"
+                  <AppButton variant="primary" size="sm" class="request-btn" v-else type="button" :disabled="requestingVenueId === venue.id"
                     @click="requestVenue(venue.id)">
                     {{ requestingVenueId === venue.id ? "Requesting…" : "Request this venue" }}
-                  </button>
+                  </AppButton>
                   <p v-if="requestErrorVenueId === venue.id" class="body-small error-text" role="alert">
                     {{ requestError }}
                   </p>
@@ -669,31 +670,6 @@ onMounted(async () => {
 }
 
 /* Style.md 3.4 Button Hierarchy (primary) + 8.2 focus ring; radius-xs. */
-.request-btn {
-  margin-top: var(--spacing-16);
-  padding: var(--spacing-12) var(--spacing-16);
-  border: 1px solid transparent;
-  border-radius: var(--radius-xs);
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.request-btn:hover:not(:disabled) {
-  background: var(--color-purple-700);
-}
-
-.request-btn:focus-visible {
-  outline: 2px solid var(--color-purple-600);
-  outline-offset: 2px;
-}
-
-.request-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
 
 .requested-note {
   margin-top: var(--spacing-16);
@@ -860,42 +836,13 @@ onMounted(async () => {
   background-color: var(--color-blue-200)!important;
 }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  height: 40px;
-  padding: 0 var(--spacing-16);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn--outline {
-  border: 1px solid var(--color-purple-300);
-  background: transparent;
-  color: var(--color-purple-600);
-}
-
-.btn--outline:hover {
-  background: var(--color-purple-100);
-}
-
-.btn--ghost {
-  border: none;
-  background: transparent;
-  color: var(--color-purple-600);
-}
-
-.btn--ghost:hover {
-  background: var(--color-purple-100);
-}
-
 .btn__count {
   font-weight: 400;
   color: var(--color-grey-500);
+}
+
+/* Space above the "Request this venue" button. */
+.request-btn {
+  margin-top: var(--spacing-16);
 }
 </style>

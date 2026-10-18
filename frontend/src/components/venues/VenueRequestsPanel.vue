@@ -15,6 +15,7 @@
  * sibling of the venue recommendations card rather than part of it. The
  * list inside is a single column at every breakpoint.
  */
+import AppButton from "../ui/AppButton.vue";
 import { computed, ref } from "vue";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/vue/16/solid";
 import {
@@ -192,7 +193,7 @@ async function confirmAction(): Promise<void> {
           </span>
           <!-- E4-9: withdraw a pending request/hold, or release an Approved
                booking. Approving/rejecting stays Venue Staff's (E4-10). -->
-          <button v-if="canWithdraw && actionFor(booking.status)" type="button" class="action-btn"
+          <AppButton variant="outline" size="sm" class="action-btn" v-if="canWithdraw && actionFor(booking.status)" type="button"
             :disabled="actingId === booking.id" @click="requestAction(booking)">
             {{
               actingId === booking.id
@@ -201,7 +202,7 @@ async function confirmAction(): Promise<void> {
                   ? "Withdraw"
                   : "Release"
             }}
-          </button>
+          </AppButton>
         </div>
       </li>
     </ul>
@@ -212,14 +213,14 @@ async function confirmAction(): Promise<void> {
         <p id="withdraw-confirm-title" class="modal-title">{{ pendingActionCopy.title }}</p>
         <p class="body-default muted">{{ pendingActionCopy.body }}</p>
         <div class="modal-actions">
-          <button type="button" class="modal-button modal-button--secondary" :disabled="actingId !== null"
+          <AppButton variant="outline" type="button" :disabled="actingId !== null"
             @click="cancelAction">
             Cancel
-          </button>
-          <button type="button" class="modal-button modal-button--danger" :disabled="actingId !== null"
+          </AppButton>
+          <AppButton variant="danger-solid" type="button" :disabled="actingId !== null"
             @click="confirmAction">
             {{ actingId !== null ? "Working…" : pendingActionCopy.confirmLabel }}
-          </button>
+          </AppButton>
         </div>
       </div>
     </div>
@@ -330,31 +331,6 @@ async function confirmAction(): Promise<void> {
 }
 
 /* Style.md 3.4 Button Hierarchy (outline) + 8.2 focus ring; radius-xs. */
-.action-btn {
-  padding: var(--spacing-4) var(--spacing-12);
-  border: 1px solid var(--color-purple-300);
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-purple-600);
-  font-size: 0.75rem;
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.action-btn:hover:not(:disabled) {
-  background: var(--color-purple-100);
-}
-
-.action-btn:focus-visible {
-  outline: 2px solid var(--color-purple-600);
-  outline-offset: 2px;
-}
-
-.action-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
 
 .status-success {
   background: #e5eee5;
@@ -409,36 +385,4 @@ async function confirmAction(): Promise<void> {
   margin-top: var(--spacing-24);
 }
 
-.modal-button {
-  appearance: none;
-  border: none;
-  cursor: pointer;
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-8) var(--spacing-16);
-  font-size: 0.875rem;
-  font-weight: 700;
-}
-
-.modal-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.modal-button--secondary {
-  background: var(--color-grey-100);
-  color: var(--color-grey-900);
-}
-
-.modal-button--secondary:hover:not(:disabled) {
-  background: var(--color-grey-200);
-}
-
-.modal-button--danger {
-  background: var(--color-error-600);
-  color: var(--color-base-white);
-}
-
-.modal-button--danger:hover:not(:disabled) {
-  filter: brightness(0.9);
-}
 </style>

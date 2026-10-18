@@ -45,6 +45,8 @@ function eventView(overrides: Partial<AttendeeEventView> = {}): AttendeeEventVie
     endTime: "16:00",
     venues: ["Great Lawn", "Sports Hall (rain site)"],
     accessibility: "Step-free entry and a hearing loop.",
+    capacity: null,
+    slotsLeft: null,
     registrationStatus: "Registered",
     open: false,
     ...overrides,
@@ -129,6 +131,15 @@ describe("AttendeeEventDetailView", () => {
     expect(unregistered.find(".badge").exists()).toBe(false);
   });
 
+  it("makes Register an extra-large button", async () => {
+    mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
+    const wrapper = await mountView();
+
+    const button = wrapper.find(".actions button");
+    expect(button.text()).toBe("Register");
+    expect(button.classes()).toContain("btn--xl");
+  });
+
   it("registers and flips the badge and button in place", async () => {
     mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
     mockedRegister.mockResolvedValue(undefined);
@@ -156,6 +167,55 @@ describe("AttendeeEventDetailView", () => {
     await flushPromises();
     expect(closed.find("[role='alert']").text()).toContain("no longer open");
     expect(closed.findAll(".actions button")).toHaveLength(0);
+  });
+
+  it("shows slots left, and none when the event has no cap", async () => {
+    mockedView.mockResolvedValue(eventView({ capacity: 50, slotsLeft: 12 }));
+    const capped = await mountView();
+    expect(capped.find("[data-testid='slots-left']").text()).toContain("12 slots left");
+
+    mockedView.mockResolvedValue(eventView());
+    const uncapped = await mountView();
+    expect(uncapped.find("[data-testid='slots-left']").exists()).toBe(false);
+  });
+
+  it("shows a disabled Event full button instead of Register when no places are left", async () => {
+    mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true, capacity: 50, slotsLeft: 0 }));
+    const wrapper = await mountView();
+
+    const buttons = wrapper.findAll(".actions button");
+    expect(buttons.map((b) => b.text())).toEqual(["Event full"]);
+    expect(buttons[0].attributes("disabled")).toBeDefined();
+    expect(wrapper.find("[data-testid='slots-left']").text()).toContain("Full");
+  });
+
+  it("still lets a registered attendee withdraw from a full event, freeing a place", async () => {
+    mockedView.mockResolvedValue(eventView({ open: true, capacity: 50, slotsLeft: 0 }));
+    mockedWithdraw.mockResolvedValue(undefined);
+    const wrapper = await mountView();
+
+    await wrapper.find(".actions button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find("[data-testid='slots-left']").text()).toContain("1 slot left");
+    expect(wrapper.findAll(".actions button").map((b) => b.text())).toEqual(["Register"]);
+  });
+
+  it("takes a place on registering, and says so when the last one went first", async () => {
+    mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true, capacity: 50, slotsLeft: 3 }));
+    mockedRegister.mockResolvedValue(undefined);
+    const ok = await mountView();
+    await ok.find(".actions button").trigger("click");
+    await flushPromises();
+    expect(ok.find("[data-testid='slots-left']").text()).toContain("2 slots left");
+
+    mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true, capacity: 50, slotsLeft: 1 }));
+    mockedRegister.mockRejectedValue(new RegistrationRequestError("full", 409, "event_full"));
+    const raced = await mountView();
+    await raced.find(".actions button").trigger("click");
+    await flushPromises();
+    expect(raced.find("[role='alert']").text()).toContain("now full");
+    expect(raced.findAll(".actions button").map((b) => b.text())).toEqual(["Event full"]);
   });
 
   it("withdraws and flips the badge in place", async () => {

@@ -482,8 +482,11 @@ async function venueBookingInfoHandler(req: AuthedRequest, res: Response): Promi
  * E6: the only fields an Attendee may see about an event — what is safe to
  * show someone who is not part of the planning. Built as a whitelist, never
  * by filtering a fuller object, so a field added to submitted_details later
- * stays private until it is listed here. No organiser, coordinator, purpose,
- * equipment, accessibility, review outcome, history or clarifications.
+ * stays private until it is listed here. No coordinator, purpose, equipment,
+ * review outcome, history or clarifications, and of the organiser only their
+ * display name (never their id, email or contact details). The accessibility
+ * note and the capacity (expected attendance) are added explicitly by the
+ * routes below.
  */
 const ATTENDEE_INFO_FIELDS = ["name", "description", "proposedDate", "startTime", "endTime"] as const;
 
@@ -500,6 +503,27 @@ function attendeeAccessibility(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const text = value.trim();
   return text === "" || NO_ACCESSIBILITY_INFO_PATTERN.test(text) ? null : text;
+}
+
+/**
+ * How many attendees may register, shown to attendees as slots left. The
+ * single place capacity is decided: today it is the organiser's expected
+ * attendance; a dedicated registration limit would be read here instead.
+ * Null when there is no usable number (older events), meaning no cap.
+ */
+function attendeeCapacity(details: Record<string, unknown>): number | null {
+  const value = Number(details.expectedAttendance);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+/**
+ * The organiser's display name for attendees, from the `organiser:organiser_id(name)`
+ * embed. Name only: nothing else about the organiser is read or returned.
+ */
+function attendeeOrganiserName(organiser: unknown): string | null {
+  const record = (Array.isArray(organiser) ? organiser[0] : organiser) as { name?: unknown } | null | undefined;
+  const name = record?.name;
+  return typeof name === "string" && name.trim() !== "" ? name.trim() : null;
 }
 
 const MAX_ATTENDEE_INFO_IDS = 100;
@@ -552,7 +576,7 @@ eventsRouter.get("/attendee-info", async (req: AuthedRequest, res) => {
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, status, submitted_details")
+    .select("id, status, submitted_details, organiser:organiser_id(name)")
     .in("id", ids)
     .neq("status", "Draft");
 
@@ -568,6 +592,8 @@ eventsRouter.get("/attendee-info", async (req: AuthedRequest, res) => {
       registrationNeeded: details.registrationNeeded === true,
       open: isOpenForRegistration(row.status, details),
       accessibility: attendeeAccessibility(details.accessibility),
+      capacity: attendeeCapacity(details),
+      organiserName: attendeeOrganiserName(row.organiser),
     };
     for (const field of ATTENDEE_INFO_FIELDS) info[field] = details[field] ?? null;
     return info;
@@ -596,7 +622,7 @@ eventsRouter.get("/open-for-registration", async (req: AuthedRequest, res) => {
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, status, submitted_details")
+    .select("id, status, submitted_details, organiser:organiser_id(name)")
     .eq("status", "Confirmed");
 
   if (error) {
@@ -613,6 +639,8 @@ eventsRouter.get("/open-for-registration", async (req: AuthedRequest, res) => {
         registrationNeeded: true,
         open: true,
         accessibility: attendeeAccessibility(details.accessibility),
+        capacity: attendeeCapacity(details),
+        organiserName: attendeeOrganiserName(row.organiser),
       };
       for (const field of ATTENDEE_INFO_FIELDS) info[field] = details[field] ?? null;
       return info;

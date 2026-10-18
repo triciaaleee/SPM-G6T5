@@ -15,6 +15,7 @@
  * parent's width at every breakpoint; the carousel track shows one card
  * per view.
  */
+import AppButton from "../ui/AppButton.vue";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import VenueIcon from "./VenueIcon.vue";
 import {
@@ -253,10 +254,10 @@ function matchedFeatures(venue: Venue): string[] {
               <p v-if="requestedVenueIds.has(venue.id)" class="body-small requested-note" role="status">
                 Requested — awaiting Venue Staff
               </p>
-              <button v-else type="button" class="request-btn" :disabled="requestingVenueId === venue.id"
+              <AppButton variant="primary" size="sm" class="request-btn" v-else type="button" :disabled="requestingVenueId === venue.id"
                 @click="requestVenue(venue.id)">
                 {{ requestingVenueId === venue.id ? "Requesting…" : "Request this venue" }}
-              </button>
+              </AppButton>
               <p v-if="requestErrorVenueId === venue.id" class="body-small error-text" role="alert">
                 {{ requestError }}
               </p>
@@ -328,31 +329,6 @@ function matchedFeatures(venue: Venue): string[] {
 }
 
 /* Style.md 3.4 Button Hierarchy (primary) + 8.2 focus ring; radius-xs. */
-.request-btn {
-  margin-top: var(--spacing-8);
-  padding: var(--spacing-8) var(--spacing-12);
-  border: 1px solid transparent;
-  border-radius: var(--radius-xs);
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.request-btn:hover:not(:disabled) {
-  background: var(--color-purple-700);
-}
-
-.request-btn:focus-visible {
-  outline: 2px solid var(--color-purple-600);
-  outline-offset: 2px;
-}
-
-.request-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
 
 .requested-note {
   margin-top: var(--spacing-8);
@@ -468,5 +444,9 @@ function matchedFeatures(venue: Venue): string[] {
 .carousel__arrow:focus-visible {
   outline: 2px solid var(--ring-brand);
   outline-offset: 2px;
+}
+
+.request-btn {
+  margin-top: var(--spacing-8);
 }
 </style>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../ui/AppButton.vue";
 import { computed, ref } from "vue";
 import {
   clearCriterion,
@@ -119,8 +120,8 @@ function setNumber(key: "capacityMin" | "capacityMax", raw: string): void {
           {{ filters.date ? "Venues already booked in this window are hidden. Leave times empty to check the whole day." : "Pick a date to check availability." }}
         </p>
         <div class="popover-actions">
-          <button type="button" class="btn btn--ghost" @click="clear('availability')">Clear</button>
-          <button type="button" class="btn btn--solid" @click="openChip = null">Done</button>
+          <AppButton variant="ghost" size="sm" type="button" @click="clear('availability')">Clear</AppButton>
+          <AppButton variant="primary" size="sm" type="button" @click="openChip = null">Done</AppButton>
         </div>
       </FilterChip>
 
@@ -142,8 +143,8 @@ function setNumber(key: "capacityMin" | "capacityMax", raw: string): void {
         </div>
         <p v-if="capacityError" class="field__error" role="alert">{{ capacityError }}</p>
         <div class="popover-actions">
-          <button type="button" class="btn btn--ghost" @click="clear('capacity')">Clear</button>
-          <button type="button" class="btn btn--solid" @click="openChip = null">Done</button>
+          <AppButton variant="ghost" size="sm" type="button" @click="clear('capacity')">Clear</AppButton>
+          <AppButton variant="primary" size="sm" type="button" @click="openChip = null">Done</AppButton>
         </div>
       </FilterChip>
 
@@ -166,9 +167,9 @@ function setNumber(key: "capacityMin" | "capacityMax", raw: string): void {
           hint="Must have all selected" search-placeholder="Search facilities" />
       </FilterChip>
 
-      <button v-if="hasAnyFilter" type="button" class="btn btn--ghost chips__clear-all" @click="clearAll">
+      <AppButton variant="ghost" size="sm" v-if="hasAnyFilter" type="button" class="chips__clear-all" @click="clearAll">
         Clear all
-      </button>
+      </AppButton>
     </div>
   </div>
 </template>
@@ -330,34 +331,4 @@ function setNumber(key: "capacityMin" | "capacityMax", raw: string): void {
   margin-top: var(--spacing-16);
 }
 
-.btn {
-  height: 36px;
-  padding: 0 var(--spacing-16);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn--solid {
-  border: none;
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn--solid:hover {
-  background: var(--color-purple-500);
-}
-
-.btn--ghost {
-  border: none;
-  background: transparent;
-  color: var(--color-error-600);
-}
-
-.btn--ghost:hover {
-  background: var(--color-error-200);
-}
 </style>

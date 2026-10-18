@@ -24,6 +24,10 @@ export interface AttendeeEventInfo {
   /** The organiser's accessibility note, or null when there is none. */
   accessibility: string | null;
   registrationNeeded: boolean;
+  /** How many may register (decided by events-service); null means no cap. */
+  capacity: number | null;
+  /** The organiser's display name (name only), or null when it isn't known. */
+  organiserName?: string | null;
   /** Confirmed, registration needed and not yet ended — decided by events-service. */
   open: boolean;
 }

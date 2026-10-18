@@ -15,6 +15,7 @@
  * on tablet (1/7) and 4 on mobile (1/5), matching CoordinatorWorkloadView.
  * The request list is a single column at every breakpoint.
  */
+import AppButton from "../components/ui/AppButton.vue";
 import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 import {
@@ -152,7 +153,7 @@ function formatMoment(value: string | null): string {
             Requests waiting on you, soonest event first. Holding a venue reserves it until the hold expires.
           </p>
         </div>
-        <RouterLink :to="{ name: 'venue-schedule' }" class="btn-secondary">Venue schedule</RouterLink>
+        <AppButton variant="outline" :to="{ name: 'venue-schedule' }">Venue schedule</AppButton>
       </header>
 
       <p v-if="notice" class="body-default notice" role="status">{{ notice }}</p>
@@ -216,27 +217,27 @@ function formatMoment(value: string | null): string {
               placeholder="The coordinator is shown this." />
             <p v-if="rejectReasonError" class="body-small error-text">{{ rejectReasonError }}</p>
             <div class="actions">
-              <button type="button" class="btn-danger" :disabled="busyId === request.id"
+              <AppButton variant="danger" type="button" :disabled="busyId === request.id"
                 @click="confirmReject(request)">
                 {{ busyId === request.id ? "Rejecting…" : "Confirm rejection" }}
-              </button>
-              <button type="button" class="btn-secondary" :disabled="busyId === request.id" @click="cancelReject">
+              </AppButton>
+              <AppButton variant="outline" type="button" :disabled="busyId === request.id" @click="cancelReject">
                 Cancel
-              </button>
+              </AppButton>
             </div>
           </div>
 
           <div v-else class="actions">
-            <button v-if="request.status === 'Requested'" type="button" class="btn-secondary"
+            <AppButton variant="outline" v-if="request.status === 'Requested'" type="button"
               :disabled="busyId === request.id" @click="hold(request)">
               Hold
-            </button>
-            <button type="button" class="btn-primary" :disabled="busyId === request.id" @click="approve(request)">
+            </AppButton>
+            <AppButton variant="primary" type="button" :disabled="busyId === request.id" @click="approve(request)">
               Approve
-            </button>
-            <button type="button" class="btn-danger" :disabled="busyId === request.id" @click="openReject(request)">
+            </AppButton>
+            <AppButton variant="danger" type="button" :disabled="busyId === request.id" @click="openReject(request)">
               Reject
-            </button>
+            </AppButton>
           </div>
 
           <p v-if="rowError?.id === request.id" class="body-small error-text" role="alert">{{ rowError.message }}</p>
@@ -419,61 +420,6 @@ function formatMoment(value: string | null): string {
 }
 
 /* Style.md 3.4 Button Hierarchy; 7 radius-xs; 8.2 focus ring. */
-.btn-primary,
-.btn-secondary,
-.btn-danger {
-  padding: var(--spacing-8) var(--spacing-16);
-  border-radius: var(--radius-xs);
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
-  border: 1px solid transparent;
-}
-
-.btn-primary {
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: var(--color-purple-700);
-}
-
-.btn-secondary {
-  background: var(--color-base-white);
-  border-color: var(--color-grey-200);
-  color: var(--color-grey-900);
-  text-decoration: none;
-  display: inline-block;
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: var(--color-grey-50);
-}
-
-.btn-danger {
-  background: var(--color-base-white);
-  border-color: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-.btn-danger:hover:not(:disabled) {
-  background: var(--color-error-200);
-}
-
-.btn-primary:focus-visible,
-.btn-secondary:focus-visible,
-.btn-danger:focus-visible {
-  outline: 2px solid var(--color-purple-600);
-  outline-offset: 2px;
-}
-
-.btn-primary:disabled,
-.btn-secondary:disabled,
-.btn-danger:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
 
 .reject-box {
   display: flex;

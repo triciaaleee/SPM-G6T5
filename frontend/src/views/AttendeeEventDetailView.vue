@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../components/ui/AppButton.vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -10,7 +11,7 @@ import {
   type AttendeeEventView,
 } from "../lib/registrationApi";
 import { registrationBadgeClass } from "../lib/registrationStatus";
-import { formatCardTimeRange, formatLongDate } from "../lib/attendeeEvents";
+import { eventThumbnail, formatCardTimeRange, formatLongDate, slotsLabel } from "../lib/attendeeEvents";
 import { getStoredUser, landingRouteForRole } from "../lib/auth";
 
 /**
@@ -61,13 +62,22 @@ const canRegister = computed(
   () => event.value?.open === true && event.value.registrationStatus !== "Registered",
 );
 
+// No places left: the Register slot shows a disabled "Event full" instead.
+const isFull = computed(() => event.value?.slotsLeft === 0);
+
+/** Keeps the shown places in step with this attendee taking or giving one up. */
+function adjustSlots(by: number): number | null {
+  const slots = event.value?.slotsLeft;
+  return slots == null ? null : Math.max(0, slots + by);
+}
+
 async function handleRegister() {
   if (!event.value || registering.value) return;
   registering.value = true;
   registerError.value = null;
   try {
     await register(eventId);
-    event.value = { ...event.value, registrationStatus: "Registered" };
+    event.value = { ...event.value, registrationStatus: "Registered", slotsLeft: adjustSlots(-1) };
   } catch (err) {
     if (err instanceof RegistrationRequestError && err.code === "already_registered") {
       // Registered elsewhere (another tab): the page was just out of date.
@@ -75,6 +85,10 @@ async function handleRegister() {
     } else if (err instanceof RegistrationRequestError && err.code === "not_open") {
       event.value = { ...event.value, open: false };
       registerError.value = "This event is no longer open for registration.";
+    } else if (err instanceof RegistrationRequestError && err.code === "event_full") {
+      // The last places went while this page was open.
+      event.value = { ...event.value, slotsLeft: 0 };
+      registerError.value = "This event is now full.";
     } else {
       registerError.value = err instanceof Error ? err.message : "Failed to register";
     }
@@ -89,7 +103,7 @@ async function handleWithdraw() {
   withdrawError.value = null;
   try {
     await withdraw(eventId);
-    event.value = { ...event.value, registrationStatus: "Withdrawn" };
+    event.value = { ...event.value, registrationStatus: "Withdrawn", slotsLeft: adjustSlots(1) };
   } catch (err) {
     if (err instanceof RegistrationRequestError && err.code === "already_withdrawn") {
       // Withdrawn elsewhere (another tab): the page was just out of date.
@@ -117,7 +131,7 @@ onMounted(async () => {
 <template>
   <!--
     Column mapping — Attendee event details
-    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); back link, title row and the "When and where" info strip col 1-12; description col 1-8. The strip's items (date, time, venue) sit side by side.
+    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); back link, banner, title row and the "When and where" info strip col 1-12; description col 1-8. The strip's items (date, time, venue) sit side by side.
     Tablet (6-col): everything col 1-6 full width, grid-tablet-margin 32px; description col 1-6.
     Mobile (4-col): everything col 1-4 full width, grid-mobile-margin 6px; title row stacks, Withdraw button full width, strip items stack.
   -->
@@ -144,6 +158,9 @@ onMounted(async () => {
     </p>
 
     <template v-else>
+      <!-- The event's thumbnail as a full-width banner, same picture as on its cards. -->
+      <img :src="eventThumbnail(event.id)" alt="" class="banner" />
+
       <div class="title-row">
         <div class="title-block">
           <span v-if="event.registrationStatus" class="badge" :class="registrationBadgeClass(event.registrationStatus)">
@@ -152,15 +169,18 @@ onMounted(async () => {
           <h1 class="h2">{{ event.name || `Event #${event.id}` }}</h1>
         </div>
 
-        <div v-if="canRegister" class="actions">
-          <button type="button" class="btn-register" :disabled="registering" @click="handleRegister">
+        <div v-if="canRegister && isFull" class="actions">
+          <AppButton variant="primary" size="xl" class="action-button" disabled>Event full</AppButton>
+        </div>
+        <div v-else-if="canRegister" class="actions">
+          <AppButton variant="primary" size="xl" class="action-button" :disabled="registering" @click="handleRegister">
             {{ registering ? "Registering…" : "Register" }}
-          </button>
+          </AppButton>
         </div>
         <div v-else-if="canWithdraw" class="actions">
-          <button type="button" class="btn-withdraw" :disabled="withdrawing" @click="handleWithdraw">
+          <AppButton variant="danger" class="action-button" :disabled="withdrawing" @click="handleWithdraw">
             {{ withdrawing ? "Withdrawing…" : "Withdraw registration" }}
-          </button>
+          </AppButton>
         </div>
       </div>
       <p v-if="registerError" class="full body-small error-text" role="alert">{{ registerError }}</p>
@@ -216,13 +236,29 @@ onMounted(async () => {
               <span v-for="venue in event.venues" :key="venue" class="detail-value">{{ venue }}</span>
             </div>
           </div>
+
+          <div v-if="event.slotsLeft != null" class="detail-item" data-testid="slots-left">
+            <span class="detail-icon-chip">
+              <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path
+                  d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+              </svg>
+            </span>
+            <div class="detail-text">
+              <span class="detail-label">Availability</span>
+              <span class="detail-value" :class="{ 'detail-value--full': event.slotsLeft === 0 }">
+                {{ slotsLabel(event.slotsLeft) }}
+              </span>
+            </div>
+          </div>
         </div>
       </section>
 
       <!-- One full-width container below the strip, items stacked in a column: Accessibility first, any
            further event info below it (same markup, class "info-item"). The wrapper's v-if should also
            cover any future item. -->
-      <section v-if="event.accessibility" class="info-rows pt-" aria-label="More about this event">
+      <section v-if="event.accessibility" class="info-rows" aria-label="More about this event">
         <div class="info-item accessibility-note">
           <span class="detail-icon-chip">
             <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -246,17 +282,28 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(12, 1fr);
   gap: var(--spacing-24) var(--grid-desktop-gutter);
-  padding: var(--spacing-40) var(--grid-desktop-margin) var(--spacing-80);
+  padding: var(--spacing-40) 180px var(--spacing-80);
   align-content: start;
   min-height: 100vh;
 }
 
 .back,
 .full,
+.banner,
 .title-row,
 .details,
 .info-rows {
   grid-column: 1 / 13;
+}
+
+/* Banner: wide and short on desktop, taller on small screens so the picture isn't a thin strip. */
+.banner {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3.5 / 1;
+  object-fit: cover;
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--spacing-16)
 }
 
 .description {
@@ -276,6 +323,7 @@ onMounted(async () => {
 
   .back,
   .full,
+  .banner,
   .title-row,
   .details,
   .info-rows,
@@ -285,6 +333,10 @@ onMounted(async () => {
 }
 
 @media (max-width: 640px) {
+  .banner {
+    aspect-ratio: 2 / 1;
+  }
+
   .page {
     grid-template-columns: repeat(4, 1fr);
     gap: var(--spacing-24) var(--grid-mobile-gutter);
@@ -293,6 +345,7 @@ onMounted(async () => {
 
   .back,
   .full,
+  .banner,
   .title-row,
   .details,
   .info-rows,
@@ -305,10 +358,11 @@ onMounted(async () => {
     align-items: stretch;
   }
 
-  .btn-withdraw,
-  .btn-register {
+  .action-button {
     width: 100%;
   }
+
+  
 }
 
 .back-link {
@@ -418,68 +472,8 @@ onMounted(async () => {
 }
 
 /* Register: the page's one solid button (Style.md 3.4). */
-.btn-register {
-  flex: none;
-  min-height: 44px;
-  padding: 0 var(--spacing-24);
-  border: none;
-  border-radius: var(--radius-xs);
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn-register:hover:not(:disabled) {
-  background: var(--color-purple-500);
-}
-
-.btn-register:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.btn-register:disabled {
-  background: var(--color-grey-100);
-  color: var(--color-grey-300);
-  cursor: not-allowed;
-}
 
 /* Withdraw: outline in Red Error 300, label in Red Error 600; hover tints, focus rings. */
-.btn-withdraw {
-  flex: none;
-  min-height: 44px;
-  padding: 0 var(--spacing-24);
-  border: 1px solid var(--color-error-300);
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-error-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.btn-withdraw:hover:not(:disabled) {
-  background: var(--color-error-200);
-}
-
-.btn-withdraw:focus-visible {
-  border-color: var(--color-error-600);
-  outline: 2px solid var(--color-error-200);
-  outline-offset: 2px;
-}
-
-.btn-withdraw:disabled {
-  border-color: var(--color-grey-100);
-  background: var(--color-grey-25);
-  color: var(--color-grey-300);
-  cursor: not-allowed;
-}
 
 /* Info strip: no card, just a rule above and below; rows stack vertically,
    each row's items spread across the full width. */
@@ -574,6 +568,11 @@ onMounted(async () => {
   font-weight: 700;
   line-height: 1.75rem;
   color: var(--color-grey-900);
+}
+
+/* No places left: the error text colour (Style.md UI state). */
+.detail-value--full {
+  color: var(--color-error-600);
 }
 
 /* "Venue to be confirmed" reads as a placeholder, not a fact. */

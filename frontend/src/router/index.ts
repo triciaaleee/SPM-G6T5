@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import EventsListView from "../views/EventsListView.vue";
-import AttendeeEventsView from "../views/AttendeeEventsView.vue";
+import AttendeeEventsView from "../views/AttendeeHomeView.vue";
 import AttendeeDiscoverView from "../views/AttendeeDiscoverView.vue";
 import AttendeeEventDetailView from "../views/AttendeeEventDetailView.vue";
 import EventDetailView from "../views/EventDetailView.vue";
@@ -16,6 +16,8 @@ import TechnicalSupportView from "../views/TechnicalSupportView.vue";
 import EquipmentRequestDetailView from "../views/EquipmentRequestDetailView.vue";
 import EquipmentInventoryView from "../views/EquipmentInventoryView.vue";
 import LeadDashboardView from "../views/LeadDashboardView.vue";
+import LeadUnassignedQueueView from "../views/LeadUnassignedQueueView.vue";
+import LeadCoordinatorView from "../views/LeadCoordinatorView.vue";
 import SafetyReviewQueueView from "../views/SafetyReviewQueueView.vue";
 import NotificationsView from "../views/NotificationsView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
@@ -133,13 +135,27 @@ export const router = createRouter({
       meta: { requiresAuth: true, roles: ["technical_support"] },
     },
     {
-      // E1-8: the Event Coordinator Lead's unassigned queue, plus every
-      // active event and its coordinator (Week 7 change 5) as the way in
-      // to a reassignment (E2-12). AC3: other roles are turned away here
-      // and by the backend.
+      // Week 7 change 5: the Event Coordinator Lead's landing page — every
+      // coordinator and their active events, the way in to a reassignment
+      // (E2-12). Other roles are turned away here and by the backend.
       path: "/lead",
       name: "lead-dashboard",
       component: LeadDashboardView,
+      meta: { requiresAuth: true, roles: ["coordinator_lead"] },
+    },
+    {
+      // E1-8: the Lead's unassigned queue, reached from "Assign event".
+      // AC3: other roles are turned away here and by the backend.
+      path: "/lead/unassigned",
+      name: "lead-unassigned",
+      component: LeadUnassignedQueueView,
+      meta: { requiresAuth: true, roles: ["coordinator_lead"] },
+    },
+    {
+      // One coordinator's active events ("View all N events" on the overview).
+      path: "/lead/coordinators/:id",
+      name: "lead-coordinator",
+      component: LeadCoordinatorView,
       meta: { requiresAuth: true, roles: ["coordinator_lead"] },
     },
     {

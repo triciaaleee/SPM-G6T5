@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../components/ui/AppButton.vue";
 import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { LockedOutError, landingRouteForRole, login } from "../lib/auth";
@@ -76,9 +77,9 @@ async function handleSubmit() {
         {{ errorMessage }}
       </p>
 
-      <button type="submit" class="btn-primary" :disabled="submitting || lockedOut">
+      <AppButton variant="primary" type="submit" :disabled="submitting || lockedOut">
         {{ submitting ? "Signing in…" : "Sign in" }}
-      </button>
+      </AppButton>
 
       <p class="body-small muted signup-hint">
         No account yet? <RouterLink to="/signup">Sign up</RouterLink>
@@ -179,28 +180,6 @@ async function handleSubmit() {
   border-radius: var(--radius-xs);
   padding: var(--spacing-12);
   margin: 0 0 var(--spacing-16);
-}
-
-.btn-primary {
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-base-white);
-  background: var(--color-purple-600);
-  border: none;
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-12) var(--spacing-24);
-  cursor: pointer;
-}
-
-.btn-primary:hover {
-  background: var(--color-purple-700);
-}
-
-.btn-primary:disabled {
-  background: var(--color-grey-200);
-  color: var(--color-grey-400);
-  cursor: not-allowed;
 }
 
 .muted {

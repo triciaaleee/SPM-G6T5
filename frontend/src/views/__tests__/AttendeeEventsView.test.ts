@@ -2,7 +2,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { h } from "vue";
-import AttendeeEventsView from "../AttendeeEventsView.vue";
+import AttendeeEventsView from "../AttendeeHomeView.vue";
 import { fetchMyRegistrations, type MyRegistration } from "../../lib/registrationApi";
 
 vi.mock("../../lib/registrationApi", () => ({ fetchMyRegistrations: vi.fn() }));
@@ -40,6 +40,7 @@ function registration(
       endTime: "16:00",
       venues: ["Great Lawn"],
       accessibility: "Step-free entry and a hearing loop.",
+      organiserName: "Pat Organiser",
       ...event,
     },
     ...overrides,
@@ -74,19 +75,19 @@ describe("AttendeeEventsView", () => {
 
     const tabs = wrapper.findAll('[role="tab"]');
     expect(tabs.map((t) => t.text())).toEqual(["Upcoming", "Past", "Withdrawn"]);
-    expect(wrapper.findAll(".card")).toHaveLength(2);
+    expect(wrapper.findAll(".event-card")).toHaveLength(2);
 
     await tabs[1].trigger("click");
 
-    expect(wrapper.findAll(".card")).toHaveLength(1);
-    expect(wrapper.find(".card").text()).toContain("Event 3");
+    expect(wrapper.findAll(".event-card")).toHaveLength(1);
+    expect(wrapper.find(".event-card").text()).toContain("Event 3");
   });
 
   it("shows the event's name, description, date, time and venue on the card", async () => {
     mockedFetch.mockResolvedValue([registration(1)]);
     const wrapper = await mountView();
 
-    const text = wrapper.find(".card").text();
+    const text = wrapper.find(".event-card").text();
     expect(text).toContain("Registered");
     expect(text).toContain("Event 1");
     expect(text).toContain("About event 1");
@@ -118,37 +119,49 @@ describe("AttendeeEventsView", () => {
     const wrapper = await mountView();
     const tabs = wrapper.findAll('[role="tab"]');
 
-    expect(wrapper.findAll(".card h2").map((h) => h.text())).toEqual(["Event 1"]);
+    expect(wrapper.findAll(".event-card h2").map((h) => h.text())).toEqual(["Event 1"]);
 
     await tabs[1].trigger("click");
-    expect(wrapper.findAll(".card")).toHaveLength(0);
+    expect(wrapper.findAll(".event-card")).toHaveLength(0);
 
     await tabs[2].trigger("click");
-    expect(wrapper.findAll(".card h2").map((h) => h.text())).toEqual(["Event 2", "Event 3"]);
+    expect(wrapper.findAll(".event-card h2").map((h) => h.text())).toEqual(["Event 2", "Event 3"]);
     expect(wrapper.findAll(".badge").map((b) => b.text())).toEqual(["Withdrawn", "Withdrawn"]);
     expect(wrapper.find(".status-over").exists()).toBe(false);
   });
 
-  it("has no Withdraw button and no dot in the status badge", async () => {
+  it("has no Withdraw button, and the status badge has a leading dot like the organiser's card", async () => {
     mockedFetch.mockResolvedValue([registration(1), registration(2, { status: "Withdrawn" })]);
     const wrapper = await mountView();
 
     // The Withdrawn tab is a tab, not a card action: no button inside any card.
-    expect(wrapper.findAll(".card button")).toHaveLength(0);
+    expect(wrapper.findAll(".event-card button")).toHaveLength(0);
     for (const tab of wrapper.findAll('[role="tab"]')) {
       await tab.trigger("click");
-      for (const badge of wrapper.findAll(".badge")) expect(badge.element.children).toHaveLength(0);
-      expect(wrapper.findAll(".card button")).toHaveLength(0);
+      for (const badge of wrapper.findAll(".badge")) expect(badge.find(".badge__dot").exists()).toBe(true);
+      expect(wrapper.findAll(".event-card button")).toHaveLength(0);
     }
   });
 
-  it("shows the accessibility note on the card, and nothing when there is none", async () => {
-    mockedFetch.mockResolvedValue([registration(1), registration(2, {}, { accessibility: null })]);
+  it("names the organiser on the card, never a coordinator, and puts date and time on separate lines", async () => {
+    mockedFetch.mockResolvedValue([registration(1), registration(2, {}, { organiserName: null })]);
     const wrapper = await mountView();
 
-    const cards = wrapper.findAll(".card");
-    expect(cards[0].find(".fact--accessibility").text()).toBe("Step-free entry and a hearing loop.");
-    expect(cards[1].find(".fact--accessibility").exists()).toBe(false);
+    const [withOrganiser, withoutOrganiser] = wrapper.findAll(".event-card");
+    expect(withOrganiser.find(".card-person").text()).toContain("Organiser: Pat Organiser");
+    expect(withOrganiser.text()).not.toContain("Coordinator");
+    expect(withoutOrganiser.find(".card-person").exists()).toBe(false);
+
+    const facts = withOrganiser.findAll(".fact").map((fact) => fact.text());
+    expect(facts.slice(0, 2)).toEqual(["1 Jan 2099", "10:00 AM to 4:00 PM"]);
+  });
+
+  it("does not show the accessibility note on the card: it is on the event details page only", async () => {
+    mockedFetch.mockResolvedValue([registration(1)]);
+    const wrapper = await mountView();
+
+    expect(wrapper.find(".event-card").text()).not.toContain("Step-free entry");
+    expect(wrapper.find(".event-card .fact--clamp").exists()).toBe(false);
   });
 
   it("lists upcoming events soonest first", async () => {
@@ -158,14 +171,14 @@ describe("AttendeeEventsView", () => {
     ]);
     const wrapper = await mountView();
 
-    expect(wrapper.findAll(".card h2").map((h) => h.text())).toEqual(["Event 2", "Event 1"]);
+    expect(wrapper.findAll(".event-card h2").map((h) => h.text())).toEqual(["Event 2", "Event 1"]);
   });
 
   it("falls back when the venue or event info is missing", async () => {
     mockedFetch.mockResolvedValue([registration(1, {}, { venues: [] }), registration(2, { event: null })]);
     const wrapper = await mountView();
 
-    const cards = wrapper.findAll(".card");
+    const cards = wrapper.findAll(".event-card");
     expect(cards[0].text()).toContain("Venue to be confirmed");
     expect(cards[1].text()).toContain("Event #2");
   });
@@ -174,7 +187,7 @@ describe("AttendeeEventsView", () => {
     mockedFetch.mockResolvedValue([registration(7)]);
     const wrapper = await mountView();
 
-    expect(wrapper.find("a.card").attributes("href")).toBe("/attendee/events/7");
+    expect(wrapper.find("a.event-card").attributes("href")).toBe("/attendee/events/7");
   });
 
   it("shows an empty state for a tab with no events", async () => {

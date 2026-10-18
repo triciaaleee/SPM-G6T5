@@ -11,6 +11,8 @@ export interface RegisteredEventInfo {
   venues: string[];
   /** The organiser's accessibility note; null when there is none. */
   accessibility: string | null;
+  /** The organiser's display name (name only); null when it isn't known. */
+  organiserName: string | null;
 }
 
 export interface MyRegistration {
@@ -34,6 +36,11 @@ export interface AttendeeEventView {
   endTime: string | null;
   venues: string[];
   accessibility: string | null;
+  organiserName: string | null;
+  /** How many may register; null when the event has no cap. */
+  capacity: number | null;
+  /** Places still free (0 = full); null when the event has no cap. */
+  slotsLeft: number | null;
   /** Null when the attendee has no registration for this event. */
   registrationStatus: RegistrationStatus | null;
   open: boolean;
@@ -48,6 +55,11 @@ export interface OpenEvent {
   startTime: string | null;
   endTime: string | null;
   accessibility: string | null;
+  organiserName: string | null;
+  /** How many may register; null when the event has no cap. */
+  capacity: number | null;
+  /** Places still free (0 = full); null when the event has no cap. */
+  slotsLeft: number | null;
   registrationStatus: RegistrationStatus | null;
 }
 
