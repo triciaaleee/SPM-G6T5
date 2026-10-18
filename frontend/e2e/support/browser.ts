@@ -14,7 +14,21 @@ export async function logIn(page: Page, session: Session): Promise<void> {
   await page.getByLabel("Email").fill(session.email);
   await page.getByLabel("Password", { exact: true }).fill(session.password);
   await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(session.landingPath);
+  // Pathname only: a landing view may append its own default query shortly
+  // after mount (e.g. VenueStaff.vue adding ?venue=&date=&tab=), which is
+  // that component's own state, not part of what the login redirect itself
+  // decided. An exact match races that append and is flaky by design.
+  await expect(page).toHaveURL(landingPathPattern(session.landingPath));
+}
+
+/**
+ * Matches `path`, optionally followed by a query string — for asserting a
+ * redirect landed on the right page without caring about query params a
+ * component appends on its own shortly after mount (see logIn above).
+ */
+export function landingPathPattern(path: string): RegExp {
+  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`${escaped}(\\?.*)?$`);
 }
 
 /**

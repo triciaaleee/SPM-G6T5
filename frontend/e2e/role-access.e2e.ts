@@ -9,7 +9,7 @@ import {
   signInAsVenueStaff,
   type Session,
 } from "./support/backend";
-import { signInThroughStorage } from "./support/browser";
+import { landingPathPattern, signInThroughStorage } from "./support/browser";
 
 /**
  * A representative sweep of the router's role guard (frontend/src/router/
@@ -80,11 +80,6 @@ for (const { path, wrongRole } of ROUTES) {
     const session = await sessionFor(wrongRole);
     await signInThroughStorage(page, session);
     await page.goto(path);
-    // Matched on pathname only: a landing view may append its own default
-    // query (e.g. VenueStaff.vue adding ?venue=&date=&tab= once it mounts)
-    // which is that component's own state, not part of what the router
-    // guard itself decided.
-    const escapedPath = session.landingPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    await expect(page).toHaveURL(new RegExp(`${escapedPath}(\\?.*)?$`));
+    await expect(page).toHaveURL(landingPathPattern(session.landingPath));
   });
 }
