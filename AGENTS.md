@@ -182,9 +182,10 @@ Event details (`submitted_details`) can only be edited **up to and including `Pl
 | `Unassigned` | **Yes** (direct edit) | No | No |
 | `Requested` | Yes (direct edit, E2-7) | No | No |
 | `Clarification Requested` | Yes (responding edit, E2-10) | No | No |
-| `Planning` | Yes (direct edit) | Non-critical fields only (E3-7) | No |
+| `Planning` | Yes (direct edit) | **Yes, all fields** (E3-7) | No |
 | `Safety Review`, `Confirmed`, `Completed`, `Rejected`, `Cancelled` | **No** | **No** | **No** |
 
+- *(Team decision, overrides E3-7's "non-critical fields only" literal text)*: the assigned coordinator may edit **any** field on an event in `Planning`, not just non-critical ones. The critical/non-critical split added no protection — the Organiser can already edit every field directly in this status, so restricting the coordinator achieved nothing. Full event history (field, old value, new value, timestamp, author) already captures every change for audit, so there's no accountability gap from allowing it.
 - Every edit is recorded in event history (field, old value, new value, timestamp, author).
 - A rejection or "request changes" from the Safety Officer returns the event to `Planning`, which makes it editable again; so does the automatic arrangements-changed re-review. Those are the only routes to change an event in `Safety Review` or `Confirmed`.
 - After `Confirmed`, the Organiser raises a **change request** instead (E3-9). Critical fields are held for coordinator review (E3-8).
