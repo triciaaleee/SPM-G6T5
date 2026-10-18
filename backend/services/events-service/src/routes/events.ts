@@ -904,9 +904,10 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   }
 
   // E3-7: the assigned coordinator edits event details during Planning —
-  // a separate path from the organiser one below, with its own status gate
-  // and a locked set of "critical" fields (schedule/venue/capacity) that
-  // must go through reject/re-request instead of a silent direct edit.
+  // a separate path from the organiser one below, with its own status gate.
+  // All fields are editable (team decision: the organiser can already
+  // change any field directly in Planning, so restricting the coordinator
+  // added no protection, and event history already covers the audit trail).
   const isCoordinatorEditor = user.role === "coordinator";
 
   if (isCoordinatorEditor) {
@@ -928,15 +929,6 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     }
 
     const oldDetails = (existing.submitted_details ?? {}) as Record<string, unknown>;
-    const changedCriticalFields = COORDINATOR_LOCKED_FIELDS.filter(
-      (field) => oldDetails[field] !== (result.value as unknown as Record<string, unknown>)[field],
-    );
-    if (changedCriticalFields.length > 0) {
-      res.status(400).json({
-        error: `Coordinators cannot change ${changedCriticalFields.join(", ")} directly.`,
-      });
-      return;
-    }
 
     const { data, error } = await supabase
       .from("events")
@@ -1802,13 +1794,6 @@ const ORGANISER_DIRECT_EDIT_STATUSES = new Set<string>([
  */
 const COORDINATOR_REVIEW_STATUSES = new Set<string>([EVENT_STATUS.Requested]);
 const REJECTABLE_STATUSES = new Set<string>([EVENT_STATUS.Requested, EVENT_STATUS.ClarificationRequested]);
-
-/**
- * E3-7 AC1: fields the assigned coordinator cannot change through the
- * Planning-stage direct edit — schedule/venue/capacity changes are
- * "critical" and go through reject/re-request instead of a silent edit.
- */
-const COORDINATOR_LOCKED_FIELDS = ["proposedDate", "startTime", "endTime", "venue", "expectedAttendance"] as const;
 
 interface ReviewEventRow {
   id: number;

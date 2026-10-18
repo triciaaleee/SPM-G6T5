@@ -1647,7 +1647,7 @@ describe("PATCH /api/events/:id", () => {
   describe("coordinator edits during Planning (E3-7, issue #32)", () => {
     const coordinator = { id: "COORD-0001", role: "coordinator" };
 
-    it("lets the assigned coordinator edit a non-critical field", async () => {
+    it("lets the assigned coordinator edit a field", async () => {
       const oldDetails = { ...validPayload, equipment: "Old equipment list" };
       const { from, update, historyInsert } = buildPatchSupabase({
         event: {
@@ -1670,7 +1670,7 @@ describe("PATCH /api/events/:id", () => {
       expect(historyInsert).toHaveBeenCalled();
     });
 
-    it("blocks a critical-field change from the coordinator (AC1)", async () => {
+    it("lets the assigned coordinator edit a formerly-critical field (venue/schedule/capacity)", async () => {
       const oldDetails = { ...validPayload, venue: "Old Hall" };
       const { from, update, historyInsert } = buildPatchSupabase({
         event: {
@@ -1680,14 +1680,17 @@ describe("PATCH /api/events/:id", () => {
           coordinator_id: coordinator.id,
           submitted_details: oldDetails,
         },
+        updatedEvent: { id: 1, status: "Planning" },
       });
       const app = buildApp({ from }, coordinator);
 
       const res = await request(app).patch("/api/events/1").send(validPayload);
 
-      expect(res.status).toBe(400);
-      expect(update).not.toHaveBeenCalled();
-      expect(historyInsert).not.toHaveBeenCalled();
+      expect(res.status).toBe(200);
+      expect(update).toHaveBeenCalledWith({
+        submitted_details: expect.objectContaining({ venue: validPayload.venue }),
+      });
+      expect(historyInsert).toHaveBeenCalled();
     });
 
     it("blocks a coordinator who isn't the assigned one (AC3)", async () => {

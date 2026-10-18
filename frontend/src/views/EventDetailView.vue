@@ -351,11 +351,8 @@ const editBlockedMessage = computed(() => {
     return null;
   return "This request can no longer be edited or changed at this stage.";
 });
-/** E3-7 AC1/AC3: the assigned coordinator can edit non-critical fields
- * while the event is in Planning — separate from the organiser paths
- * above. Schedule/venue/capacity fields stay disabled in the form below
- * (see COORDINATOR_LOCKED_FIELDS) since the backend rejects changes to
- * them from this path outright. */
+/** E3-7: the assigned coordinator can edit all fields while the event is
+ * in Planning — separate from the organiser paths above. */
 const canCoordinatorEdit = computed(
   () => isAssignedCoordinator.value && event.value?.status === "Planning",
 );
@@ -998,7 +995,7 @@ onMounted(async () => {
                       <div class="field">
                         <label for="edit-expectedAttendance" class="body-small muted mb-1">Expected attendance</label>
                         <input id="edit-expectedAttendance" v-model="editForm.expectedAttendance" type="number" min="1"
-                          class="edit-input" :disabled="canCoordinatorEdit && !canEditDirectly" />
+                          class="edit-input" />
                         <p v-if="editFieldErrors.expectedAttendance" class="body-small error-text">
                           {{ editFieldErrors.expectedAttendance }}
                         </p>
@@ -1007,22 +1004,19 @@ onMounted(async () => {
                     <div class="field-row field-row-3">
                       <div class="field">
                         <label for="edit-proposedDate" class="body-small muted mb-1">Proposed date</label>
-                        <input id="edit-proposedDate" v-model="editForm.proposedDate" type="date" class="edit-input"
-                          :disabled="canCoordinatorEdit && !canEditDirectly" />
+                        <input id="edit-proposedDate" v-model="editForm.proposedDate" type="date" class="edit-input" />
                         <p v-if="editFieldErrors.proposedDate" class="body-small error-text">{{
                           editFieldErrors.proposedDate }}</p>
                       </div>
                       <div class="field">
                         <label for="edit-startTime" class="body-small muted mb-1">Start time</label>
-                        <input id="edit-startTime" v-model="editForm.startTime" type="time" class="edit-input"
-                          :disabled="canCoordinatorEdit && !canEditDirectly" />
+                        <input id="edit-startTime" v-model="editForm.startTime" type="time" class="edit-input" />
                         <p v-if="editFieldErrors.startTime" class="body-small error-text">{{ editFieldErrors.startTime }}
                         </p>
                       </div>
                       <div class="field">
                         <label for="edit-endTime" class="body-small muted mb-1">End time</label>
-                        <input id="edit-endTime" v-model="editForm.endTime" type="time" class="edit-input"
-                          :disabled="canCoordinatorEdit && !canEditDirectly" />
+                        <input id="edit-endTime" v-model="editForm.endTime" type="time" class="edit-input" />
                         <p v-if="editFieldErrors.endTime" class="body-small error-text">{{ editFieldErrors.endTime }}</p>
                       </div>
                     </div>
@@ -1080,8 +1074,7 @@ onMounted(async () => {
                     <div class="field-row">
                       <div class="field">
                         <label for="edit-venue" class="body-small muted mb-1">Venue Requirements</label>
-                        <textarea id="edit-venue" v-model="editForm.venue" rows="2" class="edit-input"
-                          :disabled="canCoordinatorEdit && !canEditDirectly" />
+                        <textarea id="edit-venue" v-model="editForm.venue" rows="2" class="edit-input" />
                         <p v-if="editFieldErrors.venue" class="body-small error-text">{{ editFieldErrors.venue }}</p>
                       </div>
                       <div class="field">

@@ -8,10 +8,13 @@ import BlockOutPanel from "../components/venues/BlockOutPanel.vue";
 import VenueIcon from "../components/venues/VenueIcon.vue";
 import UnavailabilityCard from "../components/venues/UnavailabilityCard.vue";
 import VenueFormPanel from "../components/venues/VenueFormPanel.vue";
+import BufferOverlapList from "../components/venues/BufferOverlapList.vue";
 import {
+  fetchBufferOverlaps,
   fetchMyVenues,
   fetchStaffVenues,
   fetchVenueBookings,
+  type BufferOverlapRecord,
   type StaffVenueOption,
   type VenueBooking,
   type VenueRecord,
@@ -245,6 +248,38 @@ async function loadUnavailability(): Promise<void> {
 watch([venueId, visibleMonth], loadUnavailability);
 watch(venueId, () => (notice.value = null));
 
+// ---- E4-13 AC2/AC3: persisted buffer-overlap review list ----------------
+
+const bufferOverlaps = ref<BufferOverlapRecord[]>([]);
+const bufferOverlapsLoading = ref(false);
+const bufferOverlapsError = ref<string | null>(null);
+
+let overlapsSeq = 0;
+
+/** Venue-scoped, not date-scoped — reloaded whenever the selected venue changes. */
+async function loadBufferOverlaps(): Promise<void> {
+  if (venueId.value === null) {
+    bufferOverlaps.value = [];
+    return;
+  }
+  const seq = ++overlapsSeq;
+  bufferOverlapsLoading.value = true;
+  bufferOverlapsError.value = null;
+  try {
+    const result = await fetchBufferOverlaps(venueId.value);
+    if (seq !== overlapsSeq) return;
+    bufferOverlaps.value = result;
+  } catch {
+    if (seq !== overlapsSeq) return;
+    bufferOverlaps.value = [];
+    bufferOverlapsError.value = "We couldn't load this venue's flagged bookings.";
+  } finally {
+    if (seq === overlapsSeq) bufferOverlapsLoading.value = false;
+  }
+}
+
+watch(venueId, loadBufferOverlaps);
+
 function openBlockOut(period: UnavailabilityPeriod | null = null): void {
   editingPeriod.value = period;
   panelOpen.value = true;
@@ -375,6 +410,10 @@ function onVenueUpdated(result: VenueUpdateResult): void {
   void afterVenueSaved(result.venue.id, text, result.notificationsFailed);
   // The schedule's bookings carry layouts/facilities derived from the venue.
   void loadBookings();
+  // E4-13: the save may have changed which pairs overlap; venueId.value may
+  // already equal result.venue.id (editing the currently-selected venue),
+  // in which case the watch() above never fires, so reload explicitly.
+  void loadBufferOverlaps();
 }
 
 onMounted(() => {
@@ -577,6 +616,11 @@ onMounted(async () => {
         </ul>
         </div>
       </section>
+
+      <!-- E4-13 AC2/AC3: persistent, self-reconciling — distinct from VenueFormPanel's one-shot edit warning. -->
+      <section class="overlap-review-row">
+        <BufferOverlapList :overlaps="bufferOverlaps" :loading="bufferOverlapsLoading" :load-error="bufferOverlapsError" />
+      </section>
     </template>
 
     <BlockOutPanel v-if="panelOpen && venueId !== null" :key="editingPeriod?.id ?? 'new'" :venue-id="venueId"
@@ -656,6 +700,12 @@ onMounted(async () => {
   min-width: 0;
 }
 
+/* E4-13: full-width row below the sidebar+schedule pair, same convention as .full-row. */
+.overlap-review-row {
+  grid-column: 1 / 13;
+  margin-top: var(--spacing-8);
+}
+
 @media (max-width: 1024px) {
   .page {
     grid-template-columns: repeat(6, 1fr);
@@ -665,7 +715,8 @@ onMounted(async () => {
   .page-header,
   .full-row,
   .sidebar,
-  .schedule {
+  .schedule,
+  .overlap-review-row {
     grid-column: 1 / 7;
   }
 }
@@ -680,7 +731,8 @@ onMounted(async () => {
   .page-header,
   .full-row,
   .sidebar,
-  .schedule {
+  .schedule,
+  .overlap-review-row {
     grid-column: 1 / 5;
   }
 }
