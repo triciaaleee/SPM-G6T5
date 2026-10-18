@@ -33,6 +33,7 @@ import {
   type VenueChangeImpact,
 } from "../lib/venueChanges.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
+import { reconcileBufferOverlaps } from "../lib/bufferOverlapReview.js";
 
 /**
  * E1-5: venue staff's view of what's booked at a venue. Staff see enough
@@ -244,6 +245,15 @@ staffRouter.post("/venues/:venueId/preview", async (req: AuthedRequest, res) => 
  * AC3). Bookings are never removed by an edit: AC6 capacity shortfalls and
  * §3a setup/turnaround overlaps are reported and their coordinators told,
  * best-effort and after the write lands.
+ *
+ * E4-13 AC2/AC3: the persisted review list (venue_buffer_overlaps) is also
+ * reconciled here, after the write — this is the "venue's setup/turnaround
+ * is set or changed" trigger, so both directions (a longer padding creating
+ * a new overlap, or a shorter one resolving one) keep the table correct.
+ * Notifications for the pairs found here are already sent below via
+ * `impactNotifications` (unchanged, AC4), so reconciliation itself is
+ * fire-and-forget and must not send its own — otherwise a newly-flagged
+ * pair would be told about twice.
  */
 staffRouter.patch("/venues/:venueId", async (req: AuthedRequest, res) => {
   const prepared = await prepareVenueUpdate(req, res);
@@ -265,11 +275,110 @@ staffRouter.patch("/venues/:venueId", async (req: AuthedRequest, res) => {
   const results = await Promise.all(messages.map((m) => getPublisher().publish(m)));
   const allSent = results.every(Boolean);
 
+  // Best-effort: this never affects the response above, which already
+  // reflects the save and today's AC4 notifications.
+  try {
+    await reconcileBufferOverlaps(req.supabase!, venue.id, req.headers.authorization!);
+  } catch (err) {
+    console.error(`[buffer-overlap-review] reconciliation failed for venue ${venue.id}`, err);
+  }
+
   res.json({
     venue: toVenueRecord(data as VenueRecordRow),
     ...toPublicImpact(impact),
     coordinatorsNotified: allSent ? new Set(messages.flatMap((m) => m.recipients.userIds)).size : 0,
     notificationsFailed: !allSent,
+  });
+});
+
+/**
+ * E4-13 AC2: Venue Staff revisit the persisted review list of flagged
+ * setup/turnaround overlap pairs for one of their venues. Reconciles first
+ * (read-only from the venue-edit perspective — it only touches
+ * venue_buffer_overlaps, never venues.setup_minutes/turnaround_minutes), so
+ * this self-heals if some write path was missed or its own reconciliation
+ * failed. No dismiss action exists: a pair leaves this list only when it
+ * stops overlapping (AC3).
+ */
+staffRouter.get("/venues/:venueId/buffer-overlaps", async (req: AuthedRequest, res) => {
+  const supabase = req.supabase!;
+  const rawId = Array.isArray(req.params.venueId) ? req.params.venueId[0] : req.params.venueId;
+  if (!VENUE_ID_PATTERN.test(rawId)) {
+    res.status(400).json({ error: "Invalid venue id" });
+    return;
+  }
+  const venueId = Number(rawId);
+
+  const { data: venueRow, error: venueError } = await supabase
+    .from("venues")
+    .select("id, staff_id")
+    .eq("id", venueId)
+    .maybeSingle();
+  if (venueError) {
+    res.status(500).json({ error: "Failed to load the venue" });
+    return;
+  }
+  if (!venueRow) {
+    res.status(404).json({ error: "Venue not found" });
+    return;
+  }
+  const venue = venueRow as { id: number; staff_id: string | null };
+  if (venue.staff_id !== req.user!.id) {
+    res.status(403).json({ error: NOT_ASSIGNED_MESSAGE });
+    return;
+  }
+
+  try {
+    await reconcileBufferOverlaps(supabase, venueId, req.headers.authorization!);
+  } catch (err) {
+    console.error(`[buffer-overlap-review] reconciliation failed for venue ${venueId}`, err);
+  }
+
+  const { data, error } = await supabase
+    .from("venue_buffer_overlaps")
+    .select("id, booking_id_a, booking_id_b, window_a, window_b, detected_at")
+    .eq("venue_id", venueId)
+    .order("detected_at", { ascending: true });
+  if (error) {
+    res.status(500).json({ error: "Failed to load flagged bookings" });
+    return;
+  }
+
+  type OverlapRow = { id: number; booking_id_a: number; booking_id_b: number; window_a: string; window_b: string; detected_at: string };
+  const rows = (data ?? []) as OverlapRow[];
+
+  const bookingIds = [...new Set(rows.flatMap((row) => [row.booking_id_a, row.booking_id_b]))];
+  // The rows only carry booking ids and cached window strings — the event
+  // name shown alongside each window still needs a lookup, by booking.
+  const { data: bookingRows, error: bookingsError } = await supabase
+    .from("venue_bookings")
+    .select("id, event_id")
+    .in("id", bookingIds);
+  if (bookingsError) {
+    res.status(500).json({ error: "Failed to load flagged bookings" });
+    return;
+  }
+  const eventIdByBookingId = new Map(((bookingRows ?? []) as { id: number; event_id: number }[]).map((b) => [b.id, b.event_id]));
+
+  const infoResult = await fetchVenueBookingInfo(
+    [...new Set([...eventIdByBookingId.values()])],
+    req.headers.authorization!,
+  );
+  const eventsById = infoResult.status === "ok" ? new Map(infoResult.events.map((event) => [event.id, event])) : new Map();
+
+  function side(bookingId: number, window: string) {
+    const eventId = eventIdByBookingId.get(bookingId) ?? null;
+    const event = eventId !== null ? eventsById.get(eventId) : undefined;
+    return { bookingId, eventId, eventName: event?.name ?? null, window };
+  }
+
+  res.json({
+    overlaps: rows.map((row) => ({
+      id: row.id,
+      detectedAt: row.detected_at,
+      first: side(row.booking_id_a, row.window_a),
+      second: side(row.booking_id_b, row.window_b),
+    })),
   });
 });
 

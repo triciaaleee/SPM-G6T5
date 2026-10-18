@@ -72,6 +72,17 @@ function eventInfo(overrides: Record<string, unknown>) {
  * (select → eq → order), single venue (select → eq → maybeSingle), and
  * written by insert/update (… → select → single).
  */
+/** A venue_buffer_overlaps row, as the in-memory fake table stores it. */
+interface OverlapFixtureRow {
+  id: number;
+  venue_id: number;
+  booking_id_a: number;
+  booking_id_b: number;
+  window_a: string;
+  window_b: string;
+  detected_at: string;
+}
+
 function buildApp(
   options: {
     user?: { id: string; role: string };
@@ -81,22 +92,31 @@ function buildApp(
     bookings?: { id: number; event_id: number; status: string; hold_expires_at: string | null }[];
     events?: Record<string, unknown>[];
     notifyOk?: boolean;
+    /** Rows already in venue_buffer_overlaps before the call, for reconciliation tests. */
+    storedOverlaps?: OverlapFixtureRow[];
   } = {},
 ) {
   const written = { ...storedVenue, name: validVenue.name, opening_time: "09:00:00", closing_time: "21:00:00" };
+  // Mutable so a PATCH's own `.update(...)` is reflected by the venues
+  // select a later reconciliation call makes within the same request —
+  // otherwise reconciliation would compute against stale pre-save padding.
+  let currentVenue: Record<string, unknown> | null = options.stored === undefined ? storedVenue : options.stored;
+
   const single = vi.fn().mockResolvedValue(
     options.insertError ? { data: null, error: { message: "boom" } } : { data: { ...written, id: 11 }, error: null },
   );
   const insert = vi.fn().mockReturnValue({ select: vi.fn().mockReturnValue({ single }) });
 
-  const updateSingle = vi.fn().mockResolvedValue({ data: written, error: null });
-  const updateEq = vi.fn().mockReturnValue({ select: vi.fn().mockReturnValue({ single: updateSingle }) });
-  const update = vi.fn().mockReturnValue({ eq: updateEq });
+  const update = vi.fn((patch: Record<string, unknown>) => {
+    const updateSingle = vi.fn().mockResolvedValue({ data: { ...written, ...patch }, error: null });
+    if (currentVenue) currentVenue = { ...currentVenue, ...patch };
+    return { eq: vi.fn().mockReturnValue({ select: vi.fn().mockReturnValue({ single: updateSingle }) }) };
+  });
 
   const venueQuery: any = {
     eq: vi.fn(),
     order: vi.fn().mockResolvedValue({ data: options.existing ?? [], error: null }),
-    maybeSingle: vi.fn().mockResolvedValue({ data: options.stored === undefined ? storedVenue : options.stored, error: null }),
+    maybeSingle: vi.fn(() => Promise.resolve({ data: currentVenue, error: null })),
     then: (resolve: (v: unknown) => void) => resolve({ data: options.existing ?? [], error: null }),
   };
   venueQuery.eq.mockReturnValue(venueQuery);
@@ -105,10 +125,46 @@ function buildApp(
   const bookingsQuery: any = { eq: vi.fn(), in: vi.fn().mockResolvedValue({ data: options.bookings ?? [], error: null }) };
   bookingsQuery.eq.mockReturnValue(bookingsQuery);
 
+  // E4-13: an in-memory venue_buffer_overlaps so reconciliation (called
+  // best-effort from the PATCH route and the new GET endpoint) has
+  // something real to read/insert/delete against, instead of throwing on
+  // an unmocked table — which is what every test not interested in
+  // reconciliation relies on to keep passing unmodified (the throw is
+  // caught and swallowed, same as any other best-effort failure).
+  let overlapRows: OverlapFixtureRow[] = [...(options.storedOverlaps ?? [])];
+  let nextOverlapId = (options.storedOverlaps?.length ?? 0) + 1000;
+  const overlapsTable = {
+    select: vi.fn(() => {
+      let venueId: number | undefined;
+      const q: any = {
+        eq: vi.fn((_col: string, value: number) => {
+          venueId = value;
+          return q;
+        }),
+        order: vi.fn(() => q),
+      };
+      q.then = (resolve: (v: unknown) => void) =>
+        resolve({ data: overlapRows.filter((row) => row.venue_id === venueId), error: null });
+      return q;
+    }),
+    insert: vi.fn((rows: Omit<OverlapFixtureRow, "id" | "detected_at">[]) => {
+      const inserted = rows.map((row) => ({ ...row, id: nextOverlapId++, detected_at: new Date().toISOString() }));
+      overlapRows = [...overlapRows, ...inserted];
+      return { then: (resolve: (v: unknown) => void) => resolve({ data: inserted, error: null }) };
+    }),
+    delete: vi.fn(() => ({
+      in: vi.fn((_col: string, ids: number[]) => {
+        overlapRows = overlapRows.filter((row) => !ids.includes(row.id));
+        return { then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }) };
+      }),
+    })),
+  };
+
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === "venues") return { insert, select, update };
       if (table === "venue_bookings") return { select: vi.fn().mockReturnValue(bookingsQuery) };
+      if (table === "venue_buffer_overlaps") return overlapsTable;
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -133,7 +189,7 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/venues/staff", staffRouter);
-  return { app, insert, update, fetchMock, publish };
+  return { app, insert, update, fetchMock, publish, overlapsTable, getOverlapRows: () => overlapRows };
 }
 
 afterEach(() => {
@@ -423,6 +479,138 @@ describe("PATCH /api/venues/staff/venues/:venueId", () => {
     const { app } = buildApp({ stored: null });
     const res = await request(app).patch("/api/venues/staff/venues/99").send(validVenue);
     expect(res.status).toBe(404);
+  });
+
+  describe("E4-13 AC2/AC3: reconciling the persisted buffer-overlap review list", () => {
+    it("inserts a newly-found overlap pair, with the lower booking id first", async () => {
+      const { app, getOverlapRows } = buildApp({
+        bookings: [approved, { id: 2, event_id: 8, status: "Approved", hold_expires_at: null }],
+        events: [
+          eventInfo({ id: 7, startTime: "10:00", endTime: "12:00", expectedAttendance: 50 }),
+          eventInfo({ id: 8, startTime: "12:30", endTime: "14:00", expectedAttendance: 50, coordinatorId: "COO-0002" }),
+        ],
+      });
+      const res = await request(app).patch("/api/venues/staff/venues/6").send(validVenue);
+
+      expect(res.status).toBe(200);
+      const rows = getOverlapRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ venue_id: 6, booking_id_a: 1, booking_id_b: 2 });
+      expect(rows[0].window_a).toMatch(/^2099-09-24/);
+    });
+
+    it("leaves an already-flagged pair untouched rather than deleting and re-inserting it", async () => {
+      const existing = {
+        id: 1000,
+        venue_id: 6,
+        booking_id_a: 1,
+        booking_id_b: 2,
+        window_a: "2099-09-24 09:30–12:45",
+        window_b: "2099-09-24 12:00–14:45",
+        detected_at: "2026-01-01T00:00:00.000Z",
+      };
+      const { app, overlapsTable, getOverlapRows } = buildApp({
+        storedOverlaps: [existing],
+        bookings: [approved, { id: 2, event_id: 8, status: "Approved", hold_expires_at: null }],
+        events: [
+          eventInfo({ id: 7, startTime: "10:00", endTime: "12:00", expectedAttendance: 50 }),
+          eventInfo({ id: 8, startTime: "12:30", endTime: "14:00", expectedAttendance: 50, coordinatorId: "COO-0002" }),
+        ],
+      });
+      const res = await request(app).patch("/api/venues/staff/venues/6").send(validVenue);
+
+      expect(res.status).toBe(200);
+      expect(overlapsTable.insert).not.toHaveBeenCalled();
+      expect(getOverlapRows()).toEqual([existing]);
+    });
+
+    it("deletes a stored pair once it no longer overlaps (setup/turnaround changed back)", async () => {
+      const existing = {
+        id: 1000,
+        venue_id: 6,
+        booking_id_a: 1,
+        booking_id_b: 2,
+        window_a: "2099-09-24 09:30–12:45",
+        window_b: "2099-09-24 12:00–14:45",
+        detected_at: "2026-01-01T00:00:00.000Z",
+      };
+      // Saving setupMinutes/turnaroundMinutes back to 0 means the two
+      // bookings (10:00–12:00 and 12:30–14:00) no longer overlap.
+      const { app, getOverlapRows } = buildApp({
+        storedOverlaps: [existing],
+        bookings: [approved, { id: 2, event_id: 8, status: "Approved", hold_expires_at: null }],
+        events: [
+          eventInfo({ id: 7, startTime: "10:00", endTime: "12:00", expectedAttendance: 50 }),
+          eventInfo({ id: 8, startTime: "12:30", endTime: "14:00", expectedAttendance: 50, coordinatorId: "COO-0002" }),
+        ],
+      });
+      const res = await request(app)
+        .patch("/api/venues/staff/venues/6")
+        .send({ ...validVenue, setupMinutes: 0, turnaroundMinutes: 0 });
+
+      expect(res.status).toBe(200);
+      expect(getOverlapRows()).toEqual([]);
+    });
+  });
+});
+
+describe("GET /api/venues/staff/venues/:venueId/buffer-overlaps", () => {
+  const approvedA = { id: 1, event_id: 7, status: "Approved", hold_expires_at: null };
+  const approvedB = { id: 2, event_id: 8, status: "Approved", hold_expires_at: null };
+
+  it("AC2: returns both bookings' events, windows and the overlap, reconciling first", async () => {
+    const { app, getOverlapRows } = buildApp({
+      bookings: [approvedA, approvedB],
+      events: [
+        eventInfo({ id: 7, name: "Nut Festival", startTime: "10:00", endTime: "12:00" }),
+        eventInfo({ id: 8, name: "Bake Sale", startTime: "12:30", endTime: "14:00", coordinatorId: "COO-0002" }),
+      ],
+      stored: { ...storedVenue, setup_minutes: 30, turnaround_minutes: 45 },
+    });
+    const res = await request(app).get("/api/venues/staff/venues/6/buffer-overlaps");
+
+    expect(res.status).toBe(200);
+    expect(res.body.overlaps).toHaveLength(1);
+    expect(res.body.overlaps[0]).toMatchObject({
+      first: { bookingId: 1, eventId: 7, eventName: "Nut Festival" },
+      second: { bookingId: 2, eventId: 8, eventName: "Bake Sale" },
+    });
+    expect(res.body.overlaps[0].first.window).toMatch(/^2099-09-24/);
+    // Self-healed: reconciliation ran and found the pair even though
+    // nothing was stored beforehand.
+    expect(getOverlapRows()).toHaveLength(1);
+  });
+
+  it("returns an empty list when nothing is flagged", async () => {
+    const { app } = buildApp({ bookings: [], stored: storedVenue });
+    const res = await request(app).get("/api/venues/staff/venues/6/buffer-overlaps");
+
+    expect(res.status).toBe(200);
+    expect(res.body.overlaps).toEqual([]);
+  });
+
+  it("403s a staff member not assigned to the venue", async () => {
+    const { app } = buildApp({ stored: { ...storedVenue, staff_id: "VEN-0002" } });
+    const res = await request(app).get("/api/venues/staff/venues/6/buffer-overlaps");
+    expect(res.status).toBe(403);
+  });
+
+  it("404s an unknown venue", async () => {
+    const { app } = buildApp({ stored: null });
+    const res = await request(app).get("/api/venues/staff/venues/99/buffer-overlaps");
+    expect(res.status).toBe(404);
+  });
+
+  it("400s an invalid venue id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).get("/api/venues/staff/venues/abc/buffer-overlaps");
+    expect(res.status).toBe(400);
+  });
+
+  it("never touches venues.setup_minutes/turnaround_minutes — read-only reconciliation", async () => {
+    const { app, update } = buildApp({ bookings: [approvedA, approvedB] });
+    await request(app).get("/api/venues/staff/venues/6/buffer-overlaps");
+    expect(update).not.toHaveBeenCalled();
   });
 });
 
