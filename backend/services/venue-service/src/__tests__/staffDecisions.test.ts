@@ -153,6 +153,8 @@ function buildApp(
     notificationHttpStatus?: number;
     /** §3a change 2: block-out periods on the venues. */
     unavailability?: PeriodFixture[];
+    /** E4-13: rows already in venue_buffer_overlaps before the call. */
+    storedOverlaps?: { id: number; venue_id: number; booking_id_a: number; booking_id_b: number }[];
   } = {},
 ) {
   const rows = options.bookings ?? [];
@@ -302,6 +304,40 @@ function buildApp(
     rows.push(options.appearsAfterUpdate);
   }
 
+  // E4-13 AC2/AC3: an in-memory venue_buffer_overlaps, read/written by
+  // reconcileBufferOverlapsSafely (called best-effort after every status
+  // change this file exercises). Starts from `options.storedOverlaps` so
+  // tests can assert on inserts/deletes rather than only on the
+  // swallowed-error path every other test here relies on.
+  let overlapRows: { id: number; venue_id: number; booking_id_a: number; booking_id_b: number }[] = [
+    ...(options.storedOverlaps ?? []),
+  ];
+  let nextOverlapId = 9000;
+  const overlapsTable = {
+    select: vi.fn(() => {
+      let venueId: unknown;
+      const q: any = {
+        eq: vi.fn((_c: string, v: unknown) => {
+          venueId = v;
+          return q;
+        }),
+        order: vi.fn(() => q),
+      };
+      q.then = (resolve: (v: unknown) => unknown) => resolve({ data: overlapRows.filter((r) => r.venue_id === venueId), error: null });
+      return q;
+    }),
+    insert: vi.fn((rows: { venue_id: number; booking_id_a: number; booking_id_b: number }[]) => {
+      overlapRows = [...overlapRows, ...rows.map((r) => ({ ...r, id: nextOverlapId++ }))];
+      return { then: (resolve: (v: unknown) => unknown) => resolve({ data: null, error: null }) };
+    }),
+    delete: vi.fn(() => ({
+      in: vi.fn((_c: string, ids: number[]) => {
+        overlapRows = overlapRows.filter((r) => !ids.includes(r.id));
+        return { then: (resolve: (v: unknown) => unknown) => resolve({ data: null, error: null }) };
+      }),
+    })),
+  };
+
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === "venue_bookings") {
@@ -331,6 +367,7 @@ function buildApp(
       }
       if (table === "venue_unavailability") return unavailabilityTable(options.unavailability ?? []);
       if (table === "venue_booking_locks") return locksTable();
+      if (table === "venue_buffer_overlaps") return overlapsTable;
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -364,7 +401,7 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/venues/staff", staffRouter);
-  return { app, supabase, updates, fetchMock, publish };
+  return { app, supabase, updates, fetchMock, publish, overlapsTable, getOverlapRows: () => overlapRows };
 }
 
 function act(app: express.Express, action: string, bookingId = 10, body: Record<string, unknown> = {}) {
@@ -731,6 +768,43 @@ describe("POST /bookings/:id/approve", () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/someone else/i);
+  });
+
+  describe("E4-13 AC3: reconciliation runs on a successful decision too, not only a venue edit", () => {
+    // A decision's own pre-write conflict check (blockingWindows) uses the
+    // identical padded-window math findAllBufferOverlaps does, over the
+    // identical blocking set (UNAVAILABLE_BOOKING_STATUSES) — so a decision
+    // that succeeds can never create a FRESH overlap involving the booking
+    // it just decided (if it would have, the conflict check above would
+    // have rejected it first). What reconciliation here actually protects
+    // against is the review list drifting stale for any other reason
+    // (an unrelated pair at the same venue resolved by something else) by
+    // the time this call happens, and self-heals rather than leaving the
+    // persisted table out of date until the next venue edit.
+
+    it("deletes an unrelated stored pair at the venue that no longer overlaps, alongside a successful decision", async () => {
+      // Booking 12/13 (a different pair at the same venue) was flagged
+      // earlier but one side has since moved on — simulated by storing a
+      // pair referencing booking ids not present in this call's bookings
+      // at all, which findAllBufferOverlaps can no longer see.
+      const stale = { id: 9500, venue_id: 1, booking_id_a: 12, booking_id_b: 13 };
+      const { app, getOverlapRows } = buildApp({ storedOverlaps: [stale], bookings: [booking({ id: 10 })] });
+      const res = await act(app, "approve", 10);
+
+      expect(res.status).toBe(200);
+      expect(getOverlapRows()).toEqual([]);
+    });
+
+    it("never inserts a pair for the booking it just successfully approved", async () => {
+      const { app, overlapsTable } = buildApp({
+        bookings: [booking({ id: 10 }), booking({ id: 12, event_id: 22, status: "Approved" })],
+        events: [bookedEvent(7), bookedEvent(22, "16:00", "18:00")], // same day, no overlap
+      });
+      const res = await act(app, "approve", 10);
+
+      expect(res.status).toBe(200);
+      expect(overlapsTable.insert).not.toHaveBeenCalled();
+    });
   });
 });
 
