@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { fetchOpenEvents, type OpenEvent } from "../lib/registrationApi";
-import { registrationBadgeClass } from "../lib/registrationStatus";
+import { registrationBadgeClass, registrationStateBadge } from "../lib/registrationStatus";
 import EventCard, { type CardFact } from "../components/ui/EventCard.vue";
 import { eventThumbnail, formatCardDate, formatCardTimeRange, slotsLabel } from "../lib/attendeeEvents";
 
@@ -102,8 +102,8 @@ onMounted(async () => {
               :thumbnail="eventThumbnail(event.id)"
               :title="eventTitle(event)"
               :description="event.description"
-              :status-label="event.registrationStatus ?? 'Open'"
-              :status-class="event.registrationStatus ? registrationBadgeClass(event.registrationStatus) : 'status-open'"
+              :status-label="event.registrationStatus ?? registrationStateBadge(event.registrationState).label"
+              :status-class="event.registrationStatus ? registrationBadgeClass(event.registrationStatus) : registrationStateBadge(event.registrationState).className"
               :facts="cardFacts(event)"
               :title-aside="slotsAside(event)"
               person-label="Organiser"

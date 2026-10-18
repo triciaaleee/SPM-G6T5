@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import AppButton from "../components/ui/AppButton.vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
 import CalendarPicker, { type DayMarker } from "../components/venues/CalendarPicker.vue";
 import BlockOutPanel from "../components/venues/BlockOutPanel.vue";

@@ -252,6 +252,16 @@ Rules:
 
 ---
 
+## 3b. Registration period (E6)
+
+Registration is not an event status: the lifecycle in §3 is unchanged. It applies to `Confirmed` events with `registrationNeeded`. Nothing is stored about whether it is open — the state is **derived on every read** (events-service `lib/registrationPeriod.ts`), so there is no scheduler. Stored on `events` (migration `0039`): `registration_open_date` (the coordinator's opening date, Singapore local date) and `registration_override` (`NONE` | `FORCE_OPEN` | `FORCE_CLOSED`).
+
+State is `NOT_OPEN | OPEN | FULL | CLOSED`, decided in this order: `FORCE_CLOSED` → closed; **the event start always closes it** (even `FORCE_OPEN`); `FORCE_OPEN` → open (before the open date, or inside the last 5 days); otherwise closed from **5 days before the event starts**, not open before the open date, else open. There is no closing date. Full (registered count ≥ expected attendance) is decided by registration-service, which owns the count; a withdrawal reopens a full event automatically.
+
+- Only the assigned coordinator sets the open date (`PUT /api/events/:id/registration`, must be earlier than the 5-day cutoff) or the override (`POST /:id/registration/open|close|auto`, Confirmed only).
+- Attendees see an event once registration has opened (open date reached or `FORCE_OPEN`); closed and full events stay listed.
+- Registering goes through the `register_for_event` Postgres function (migration `0040`), which counts and writes under a per-event advisory lock so two attendees can't take the last place.
+
 ## 4. Frontend: follow `Style.md`
 
 All frontend work **must** follow [`Style.md`](Style.md). Read it before creating or editing any UI.

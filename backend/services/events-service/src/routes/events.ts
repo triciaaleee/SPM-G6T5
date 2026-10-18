@@ -21,7 +21,16 @@ import {
   MAX_SAFETY_DECISION_REASON_LENGTH,
   parseSafetyNotes,
 } from "../lib/safetyReview.js";
-import { eventEndsAt, hasEventEnded } from "../lib/eventTiming.js";
+import { eventEndsAt, eventStartsAt, hasEventEnded, localDateStart } from "../lib/eventTiming.js";
+import {
+  getRegistrationState,
+  isListed,
+  REGISTRATION_CUTOFF_DAYS,
+  REGISTRATION_DATE_EDITABLE_STATUSES,
+  REGISTRATION_OVERRIDE,
+  REGISTRATION_STATE,
+} from "../lib/registrationPeriod.js";
+import type { RegistrationOverride } from "../lib/registrationPeriod.js";
 import {
   arrangementOptions,
   combinedReason,
@@ -126,7 +135,7 @@ eventsRouter.use(requireAuth);
  * for the "Event Requestor" field on the detail view.
  */
 const EVENT_COLUMNS =
-  "id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at";
+  "id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override";
 
 /**
  * E2-1: submit a new event request. Validates the mandatory fields per the
@@ -528,18 +537,33 @@ function attendeeOrganiserName(organiser: unknown): string | null {
 
 const MAX_ATTENDEE_INFO_IDS = 100;
 
-/**
- * "Open for registration": the event is Confirmed (safety-approved, so it
- * will go ahead), the organiser asked for registration, and it hasn't
- * ended yet. Lives here, with the event data, so registration-service
- * doesn't re-derive it. When it ends is worked out in Singapore time (see
- * lib/eventTiming.ts), the same rule E3-5 completion uses.
- */
-function isOpenForRegistration(status: string, details: Record<string, unknown>, now: Date = new Date()): boolean {
-  if (status !== "Confirmed" || details.registrationNeeded !== true) return false;
+interface RegistrationRowFields {
+  status: string;
+  registration_open_date?: unknown;
+  registration_override?: unknown;
+}
 
-  const endsAt = eventEndsAt(details);
-  return endsAt !== null && endsAt.getTime() > now.getTime();
+/**
+ * The registration period as attendees need it: the state (NOT_OPEN, OPEN or
+ * CLOSED — registration-service turns OPEN into FULL when no places are left,
+ * since it owns the count), whether the event is listed, and `open` (state is
+ * OPEN). Lives here, with the event data, so registration-service doesn't
+ * re-derive it. Times are Singapore time (lib/eventTiming.ts); the rules are
+ * in lib/registrationPeriod.ts.
+ */
+function registrationInfo(row: RegistrationRowFields, details: Record<string, unknown>, now: Date = new Date()) {
+  const inputs = {
+    status: row.status,
+    details,
+    openDate: row.registration_open_date,
+    override: row.registration_override,
+  };
+  const registrationState = getRegistrationState(inputs, now);
+  return {
+    registrationState,
+    listed: isListed(inputs, now),
+    open: registrationState === REGISTRATION_STATE.Open,
+  };
 }
 
 /**
@@ -576,7 +600,7 @@ eventsRouter.get("/attendee-info", async (req: AuthedRequest, res) => {
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, status, submitted_details, organiser:organiser_id(name)")
+    .select("id, status, submitted_details, registration_open_date, registration_override, organiser:organiser_id(name)")
     .in("id", ids)
     .neq("status", "Draft");
 
@@ -590,7 +614,7 @@ eventsRouter.get("/attendee-info", async (req: AuthedRequest, res) => {
     const info: Record<string, unknown> = {
       id: row.id,
       registrationNeeded: details.registrationNeeded === true,
-      open: isOpenForRegistration(row.status, details),
+      ...registrationInfo(row, details),
       accessibility: attendeeAccessibility(details.accessibility),
       capacity: attendeeCapacity(details),
       organiserName: attendeeOrganiserName(row.organiser),
@@ -622,7 +646,7 @@ eventsRouter.get("/open-for-registration", async (req: AuthedRequest, res) => {
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, status, submitted_details, organiser:organiser_id(name)")
+    .select("id, status, submitted_details, registration_open_date, registration_override, organiser:organiser_id(name)")
     .eq("status", "Confirmed");
 
   if (error) {
@@ -632,12 +656,12 @@ eventsRouter.get("/open-for-registration", async (req: AuthedRequest, res) => {
 
   const events = (data ?? [])
     .map((row) => ({ row, details: (row.submitted_details ?? {}) as Record<string, unknown> }))
-    .filter(({ row, details }) => isOpenForRegistration(row.status, details))
+    .filter(({ row, details }) => registrationInfo(row, details).listed)
     .map(({ row, details }) => {
       const info: Record<string, unknown> = {
         id: row.id,
         registrationNeeded: true,
-        open: true,
+        ...registrationInfo(row, details),
         accessibility: attendeeAccessibility(details.accessibility),
         capacity: attendeeCapacity(details),
         organiserName: attendeeOrganiserName(row.organiser),
@@ -2043,6 +2067,154 @@ eventsRouter.post("/:id/complete", async (req: AuthedRequest, res) => {
 
   res.json({ event: data });
 });
+
+/**
+ * Registration period (coordinator). Only the assigned coordinator, via
+ * authorizeCoordinatorReview. Writes the stored intent (open date, manual
+ * open/close); whether registration is open right now is derived on read
+ * (lib/registrationPeriod.ts), so nothing here opens or closes anything on a
+ * timer. Each change goes into the event history.
+ */
+async function loadRegistrationRow(
+  supabase: NonNullable<AuthedRequest["supabase"]>,
+  eventId: number,
+): Promise<{
+  submitted_details: Record<string, unknown> | null;
+  registration_open_date: string | null;
+  registration_override: string | null;
+} | null> {
+  const { data } = await supabase
+    .from("events")
+    .select("submitted_details, registration_open_date, registration_override")
+    .eq("id", eventId)
+    .maybeSingle();
+  return data ?? null;
+}
+
+eventsRouter.put("/:id/registration", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await authorizeCoordinatorReview(req, res, eventId);
+  if (!event) return;
+
+  if (!REGISTRATION_DATE_EDITABLE_STATUSES.includes(event.status)) {
+    res.status(409).json({ error: "The registration open date can only be set once the event is in Planning, and before it ends" });
+    return;
+  }
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const row = await loadRegistrationRow(supabase, event.id);
+  if (!row) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+  const details = row.submitted_details ?? {};
+  if (details.registrationNeeded !== true) {
+    res.status(409).json({ error: "This event doesn't need registration" });
+    return;
+  }
+
+  const openDate = (req.body ?? {}).openDate;
+  if (localDateStart(openDate) === null) {
+    res.status(400).json({ error: "openDate must be a date in YYYY-MM-DD format" });
+    return;
+  }
+  const startsAt = eventStartsAt(details);
+  if (startsAt !== null) {
+    const cutoff = startsAt.getTime() - REGISTRATION_CUTOFF_DAYS * 24 * 60 * 60 * 1000;
+    if ((localDateStart(openDate) as Date).getTime() >= cutoff) {
+      res.status(400).json({
+        error: `Registration closes ${REGISTRATION_CUTOFF_DAYS} days before the event, so the open date must be earlier than that`,
+      });
+      return;
+    }
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .update({ registration_open_date: openDate })
+    .eq("id", event.id)
+    .eq("coordinator_id", user.id)
+    .in("status", REGISTRATION_DATE_EDITABLE_STATUSES)
+    .select(EVENT_COLUMNS)
+    .maybeSingle();
+  if (error) {
+    res.status(500).json({ error: "Failed to save the registration open date" });
+    return;
+  }
+  if (!data) {
+    res.status(409).json({ error: "This event changed or is no longer assigned to you" });
+    return;
+  }
+
+  await recordEventHistory(
+    supabase,
+    event.id,
+    [{ field: "Registration open date", oldValue: row.registration_open_date, newValue: openDate as string }],
+    user.id,
+  );
+
+  res.json({ event: data });
+});
+
+/** open / close / auto: the manual override on registration (Confirmed events only). */
+function registrationOverrideRoute(action: string, override: RegistrationOverride) {
+  eventsRouter.post(`/:id/registration/${action}`, async (req: AuthedRequest, res) => {
+    const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const event = await authorizeCoordinatorReview(req, res, eventId);
+    if (!event) return;
+
+    if (event.status !== EVENT_STATUS.Confirmed) {
+      res.status(409).json({ error: "Registration can only be opened or closed for a Confirmed event" });
+      return;
+    }
+
+    const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+    const row = await loadRegistrationRow(supabase, event.id);
+    if (!row) {
+      res.status(500).json({ error: "Failed to load event" });
+      return;
+    }
+    if ((row.submitted_details ?? {}).registrationNeeded !== true) {
+      res.status(409).json({ error: "This event doesn't need registration" });
+      return;
+    }
+    const startsAt = eventStartsAt(row.submitted_details ?? {});
+    if (override === REGISTRATION_OVERRIDE.ForceOpen && startsAt !== null && startsAt.getTime() <= Date.now()) {
+      res.status(409).json({ error: "This event has already started, so registration can't be opened" });
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("events")
+      .update({ registration_override: override })
+      .eq("id", event.id)
+      .eq("status", EVENT_STATUS.Confirmed)
+      .eq("coordinator_id", user.id)
+      .select(EVENT_COLUMNS)
+      .maybeSingle();
+    if (error) {
+      res.status(500).json({ error: "Failed to update registration" });
+      return;
+    }
+    if (!data) {
+      res.status(409).json({ error: "This event is no longer Confirmed or no longer assigned to you" });
+      return;
+    }
+
+    await recordEventHistory(
+      supabase,
+      event.id,
+      [{ field: "Registration override", oldValue: row.registration_override ?? REGISTRATION_OVERRIDE.None, newValue: override }],
+      user.id,
+    );
+
+    res.json({ event: data });
+  });
+}
+
+registrationOverrideRoute("open", REGISTRATION_OVERRIDE.ForceOpen);
+registrationOverrideRoute("close", REGISTRATION_OVERRIDE.ForceClosed);
+registrationOverrideRoute("auto", REGISTRATION_OVERRIDE.None);
 
 /**
  * E3-4: the assigned coordinator submits a Planning event for the Safety
