@@ -247,19 +247,31 @@ describe("GET /event/:eventId (roster)", () => {
 });
 
 describe("POST / (register)", () => {
-  it("registers for an open event", async () => {
-    const insertQuery = query({ data: null, error: null }, { data: row(), error: null });
-    const { app } = buildApp(attendee, query({ data: null, error: null }), insertQuery);
+  /** buildApp, plus the register_for_event RPC answering `outcome`. */
+  function buildRegisterApp(outcome: string, ...queries: Record<string, any>[]) {
+    const built = buildApp(attendee, ...queries);
+    const rpc = vi.fn().mockResolvedValue({ data: outcome, error: null });
+    (globalThis as any).__mockSupabase.rpc = rpc;
+    return { ...built, rpc };
+  }
+
+  it("registers for an open event through the race-safe RPC", async () => {
+    const { app, rpc } = buildRegisterApp(
+      "registered",
+      query({ data: null, error: null }),
+      query({ data: null, error: null }, { data: row(), error: null }),
+    );
 
     const res = await request(app).post("/api/registrations").send({ eventId: 1, additionalInfo: { diet: "veg" } });
 
     expect(res.status).toBe(201);
     expect(res.body.registration).toMatchObject({ eventId: 1, userId: "ATT-0001", status: "Registered" });
-    expect(insertQuery.insert).toHaveBeenCalledWith({
-      event_id: 1,
-      user_id: "ATT-0001",
-      status: "Registered",
-      additional_info: { diet: "veg" },
+    expect(rpc).toHaveBeenCalledWith("register_for_event", {
+      p_event_id: 1,
+      p_user_id: "ATT-0001",
+      p_capacity: null,
+      p_additional_info: { diet: "veg" },
+      p_set_info: true,
     });
     // #105 row 6: the attendee is notified their registration is confirmed.
     expect(publish).toHaveBeenCalledWith(
@@ -273,34 +285,52 @@ describe("POST / (register)", () => {
   });
 
   it("takes the user id from the token, never the body", async () => {
-    const insertQuery = query({ data: null, error: null }, { data: row(), error: null });
-    const { app } = buildApp(attendee, query({ data: null, error: null }), insertQuery);
+    const { app, rpc } = buildRegisterApp(
+      "registered",
+      query({ data: null, error: null }),
+      query({ data: null, error: null }, { data: row(), error: null }),
+    );
 
     await request(app).post("/api/registrations").send({ eventId: 1, userId: "ATT-0099" });
 
-    expect(insertQuery.insert).toHaveBeenCalledWith(expect.objectContaining({ user_id: "ATT-0001" }));
+    expect(rpc).toHaveBeenCalledWith("register_for_event", expect.objectContaining({ p_user_id: "ATT-0001" }));
   });
 
-  it("refuses an event that isn't open", async () => {
-    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ open: false })] });
-    const { app, from } = buildApp(attendee);
+  it.each([
+    [{ open: false, registrationState: "NOT_OPEN" }, "not_open"],
+    [{ open: false, registrationState: "CLOSED" }, "closed"],
+    [{ open: false }, "not_open"],
+  ])("refuses an event that isn't open %j", async (overrides, code) => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo(overrides)] });
+    const { app, from, rpc } = buildRegisterApp("registered");
 
     const res = await request(app).post("/api/registrations").send({ eventId: 1 });
 
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe("not_open");
+    expect(res.body.code).toBe(code);
     expect(from).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it("answers 404 for an event that doesn't exist", async () => {
     clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [] });
-    const { app } = buildApp(attendee);
+    const { app } = buildRegisterApp("registered");
 
     expect((await request(app).post("/api/registrations").send({ eventId: 99 })).status).toBe(404);
   });
 
-  it("refuses a duplicate registration", async () => {
-    const { app } = buildApp(attendee, query({ data: null, error: null }, { data: row(), error: null }));
+  it("refuses a duplicate registration without calling the RPC", async () => {
+    const { app, rpc } = buildRegisterApp("registered", query({ data: null, error: null }, { data: row(), error: null }));
+
+    const res = await request(app).post("/api/registrations").send({ eventId: 1 });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("already_registered");
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("treats the RPC answering already_registered (a race) as already registered", async () => {
+    const { app } = buildRegisterApp("already_registered", query({ data: null, error: null }));
 
     const res = await request(app).post("/api/registrations").send({ eventId: 1 });
 
@@ -308,80 +338,58 @@ describe("POST / (register)", () => {
     expect(res.body.code).toBe("already_registered");
   });
 
-  it("treats a unique-constraint race as already registered", async () => {
-    const { app } = buildApp(
-      attendee,
-      query({ data: null, error: null }),
-      query({ data: null, error: null }, { data: null, error: { code: "23505", message: "dup" } }),
+  it("flips a withdrawn registration back to Registered (200, same row), keeping earlier info when none is sent", async () => {
+    const lookup = query({ data: null, error: null }, { data: row({ status: "Withdrawn" }), error: null });
+    const { app, rpc } = buildRegisterApp(
+      "registered",
+      lookup,
+      query({ data: null, error: null }, { data: row({ status: "Registered" }), error: null }),
     );
 
     const res = await request(app).post("/api/registrations").send({ eventId: 1 });
 
-    expect(res.status).toBe(409);
-  });
-
-  it("flips a withdrawn registration back to Registered on the same row", async () => {
-    const updateQuery = query({ data: null, error: null }, { data: row({ status: "Registered" }), error: null });
-    const lookup = query({ data: null, error: null }, { data: row({ status: "Withdrawn" }), error: null });
-    const { app } = buildApp(attendee, lookup, updateQuery);
-
-    const res = await request(app).post("/api/registrations").send({ eventId: 1 });
-
     expect(res.status).toBe(200);
-    expect(updateQuery.update).toHaveBeenCalledWith({ status: "Registered" });
-    expect(updateQuery.eq).toHaveBeenCalledWith("registration_id", 10);
+    expect(rpc).toHaveBeenCalledWith("register_for_event", expect.objectContaining({ p_set_info: false }));
     expect(res.body.registration.status).toBe("Registered");
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: "registration.confirmed" }));
   });
 
-  it("refuses a full event", async () => {
+  it("passes the capacity to the RPC and answers 409 event_full when it says full", async () => {
     clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ capacity: 2 })] });
-    const countQuery = query({ data: [{ event_id: 1 }, { event_id: 1 }], error: null });
-    const { app, from } = buildApp(attendee, query({ data: null, error: null }), countQuery);
+    const { app, rpc } = buildRegisterApp("full", query({ data: null, error: null }));
 
     const res = await request(app).post("/api/registrations").send({ eventId: 1 });
 
     expect(res.status).toBe(409);
     expect(res.body.code).toBe("event_full");
-    expect(countQuery.eq).toHaveBeenCalledWith("status", "Registered");
-    expect(from).toHaveBeenCalledTimes(2);
+    expect(rpc).toHaveBeenCalledWith("register_for_event", expect.objectContaining({ p_capacity: 2 }));
     expect(publish).not.toHaveBeenCalled();
   });
 
   it("refuses re-registering after a withdrawal once the event is full", async () => {
     clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ capacity: 1 })] });
     const lookup = query({ data: null, error: null }, { data: row({ status: "Withdrawn" }), error: null });
-    const { app } = buildApp(attendee, lookup, query({ data: [{ event_id: 1 }], error: null }));
+    const { app } = buildRegisterApp("full", lookup);
 
     const res = await request(app).post("/api/registrations").send({ eventId: 1 });
 
-    expect(res.status).toBe(409);
     expect(res.body.code).toBe("event_full");
   });
 
   it("still says already registered, not full, to someone holding a place", async () => {
     clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ capacity: 1 })] });
-    const { app } = buildApp(attendee, query({ data: null, error: null }, { data: row(), error: null }));
+    const { app } = buildRegisterApp("full", query({ data: null, error: null }, { data: row(), error: null }));
 
     const res = await request(app).post("/api/registrations").send({ eventId: 1 });
 
     expect(res.body.code).toBe("already_registered");
   });
 
-  it("registers while places remain", async () => {
-    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ capacity: 2 })] });
-    const insertQuery = query({ data: null, error: null }, { data: row(), error: null });
-    const { app } = buildApp(
-      attendee,
-      query({ data: null, error: null }),
-      query({ data: [{ event_id: 1 }], error: null }),
-      insertQuery,
-    );
+  it("answers 500 when the RPC fails", async () => {
+    const { app } = buildApp(attendee, query({ data: null, error: null }));
+    (globalThis as any).__mockSupabase.rpc = vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } });
 
-    const res = await request(app).post("/api/registrations").send({ eventId: 1 });
-
-    expect(res.status).toBe(201);
-    expect(insertQuery.insert).toHaveBeenCalled();
+    expect((await request(app).post("/api/registrations").send({ eventId: 1 })).status).toBe(500);
   });
 
   it.each([
@@ -605,5 +613,44 @@ describe("GET /open-events", () => {
 
     expect(res.body).toEqual({ events: [] });
     expect(from).not.toHaveBeenCalled();
+  });
+});
+
+describe("registration state (open / full / closed)", () => {
+  it("lists closed events as CLOSED and upgrades an OPEN event with no places left to FULL", async () => {
+    clients.fetchOpenEvents.mockResolvedValue({
+      status: "ok",
+      events: [
+        eventInfo({ id: 1, capacity: 1, registrationState: "OPEN" }),
+        eventInfo({ id: 2, open: false, registrationState: "CLOSED" }),
+        eventInfo({ id: 3, capacity: 5, registrationState: "OPEN" }),
+      ],
+    });
+    const { app } = buildApp(
+      attendee,
+      query({ data: [], error: null }),
+      query({ data: [{ event_id: 1 }], error: null }),
+    );
+
+    const res = await request(app).get("/api/registrations/open-events");
+
+    expect(res.body.events.map((e: { id: number; registrationState: string }) => [e.id, e.registrationState])).toEqual([
+      [1, "FULL"],
+      [2, "CLOSED"],
+      [3, "OPEN"],
+    ]);
+  });
+
+  it("lets an unregistered attendee look at a listed event that is now closed", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({
+      status: "ok",
+      events: [eventInfo({ open: false, listed: true, registrationState: "CLOSED" })],
+    });
+    const { app } = buildApp(attendee, query({ data: null, error: null }), query({ data: [], error: null }));
+
+    const res = await request(app).get("/api/registrations/event/1/view");
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.registrationState).toBe("CLOSED");
   });
 });

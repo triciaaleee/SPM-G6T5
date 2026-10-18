@@ -13,6 +13,10 @@ import {
   assignCoordinator,
   cancelEvent,
   completeEvent,
+  openRegistration,
+  closeRegistration,
+  followRegistrationSchedule,
+  setRegistrationOpenDate,
   reassignCoordinator,
   fetchEventById,
   fetchEventHistory,
@@ -33,6 +37,7 @@ import {
 } from "../lib/eventsApi";
 import { formatEventDate, statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
 import { hasEventEnded } from "../lib/eventTiming";
+import { REGISTRATION_STATE_LABEL, registrationState } from "../lib/registrationPeriod";
 import EventStatusTracker from "../components/EventStatusTracker.vue";
 import ClarificationPanel from "../components/ClarificationPanel.vue";
 import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
@@ -244,6 +249,66 @@ async function handleComplete(): Promise<void> {
   }
 }
 
+/**
+ * Registration period (coordinator). The assigned coordinator sets the day
+ * registration opens and can open/close it by hand; it otherwise closes by
+ * itself 5 days before the event or when full. The backend decides — this
+ * only mirrors it (lib/registrationPeriod.ts).
+ */
+const registrationNeeded = computed(
+  () => asSubmittedDetails(event.value?.submitted_details ?? {}).registrationNeeded === true,
+);
+
+const registrationStateLabel = computed(() => {
+  if (!event.value) return "";
+  return REGISTRATION_STATE_LABEL[
+    registrationState(
+      event.value.status,
+      event.value.submitted_details,
+      event.value.registration_open_date,
+      event.value.registration_override,
+      now.value,
+    )
+  ];
+});
+
+const showRegistrationControls = computed(
+  () =>
+    isAssignedCoordinator.value &&
+    registrationNeeded.value &&
+    ["Planning", "Safety Review", "Confirmed"].includes(event.value?.status ?? ""),
+);
+
+const registrationDateInput = ref("");
+const registrationDateDirty = ref(false);
+const registrationDateValue = computed({
+  get: () => (registrationDateDirty.value ? registrationDateInput.value : event.value?.registration_open_date ?? ""),
+  set: (value: string) => {
+    registrationDateInput.value = value;
+    registrationDateDirty.value = true;
+  },
+});
+
+async function runRegistrationAction(action: () => Promise<EventSummary>): Promise<void> {
+  isReviewing.value = true;
+  actionError.value = null;
+  try {
+    event.value = await action();
+    registrationDateDirty.value = false;
+    await loadHistory();
+  } catch (err) {
+    actionError.value = err instanceof ReviewActionError ? err.message : "We couldn't complete that action. Please try again.";
+  } finally {
+    isReviewing.value = false;
+  }
+}
+
+function saveRegistrationDate(): Promise<void> {
+  if (!event.value || !registrationDateValue.value) return Promise.resolve();
+  const id = event.value.id;
+  return runRegistrationAction(() => setRegistrationOpenDate(id, registrationDateValue.value));
+}
+
 function asSubmittedDetails(value: EventSummary["submitted_details"]): SubmittedEventDetails {
   return value as SubmittedEventDetails;
 }
@@ -309,6 +374,8 @@ const editForm = reactive<EventRequestPayload>({
   technicalSupport: "",
   registrationNeeded: false,
 });
+/** The coordinator's registration open date, edited alongside the other details (YYYY-MM-DD, "" = not set). */
+const editRegistrationDate = ref("");
 const editFieldErrors = ref<Record<string, string>>({});
 const editGeneralError = ref<string | null>(null);
 const submittingEdit = ref(false);
@@ -332,6 +399,7 @@ function startEditingDetails(): void {
   editForm.equipment = details.equipment ?? "";
   editForm.technicalSupport = details.technicalSupport ?? "";
   editForm.registrationNeeded = details.registrationNeeded ?? false;
+  editRegistrationDate.value = event.value.registration_open_date ?? "";
 
   // E3-9: a field already held in a Pending request is pre-filled with
   // its *requested* value, not the committed one — otherwise simply
@@ -377,11 +445,22 @@ async function submitEditedDetails(): Promise<void> {
       return;
     }
     event.value = await updateEventDetails(event.value.id, editForm);
+    // The coordinator's registration open date is saved by its own route, after the details.
+    if (
+      canCoordinatorEdit.value &&
+      editForm.registrationNeeded &&
+      editRegistrationDate.value &&
+      editRegistrationDate.value !== (event.value.registration_open_date ?? "")
+    ) {
+      event.value = await setRegistrationOpenDate(event.value.id, editRegistrationDate.value);
+    }
     isEditingDetails.value = false;
     await Promise.all([clarificationPanelRef.value?.refresh(), loadHistory()]);
   } catch (err) {
     if (err instanceof ValidationError) {
       editFieldErrors.value = err.fields;
+    } else if (err instanceof ReviewActionError) {
+      editGeneralError.value = err.message;
     } else {
       editGeneralError.value = canRequestChange.value
         ? "We couldn't submit your change request. Please try again."
@@ -1040,6 +1119,12 @@ onMounted(async () => {
                         </AppButton>
                       </div>
                     </div>
+                    <div v-if="canCoordinatorEdit && editForm.registrationNeeded" class="field">
+                      <label for="edit-registration-open-date" class="body-small muted mb-1">Registration open date</label>
+                      <input id="edit-registration-open-date" v-model="editRegistrationDate" type="date"
+                        class="edit-input" />
+                      <p class="body-small muted">Registration closes automatically 5 days before the event, or when it is full.</p>
+                    </div>
                     <div class="edit-actions">
                       <AppButton variant="primary" type="button" :disabled="submittingEdit"
                         @click="submitEditedDetails">
@@ -1075,6 +1160,16 @@ onMounted(async () => {
                         <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
                         <p class="body-default field-value">
                           {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
+                        </p>
+                      </div>
+                      <div v-if="asSubmittedDetails(event.submitted_details).registrationNeeded" class="field"
+                        data-testid="registration-open-date">
+                        <p class="body-small muted mb-1">Registration open date</p>
+                        <p class="body-default field-value">
+                          {{ event.registration_open_date ? formatEventDate(event.registration_open_date) : "Not set" }}
+                          <span v-if="event.registration_override && event.registration_override !== 'NONE'" class="body-small muted">
+                            (manually {{ event.registration_override === "FORCE_OPEN" ? "opened" : "closed" }})
+                          </span>
                         </p>
                       </div>
                     </div>
@@ -1402,6 +1497,38 @@ onMounted(async () => {
       <p v-else class="body-small muted">
         No coordinator actions are available for this request's current status ({{ event.status }}).
       </p>
+
+      <!-- Registration period: when it opens, and the manual open/close -->
+      <div v-if="showRegistrationControls" class="review-actions__form" data-testid="registration-controls">
+        <h4 class="text-base font-semibold text-[--color-grey-900]">Registration</h4>
+        <p class="body-small muted">
+          Status: <strong data-testid="registration-state">{{ registrationStateLabel }}</strong>.
+          Registration closes automatically 5 days before the event, or when it is full, and always stops when the event starts.
+        </p>
+        <p v-if="actionError && event.status !== 'Confirmed'" class="body-default error-text">{{ actionError }}</p>
+        <label for="registration-open-date" class="body-small muted">Registration opens on</label>
+        <div class="review-actions__buttons">
+          <input id="registration-open-date" v-model="registrationDateValue" type="date" class="review-actions__textarea" />
+          <AppButton variant="outline" type="button" :disabled="isReviewing || !registrationDateValue"
+            @click="saveRegistrationDate">
+            Save open date
+          </AppButton>
+        </div>
+        <div v-if="event.status === 'Confirmed'" class="review-actions__buttons">
+          <AppButton variant="primary" type="button" :disabled="isReviewing || event.registration_override === 'FORCE_OPEN'"
+            @click="runRegistrationAction(() => openRegistration(event!.id))">
+            Open registration
+          </AppButton>
+          <AppButton variant="danger" type="button" :disabled="isReviewing || event.registration_override === 'FORCE_CLOSED'"
+            @click="runRegistrationAction(() => closeRegistration(event!.id))">
+            Close registration
+          </AppButton>
+          <AppButton v-if="event.registration_override && event.registration_override !== 'NONE'" variant="outline" type="button" :disabled="isReviewing"
+            @click="runRegistrationAction(() => followRegistrationSchedule(event!.id))">
+            Use automatic schedule
+          </AppButton>
+        </div>
+      </div>
     </div>
   </div>
 

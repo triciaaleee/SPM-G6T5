@@ -13,6 +13,10 @@ export interface EventSummary {
   decided_at: string | null;
   decided_by: string | null;
   created_at: string;
+  /** Registration period: the day registration opens (YYYY-MM-DD), set by the coordinator. */
+  registration_open_date?: string | null;
+  /** Manual control: NONE follows the dates, FORCE_OPEN opens it now, FORCE_CLOSED closes it. */
+  registration_override?: "NONE" | "FORCE_OPEN" | "FORCE_CLOSED";
 }
 
 const apiBase = import.meta.env.VITE_EVENTS_API_URL as string;
@@ -343,6 +347,32 @@ export function rejectEvent(id: number, reason: string): Promise<EventSummary> {
 /** E3-5: the assigned coordinator marks a Confirmed event completed once it has ended. */
 export function completeEvent(id: number): Promise<EventSummary> {
   return postReviewAction(id, "complete");
+}
+
+/** Registration period: the assigned coordinator opens, closes, or hands back to the schedule. */
+export function openRegistration(id: number): Promise<EventSummary> {
+  return postReviewAction(id, "registration/open");
+}
+
+export function closeRegistration(id: number): Promise<EventSummary> {
+  return postReviewAction(id, "registration/close");
+}
+
+export function followRegistrationSchedule(id: number): Promise<EventSummary> {
+  return postReviewAction(id, "registration/auto");
+}
+
+/** Registration period: the assigned coordinator sets the day registration opens. */
+export async function setRegistrationOpenDate(id: number, openDate: string): Promise<EventSummary> {
+  const res = await fetch(`${apiBase}/${id}/registration`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ openDate }),
+  });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new ReviewActionError(body.error ?? "That action couldn't be completed");
+  return body.event as EventSummary;
 }
 
 /** E3-6: the owning Organiser cancels their own event with a mandatory reason. */

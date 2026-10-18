@@ -82,7 +82,7 @@ async function handleRegister() {
     if (err instanceof RegistrationRequestError && err.code === "already_registered") {
       // Registered elsewhere (another tab): the page was just out of date.
       event.value = { ...event.value, registrationStatus: "Registered" };
-    } else if (err instanceof RegistrationRequestError && err.code === "not_open") {
+    } else if (err instanceof RegistrationRequestError && (err.code === "not_open" || err.code === "closed")) {
       event.value = { ...event.value, open: false };
       registerError.value = "This event is no longer open for registration.";
     } else if (err instanceof RegistrationRequestError && err.code === "event_full") {
@@ -177,6 +177,9 @@ onMounted(async () => {
             {{ registering ? "Registering…" : "Register" }}
           </AppButton>
         </div>
+        <p v-else-if="!canWithdraw && event.open === false" class="body-default muted" data-testid="registration-closed">
+          {{ event.registrationState === "NOT_OPEN" ? "Registration hasn't opened yet" : "Registration is closed" }}
+        </p>
         <div v-else-if="canWithdraw" class="actions">
           <AppButton variant="danger" class="action-button" :disabled="withdrawing" @click="handleWithdraw">
             {{ withdrawing ? "Withdrawing…" : "Withdraw registration" }}

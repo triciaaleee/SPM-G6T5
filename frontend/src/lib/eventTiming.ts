@@ -31,3 +31,22 @@ export function hasEventEnded(details: Record<string, unknown> | null | undefine
   const endsAt = eventEndsAt(details);
   return endsAt !== null && endsAt.getTime() <= now.getTime();
 }
+
+/** The moment the event starts, or null when its date or start time can't be read. */
+export function eventStartsAt(details: Record<string, unknown> | null | undefined): Date | null {
+  const date = details?.proposedDate;
+  if (typeof date !== "string" || !DATE_PATTERN.test(date)) return null;
+
+  const startTime = details?.startTime === undefined || details?.startTime === null ? "00:00" : details.startTime;
+  if (typeof startTime !== "string" || !TIME_PATTERN.test(startTime)) return null;
+
+  const startsAt = new Date(`${date}T${startTime}:00${EVENT_UTC_OFFSET}`);
+  return Number.isNaN(startsAt.getTime()) ? null : startsAt;
+}
+
+/** The start of a local (Singapore) calendar day, or null for a malformed date. */
+export function localDateStart(date: unknown): Date | null {
+  if (typeof date !== "string" || !DATE_PATTERN.test(date)) return null;
+  const start = new Date(`${date}T00:00:00${EVENT_UTC_OFFSET}`);
+  return Number.isNaN(start.getTime()) ? null : start;
+}

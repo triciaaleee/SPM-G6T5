@@ -11,3 +11,13 @@ export type RegistrationStatus = (typeof REGISTRATION_STATUSES)[number];
 export function registrationBadgeClass(status: RegistrationStatus): string {
   return status === "Registered" ? "status-success" : "status-warning";
 }
+
+/** What an attendee is told about an event's registration period (decided by the backend). */
+export type RegistrationStateValue = "NOT_OPEN" | "OPEN" | "FULL" | "CLOSED";
+
+/** Card badge for an event the attendee hasn't registered for: label and colour class. */
+export function registrationStateBadge(state: RegistrationStateValue | undefined): { label: string; className: string } {
+  if (state === "FULL") return { label: "Full", className: "status-warning" };
+  if (state === "CLOSED") return { label: "Registration closed", className: "status-warning" };
+  return { label: "Open", className: "status-open" };
+}

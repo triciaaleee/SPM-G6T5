@@ -17,7 +17,6 @@
  */
 import AppButton from "../components/ui/AppButton.vue";
 import { computed, onMounted, ref } from "vue";
-import { RouterLink } from "vue-router";
 import {
   approveBooking,
   describeBookingFailure,
