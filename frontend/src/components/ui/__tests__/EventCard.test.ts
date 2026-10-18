@@ -85,6 +85,23 @@ describe("EventCard", () => {
     expect(wrapper.findAll(".fact")[1].classes()).toContain("fact--clamp");
   });
 
+  it("puts an aside (places left) at the right end of the title row, outside the facts", () => {
+    const wrapper = mountCard({
+      facts: [{ icon: "calendar", text: "14 Nov 2026" }],
+      titleAside: { icon: "people", text: "Full", alert: true, testid: "slots-left" },
+    });
+
+    const aside = wrapper.find(".card-title-row [data-testid='slots-left']");
+    expect(aside.text()).toBe("Full");
+    expect(aside.classes()).toContain("card-aside--alert");
+    expect(wrapper.find(".card-title-row .card-title").exists()).toBe(true);
+    expect(wrapper.findAll(".fact")).toHaveLength(1);
+  });
+
+  it("has no aside by default", () => {
+    expect(mountCard().find(".card-aside").exists()).toBe(false);
+  });
+
   describe("person line", () => {
     it("says who is in charge, with their initial", () => {
       const wrapper = mountCard({ personLabel: "Organiser", personName: "Pat Organiser" });

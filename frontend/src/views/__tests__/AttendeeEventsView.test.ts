@@ -143,7 +143,7 @@ describe("AttendeeEventsView", () => {
     }
   });
 
-  it("names the organiser on the card, never a coordinator, and puts date and time on one line", async () => {
+  it("names the organiser on the card, never a coordinator, and puts date and time on separate lines", async () => {
     mockedFetch.mockResolvedValue([registration(1), registration(2, {}, { organiserName: null })]);
     const wrapper = await mountView();
 
@@ -152,8 +152,8 @@ describe("AttendeeEventsView", () => {
     expect(withOrganiser.text()).not.toContain("Coordinator");
     expect(withoutOrganiser.find(".card-person").exists()).toBe(false);
 
-    const dateTime = withOrganiser.findAll(".fact").find((fact) => fact.text().includes("1 Jan 2099"))!;
-    expect(dateTime.text()).toBe("1 Jan 2099 · 10:00 AM to 4:00 PM");
+    const facts = withOrganiser.findAll(".fact").map((fact) => fact.text());
+    expect(facts.slice(0, 2)).toEqual(["1 Jan 2099", "10:00 AM to 4:00 PM"]);
   });
 
   it("shows the accessibility note on the card, and nothing when there is none", async () => {

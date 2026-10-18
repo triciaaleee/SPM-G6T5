@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import AppButton from "../ui/AppButton.vue";
-import AppButton from "../ui/AppButton.vue";
 import { computed } from "vue";
 import VenueIcon from "./VenueIcon.vue";
 import type { UnavailabilityPeriod } from "../../lib/unavailabilityApi";

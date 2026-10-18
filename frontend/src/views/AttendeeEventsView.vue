@@ -62,14 +62,12 @@ function eventTitle(registration: MyRegistration): string {
   return registration.event?.name || `Event #${registration.eventId}`;
 }
 
-/** Date and time share one line; the venue and any accessibility note follow. */
+/** Date and time each get their own line; the venue and any accessibility note follow. */
 function cardFacts(registration: MyRegistration): CardFact[] {
   const event = registration.event;
   const facts: CardFact[] = [
-    {
-      icon: "calendar",
-      text: `${formatCardDate(event?.proposedDate)} · ${formatCardTimeRange(event?.startTime, event?.endTime)}`,
-    },
+    { icon: "calendar", text: formatCardDate(event?.proposedDate) },
+    { icon: "clock", text: formatCardTimeRange(event?.startTime, event?.endTime) },
     { icon: "pin", text: venueLabel(registration) },
   ];
   if (event?.accessibility) facts.push({ icon: "accessibility", text: event.accessibility, clamp: true });

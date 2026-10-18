@@ -282,7 +282,7 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(12, 1fr);
   gap: var(--spacing-24) var(--grid-desktop-gutter);
-  padding: var(--spacing-40) var(--grid-desktop-margin) var(--spacing-80);
+  padding: var(--spacing-40) 180px var(--spacing-80);
   align-content: start;
   min-height: 100vh;
 }
@@ -303,6 +303,7 @@ onMounted(async () => {
   aspect-ratio: 3.5 / 1;
   object-fit: cover;
   border-radius: var(--radius-lg);
+  margin-bottom: var(--spacing-16)
 }
 
 .description {

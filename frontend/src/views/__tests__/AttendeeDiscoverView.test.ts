@@ -56,7 +56,7 @@ describe("AttendeeDiscoverView", () => {
     expect(wrapper.text()).toContain("Showing 2 events");
   });
 
-  it("follows the organiser's card: description, date and time on one line, and the organiser's name", async () => {
+  it("follows the organiser's card: description, date and time on separate lines, and the organiser's name", async () => {
     mockedOpen.mockResolvedValue([openEvent(), openEvent({ id: 2, name: "No Organiser", organiserName: null, proposedDate: "2026-12-04" })]);
     const wrapper = await mountView();
 
@@ -64,7 +64,7 @@ describe("AttendeeDiscoverView", () => {
     expect(first.find(".card-description").text()).toBe("Talk to employers and alumni.");
     expect(first.find(".card-person").text()).toContain("Organiser: Pat Organiser");
     expect(first.text()).not.toContain("Coordinator");
-    expect(first.find(".fact").text()).toBe("19 Nov 2026 · 6:30 PM to 9:00 PM");
+    expect(first.findAll(".fact").map((fact) => fact.text())).toEqual(["19 Nov 2026", "6:30 PM to 9:00 PM"]);
     expect(first.find(".badge__dot").exists()).toBe(true);
     expect(second.find(".card-person").exists()).toBe(false);
   });
@@ -91,7 +91,7 @@ describe("AttendeeDiscoverView", () => {
 
     const slots = wrapper.findAll("[data-testid='slots-left']");
     expect(slots.map((s) => s.text())).toEqual(["12 slots left", "1 slot left", "Full"]);
-    expect(slots[2].classes()).toContain("fact--alert");
+    expect(slots[2].classes()).toContain("card-aside--alert");
     expect(wrapper.findAll(".event-card")[3].find("[data-testid='slots-left']").exists()).toBe(false);
   });
 

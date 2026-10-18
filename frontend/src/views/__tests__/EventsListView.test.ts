@@ -73,12 +73,12 @@ describe("EventsListView", () => {
     expect(card.findAll(".badge").map((b) => b.text())).toContain("Registration Required");
   });
 
-  it("puts date and time on one line", async () => {
+  it("puts the date and the time on separate lines, the time with a clock icon", async () => {
     const wrapper = await mountView([makeEvent()]);
 
     const facts = wrapper.findAll(".event-card .fact");
-    expect(facts).toHaveLength(1);
-    expect(facts[0].text()).toBe("15 Jun 2099 · 6:00 PM to 9:00 PM");
+    expect(facts.map((fact) => fact.text())).toEqual(["15 Jun 2099", "6:00 PM to 9:00 PM"]);
+    expect(facts[1].find("svg").exists()).toBe(true);
   });
 
   it("names the coordinator, or says Unassigned, and shows when it was submitted", async () => {

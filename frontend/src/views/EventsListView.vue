@@ -69,9 +69,12 @@ function eventDateLabel(event: EventSummary): string {
   return formatCardDate(details?.proposedDate);
 }
 
-/** Date and time share one line on the card. */
+/** Date and time each get their own line on the card. */
 function cardFacts(event: EventSummary): CardFact[] {
-  return [{ icon: "calendar", text: `${eventDateLabel(event)} · ${eventTimeLabel(event)}` }];
+  return [
+    { icon: "calendar", text: eventDateLabel(event) },
+    { icon: "clock", text: eventTimeLabel(event) },
+  ];
 }
 
 function eventTimeLabel(event: EventSummary): string {

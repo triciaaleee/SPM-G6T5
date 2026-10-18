@@ -5,11 +5,11 @@ import type { RouteLocationRaw } from "vue-router";
 /**
  * The one event card (Style.md 3.4, "Event card"), based on the organiser's
  * list card. The whole card is a link to the event. Facts are passed in as
- * data (icon, text) so every page lays them out the same way; date and time
- * belong on one line ("14 Nov 2026 · 10:00 AM to 4:00 PM").
+ * data (icon, text) so every page lays them out the same way: date, time
+ * (with the clock icon), then venue and the rest, each on its own line.
  */
 export interface CardFact {
-  icon: "calendar" | "pin" | "people" | "accessibility";
+  icon: "calendar" | "clock" | "pin" | "people" | "accessibility";
   text: string;
   /** Clamp long text (an accessibility note) to two lines. */
   clamp?: boolean;
@@ -34,6 +34,8 @@ const props = withDefaults(
     /** Extra badges beside the status, e.g. "Registration Required". */
     extraBadges?: string[];
     facts?: CardFact[];
+    /** One short fact at the right end of the title row (e.g. "12 slots left"). */
+    titleAside?: CardFact | null;
     /** "Coordinator" or "Organiser": the label of the person line. */
     personLabel?: string;
     personName?: string | null;
@@ -42,7 +44,7 @@ const props = withDefaults(
     /** A small line in the footer, e.g. "Submitted: 12/10/2026". */
     meta?: string;
   }>(),
-  { description: null, dot: true, extraBadges: () => [], facts: () => [], personName: null },
+  { description: null, dot: true, extraBadges: () => [], facts: () => [], titleAside: null, personName: null },
 );
 
 const slots = useSlots();
@@ -62,6 +64,7 @@ const ICONS: Record<CardFact["icon"], string[]> = {
   calendar: [
     "M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5",
   ],
+  clock: ["M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"],
   pin: [
     "M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
     "M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z",
@@ -84,9 +87,21 @@ const ICONS: Record<CardFact["icon"], string[]> = {
           {{ statusLabel }}
         </span>
         <span v-for="badge in extraBadges" :key="badge" class="badge badge-extra">{{ badge }}</span>
+                <span
+          v-if="titleAside"
+          class="card-aside"
+          :class="{ 'card-aside--alert': titleAside.alert }"
+          :data-testid="titleAside.testid"
+        >
+
+          {{ titleAside.text }}
+        </span>
       </div>
 
-      <h2 class="card-title">{{ title }}</h2>
+      <div class="card-title-row">
+        <h2 class="card-title">{{ title }}</h2>
+
+      </div>
       <p v-if="description" class="card-description">{{ description }}</p>
 
       <ul v-if="facts.length > 0" class="card-facts">
@@ -171,7 +186,7 @@ const ICONS: Record<CardFact["icon"], string[]> = {
 .card-header {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
   gap: var(--spacing-8);
 }
 
@@ -230,7 +245,40 @@ const ICONS: Record<CardFact["icon"], string[]> = {
 
 /* Text ---------------------------------------------------------------------- */
 
+/* Title on the left; a short aside (places left) pushed to the right end of the same row. */
+.card-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-12);
+}
+
+.card-aside {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-6);
+  margin-top: var(--spacing-4);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  color: var(--color-grey-600);
+  white-space: nowrap;
+}
+
+.card-aside__icon {
+  flex: none;
+  color: var(--color-grey-500);
+}
+
+/* No places left: the error text colour, icon included (Style.md 3.1). */
+.card-aside--alert,
+.card-aside--alert .card-aside__icon {
+  color: var(--color-error-600);
+}
+
 .card-title {
+  min-width: 0;
   margin: 0;
   font-size: 1.25rem;
   font-weight: 700;
@@ -255,7 +303,7 @@ const ICONS: Record<CardFact["icon"], string[]> = {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
+  gap: var(--spacing-8);
 }
 
 .fact {

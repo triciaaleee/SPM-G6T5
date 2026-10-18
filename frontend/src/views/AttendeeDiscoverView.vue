@@ -32,16 +32,20 @@ const filtered = computed(() => {
   );
 });
 
-/** Date and time share one line; places left and any accessibility note follow. */
+/** Date and time each get their own line; any accessibility note follows. */
 function cardFacts(event: OpenEvent): CardFact[] {
   const facts: CardFact[] = [
-    { icon: "calendar", text: `${formatCardDate(event.proposedDate)} · ${formatCardTimeRange(event.startTime, event.endTime)}` },
+    { icon: "calendar", text: formatCardDate(event.proposedDate) },
+    { icon: "clock", text: formatCardTimeRange(event.startTime, event.endTime) },
   ];
-  if (event.slotsLeft != null) {
-    facts.push({ icon: "people", text: slotsLabel(event.slotsLeft) ?? "", alert: event.slotsLeft === 0, testid: "slots-left" });
-  }
   if (event.accessibility) facts.push({ icon: "accessibility", text: event.accessibility, clamp: true });
   return facts;
+}
+
+/** Places left sit at the right end of the title row, not in the fact list. */
+function slotsAside(event: OpenEvent): CardFact | null {
+  if (event.slotsLeft == null) return null;
+  return { icon: "people", text: slotsLabel(event.slotsLeft) ?? "", alert: event.slotsLeft === 0, testid: "slots-left" };
 }
 
 function eventTitle(event: OpenEvent): string {
@@ -102,6 +106,7 @@ onMounted(async () => {
               :status-label="event.registrationStatus ?? 'Open'"
               :status-class="event.registrationStatus ? registrationBadgeClass(event.registrationStatus) : 'status-open'"
               :facts="cardFacts(event)"
+              :title-aside="slotsAside(event)"
               person-label="Organiser"
               :person-name="event.organiserName"
             />
