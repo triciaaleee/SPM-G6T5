@@ -1,0 +1,65 @@
+import { expect, test } from "@playwright/test";
+import {
+  approveRequest,
+  assignCoordinator,
+  listEquipmentCatalog,
+  registerOrganiser,
+  signInAsCoordinator,
+  signInAsCoordinatorLead,
+  signInAsTechnicalSupport,
+  submitEvent,
+  uniqueName,
+} from "./support/backend";
+import { signInThroughStorage } from "./support/browser";
+
+/**
+ * E5-1: while an event is in Planning, its assigned coordinator records
+ * equipment requirements through the real form in EquipmentRequestPanel
+ * (not the API), and Technical Support then sees it in their queue
+ * (/equipment-requests) and on the event's own request detail page.
+ */
+
+test("coordinator records equipment requirements via the form; Technical Support sees the request", async ({
+  page,
+}) => {
+  const organiser = await registerOrganiser("equipment-organiser");
+  const coordinator = await signInAsCoordinator();
+  const lead = await signInAsCoordinatorLead();
+  const techSupport = await signInAsTechnicalSupport();
+
+  const eventName = uniqueName("Equipment Event");
+  const event = await submitEvent(organiser, { name: eventName });
+  await assignCoordinator(lead, event.id, coordinator.id);
+  await approveRequest(coordinator, event.id); // Requested -> Planning
+
+  const catalog = await listEquipmentCatalog(coordinator);
+  expect(catalog.length).toBeGreaterThan(0);
+  const item = catalog[0];
+
+  // Coordinator drives the real Equipment Requirements form on the event page.
+  await signInThroughStorage(page, coordinator);
+  await page.goto(`/events/${event.id}`);
+  await page.getByRole("button", { name: /record equipment requirements/i }).click();
+
+  await page.getByLabel("Equipment type").selectOption(String(item.id));
+  await page.getByLabel("Quantity").fill("2");
+  await page.getByRole("button", { name: /submit request/i }).click();
+
+  await expect(page.getByText(/equipment request submitted/i)).toBeVisible();
+  await expect(page.getByText(`2× ${item.name}`)).toBeVisible();
+
+  // Technical Support sees it in their queue, grouped under this event.
+  // backend.ts's default eventDetails() proposedDate is 2099-09-24 (safely
+  // in the future for every test that doesn't care about the date), which
+  // falls outside this queue's default "Next 30 days" filter — switch to
+  // "All dates" rather than relying on a near-future date no test asserts on.
+  await signInThroughStorage(page, techSupport);
+  await page.goto("/equipment-requests");
+  await page.getByLabel("Date range").selectOption({ label: "All dates" });
+  await expect(page.getByRole("heading", { name: eventName, level: 2 })).toBeVisible();
+
+  // And on the event's own equipment request detail page.
+  await page.getByRole("heading", { name: eventName, level: 2 }).click();
+  await expect(page).toHaveURL(new RegExp(`/equipment-requests/event/${event.id}$`));
+  await expect(page.getByText(`2× ${item.name}`)).toBeVisible();
+});
