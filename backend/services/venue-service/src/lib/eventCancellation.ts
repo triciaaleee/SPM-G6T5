@@ -14,6 +14,7 @@
 import type { AuthedRequest } from "../middleware/auth.js";
 import { BOOKING_COLUMNS, type BookingRow } from "./bookingDecisions.js";
 import { getPublisher } from "./rabbitPublisher.js";
+import { reconcileBufferOverlapsSafely } from "./bufferOverlapReview.js";
 
 type Supabase = NonNullable<AuthedRequest["supabase"]>;
 
@@ -74,6 +75,21 @@ export async function releaseBookingsForCancelledEvent(
       actorId,
       recipients: { userIds: [venue.staff_id], roles: [] },
       data: { bookingId: booking.id, venueName: venue.name, eventName, reason: "event_cancelled" },
+    });
+  }
+
+  // E4-13 AC3: any Approved/On-Hold booking just released left
+  // UNAVAILABLE_BOOKING_STATUSES, which can resolve an overlap it was part
+  // of. One reconciliation call per distinct venue — this cancellation can
+  // release bookings across several venues at once (change 3). No caller
+  // token exists here (this runs off a RabbitMQ consumer, not a request),
+  // so `authorization: null` makes loadLiveBookings sign its own internal
+  // token, same as the expiring-hold sweep does.
+  for (const venueId of venueIds) {
+    const venue = venueById.get(venueId);
+    await reconcileBufferOverlapsSafely(supabase, venueId, null, {
+      venueName: venue?.name,
+      venueStaffId: venue?.staff_id,
     });
   }
 

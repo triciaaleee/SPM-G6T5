@@ -49,6 +49,7 @@ import { describePeriod, findClashingPeriod } from "./unavailability.js";
 import { withVenueLock } from "./venueLock.js";
 import { isLockBusy, withVenueBookingLock } from "./venueBookingLock.js";
 import { isAssignedToVenue } from "./venueStaff.js";
+import { reconcileBufferOverlapsSafely } from "./bufferOverlapReview.js";
 
 type Supabase = NonNullable<AuthedRequest["supabase"]>;
 
@@ -159,6 +160,14 @@ export async function expireLapsedHolds(
     return message ? [message] : [];
   });
   await publishAll(messages);
+
+  // E4-13 AC3: an Expired hold leaves UNAVAILABLE_BOOKING_STATUSES, which
+  // can resolve an overlap it was part of. One reconciliation call per
+  // distinct venue — this sweep can expire holds across several venues in
+  // one pass. Best-effort and after the status write above has committed.
+  for (const venueId of new Set(lapsed.map((booking) => booking.venue_id))) {
+    await reconcileBufferOverlapsSafely(supabase, venueId, authorization);
+  }
 }
 
 /**
@@ -528,6 +537,13 @@ async function rejectBooking(
     return { outcome: { status: "blocked", message: "This booking was decided by someone else — reload the queue" } };
   }
 
+  // E4-13 AC3: a rejected On Hold booking leaves UNAVAILABLE_BOOKING_STATUSES,
+  // which can resolve an overlap it was part of (a Requested booking being
+  // rejected never blocked the venue, so there's nothing to reconcile for
+  // that case, but it's harmless/idempotent to always check). Best-effort,
+  // after the write above has committed.
+  await reconcileBufferOverlapsSafely(supabase, booking.venue_id, input.authorization);
+
   // Only now, with the rejection recorded, is the coordinator looked up:
   // telling them is best-effort and must not decide whether this succeeds.
   const info = await fetchVenueBookingInfo([booking.event_id], input.authorization);
@@ -672,6 +688,10 @@ async function decideUnderLock(
       .eq("id", booking.id)
       .eq("status", input.decision);
     if (rollbackError) return { outcome: { status: "error" } };
+    // E4-13 AC3: this booking briefly held UNAVAILABLE_BOOKING_STATUSES and
+    // then immediately left it again — reconcile so it's never left
+    // flagged against a pair it only held for a moment.
+    await reconcileBufferOverlapsSafely(supabase, booking.venue_id, input.authorization);
     return { outcome: conflictResult(rival, ownWindow, venue) };
   }
 
@@ -679,6 +699,22 @@ async function decideUnderLock(
   // it — one that yielded above must not drag them down with it.
   const autoRejected = await autoRejectOverlapping(supabase, venue, ownWindow, input.authorization, booking.id, now);
   if (!autoRejected) return { outcome: { status: "error" } };
+
+  // E4-13: the safer, more complete reading of AC3 is that reconciliation
+  // runs on every status change into or out of UNAVAILABLE_BOOKING_STATUSES,
+  // not only on a venue edit — so venue_buffer_overlaps is kept equal to
+  // "what findAllBufferOverlaps would compute right now" rather than only
+  // catching up on the next PATCH. In practice a *successful* decision can
+  // never create a fresh pair involving the booking it just decided: the
+  // pre-write conflict check just above (`blockingWindows`) already compares
+  // this booking's padded window against every other currently-blocking
+  // booking with the identical math findAllBufferOverlaps uses, so a
+  // decision that would create an overlap is rejected before it ever
+  // reaches here. What this call is for is self-healing anything else that
+  // may have left the table stale by now (same reasoning as the GET
+  // endpoint's defensive reconcile). autoRejectOverlapping's losers were
+  // all Requested (never blocking), so they don't need their own call.
+  await reconcileBufferOverlapsSafely(supabase, booking.venue_id, input.authorization);
 
   const notifications = [
     decidedMessage(venue, booking, event, input.decision, "", input.staffId),

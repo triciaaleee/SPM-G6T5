@@ -41,6 +41,12 @@ function buildApp(
     /** Simulate another decision winning the optimistic-lock race. */
     updateConflict?: boolean;
     updateError?: boolean;
+    /** E4-13: rows already in venue_buffer_overlaps for this venue before the call. */
+    storedOverlaps?: { id: number; venue_id: number; booking_id_a: number; booking_id_b: number }[];
+    /** E4-13: other bookings still blocking the venue, for reconciliation's own venue_bookings read. */
+    liveBookings?: { id: number; event_id: number; status: string; hold_expires_at: string | null }[];
+    /** E4-13: events-service's venue-booking-info answer for those live bookings. */
+    liveBookingEvents?: Record<string, unknown>[];
   } = {},
 ) {
   const booking: BookingFixture = {
@@ -60,8 +66,15 @@ function buildApp(
       ? { data: null, error: { message: "boom" } }
       : { data: options.bookingNotFound ? null : booking, error: null },
   );
-  const bookingSelectEq = vi.fn().mockReturnValue({ maybeSingle: bookingMaybeSingle });
-  const bookingSelect = vi.fn().mockReturnValue({ eq: bookingSelectEq });
+  // Two different shapes read venue_bookings through this same table: the
+  // withdraw/release handler's single-row `.eq("id", …).maybeSingle()`, and
+  // reconcileBufferOverlaps's `.eq("venue_id", …).in("status", …)` live-
+  // bookings read (lib/venueChanges.ts's loadLiveBookings). Both chain off
+  // one `.eq()` call, so the query object has to serve either ending.
+  const bookingSelectEq: any = vi.fn(() => bookingQuery);
+  const bookingQuery: any = { eq: bookingSelectEq, maybeSingle: bookingMaybeSingle, in: vi.fn() };
+  bookingQuery.in.mockResolvedValue({ data: options.liveBookings ?? [], error: null });
+  const bookingSelect = vi.fn().mockReturnValue(bookingQuery);
 
   const updateEqId = vi.fn();
   const updateEqStatus = vi.fn();
@@ -94,32 +107,77 @@ function buildApp(
     name: "Grand Ballroom",
     location: "Central Campus",
     staff_id: options.staffId === undefined ? "VENUE-0001" : options.staffId,
+    setup_minutes: 0,
+    turnaround_minutes: 0,
   };
   const venueMaybeSingle = vi.fn().mockResolvedValue({ data: venueRow, error: null });
   const venueEq = vi.fn().mockReturnValue({ maybeSingle: venueMaybeSingle });
   const venueSelect = vi.fn().mockReturnValue({ eq: venueEq });
 
+  // E4-13 AC3: reconcileBufferOverlapsSafely runs after a withdraw/release
+  // commits. It reads live bookings at the venue (none here, by default —
+  // this fixture's own booking has just left the unavailable set) and
+  // reconciles venue_buffer_overlaps; an in-memory table lets tests assert
+  // on that rather than only on the swallowed-error path every other test
+  // here relies on.
+  let overlapRows: { id: number; venue_id: number; booking_id_a: number; booking_id_b: number }[] = [
+    ...(options.storedOverlaps ?? []),
+  ];
+  const overlapsTable = {
+    select: vi.fn(() => {
+      let venueId: unknown;
+      const q: any = {
+        eq: vi.fn((_c: string, v: unknown) => {
+          venueId = v;
+          return q;
+        }),
+        order: vi.fn(() => q),
+      };
+      q.then = (resolve: (v: unknown) => void) => resolve({ data: overlapRows.filter((r) => r.venue_id === venueId), error: null });
+      return q;
+    }),
+    insert: vi.fn((rows: { venue_id: number; booking_id_a: number; booking_id_b: number }[]) => {
+      overlapRows = [...overlapRows, ...rows.map((r, i) => ({ ...r, id: 2000 + i }))];
+      return { then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }) };
+    }),
+    delete: vi.fn(() => ({
+      in: vi.fn((_c: string, ids: number[]) => {
+        overlapRows = overlapRows.filter((r) => !ids.includes(r.id));
+        return { then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }) };
+      }),
+    })),
+  };
+
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === "venue_bookings") return { select: bookingSelect, update };
       if (table === "venues") return { select: venueSelect };
+      if (table === "venue_buffer_overlaps") return overlapsTable;
       throw new Error(`unexpected table ${table}`);
     }),
   };
 
   const eventHttpStatus = options.eventHttpStatus ?? 200;
-  const fetchMock = vi.fn(async () => ({
-    ok: eventHttpStatus >= 200 && eventHttpStatus < 300,
-    status: eventHttpStatus,
-    json: async () => ({
-      event: {
-        id: booking.event_id,
-        status: "Planning",
-        submitted_details: { name: options.eventName === undefined ? "Alumni Dinner" : options.eventName },
-        coordinator_id: options.eventCoordinatorId === undefined ? "COORD-0001" : options.eventCoordinatorId,
-      },
-    }),
-  }));
+  const fetchMock = vi.fn(async (url: string) => {
+    if (String(url).includes("/venue-booking-info")) {
+      // reconcileBufferOverlaps's loadLiveBookings call — a second,
+      // differently-shaped events-service endpoint from the single-event
+      // fetchEvent() lookup below.
+      return { ok: true, status: 200, json: async () => ({ events: options.liveBookingEvents ?? [] }) };
+    }
+    return {
+      ok: eventHttpStatus >= 200 && eventHttpStatus < 300,
+      status: eventHttpStatus,
+      json: async () => ({
+        event: {
+          id: booking.event_id,
+          status: "Planning",
+          submitted_details: { name: options.eventName === undefined ? "Alumni Dinner" : options.eventName },
+          coordinator_id: options.eventCoordinatorId === undefined ? "COORD-0001" : options.eventCoordinatorId,
+        },
+      }),
+    };
+  });
   vi.stubGlobal("fetch", fetchMock);
 
   const publish = vi.fn().mockResolvedValue(true);
@@ -131,7 +189,18 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/venues", venuesRouter);
-  return { app, supabase, update, updateEqId, updateEqStatus, fetchMock, publish, booking };
+  return {
+    app,
+    supabase,
+    update,
+    updateEqId,
+    updateEqStatus,
+    fetchMock,
+    publish,
+    booking,
+    overlapsTable,
+    getOverlapRows: () => overlapRows,
+  };
 }
 
 function withdraw(app: express.Express, bookingId: number | string = 900) {
@@ -315,5 +384,55 @@ describe("POST /api/venues/bookings/:bookingId/release", () => {
   it("rejects a coordinator who isn't assigned to the event", async () => {
     const { app } = buildApp({ booking: { status: "Approved" }, eventCoordinatorId: "COORD-0002" });
     expect((await release(app)).status).toBe(403);
+  });
+});
+
+describe("E4-13 AC3: releasing/withdrawing reconciles the persisted buffer-overlap review list", () => {
+  it("removes a flagged pair once the released booking leaves the unavailable set", async () => {
+    // Booking 900 (venue 1) is being released; booking 901 was flagged
+    // against it. Once 900 is Withdrawn, loadLiveBookings only sees 901, so
+    // findAllBufferOverlaps can no longer report the pair.
+    const { app, getOverlapRows } = buildApp({
+      booking: { status: "Approved" },
+      storedOverlaps: [{ id: 5000, venue_id: 1, booking_id_a: 900, booking_id_b: 901 }],
+      liveBookings: [{ id: 901, event_id: 21, status: "Approved", hold_expires_at: null }],
+      liveBookingEvents: [
+        {
+          id: 21,
+          status: "Planning",
+          name: "Other Event",
+          proposedDate: "2099-01-01",
+          startTime: "09:00",
+          endTime: "10:00",
+          expectedAttendance: 10,
+          coordinatorId: "COORD-0002",
+        },
+      ],
+    });
+    const res = await release(app);
+
+    expect(res.status).toBe(200);
+    expect(getOverlapRows()).toEqual([]);
+  });
+
+  it("leaves other venues' flagged pairs alone", async () => {
+    const other = { id: 5001, venue_id: 2, booking_id_a: 10, booking_id_b: 11 };
+    const { app, getOverlapRows } = buildApp({
+      booking: { status: "Approved" },
+      storedOverlaps: [other],
+    });
+    await release(app);
+
+    expect(getOverlapRows()).toEqual([other]);
+  });
+
+  it("a reconciliation failure never turns a successful withdraw into an error response", async () => {
+    // No special wiring needed: the mock's venues select for this test
+    // doesn't carry setup_minutes/turnaround_minutes mismatches, but to
+    // prove the best-effort contract, simulate loadLiveBookings failing by
+    // having events-service's venue-booking-info answer an error for it.
+    const { app } = buildApp({ booking: { status: "On Hold", hold_expires_at: "2099-01-01T00:00:00.000Z" } });
+    const res = await withdraw(app);
+    expect(res.status).toBe(200);
   });
 });
