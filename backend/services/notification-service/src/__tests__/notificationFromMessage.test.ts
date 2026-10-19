@@ -457,6 +457,30 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders registration.cancelled_by_event, linking attendees to their own event page", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "registration.cancelled_by_event",
+        eventId: 7,
+        recipients: { userIds: ["ATT-0001"], roles: [] },
+        data: { eventName: "Spring Gala" },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "ATT-0001",
+        title: "Event cancelled",
+        body: 'Your registration for "Spring Gala" was cancelled because the event itself was cancelled.',
+        link: "/attendee/events/7",
+      }),
+    ]);
+  });
+
   it("renders booking.requested", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();

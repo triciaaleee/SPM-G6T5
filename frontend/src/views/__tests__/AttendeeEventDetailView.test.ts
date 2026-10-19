@@ -62,6 +62,12 @@ async function mountView() {
   return wrapper;
 }
 
+/** Withdraw now asks first (E6-4): click Withdraw, then confirm in the dialog. */
+async function withdrawAndConfirm(wrapper: Awaited<ReturnType<typeof mountView>>) {
+  await wrapper.find(".actions button").trigger("click");
+  await wrapper.find("[data-testid='confirm-withdraw']").trigger("click");
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -167,7 +173,7 @@ describe("AttendeeEventDetailView", () => {
     expect(success.attributes("role")).toBe("status");
     expect(success.text()).toContain("You're registered");
 
-    await wrapper.find(".actions button").trigger("click");
+    await withdrawAndConfirm(wrapper);
     await flushPromises();
     expect(wrapper.find("[data-testid='register-success']").exists()).toBe(false);
   });
@@ -187,7 +193,7 @@ describe("AttendeeEventDetailView", () => {
       vi.runAllTimers();
       expect(refreshes).toHaveBeenCalledTimes(1);
 
-      await wrapper.find(".actions button").trigger("click");
+      await withdrawAndConfirm(wrapper);
       await flushPromises();
       vi.runAllTimers();
       expect(refreshes).toHaveBeenCalledTimes(2);
@@ -248,7 +254,7 @@ describe("AttendeeEventDetailView", () => {
     mockedWithdraw.mockResolvedValue(undefined);
     const wrapper = await mountView();
 
-    await wrapper.find(".actions button").trigger("click");
+    await withdrawAndConfirm(wrapper);
     await flushPromises();
 
     expect(wrapper.find("[data-testid='slots-left']").text()).toContain("1 slot left");
@@ -272,32 +278,93 @@ describe("AttendeeEventDetailView", () => {
     expect(raced.findAll(".actions button").map((b) => b.text())).toEqual(["Event full"]);
   });
 
-  it("withdraws and flips the badge in place", async () => {
+  it("asks before withdrawing, and keeps the place if the attendee changes their mind", async () => {
+    mockedView.mockResolvedValue(eventView());
+    const wrapper = await mountView();
+
+    await wrapper.find(".actions button").trigger("click");
+    const dialog = wrapper.find("[role='alertdialog']");
+    expect(dialog.text()).toContain("Withdraw from this event?");
+    expect(dialog.text()).toContain('Your place at "Freshman Orientation Fair" will be released straight away.');
+    expect(mockedWithdraw).not.toHaveBeenCalled();
+
+    const keep = dialog.findAll("button").find((b) => b.text() === "Keep my place")!;
+    await keep.trigger("click");
+
+    expect(wrapper.find("[role='alertdialog']").exists()).toBe(false);
+    expect(mockedWithdraw).not.toHaveBeenCalled();
+    expect(wrapper.find(".badge").text()).toBe("Registered");
+  });
+
+  it("withdraws once confirmed, flips the badge in place and confirms on the page", async () => {
     mockedView.mockResolvedValue(eventView());
     mockedWithdraw.mockResolvedValue(undefined);
     const wrapper = await mountView();
 
-    await wrapper.find(".actions button").trigger("click");
+    await withdrawAndConfirm(wrapper);
     await flushPromises();
 
     expect(mockedWithdraw).toHaveBeenCalledWith("1");
     expect(wrapper.find(".badge").text()).toBe("Withdrawn");
     expect(wrapper.find(".badge").classes()).toContain("status-warning");
     expect(wrapper.findAll(".actions button")).toHaveLength(0);
+    expect(wrapper.find("[role='alertdialog']").exists()).toBe(false);
+    const success = wrapper.find("[data-testid='withdraw-success']");
+    expect(success.attributes("role")).toBe("status");
+    expect(success.text()).toBe("You've withdrawn from this event. A confirmation has been sent to your notifications.");
   });
 
-  it("disables the button while withdrawing", async () => {
+  it("disables the dialog's buttons while withdrawing", async () => {
     mockedView.mockResolvedValue(eventView());
     let finish: () => void = () => {};
     mockedWithdraw.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
     const wrapper = await mountView();
 
-    await wrapper.find(".actions button").trigger("click");
+    await withdrawAndConfirm(wrapper);
 
-    expect(wrapper.find(".actions button").attributes("disabled")).toBeDefined();
-    expect(wrapper.find(".actions button").text()).toBe("Withdrawing…");
+    const confirm = wrapper.find("[data-testid='confirm-withdraw']");
+    expect(confirm.attributes("disabled")).toBeDefined();
+    expect(confirm.text()).toBe("Withdrawing…");
     finish();
     await flushPromises();
+  });
+
+  it("still offers Withdraw inside the last 5 days, once registration has closed", async () => {
+    mockedView.mockResolvedValue(eventView({ open: false, registrationState: "CLOSED", hasStarted: false }));
+    const wrapper = await mountView();
+
+    expect(wrapper.findAll(".actions button").map((b) => b.text())).toEqual(["Withdraw registration"]);
+  });
+
+  it("offers no Withdraw once the event has started", async () => {
+    mockedView.mockResolvedValue(eventView({ open: false, registrationState: "CLOSED", hasStarted: true }));
+    const wrapper = await mountView();
+
+    expect(wrapper.findAll(".actions button")).toHaveLength(0);
+    expect(wrapper.find("[data-testid='event-started']").text()).toBe("This event has started");
+  });
+
+  it("explains, without a Withdraw button, when the backend says the event has started", async () => {
+    mockedView.mockResolvedValue(eventView());
+    mockedWithdraw.mockRejectedValue(new RegistrationRequestError("started", 409, "event_started"));
+    const wrapper = await mountView();
+
+    await withdrawAndConfirm(wrapper);
+    await flushPromises();
+
+    expect(wrapper.find("[role='alert']").text()).toContain("already started");
+    expect(wrapper.find(".badge").text()).toBe("Registered");
+    expect(wrapper.findAll(".actions button")).toHaveLength(0);
+  });
+
+  it("shows a registration the organiser cancelled as Cancelled, in red, with nothing to act on", async () => {
+    mockedView.mockResolvedValue(eventView({ registrationStatus: "Cancelled", open: false }));
+    const wrapper = await mountView();
+
+    expect(wrapper.find(".badge").text()).toBe("Cancelled");
+    expect(wrapper.find(".badge").classes()).toContain("status-error");
+    expect(wrapper.find("[data-testid='event-cancelled']").text()).toBe("The organiser cancelled this event");
+    expect(wrapper.findAll(".actions button")).toHaveLength(0);
   });
 
   it("shows the backend's message when withdrawing fails, and keeps the registration", async () => {
@@ -305,7 +372,7 @@ describe("AttendeeEventDetailView", () => {
     mockedWithdraw.mockRejectedValue(new RegistrationRequestError("Failed to withdraw", 500, null));
     const wrapper = await mountView();
 
-    await wrapper.find(".actions button").trigger("click");
+    await withdrawAndConfirm(wrapper);
     await flushPromises();
 
     expect(wrapper.find('[role="alert"]').text()).toBe("Failed to withdraw");
@@ -318,7 +385,7 @@ describe("AttendeeEventDetailView", () => {
     mockedWithdraw.mockRejectedValue(new RegistrationRequestError("already", 409, "already_withdrawn"));
     const wrapper = await mountView();
 
-    await wrapper.find(".actions button").trigger("click");
+    await withdrawAndConfirm(wrapper);
     await flushPromises();
 
     expect(wrapper.find(".badge").text()).toBe("Withdrawn");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { eventEndsAt, hasEventEnded } from "../lib/eventTiming.js";
+import { eventEndsAt, hasEventEnded, hasEventStarted } from "../lib/eventTiming.js";
 
 describe("eventEndsAt", () => {
   it("reads the date and end time as Singapore time (UTC+8), whatever the server's time zone", () => {
@@ -20,6 +20,23 @@ describe("eventEndsAt", () => {
     [{ proposedDate: "2026-13-45", endTime: "18:00" }],
   ])("returns null for an unreadable date or time (%j)", (details) => {
     expect(eventEndsAt(details)).toBeNull();
+  });
+});
+
+describe("hasEventStarted", () => {
+  // 10:00 Singapore time is 02:00 UTC.
+  const details = { proposedDate: "2026-11-10", startTime: "10:00", endTime: "18:00" };
+
+  it("is false before the start time", () => {
+    expect(hasEventStarted(details, new Date("2026-11-10T01:59:00.000Z"))).toBe(false);
+  });
+
+  it("is true from the start minute itself", () => {
+    expect(hasEventStarted(details, new Date("2026-11-10T02:00:00.000Z"))).toBe(true);
+  });
+
+  it("is false for an event whose start can't be worked out", () => {
+    expect(hasEventStarted({ startTime: "10:00" }, new Date("2030-01-01T00:00:00.000Z"))).toBe(false);
   });
 });
 

@@ -144,4 +144,9 @@ onMounted(async () => {
   background: var(--color-warning-100);
   color: var(--color-warning-900);
 }
+
+.status-error {
+  background: var(--color-error-200);
+  color: var(--color-error-600);
+}
 </style>

@@ -46,6 +46,8 @@ export interface AttendeeEventView {
   open: boolean;
   /** Open, full, closed, or not yet open; absent from older responses. */
   registrationState?: RegistrationStateValue;
+  /** E6-4: the event has started, so a place can no longer be withdrawn. */
+  hasStarted?: boolean;
 }
 
 /** An event open for registration, with the caller's own registration status for it (null if none). */

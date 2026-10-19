@@ -9,11 +9,9 @@ export interface HandleEventCancelledDeps {
 
 /**
  * RabbitMQ.md section 4: `event.cancelled` -> every `Registered` place for
- * the event becomes `Withdrawn` (there's no separate "Cancelled"
- * registration status — AGENTS.md §5 lists only the two in migration
- * 0023, and a registration given up because the event itself was
- * cancelled is, from the attendee's record, the same outcome as giving it
- * up any other way), then publishes `registration.cancelled_by_event`
+ * the event becomes `Cancelled` (migration 0041 — kept apart from
+ * `Withdrawn`, which means the attendee gave up their own place, E6-4),
+ * then publishes `registration.cancelled_by_event`
  * (section 3.5, #35) to each affected attendee. Naturally idempotent on
  * redelivery: the update only ever matches rows still `Registered`, so a
  * message processed twice notifies nobody the second time.
@@ -23,7 +21,7 @@ export async function handleEventCancelled(msg: InboundMessage, deps: HandleEven
 
   const { data: updated, error } = await deps.supabase
     .from("registrations")
-    .update({ status: REGISTRATION_STATUS.withdrawn })
+    .update({ status: REGISTRATION_STATUS.cancelled })
     .eq("event_id", msg.eventId)
     .eq("status", REGISTRATION_STATUS.registered)
     .select("user_id");

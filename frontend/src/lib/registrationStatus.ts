@@ -1,15 +1,19 @@
 /**
- * registrations.status — the same two values as the backend's
- * `registration_status` enum (migration 0023). Use these instead of string
- * literals.
+ * registrations.status — the same values as the backend's
+ * `registration_status` enum (migrations 0023, 0041). `Withdrawn`: the
+ * attendee gave up their place. `Cancelled`: the organiser cancelled the
+ * whole event. Use these instead of string literals.
  */
-export const REGISTRATION_STATUSES = ["Registered", "Withdrawn"] as const;
+export const REGISTRATION_STATUSES = ["Registered", "Withdrawn", "Cancelled"] as const;
 
 export type RegistrationStatus = (typeof REGISTRATION_STATUSES)[number];
 
 /** Badge colour class for a registration status (defined with the badge styles in the view). */
 export function registrationBadgeClass(status: RegistrationStatus): string {
-  return status === "Registered" ? "status-success" : "status-warning";
+  if (status === "Registered") return "status-success";
+  // Same red as the event's own Cancelled badge (lib/eventStatus.ts).
+  if (status === "Cancelled") return "status-error";
+  return "status-warning";
 }
 
 /** What an attendee is told about an event's registration period (decided by the backend). */

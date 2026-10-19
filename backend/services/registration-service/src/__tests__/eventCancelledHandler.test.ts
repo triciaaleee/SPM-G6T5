@@ -35,14 +35,14 @@ function buildSupabase(options: {
 }
 
 describe("handleEventCancelled (E3-6 AC4)", () => {
-  it("withdraws every Registered place and notifies each attendee", async () => {
+  it("marks every Registered place Cancelled (not Withdrawn) and notifies each attendee", async () => {
     const { supabase, update, updateEqEvent, updateEqStatus } = buildSupabase();
     const publish = vi.fn().mockResolvedValue(true);
     setPublisherForTest({ publish });
 
     await handleEventCancelled(buildMsg(), { supabase });
 
-    expect(update).toHaveBeenCalledWith({ status: "Withdrawn" });
+    expect(update).toHaveBeenCalledWith({ status: "Cancelled" });
     expect(updateEqEvent).toHaveBeenCalledWith("event_id", 7);
     expect(updateEqStatus).toHaveBeenCalledWith("status", "Registered");
     expect(publish).toHaveBeenCalledWith({

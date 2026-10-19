@@ -49,6 +49,16 @@ export function eventStartsAt(details: Record<string, unknown>): Date | null {
   return Number.isNaN(startsAt.getTime()) ? null : startsAt;
 }
 
+/**
+ * True once the event has started (Singapore time). An event whose start
+ * can't be worked out is treated as not started. E6-4: attendees may
+ * withdraw any time before this.
+ */
+export function hasEventStarted(details: Record<string, unknown>, now: Date = new Date()): boolean {
+  const startsAt = eventStartsAt(details);
+  return startsAt !== null && startsAt.getTime() <= now.getTime();
+}
+
 /** The start of a local (Singapore) calendar day, or null for a malformed date. */
 export function localDateStart(date: unknown): Date | null {
   if (typeof date !== "string" || !DATE_PATTERN.test(date)) return null;

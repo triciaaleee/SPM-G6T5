@@ -263,7 +263,7 @@ const TEMPLATES: Record<string, Template> = {
     link: attendeeEventLink(msg),
   }),
 
-  /** #32 in RabbitMQ.md section 3.5 (#105 row 7) — to the withdrawing attendee. No eventName: the withdraw route doesn't fetch the event, so this falls back to generic wording. */
+  /** #32 in RabbitMQ.md section 3.5 (#105 row 7) — to the withdrawing attendee. Generic wording if eventName is missing. */
   "registration.withdrawn": (msg) => ({
     title: "Registration withdrawn",
     body: `You have withdrawn your registration${msg.data.eventName ? ` for "${msg.data.eventName}"` : ""}.`,
@@ -382,7 +382,7 @@ const TEMPLATES: Record<string, Template> = {
   "registration.cancelled_by_event": (msg) => ({
     title: "Event cancelled",
     body: `Your registration${msg.data.eventName ? ` for "${msg.data.eventName}"` : ""} was cancelled because the event itself was cancelled.`,
-    link: eventLink(msg),
+    link: attendeeEventLink(msg),
   }),
 
   /** #28 in RabbitMQ.md section 3.4 (#107 row 5) — to the assigned coordinator. */

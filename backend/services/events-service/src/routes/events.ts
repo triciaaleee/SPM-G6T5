@@ -21,7 +21,7 @@ import {
   MAX_SAFETY_DECISION_REASON_LENGTH,
   parseSafetyNotes,
 } from "../lib/safetyReview.js";
-import { eventEndsAt, eventStartsAt, hasEventEnded, localDateStart } from "../lib/eventTiming.js";
+import { eventEndsAt, eventStartsAt, hasEventEnded, hasEventStarted, localDateStart } from "../lib/eventTiming.js";
 import {
   getRegistrationState,
   isListed,
@@ -618,6 +618,8 @@ eventsRouter.get("/attendee-info", async (req: AuthedRequest, res) => {
       accessibility: attendeeAccessibility(details.accessibility),
       capacity: attendeeCapacity(details),
       organiserName: attendeeOrganiserName(row.organiser),
+      // E6-4: an attendee may withdraw until the event starts.
+      hasStarted: hasEventStarted(details),
     };
     for (const field of ATTENDEE_INFO_FIELDS) info[field] = details[field] ?? null;
     return info;
