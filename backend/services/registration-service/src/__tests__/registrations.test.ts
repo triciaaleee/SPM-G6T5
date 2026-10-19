@@ -232,6 +232,18 @@ describe("GET /event/:eventId (roster)", () => {
     expect(from).not.toHaveBeenCalled();
   });
 
+  it("gives a non-owning organiser nothing at all: no body beyond the refusal, no roster read, no names looked up", async () => {
+    clients.canViewEvent.mockResolvedValue({ status: "denied" });
+    const { app, from } = buildApp(organiser, query({ data: [row()], error: null }));
+
+    const res = await request(app).get("/api/registrations/event/1");
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "Access denied" });
+    expect(from).not.toHaveBeenCalled();
+    expect(clients.fetchUserNames).not.toHaveBeenCalled();
+  });
+
   it("answers 502 when events-service can't be reached", async () => {
     clients.canViewEvent.mockResolvedValue({ status: "error" });
     const { app } = buildApp(organiser);

@@ -1565,7 +1565,7 @@ onMounted(async () => {
 <!-- E3-5 AC3: who registered, read-only — stays viewable once the event is Completed.
      registration-service only lets the owning organiser and coordinators read it. -->
 <RegistrationsPanel v-if="(isOwnerView || isCoordinator) && asSubmittedDetails(event.submitted_details).registrationNeeded"
-  :event-id="event.id" />
+  :event-id="event.id" :capacity="Number(asSubmittedDetails(event.submitted_details).expectedAttendance) || null" />
 
 <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
   :current-user-id="currentUser.id" :read-only="isLead" />
