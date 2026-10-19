@@ -95,6 +95,34 @@ describe("EquipmentRequestPanel — cancelled requests (E5-2)", () => {
   });
 });
 
+describe("EquipmentRequestPanel — reservation flags (E5-5)", () => {
+  it("shows the coordinator why a reservation no longer holds, e.g. a reserved unit became unusable", async () => {
+    const flagged = equipmentRequest({
+      items: [
+        {
+          id: 1,
+          equipmentCatalogId: 1,
+          equipmentType: "Projector",
+          quantity: 2,
+          quantityFulfilled: 2,
+          reservationFlag: { flagged: true, reason: "A reserved unit is unavailable (Damaged) during this event, so it needs a replacement." },
+        },
+        { id: 2, equipmentCatalogId: 2, equipmentType: "Screen", quantity: 1, quantityFulfilled: 1, reservationFlag: NO_FLAG },
+      ],
+    });
+    const wrapper = await mountPanel([flagged]);
+
+    const flags = wrapper.findAll("[data-testid='reservation-flag']");
+    expect(flags).toHaveLength(1);
+    expect(flags[0].text()).toBe("A reserved unit is unavailable (Damaged) during this event, so it needs a replacement.");
+  });
+
+  it("shows no warning when nothing is flagged", async () => {
+    const wrapper = await mountPanel([equipmentRequest()]);
+    expect(wrapper.find("[data-testid='reservation-flag']").exists()).toBe(false);
+  });
+});
+
 describe("EquipmentRequestPanel — who gets Amend and Cancel (E5-2)", () => {
   it("offers Amend and Cancel on a request that isn't fully arranged", async () => {
     const wrapper = await mountPanel([equipmentRequest(), equipmentRequest({ id: 56, status: "Requested", fulfillmentNote: null })]);

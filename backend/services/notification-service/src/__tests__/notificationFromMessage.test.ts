@@ -554,6 +554,78 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders equipment.unusable for the coordinator, with and without an end date (E5-5 AC2)", async () => {
+    const dated = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.unusable",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: {
+          eventName: "Alumni Gala",
+          equipmentType: "Projector",
+          reason: "Damaged",
+          startDate: "2026-11-03",
+          endDate: "2026-11-07",
+        },
+      }),
+      { supabase: dated.supabase, resolveRoleUserIds: vi.fn() },
+    );
+    expect(dated.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "Reserved equipment unavailable",
+        body: "Projector reserved for Alumni Gala is damaged from 3 Nov 2026 to 7 Nov 2026. Technical Support will need to arrange a replacement.",
+        link: "/events/7",
+      }),
+    ]);
+
+    const openEnded = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.unusable",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: {
+          eventName: "Alumni Gala",
+          equipmentType: "Projector",
+          reason: "Under Maintenance",
+          startDate: "2026-11-03",
+          endDate: null,
+        },
+      }),
+      { supabase: openEnded.supabase, resolveRoleUserIds: vi.fn() },
+    );
+    expect(openEnded.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        body: "Projector reserved for Alumni Gala is under maintenance from 3 Nov 2026 until further notice. Technical Support will need to arrange a replacement.",
+      }),
+    ]);
+
+    const several = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.unusable",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: {
+          eventName: "Alumni Gala",
+          equipmentType: "Projector",
+          quantity: 2,
+          reason: "Damaged",
+          startDate: "2026-11-03",
+          endDate: "2026-11-07",
+        },
+      }),
+      { supabase: several.supabase, resolveRoleUserIds: vi.fn() },
+    );
+    expect(several.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        body: "2 Projector units reserved for Alumni Gala are damaged from 3 Nov 2026 to 7 Nov 2026. Technical Support will need to arrange a replacement.",
+      }),
+    ]);
+  });
+
   it("renders booking.requested", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();

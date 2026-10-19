@@ -6,8 +6,15 @@ import {
   amendEquipmentRequest,
   cancelEquipmentRequest,
   createCatalogItem,
+  fetchEquipmentUnits,
   fetchEquipmentRequestsForSupport,
-  updateCatalogItem,
+  changeStock,
+  clearUnavailability,
+  fetchStockHistory,
+  fetchUnitImpact,
+  markUnitsUnusable,
+  setUnitLabel,
+  markUnitUsable,
 } from "../equipmentApi";
 
 vi.mock("../eventsApi", () => ({
@@ -28,6 +35,102 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("equipment units (E5-5)", () => {
+  it("lists the units with the bearer token", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { units: [{ id: 12, type: "Projector", status: "Available", periods: [] }] }));
+
+    expect(await fetchEquipmentUnits()).toEqual([{ id: 12, type: "Projector", status: "Available", periods: [] }]);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/equipment-units$/);
+    expect(init.headers).toEqual({ Authorization: "Bearer test-token" });
+  });
+
+  it("asks for the impact of marking units for a period, without saving anything", async () => {
+    const preview = { type: "Projector", units: [], pickable: 0, suggested: [12] };
+    fetchMock.mockResolvedValue(jsonResponse(200, preview));
+
+    expect(await fetchUnitImpact("Projector", { startDate: "2026-11-03", endDate: "2026-11-07", quantity: 2 })).toEqual(preview);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    const query = new URL(url).searchParams;
+    expect(query.get("type")).toBe("Projector");
+    expect(query.get("startDate")).toBe("2026-11-03");
+    expect(query.get("endDate")).toBe("2026-11-07");
+    expect(query.get("quantity")).toBe("2");
+    expect(init.method).toBeUndefined();
+  });
+
+  it("leaves the end date and quantity out of the query when they aren't given", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { type: "Projector", units: [], pickable: 0, suggested: [] }));
+
+    await fetchUnitImpact("Projector", { startDate: "2026-11-03" });
+
+    const query = new URL(fetchMock.mock.calls[0][0]).searchParams;
+    expect(query.has("endDate")).toBe(false);
+    expect(query.has("quantity")).toBe(false);
+  });
+
+  it("POSTs the chosen units and returns who was affected", async () => {
+    const payload = { periods: [{ unitId: 12 }], affectedEvents: [{ eventId: 1, eventName: "Gala", units: 1 }], notified: true };
+    fetchMock.mockResolvedValue(jsonResponse(201, payload));
+    const input = { type: "Projector", unitIds: [12], reason: "Damaged" as const, startDate: "2026-11-03", endDate: "2026-11-07", note: "cracked" };
+
+    expect(await markUnitsUnusable(input)).toEqual(payload);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/equipment-units\/mark$/);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual(input);
+  });
+
+  it("throws EquipmentValidationError on a 400 and EquipmentRequestError on any other failure", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(400, { fields: { startDate: "Start date is required." } }));
+    const invalid = await markUnitsUnusable({ type: "Projector", unitIds: [12], reason: "Damaged", startDate: "" }).catch((e) => e);
+    expect(invalid).toBeInstanceOf(EquipmentValidationError);
+    expect(invalid.fields.startDate).toBe("Start date is required.");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(409, { error: "Projector #12 is already out of use for those dates." }));
+    await expect(markUnitsUnusable({ type: "Projector", unitIds: [12], reason: "Damaged", startDate: "2026-11-03" })).rejects.toThrow(
+      "already out of use",
+    );
+  });
+
+  it("clears a group of periods in one request", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { removed: 2 }));
+
+    expect(await clearUnavailability([5, 6])).toBe(2);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/equipment-units\/unavailability\/clear$/);
+    expect(JSON.parse(init.body)).toEqual({ periodIds: [5, 6] });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(400, { error: "Validation failed" }));
+    await expect(clearUnavailability([])).rejects.toThrow("Validation failed");
+  });
+
+  it("sets a unit's label", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { unit: { id: 12, label: "A-012" } }));
+
+    expect(await setUnitLabel(12, "A-012")).toEqual({ id: 12, label: "A-012" });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/equipment-units\/12$/);
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body)).toEqual({ label: "A-012" });
+  });
+
+  it("DELETEs a period to mark the unit usable again, and surfaces a refusal", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { removed: true }));
+    await markUnitUsable(12, 5);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/equipment-units\/12\/unavailability\/5$/);
+    expect(init.method).toBe("DELETE");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(404, { error: "Unavailability period not found" }));
+    await expect(markUnitUsable(12, 99)).rejects.toThrow("Unavailability period not found");
+  });
 });
 
 describe("amendEquipmentRequest (E5-2)", () => {
@@ -139,35 +242,49 @@ describe("createCatalogItem", () => {
   });
 });
 
-describe("updateCatalogItem", () => {
-  it("patches the item's stock", async () => {
+describe("changeStock", () => {
+  it("POSTs the change with its reason and returns the new counts", async () => {
     const item = { id: 1, name: "Projector", totalStock: 12, availableStock: 9 };
     fetchMock.mockResolvedValue(jsonResponse(200, { equipment: item }));
 
-    const result = await updateCatalogItem(1, { totalStock: 12, availableStock: 9 });
+    const result = await changeStock(1, { direction: "add", quantity: 2, reason: "New delivery" });
 
     expect(result).toEqual(item);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toMatch(/\/equipment-catalog\/1$/);
-    expect(init.method).toBe("PATCH");
-    expect(JSON.parse(init.body)).toEqual({ totalStock: 12, availableStock: 9 });
+    expect(url).toMatch(/\/equipment-catalog\/1\/stock$/);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ direction: "add", quantity: 2, reason: "New delivery" });
   });
 
   it("turns a 400 into per-field errors", async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse(400, { error: "bad", fields: { availableStock: "Cannot be more than total stock." } }),
-    );
+    fetchMock.mockResolvedValue(jsonResponse(400, { error: "bad", fields: { reason: "A reason is required." } }));
 
-    const error = await updateCatalogItem(1, { availableStock: 99 }).catch((e) => e);
+    const error = await changeStock(1, { direction: "add", quantity: 2, reason: "" }).catch((e) => e);
+
     expect(error).toBeInstanceOf(EquipmentValidationError);
-    expect(error.fields.availableStock).toBe("Cannot be more than total stock.");
+    expect(error.fields.reason).toBe("A reason is required.");
   });
 
-  it("throws a request error with the backend's message otherwise", async () => {
-    fetchMock.mockResolvedValue(jsonResponse(404, { error: "Equipment item not found" }));
+  it("throws a request error with the backend's message when too much is removed", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(409, { error: "Only 2 can be removed: the rest is reserved, out of use or held by requests.", removable: 2 }),
+    );
 
-    const error = await updateCatalogItem(99, { totalStock: 1 }).catch((e) => e);
+    const error = await changeStock(1, { direction: "remove", quantity: 5, reason: "Sold" }).catch((e) => e);
+
     expect(error).toBeInstanceOf(EquipmentRequestError);
-    expect(error.message).toBe("Equipment item not found");
+    expect(error.message).toBe("Only 2 can be removed: the rest is reserved, out of use or held by requests.");
+  });
+});
+
+describe("fetchStockHistory", () => {
+  it("lists the item's changes with the bearer token", async () => {
+    const changes = [{ id: 1, changeType: "Added", quantity: 2, totalBefore: 10, totalAfter: 12, reason: "Delivery", changedBy: "TS-0001", createdAt: "x" }];
+    fetchMock.mockResolvedValue(jsonResponse(200, { changes }));
+
+    expect(await fetchStockHistory(1)).toEqual(changes);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/equipment-catalog\/1\/stock-history$/);
+    expect(init.headers).toEqual({ Authorization: "Bearer test-token" });
   });
 });

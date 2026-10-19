@@ -9,6 +9,7 @@
 
 import { fetchEventBookingInfo } from "./eventsClient.js";
 import { occupiedWindow, overlaps, type OccupiedWindow } from "./scheduleWindow.js";
+import { unusableUnitsInWindow } from "./unitUnavailability.js";
 
 export interface EquipmentUnitRow {
   id: number;
@@ -114,7 +115,11 @@ export async function claimUnits(
   alreadyClaimed: ReadonlySet<number> = new Set(),
 ): Promise<ClaimResult> {
   const units = await fetchUnitsByType(supabase, type);
-  const usableIds = units.filter((u) => u.status === "Available").map((u) => u.id);
+  // E5-5: a unit marked damaged or under maintenance for a period overlapping
+  // the event is not offered, on top of one whose status is not Available.
+  const availableIds = units.filter((u) => u.status === "Available").map((u) => u.id);
+  const unusableInWindow = await unusableUnitsInWindow(supabase, availableIds, targetWindow);
+  const usableIds = availableIds.filter((id) => !unusableInWindow.has(id));
   const blocked = await unitsBlocked(supabase, usableIds, targetWindow, authorization, {
     eventId,
     treatOwnEventClaimsAsBlocking: true,

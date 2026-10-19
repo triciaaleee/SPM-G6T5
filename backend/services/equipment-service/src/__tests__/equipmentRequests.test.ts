@@ -156,6 +156,8 @@ function buildApp(
     cancelError?: { message: string } | null;
     equipmentRows?: Record<string, unknown>[];
     equipmentBookingRows?: Record<string, unknown>[];
+    /** E5-5: periods Technical Support marked on units (migration 0043). */
+    unavailabilityRows?: Record<string, unknown>[];
   } = {},
 ) {
   const requestInsert = vi.fn((row: Record<string, unknown>) =>
@@ -196,6 +198,7 @@ function buildApp(
   const itemsTable = recordTable(options.items ?? []);
   const equipmentTable = recordTable(options.equipmentRows ?? defaultEquipmentRows);
   const equipmentBookingTable = recordTable(options.equipmentBookingRows ?? []);
+  const unavailabilityTable = recordTable(options.unavailabilityRows ?? []);
 
   const rpcMock = vi.fn(async (fn: string, _args?: Record<string, unknown>) => {
     if (fn === "release_equipment_for_event") return { data: null, error: options.releaseError ?? null };
@@ -227,6 +230,9 @@ function buildApp(
       }
       if (table === "equipment_booking") {
         return { select: equipmentBookingTable.select, insert: equipmentBookingTable.insert, delete: equipmentBookingTable.delete };
+      }
+      if (table === "equipment_unavailability") {
+        return { select: unavailabilityTable.select };
       }
       throw new Error(`unexpected table ${table}`);
     }),
@@ -929,6 +935,73 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
       expect([201, 202, 203]).toContain(row.equipment_id);
     }
     expect(res.body.equipmentRequest.items[0].reservationFlag).toEqual(NO_FLAG);
+  });
+
+  // E5-5 AC1: a unit marked unusable for a period overlapping the event is never claimed for it.
+  it("doesn't claim a unit that is marked unusable on the event's date, and claims it again outside the period", async () => {
+    const unavailable = (end: string) => [
+      { id: 1, equipment_id: 201, reason: "Damaged", start_date: "2026-09-19", end_date: end, note: null },
+    ];
+
+    const during = buildApp({ user: technicalSupport, items: oneItem, unavailabilityRows: unavailable("2026-09-21") });
+    const res = await request(during.app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+    expect(res.status).toBe(200);
+    expect(during.equipmentBookingTable.rows.map((r) => r.equipment_id).sort()).toEqual([202, 203]);
+
+    const after = buildApp({ user: technicalSupport, items: oneItem, unavailabilityRows: unavailable("2026-09-10") });
+    await request(after.app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+    expect(after.equipmentBookingTable.rows).toHaveLength(2);
+    expect(after.equipmentBookingTable.rows.map((r) => r.equipment_id)).toContain(201);
+  });
+
+  it("rejects with the shortfall when the only free units are out for the event's date", async () => {
+    const { app, equipmentBookingTable } = buildApp({
+      user: technicalSupport,
+      items: oneItem,
+      equipmentRows: [
+        { id: 201, type: "Projector", status: "Available" },
+        { id: 202, type: "Projector", status: "Available" },
+      ],
+      unavailabilityRows: [{ id: 1, equipment_id: 202, reason: "Under Maintenance", start_date: "2026-09-01", end_date: null, note: null }],
+    });
+
+    const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.shortfalls["1"]).toMatchObject({ availableCount: 1, shortfall: 1 });
+    expect(equipmentBookingTable.rows).toHaveLength(0);
+  });
+
+  // E5-5: a reserved unit that is unusable during its event is flagged for re-arrangement.
+  it("flags a reservation whose unit is unusable during the event, with the reason", async () => {
+    const { app } = buildApp({
+      user: coordinator,
+      requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1 }],
+      equipmentBookingRows: [{ id: 1, equipment_id: 201, event_id: 7, request_item_id: 1 }],
+      unavailabilityRows: [{ id: 1, equipment_id: 201, reason: "Damaged", start_date: "2026-09-19", end_date: null, note: null }],
+    });
+
+    const res = await request(app).get("/api/equipment-requests?eventId=7");
+
+    expect(res.body.equipmentRequests[0].items[0].reservationFlag).toEqual({
+      flagged: true,
+      reason: "A reserved unit is unavailable (Damaged) during this event, so it needs a replacement.",
+    });
+  });
+
+  it("doesn't flag a reservation whose unit is unusable only on other days", async () => {
+    const { app } = buildApp({
+      user: coordinator,
+      requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1 }],
+      equipmentBookingRows: [{ id: 1, equipment_id: 201, event_id: 7, request_item_id: 1 }],
+      unavailabilityRows: [{ id: 1, equipment_id: 201, reason: "Damaged", start_date: "2026-10-01", end_date: "2026-10-05", note: null }],
+    });
+
+    const res = await request(app).get("/api/equipment-requests?eventId=7");
+
+    expect(res.body.equipmentRequests[0].items[0].reservationFlag).toEqual(NO_FLAG);
   });
 
   // AC2: not enough available units — rejected with the shortfall shown,

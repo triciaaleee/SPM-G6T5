@@ -29,6 +29,14 @@ function supportEventLink(msg: InboundMessage): string | null {
   return msg.eventId !== null ? `/equipment-requests/event/${msg.eventId}` : null;
 }
 
+/** "2026-11-03" → "3 Nov 2026"; anything else is shown as given, and nothing gives "". */
+function formatUnavailabilityDate(value: unknown): string {
+  if (typeof value !== "string" || value === "") return "";
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
 interface AmendedChange {
   kind: "quantity" | "type" | "added" | "removed";
   equipmentType: string;
@@ -447,6 +455,30 @@ const TEMPLATES: Record<string, Template> = {
     body: `Your registration${msg.data.eventName ? ` for "${msg.data.eventName}"` : ""} was cancelled because the event itself was cancelled.`,
     link: attendeeEventLink(msg),
   }),
+
+  /**
+   * #29 in RabbitMQ.md section 3.4 (E5-5 AC2) — to the assigned coordinator of
+   * each event holding a reservation on a unit Technical Support just marked
+   * unusable. `data.quantity` is how many of that event's units are affected
+   * (1 if absent). `data.startDate` / `data.endDate` are YYYY-MM-DD; no end date
+   * means "until it is marked usable again".
+   */
+  "equipment.unusable": (msg) => {
+    const eventName = String(msg.data.eventName ?? "Your event");
+    const equipmentType = String(msg.data.equipmentType ?? "A reserved item");
+    const reason = String(msg.data.reason ?? "unavailable").toLowerCase();
+    const from = formatUnavailabilityDate(msg.data.startDate);
+    const to = formatUnavailabilityDate(msg.data.endDate);
+    const period = to ? `from ${from} to ${to}` : `from ${from} until further notice`;
+    const quantity = Math.max(1, Number(msg.data.quantity ?? 1));
+    const subject =
+      quantity > 1 ? `${quantity} ${equipmentType} units reserved for ${eventName} are` : `${equipmentType} reserved for ${eventName} is`;
+    return {
+      title: "Reserved equipment unavailable",
+      body: `${subject} ${reason} ${period}. Technical Support will need to arrange a replacement.`,
+      link: eventLink(msg),
+    };
+  },
 
   /** #28 in RabbitMQ.md section 3.4 (#107 row 5) — to the assigned coordinator. */
   "equipment.status_changed": (msg) => {

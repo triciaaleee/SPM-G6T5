@@ -338,6 +338,10 @@ function statusBadgeClass(status: string): string {
                 <strong>{{ item.quantity }}&times; {{ item.equipmentType }}</strong>
                 <span v-if="item.quantityFulfilled > 0 && !isCancelled(r)" class="muted">
                   · {{ item.quantityFulfilled }} reserved</span>
+                <!-- E5-5 / E5-6 AC3: the reservation no longer holds (e.g. a reserved unit is now unusable). -->
+                <p v-if="item.reservationFlag?.flagged && !isCancelled(r)" class="eq-flag" data-testid="reservation-flag" role="alert">
+                  {{ item.reservationFlag.reason }}
+                </p>
               </li>
             </ul>
 
@@ -596,6 +600,16 @@ function statusBadgeClass(status: string): string {
 .status-cancelled {
   background: var(--color-grey-200);
   color: var(--color-grey-900);
+}
+
+.eq-flag {
+  margin: var(--spacing-4) 0 0;
+  padding: var(--spacing-4) var(--spacing-8);
+  border-radius: var(--radius-xs);
+  background: var(--color-warning-100);
+  color: var(--color-warning-900);
+  font-size: 0.875rem;
+  line-height: 1.125rem;
 }
 
 .eq-outstanding {
