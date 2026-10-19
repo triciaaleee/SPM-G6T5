@@ -424,7 +424,12 @@ describe("handleInboundMessage", () => {
     );
 
     expect(insert).toHaveBeenCalledWith([
-      expect.objectContaining({ recipient_id: "ATT-0001", title: "Registration confirmed" }),
+      expect.objectContaining({
+        recipient_id: "ATT-0001",
+        title: "Registration confirmed",
+        body: 'Your registration for "Nut Festival" is confirmed.',
+        link: "/attendee/events/7",
+      }),
     ]);
   });
 
@@ -447,6 +452,7 @@ describe("handleInboundMessage", () => {
         recipient_id: "ATT-0001",
         title: "Registration withdrawn",
         body: "You have withdrawn your registration.",
+        link: "/attendee/events/7",
       }),
     ]);
   });

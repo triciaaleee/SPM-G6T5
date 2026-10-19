@@ -13,6 +13,7 @@ import {
 import { registrationBadgeClass } from "../lib/registrationStatus";
 import { eventThumbnail, formatCardTimeRange, formatLongDate, slotsLabel } from "../lib/attendeeEvents";
 import { getStoredUser, landingRouteForRole } from "../lib/auth";
+import { requestNotificationsRefresh } from "../lib/notificationsApi";
 
 /**
  * One event as an attendee sees it: name, description, date, time, venues,
@@ -47,6 +48,8 @@ const withdrawError = ref<string | null>(null);
 
 const registering = ref(false);
 const registerError = ref<string | null>(null);
+// Shown once a Register click succeeds; the bell notification is the lasting copy.
+const registerSuccess = ref(false);
 
 const paragraphs = computed(() =>
   (event.value?.description ?? "")
@@ -75,9 +78,12 @@ async function handleRegister() {
   if (!event.value || registering.value) return;
   registering.value = true;
   registerError.value = null;
+  registerSuccess.value = false;
   try {
     await register(eventId);
     event.value = { ...event.value, registrationStatus: "Registered", slotsLeft: adjustSlots(-1) };
+    registerSuccess.value = true;
+    requestNotificationsRefresh();
   } catch (err) {
     if (err instanceof RegistrationRequestError && err.code === "already_registered") {
       // Registered elsewhere (another tab): the page was just out of date.
@@ -101,9 +107,11 @@ async function handleWithdraw() {
   if (!event.value || withdrawing.value) return;
   withdrawing.value = true;
   withdrawError.value = null;
+  registerSuccess.value = false;
   try {
     await withdraw(eventId);
     event.value = { ...event.value, registrationStatus: "Withdrawn", slotsLeft: adjustSlots(1) };
+    requestNotificationsRefresh();
   } catch (err) {
     if (err instanceof RegistrationRequestError && err.code === "already_withdrawn") {
       // Withdrawn elsewhere (another tab): the page was just out of date.
@@ -187,6 +195,9 @@ onMounted(async () => {
         </div>
       </div>
       <p v-if="registerError" class="full body-small error-text" role="alert">{{ registerError }}</p>
+      <p v-if="registerSuccess" class="full body-small success-text" role="status" data-testid="register-success">
+        You're registered. A confirmation has been sent to your notifications.
+      </p>
       <p v-if="withdrawError" class="full body-small error-text" role="alert">{{ withdrawError }}</p>
 
       <div v-if="paragraphs.length > 0" class="description">
@@ -443,6 +454,11 @@ onMounted(async () => {
 
 .error-text {
   color: var(--color-error-600);
+}
+
+/* Style.md 3.2: success text is Green Success/600. */
+.success-text {
+  color: var(--color-success-600);
 }
 
 .denied {

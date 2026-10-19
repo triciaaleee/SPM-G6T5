@@ -11,6 +11,7 @@ import {
   withdraw,
   type AttendeeEventView,
 } from "../../lib/registrationApi";
+import { NOTIFICATIONS_REFRESH_EVENT } from "../../lib/notificationsApi";
 
 vi.mock("../../lib/registrationApi", async () => {
   const actual = await vi.importActual<typeof import("../../lib/registrationApi")>("../../lib/registrationApi");
@@ -151,6 +152,59 @@ describe("AttendeeEventDetailView", () => {
     expect(mockedRegister).toHaveBeenCalledWith("1");
     expect(wrapper.find(".badge").text()).toBe("Registered");
     expect(wrapper.findAll(".actions button").map((b) => b.text())).toEqual(["Withdraw registration"]);
+  });
+
+  it("confirms a successful registration on the page, and clears it on withdrawing", async () => {
+    mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
+    mockedRegister.mockResolvedValue(undefined);
+    mockedWithdraw.mockResolvedValue(undefined);
+    const wrapper = await mountView();
+    expect(wrapper.find("[data-testid='register-success']").exists()).toBe(false);
+
+    await wrapper.find(".actions button").trigger("click");
+    await flushPromises();
+    const success = wrapper.find("[data-testid='register-success']");
+    expect(success.attributes("role")).toBe("status");
+    expect(success.text()).toContain("You're registered");
+
+    await wrapper.find(".actions button").trigger("click");
+    await flushPromises();
+    expect(wrapper.find("[data-testid='register-success']").exists()).toBe(false);
+  });
+
+  it("asks the bell to refresh once a registration or withdrawal goes through", async () => {
+    mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
+    mockedRegister.mockResolvedValue(undefined);
+    mockedWithdraw.mockResolvedValue(undefined);
+    const refreshes = vi.fn();
+    window.addEventListener(NOTIFICATIONS_REFRESH_EVENT, refreshes);
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const wrapper = await mountView();
+
+      await wrapper.find(".actions button").trigger("click");
+      await flushPromises();
+      vi.runAllTimers();
+      expect(refreshes).toHaveBeenCalledTimes(1);
+
+      await wrapper.find(".actions button").trigger("click");
+      await flushPromises();
+      vi.runAllTimers();
+      expect(refreshes).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      window.removeEventListener(NOTIFICATIONS_REFRESH_EVENT, refreshes);
+    }
+  });
+
+  it("shows no confirmation when registering fails", async () => {
+    mockedView.mockResolvedValue(eventView({ registrationStatus: null, open: true }));
+    mockedRegister.mockRejectedValue(new RegistrationRequestError("full", 409, "event_full"));
+    const wrapper = await mountView();
+
+    await wrapper.find(".actions button").trigger("click");
+    await flushPromises();
+    expect(wrapper.find("[data-testid='register-success']").exists()).toBe(false);
   });
 
   it("treats already_registered as success and shows an error when the event is no longer open", async () => {

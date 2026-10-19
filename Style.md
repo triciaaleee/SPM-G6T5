@@ -382,6 +382,21 @@ The header's wordmark and nav links follow these rules:
 **AVOID:** Purple on the active nav link — the logo and most interactive elements (CTAs, links, focus rings) are already Purple Primary/600, and one more purple element here would blur with the brand mark. Secondary Blue is the relief accent for exactly this situation (Section 2.8).  
 **NOTE:** The Organiser role chip (Section 3.6) is also Secondary Blue. That is acceptable because organisers have no nav links; revisit if they gain any.
 
+### 3.5b Guest pages (landing, Events, Venues)
+
+Pages for visitors who are not signed in (`frontend/src/components/public/`, `frontend/src/views/public/`). Built only from existing tokens.
+
+| Pattern | Treatment | Use |
+|---------|-----------|-----|
+| Public header | `Base/White` fill, 1px `Grey/100` bottom border, sticky. Logo and nav links as in Section 3.5a; on the right an outline "Log in" and a primary "Sign up" (`AppButton` `sm`). | Every guest page. App.vue's header is for signed-in users only. |
+| Public footer | `Base/White` fill, 1px `Grey/100` top border. Logo, tagline in Small Text `Grey/500`, link columns with a Small Text / Tag heading in `Grey/900` and Body Small links in `Grey/500` (`Purple Primary/700` on hover). | Every guest page. |
+| Section tag | `Purple Primary/100` fill, `Purple Primary/700` text, Small Text / Tag, `spacing-24` tall, `radius-full`. | The small label above a landing-page section heading ("Events", "Venues"). |
+| Underline tabs | Body Small 700 `Grey/500`; the selected tab `Purple Primary/700` with a 2px `Purple Primary/600` underline (Section 3.1 Selected). A count pill beside each label: `Grey/75` / `Grey/600`, selected `Purple Primary/100` / `Purple Primary/800`. | Filtering a guest list (All events / Open for registration / Registration closed). |
+| Venue card | Same shell as the event card (`Base/White`, 1px `Grey/100`, `radius-lg`, `shadow-card`). A 3:1 image area — `Purple Primary/50` with a `Purple Primary/300` building icon until venues have photos; H6 name; Body Small facts with `Grey/500` icons; a "Next event" box in `Purple Primary/50` (`Grey/50` when there is none), `radius-xs`. | A venue on the guest pages. |
+| Guest register panel | A card beside the event (`radius-lg`, `shadow-card`): a note that guest registration isn't available, an `xl` primary "Sign up to register", and a "Log in to register" link. Both carry `?redirect=` to the attendee event page. | Where a signed-in attendee would see Register (E6: guests must sign up first). |
+
+**RULE:** A guest page never offers an action that needs an account (register, withdraw) as if it would work; it sends the visitor to sign up or log in instead.
+
 ### 3.6 Role Chip Colours
 
 The role chip in the app header gives each role its own colour so a signed-in user can tell at a glance which account they are in. Very light fill, dark text, and a 1px border a couple of shades darker than the fill; unknown roles fall back to the Attendee colours.

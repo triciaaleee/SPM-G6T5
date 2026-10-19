@@ -2,6 +2,7 @@ import "./lib/env.js";
 import cors from "cors";
 import express from "express";
 import { eventsRouter } from "./routes/events.js";
+import { publicEventsRouter } from "./routes/publicEvents.js";
 
 /**
  * Fail loudly at boot instead of at the first login. A missing JWT_SECRET
@@ -24,6 +25,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Guests' view of listed events — no login, so mounted ahead of eventsRouter's blanket requireAuth.
+app.use("/api/events/public", publicEventsRouter);
 app.use("/api/events", eventsRouter);
 
 app.get("/health", (_req, res) => {

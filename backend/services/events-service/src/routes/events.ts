@@ -497,7 +497,7 @@ async function venueBookingInfoHandler(req: AuthedRequest, res: Response): Promi
  * note and the capacity (expected attendance) are added explicitly by the
  * routes below.
  */
-const ATTENDEE_INFO_FIELDS = ["name", "description", "proposedDate", "startTime", "endTime"] as const;
+export const ATTENDEE_INFO_FIELDS = ["name", "description", "proposedDate", "startTime", "endTime"] as const;
 
 /** Whole-field answers that mean "nothing to note" (same list venue-service uses for requirements). */
 const NO_ACCESSIBILITY_INFO_PATTERN =
@@ -508,7 +508,7 @@ const NO_ACCESSIBILITY_INFO_PATTERN =
  * "NA"/"None" style answer is no note at all, so the card shows nothing
  * rather than "None".
  */
-function attendeeAccessibility(value: unknown): string | null {
+export function attendeeAccessibility(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const text = value.trim();
   return text === "" || NO_ACCESSIBILITY_INFO_PATTERN.test(text) ? null : text;
@@ -520,7 +520,7 @@ function attendeeAccessibility(value: unknown): string | null {
  * attendance; a dedicated registration limit would be read here instead.
  * Null when there is no usable number (older events), meaning no cap.
  */
-function attendeeCapacity(details: Record<string, unknown>): number | null {
+export function attendeeCapacity(details: Record<string, unknown>): number | null {
   const value = Number(details.expectedAttendance);
   return Number.isInteger(value) && value > 0 ? value : null;
 }
@@ -529,7 +529,7 @@ function attendeeCapacity(details: Record<string, unknown>): number | null {
  * The organiser's display name for attendees, from the `organiser:organiser_id(name)`
  * embed. Name only: nothing else about the organiser is read or returned.
  */
-function attendeeOrganiserName(organiser: unknown): string | null {
+export function attendeeOrganiserName(organiser: unknown): string | null {
   const record = (Array.isArray(organiser) ? organiser[0] : organiser) as { name?: unknown } | null | undefined;
   const name = record?.name;
   return typeof name === "string" && name.trim() !== "" ? name.trim() : null;
@@ -551,7 +551,7 @@ interface RegistrationRowFields {
  * re-derive it. Times are Singapore time (lib/eventTiming.ts); the rules are
  * in lib/registrationPeriod.ts.
  */
-function registrationInfo(row: RegistrationRowFields, details: Record<string, unknown>, now: Date = new Date()) {
+export function registrationInfo(row: RegistrationRowFields, details: Record<string, unknown>, now: Date = new Date()) {
   const inputs = {
     status: row.status,
     details,

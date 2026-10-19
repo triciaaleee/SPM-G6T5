@@ -19,6 +19,11 @@ function eventLink(msg: InboundMessage): string | null {
   return msg.eventId !== null ? `/events/${msg.eventId}` : null;
 }
 
+/** Attendees can't open `/events/:id` (staff only); their view of an event lives under `/attendee/events/:id`. */
+function attendeeEventLink(msg: InboundMessage): string | null {
+  return msg.eventId !== null ? `/attendee/events/${msg.eventId}` : null;
+}
+
 /**
  * One entry per message type notification-service is ready to render
  * (RabbitMQ.md section 3). A representative subset for the initial
@@ -255,14 +260,14 @@ const TEMPLATES: Record<string, Template> = {
   "registration.confirmed": (msg) => ({
     title: "Registration confirmed",
     body: `Your registration for "${msg.data.eventName ?? "this event"}" is confirmed.`,
-    link: eventLink(msg),
+    link: attendeeEventLink(msg),
   }),
 
   /** #32 in RabbitMQ.md section 3.5 (#105 row 7) — to the withdrawing attendee. No eventName: the withdraw route doesn't fetch the event, so this falls back to generic wording. */
   "registration.withdrawn": (msg) => ({
     title: "Registration withdrawn",
     body: `You have withdrawn your registration${msg.data.eventName ? ` for "${msg.data.eventName}"` : ""}.`,
-    link: eventLink(msg),
+    link: attendeeEventLink(msg),
   }),
 
   /** #15 in RabbitMQ.md section 3.3 (#106 row 1) — to the venue's assigned staff member. */
