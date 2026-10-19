@@ -184,7 +184,7 @@ describe("VenueRequestsPanel", () => {
       const wrapper = mountPanel({ bookings: [makeBooking({ status: "Replacement Required" })], canWithdraw: true });
       await wrapper.find(".action-btn").trigger("click");
 
-      await wrapper.find(".modal-button--danger").trigger("click");
+      await wrapper.find(".modal-actions .btn--danger-solid").trigger("click");
       await Promise.resolve();
       await Promise.resolve();
 

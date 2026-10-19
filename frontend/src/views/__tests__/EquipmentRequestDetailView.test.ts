@@ -60,8 +60,8 @@ function eventView(overrides: Partial<EventEquipmentView> = {}): EventEquipmentV
         fulfillmentNote: null,
         createdAt: "2099-01-01T00:00:00Z",
         items: [
-          { id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0 },
-          { id: 2, equipmentType: "Microphones", quantity: 3, quantityFulfilled: 0 },
+          { id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: { flagged: false, reason: null } },
+          { id: 2, equipmentType: "Microphones", quantity: 3, quantityFulfilled: 0, reservationFlag: { flagged: false, reason: null } },
         ],
       },
     ],

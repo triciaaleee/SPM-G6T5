@@ -45,6 +45,7 @@ function eventView(overrides: Partial<AttendeeEventView> = {}): AttendeeEventVie
     endTime: "16:00",
     venues: ["Great Lawn", "Sports Hall (rain site)"],
     accessibility: "Step-free entry and a hearing loop.",
+    organiserName: null,
     capacity: null,
     slotsLeft: null,
     registrationStatus: "Registered",
