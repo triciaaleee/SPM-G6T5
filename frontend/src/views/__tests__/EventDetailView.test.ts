@@ -350,26 +350,57 @@ describe("EventDetailView — change requests (E3-9)", () => {
     expect(wrapper.text()).not.toContain("Change request");
   });
 
-  it("shows the section with a highlighted field for a pending critical change", async () => {
+  it("shows the requested-changes grid with the current and requested value for a pending critical change", async () => {
     mockedChangeRequests.mockResolvedValue([changeRequest()]);
     const wrapper = await mountPage(makeEvent(), organiser);
 
-    expect(wrapper.text()).toContain("Pending");
-    expect(wrapper.text()).toContain("Requested: Seminar Room 3-01");
-    const highlighted = wrapper.find(".field-changed");
-    expect(highlighted.exists()).toBe(true);
-    expect(highlighted.text()).toContain("Venue Requirements");
+    expect(wrapper.text()).toContain("Pending review");
+    expect(wrapper.text()).toContain("Requested changes");
+    expect(wrapper.text()).toContain("Seminar Room 3-01");
+    expect(wrapper.text()).toContain("(was Grand Ballroom)");
+    expect(wrapper.text()).toContain("awaiting review");
   });
 
-  it("shows a rejected request with its reason, and no 'Requested' line", async () => {
+  it("doesn't repeat a held field in the already-applied details, and uses singular 'is' for one item", async () => {
+    mockedChangeRequests.mockResolvedValue([changeRequest()]); // venue held
+    const wrapper = await mountPage(makeEvent(), organiser);
+
+    expect(wrapper.text()).toContain("Your requested venue is awaiting review");
+    expect(wrapper.text()).toContain("Event details");
+    expect(wrapper.text()).toContain("Already applied");
+    // "Venue Requirements" appears once in the requested-changes grid
+    // (held) — not repeated in the already-applied section below it.
+    const cardText = wrapper.find(".change-request-card").text();
+    expect(cardText.match(/Venue Requirements/g)?.length).toBe(1);
+  });
+
+  it("folds startTime and endTime into one 'times' word in the summary sentence", async () => {
     mockedChangeRequests.mockResolvedValue([
-      changeRequest({ status: "Rejected", decisionReason: "Venue too small for the new headcount" }),
+      changeRequest({
+        fields: [
+          { field: "startTime", oldValue: "10:00", newValue: "11:00", isCritical: true },
+          { field: "endTime", oldValue: "12:00", newValue: "13:00", isCritical: true },
+        ],
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), organiser);
+
+    expect(wrapper.text()).toContain("Your requested times are awaiting review");
+  });
+
+  it("shows a rejected request with its reason, and no requested-changes section", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      changeRequest({
+        status: "Rejected",
+        decisionReason: "Venue too small for the new headcount",
+        fields: [], // E3-11 (not built) would decide what happens to held fields on reject; nothing held today.
+      }),
     ]);
     const wrapper = await mountPage(makeEvent(), organiser);
 
     expect(wrapper.text()).toContain("Rejected");
     expect(wrapper.text()).toContain("Venue too small for the new headcount");
-    expect(wrapper.text()).not.toContain("Requested: Seminar Room 3-01");
+    expect(wrapper.text()).not.toContain("Requested changes");
   });
 
   it("shows a Withdrawn badge, not Approved, for an auto-resolved request", async () => {
@@ -377,6 +408,7 @@ describe("EventDetailView — change requests (E3-9)", () => {
       changeRequest({
         status: "Auto-Withdrawn",
         decisionReason: "The requested change to venue was reverted before it was reviewed.",
+        fields: [], // the backend deletes reverted critical fields, so none are held once withdrawn.
       }),
     ]);
     const wrapper = await mountPage(makeEvent(), organiser);
@@ -404,7 +436,7 @@ describe("EventDetailView — change requests (E3-9)", () => {
     ]);
     const wrapper = await mountPage(makeEvent(), organiser);
 
-    expect(wrapper.text()).toContain("Approved");
+    expect(wrapper.text()).toContain("Applied");
     expect(wrapper.text()).not.toContain("Withdrawn");
     expect(wrapper.text()).toContain("Applied automatically");
     expect(wrapper.text()).toContain("none of the changed fields needed your coordinator's review");
@@ -484,8 +516,9 @@ describe("EventDetailView — change request impact for the coordinator (E3-8 AC
     return {
       bookings: [{ id: 900, status: "Approved", venue: { id: 1, name: "Grand Ballroom" } }],
       equipmentReservations: [{ id: 50, status: "Arranged", items: [] }],
-      registrations: { registeredCount: 3, total: 5 },
+      registrations: { registeredCount: 3, total: 5, registrations: [] },
       capacityConflict: null,
+      availabilityConflict: null,
       ...overrides,
     };
   }
@@ -526,6 +559,74 @@ describe("EventDetailView — change request impact for the coordinator (E3-8 AC
 
     expect(wrapper.text()).toContain("Capacity conflict");
     expect(wrapper.text()).toContain("Grand Ballroom holds");
+  });
+
+  it("shows an explicit unavailability-period conflict banner", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      pendingRequest({
+        impact: impact({
+          availabilityConflict: {
+            bookingId: 900,
+            unavailabilityConflict: { reason: "maintenance", description: "on 2026-11-10 (all day)" },
+            bookingConflict: null,
+          },
+        }),
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+
+    expect(wrapper.text()).toContain("Availability conflict");
+    expect(wrapper.text()).toContain("maintenance");
+  });
+
+  it("shows an explicit rival-booking conflict banner", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      pendingRequest({
+        impact: impact({
+          availabilityConflict: {
+            bookingId: 900,
+            unavailabilityConflict: null,
+            bookingConflict: { bookingId: 901, status: "Approved", window: "2026-11-10 09:30–12:45" },
+          },
+        }),
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+
+    expect(wrapper.text()).toContain("Availability conflict");
+    expect(wrapper.text()).toContain("Clashes with another booking");
+  });
+
+  it("shows the registration count against the proposed capacity", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      pendingRequest({
+        impact: impact({
+          registrations: {
+            registeredCount: 1,
+            total: 2,
+            registrations: [
+              { registrationId: 1, userId: "ATT-1", name: "Ash", status: "Registered" },
+              { registrationId: 2, userId: "ATT-2", name: "Bo", status: "Withdrawn" },
+            ],
+          },
+        }),
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+
+    expect(wrapper.text()).toContain("1 registered of");
+    expect(wrapper.text()).toContain("2 total");
+  });
+
+  it("doesn't crash when the registration list is missing from the response", async () => {
+    mockedChangeRequests.mockResolvedValue([
+      pendingRequest({
+        impact: impact({ registrations: { registeredCount: 0, total: 0 } as any }),
+      }),
+    ]);
+    const wrapper = await mountPage(makeEvent(), coordinator);
+
+    expect(wrapper.text()).toContain("Change request pending your review");
   });
 
   it("never offers an approve/reject action (E3-11 is not built)", async () => {

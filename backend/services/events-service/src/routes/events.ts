@@ -11,7 +11,7 @@ import { committedFieldValue, validateChangeRequestFields, withHeldValues } from
 import { AUTO_APPLIED_REASON_PREFIX, CHANGE_REQUEST_STATUS } from "../lib/changeRequestStatus.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
-import { fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
+import { checkBookingAvailability, fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
 import type { ArrangementEquipmentItem } from "../lib/arrangementsClient.js";
 import { fetchEventRegistrations } from "../lib/registrationsClient.js";
 import {
@@ -1549,13 +1549,25 @@ eventsRouter.post("/:id/change-requests", async (req: AuthedRequest, res) => {
 interface ChangeRequestImpact {
   bookings: { id: number; status: string; venue: { id: number; name: string } | null }[];
   equipmentReservations: { id: number; status: string; items: ArrangementEquipmentItem[] }[];
-  registrations: { registeredCount: number; total: number };
+  registrations: {
+    registeredCount: number;
+    total: number;
+    // E3-10 AC1: "listed", not just counted.
+    registrations: { registrationId: number; userId: string; name: string | null; status: string }[];
+  };
   capacityConflict: { bookingId: number; venueName: string; capacity: number; requestedAttendance: number } | null;
+  // E3-10 AC2's "availability" half — a held schedule change checked
+  // against the booked venue's block-out periods and other bookings.
+  // null when nothing to check (no schedule held) or nothing clashed.
+  availabilityConflict:
+    | { bookingId: number; unavailabilityConflict: { reason: string; description: string } | null; bookingConflict: { bookingId: number; status: string; window: string } | null }
+    | null;
 }
 
 async function loadChangeRequestImpact(
   eventId: number,
   requestedAttendance: number | null,
+  proposedSchedule: { proposedDate: string; startTime: string | null; endTime: string | null } | null,
   authorization: string,
 ): Promise<ChangeRequestImpact | null> {
   const [bookingsResult, equipmentResult, registrationsResult] = await Promise.all([
@@ -1571,9 +1583,18 @@ async function loadChangeRequestImpact(
   const bookings = bookingsResult.value;
   const registrations = registrationsResult.value;
 
+  // E3-8 AC4 / E3-10 AC2: only a booking that's actually locked in the
+  // venue is worth checking against — a Withdrawn/Rejected/Expired one
+  // doesn't hold anything real, so flagging a conflict against it would
+  // name a venue the event no longer has. By the time an event reaches
+  // Confirmed its bookings should all be Approved anyway (On Hold/
+  // Requested never survive to here), so this is the simplest correct
+  // filter without needing hold-expiry data this client doesn't carry.
+  const activeBookings = bookings.filter((booking) => booking.status === "Approved");
+
   let capacityConflict: ChangeRequestImpact["capacityConflict"] = null;
   if (requestedAttendance !== null) {
-    const overCapacity = bookings.find(
+    const overCapacity = activeBookings.find(
       (booking) => typeof booking.venue?.capacity === "number" && booking.venue.capacity < requestedAttendance,
     );
     if (overCapacity?.venue) {
@@ -1582,6 +1603,22 @@ async function loadChangeRequestImpact(
         venueName: overCapacity.venue.name,
         capacity: overCapacity.venue.capacity as number,
         requestedAttendance,
+      };
+    }
+  }
+
+  // Checked against the first active booking with a venue — same
+  // simplicity as the capacity check above, and in practice an event's
+  // main booking.
+  let availabilityConflict: ChangeRequestImpact["availabilityConflict"] = null;
+  const bookingToCheck = activeBookings.find((booking) => booking.venue);
+  if (proposedSchedule && bookingToCheck) {
+    const availabilityResult = await checkBookingAvailability(bookingToCheck.id, proposedSchedule, authorization);
+    if (availabilityResult.status === "ok" && !availabilityResult.value.available) {
+      availabilityConflict = {
+        bookingId: bookingToCheck.id,
+        unavailabilityConflict: availabilityResult.value.unavailabilityConflict,
+        bookingConflict: availabilityResult.value.bookingConflict,
       };
     }
   }
@@ -1600,8 +1637,15 @@ async function loadChangeRequestImpact(
     registrations: {
       registeredCount: registrations.filter((r) => r.status === "Registered").length,
       total: registrations.length,
+      registrations: registrations.map((r) => ({
+        registrationId: r.registrationId,
+        userId: r.userId,
+        name: r.name,
+        status: r.status,
+      })),
     },
     capacityConflict,
+    availabilityConflict,
   };
 }
 
@@ -1626,7 +1670,7 @@ eventsRouter.get("/:id/change-requests", async (req: AuthedRequest, res) => {
 
   const { data: event, error: eventError } = await supabase
     .from("events")
-    .select("id, organiser_id, coordinator_id")
+    .select("id, organiser_id, coordinator_id, submitted_details")
     .eq("id", Number(eventId))
     .maybeSingle();
 
@@ -1677,15 +1721,37 @@ eventsRouter.get("/:id/change-requests", async (req: AuthedRequest, res) => {
   }
 
   const authorization = req.headers.authorization!;
+  const committedDetails = (event.submitted_details ?? {}) as Record<string, unknown>;
   const impactByRequest = new Map<number, ChangeRequestImpact | null>();
   for (const request of requests ?? []) {
     if (request.status !== CHANGE_REQUEST_STATUS.Pending) continue;
     const fields = fieldsByRequest.get(request.id) ?? [];
     const attendanceField = fields.find((field) => field.field === "expectedAttendance");
     const requestedAttendance = attendanceField ? Number(attendanceField.new_value) : null;
+
+    // E3-10 AC2: only worth checking when a schedule field is actually
+    // held — a partial change (e.g. just endTime) still needs a complete
+    // window, so the other two fall back to what's already committed.
+    const heldScheduleField = (field: string) => fields.find((f) => f.field === field)?.new_value;
+    const hasScheduleChange = ["proposedDate", "startTime", "endTime"].some((field) =>
+      fields.some((f) => f.field === field),
+    );
+    const proposedSchedule = hasScheduleChange
+      ? {
+          proposedDate: heldScheduleField("proposedDate") ?? (committedDetails.proposedDate as string),
+          startTime: heldScheduleField("startTime") ?? (committedDetails.startTime as string | null) ?? null,
+          endTime: heldScheduleField("endTime") ?? (committedDetails.endTime as string | null) ?? null,
+        }
+      : null;
+
     impactByRequest.set(
       request.id,
-      await loadChangeRequestImpact(event.id, Number.isFinite(requestedAttendance) ? requestedAttendance : null, authorization),
+      await loadChangeRequestImpact(
+        event.id,
+        Number.isFinite(requestedAttendance) ? requestedAttendance : null,
+        proposedSchedule,
+        authorization,
+      ),
     );
   }
 

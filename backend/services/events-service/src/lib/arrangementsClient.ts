@@ -79,3 +79,29 @@ export async function fetchEventEquipmentRequests(
   );
   return result.status === "ok" ? { status: "ok", value: result.value.equipmentRequests ?? [] } : result;
 }
+
+export interface BookingAvailability {
+  available: boolean;
+  unavailabilityConflict: { reason: string; description: string } | null;
+  bookingConflict: { bookingId: number; status: string; window: string } | null;
+}
+
+/**
+ * E3-10 AC2: whether a *proposed* new date/time for an existing booking
+ * would clash with the venue's block-out periods or another booking —
+ * read-only, venue-service's own re-check re-run early so the coordinator
+ * sees it before deciding on a held schedule change.
+ */
+export async function checkBookingAvailability(
+  bookingId: number,
+  schedule: { proposedDate: string; startTime: string | null; endTime: string | null },
+  authorization: string,
+): Promise<FetchResult<BookingAvailability>> {
+  const params = new URLSearchParams({ proposedDate: schedule.proposedDate });
+  if (schedule.startTime) params.set("startTime", schedule.startTime);
+  if (schedule.endTime) params.set("endTime", schedule.endTime);
+  return getJson<BookingAvailability>(
+    `${venueServiceUrl()}/api/venues/bookings/${bookingId}/availability-check?${params.toString()}`,
+    authorization,
+  );
+}

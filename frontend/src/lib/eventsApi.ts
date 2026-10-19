@@ -237,8 +237,17 @@ export interface ChangeRequestFieldEntry {
 export interface ChangeRequestImpact {
   bookings: { id: number; status: string; venue: { id: number; name: string } | null }[];
   equipmentReservations: { id: number; status: string; items: { id: number; equipmentType: string; quantity: number; quantityFulfilled: number }[] }[];
-  registrations: { registeredCount: number; total: number };
+  registrations: {
+    registeredCount: number;
+    total: number;
+    registrations: { registrationId: number; userId: string; name: string | null; status: string }[];
+  };
   capacityConflict: { bookingId: number; venueName: string; capacity: number; requestedAttendance: number } | null;
+  availabilityConflict: {
+    bookingId: number;
+    unavailabilityConflict: { reason: string; description: string } | null;
+    bookingConflict: { bookingId: number; status: string; window: string } | null;
+  } | null;
 }
 
 export interface ChangeRequestEntry {

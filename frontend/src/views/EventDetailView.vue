@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import AppButton from "../components/ui/AppButton.vue";
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { ArrowRightIcon, ExclamationTriangleIcon } from "@heroicons/vue/20/solid";
 import { useRoute, useRouter } from "vue-router";
 import { landingRouteForRole } from "../lib/auth";
 import {
@@ -463,6 +464,35 @@ const coordinatorChangeRequest = computed(() => {
   const latest = latestChangeRequest.value;
   return isWithdrawn(latest) || isAutoApplied(latest) ? latest : null;
 });
+/** E3-8 AC4 / E3-10 AC2: each conflict as one title + description pair, for the coordinator's review-blocking list. */
+const conflictItems = computed(() => {
+  const impact = coordinatorChangeRequest.value?.impact;
+  if (!impact) return [];
+  const items: { title: string; description: string }[] = [];
+  if (impact.capacityConflict) {
+    items.push({
+      title: "Capacity conflict",
+      description: `${impact.capacityConflict.venueName} holds ${impact.capacityConflict.capacity}, but ${impact.capacityConflict.requestedAttendance} is requested.`,
+    });
+  }
+  if (impact.availabilityConflict?.unavailabilityConflict) {
+    items.push({
+      title: "Availability conflict",
+      description: `The venue is unavailable ${impact.availabilityConflict.unavailabilityConflict.description} (${impact.availabilityConflict.unavailabilityConflict.reason}).`,
+    });
+  }
+  if (impact.availabilityConflict?.bookingConflict) {
+    items.push({
+      title: "Availability conflict",
+      description: `Clashes with another booking (${impact.availabilityConflict.bookingConflict.status}) for ${impact.availabilityConflict.bookingConflict.window}.`,
+    });
+  }
+  return items;
+});
+/** Approved reads as settled (green); everything else (Withdrawn, Requested, Rejected, Expired…) as neutral. */
+function reservationStatusBadgeClass(status: string): string {
+  return status === "Approved" || status === "Arranged" ? "status-success" : "badge-neutral";
+}
 const changedFieldMap = computed(() => {
   const map = new Map<string, ChangeRequestFieldEntry>();
   for (const field of latestChangeRequest.value?.fields ?? []) map.set(field.field, field);
@@ -496,6 +526,56 @@ function changeRequestBadgeClass(request: ChangeRequestEntry): string {
 function changeRequestBadgeLabel(request: ChangeRequestEntry): string {
   return request.status === "Auto-Withdrawn" ? "Withdrawn" : request.status;
 }
+
+/** "Pending review" reads clearer to the organiser than a bare "Pending"; a plain auto-apply reads as "Applied", not "Approved" (no one actually approved it). */
+function organiserChangeRequestBadgeLabel(request: ChangeRequestEntry): string {
+  if (request.status === "Auto-Withdrawn") return "Withdrawn";
+  if (request.status === "Pending") return "Pending review";
+  if (isAutoApplied(request)) return "Applied";
+  return request.status;
+}
+
+/** The fields still held — what the "Requested changes" grid shows. */
+const heldFields = computed(() => latestChangeRequest.value?.fields.filter((f) => f.isCritical) ?? []);
+
+/** Short, human word for one held field, for the summary sentence — startTime/endTime fold into one "times". */
+const PENDING_SUMMARY_WORD: Partial<Record<keyof EventRequestPayload, string>> = {
+  expectedAttendance: "attendance",
+  proposedDate: "date",
+  venue: "venue",
+  equipment: "equipment",
+  accessibility: "accessibility needs",
+};
+
+/** "attendance and times" / "venue, attendance and times" — the fields awaiting review, read as prose. */
+const pendingSummary = computed(() => {
+  const fields = heldFields.value.map((f) => f.field);
+  const words = fields
+    .filter((f) => f !== "startTime" && f !== "endTime")
+    .map((f) => PENDING_SUMMARY_WORD[f as keyof EventRequestPayload] ?? f);
+  if (fields.includes("startTime") || fields.includes("endTime")) words.push("times");
+  if (words.length === 0) return { text: "", plural: false };
+  if (words.length === 1) return { text: words[0], plural: words[0] === "times" };
+  return { text: `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`, plural: true };
+});
+
+/**
+ * Everything not currently held — already live in submitted_details, so
+ * shown as settled fact, not "pending". Grouped the same way the held
+ * grid reads: schedule / venue / logistics. Title is skipped: it's
+ * already the page heading above. Purpose/description/proposedDate get
+ * their own row regardless (see template) since they're never grouped.
+ */
+const heldFieldSet = computed(() => new Set(heldFields.value.map((f) => f.field)));
+const appliedScheduleFields = computed(
+  () => (["startTime", "endTime"] as const).filter((f) => !heldFieldSet.value.has(f)),
+);
+const appliedVenueFields = computed(
+  () => (["venue", "accessibility"] as const).filter((f) => !heldFieldSet.value.has(f)),
+);
+const appliedLogisticsFields = computed(
+  () => (["equipment", "technicalSupport", "registrationNeeded"] as const).filter((f) => !heldFieldSet.value.has(f)),
+);
 
 function changeRequestFieldDisplayValue(field: string): string {
   const details = asSubmittedDetails(event.value!.submitted_details);
@@ -1102,39 +1182,71 @@ onMounted(async () => {
   </div>
 </div>
 
-<!-- E3-9: the organiser's own change requests on this event — the entire
-     form as submitted, with whatever the latest request touched
-     highlighted. Not the coordinator's decision screen (E3-11). -->
+<!-- E3-9: the organiser's own latest change request on this event — what's
+     still awaiting review, and what's already live. Not the coordinator's
+     decision screen (E3-11). -->
 <div v-if="isOwnerView && latestChangeRequest" class="details-card change-request-card">
   <div class="section-header">
-    <h2 class="section-title">Change request</h2>
-    <span class="badge" :class="changeRequestBadgeClass(latestChangeRequest)">{{ changeRequestBadgeLabel(latestChangeRequest) }}</span>
+    <div>
+      <h2 class="section-title">Your change request</h2>
+      <p class="body-small muted mb-1">
+        {{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}` }} · Submitted
+        {{ formatDate(latestChangeRequest.createdAt) }}
+      </p>
+    </div>
+    <span class="badge" :class="changeRequestBadgeClass(latestChangeRequest)">{{ organiserChangeRequestBadgeLabel(latestChangeRequest) }}</span>
   </div>
-  <p class="body-small muted mb-1">Submitted {{ formatDate(latestChangeRequest.createdAt) }}</p>
-  <p v-if="isWithdrawn(latestChangeRequest)" class="body-small muted change-request-card__note">
+
+  <template v-if="heldFields.length > 0">
+    <p class="body-small muted eyebrow">Requested changes</p>
+    <div class="requested-changes">
+      <div v-for="field in heldFields" :key="field.field">
+        <p class="body-small muted mb-1">{{ CHANGE_REQUEST_FIELD_LABELS[field.field as keyof EventRequestPayload] ?? field.field }}</p>
+        <p class="requested-changes__value">
+          {{ field.newValue }} <span class="body-small muted">(was {{ field.oldValue ?? "—" }})</span>
+        </p>
+      </div>
+    </div>
+    <p class="body-default">
+      Your requested {{ pendingSummary.text }} {{ pendingSummary.plural ? "are" : "is" }} awaiting review. Everything
+      else is already applied.
+    </p>
+    <hr class="divider" />
+  </template>
+  <p v-else-if="isWithdrawn(latestChangeRequest)" class="body-default muted change-request-card__note">
     Automatically withdrawn — you took every held field back to how it was before your coordinator reviewed it, so
     there's nothing pending anymore.
   </p>
-  <p v-else-if="isAutoApplied(latestChangeRequest)" class="body-small muted change-request-card__note">
+  <p v-else-if="isAutoApplied(latestChangeRequest)" class="body-default muted change-request-card__note">
     Applied automatically — none of the changed fields needed your coordinator's review.
   </p>
-  <p v-else-if="latestChangeRequest.status === 'Pending'" class="body-small muted change-request-card__note">
-    Fields below marked <em>Requested</em> are still awaiting your coordinator's review; everything else already
-    applied.
-  </p>
-  <p v-else-if="latestChangeRequest.status === 'Rejected'" class="body-small error-text change-request-card__note">
+  <p v-else-if="latestChangeRequest.status === 'Rejected'" class="body-default error-text change-request-card__note">
     Rejected{{ latestChangeRequest.decisionReason ? `: ${latestChangeRequest.decisionReason}` : "." }}
   </p>
-  <div class="change-request-grid">
-    <div v-for="(label, field) in CHANGE_REQUEST_FIELD_LABELS" :key="field" class="field"
-      :class="{ 'field-changed': changedFieldMap.has(field) }">
-      <p class="body-small muted mb-1">{{ label }}</p>
-      <p class="body-default field-value">{{ changeRequestFieldDisplayValue(field) }}</p>
-      <p v-if="changedFieldMap.get(field)?.isCritical && latestChangeRequest.status === 'Pending'"
-        class="body-small change-request-card__requested">
-        Requested: {{ changedFieldMap.get(field)!.newValue }}
-      </p>
-    </div>
+
+  <p class="body-small muted eyebrow">Event details · Already applied</p>
+  <div class="applied-details">
+    <p v-for="field in (['proposedDate', 'purpose', 'description'] as const)" :key="field" class="applied-details__row">
+      <span class="muted">{{ CHANGE_REQUEST_FIELD_LABELS[field] }}</span> {{ changeRequestFieldDisplayValue(field) }}
+    </p>
+    <p v-if="appliedScheduleFields.length > 0" class="applied-details__row applied-details__row--grouped">
+      <template v-for="(field, index) in appliedScheduleFields" :key="field">
+        <span v-if="index > 0" class="applied-details__divider">·</span>
+        <span class="muted">{{ CHANGE_REQUEST_FIELD_LABELS[field] }}</span> {{ changeRequestFieldDisplayValue(field) }}
+      </template>
+    </p>
+    <p v-if="appliedVenueFields.length > 0" class="applied-details__row applied-details__row--grouped">
+      <template v-for="(field, index) in appliedVenueFields" :key="field">
+        <span v-if="index > 0" class="applied-details__divider">·</span>
+        <span class="muted">{{ CHANGE_REQUEST_FIELD_LABELS[field] }}</span> {{ changeRequestFieldDisplayValue(field) }}
+      </template>
+    </p>
+    <p class="applied-details__row applied-details__row--grouped">
+      <template v-for="(field, index) in appliedLogisticsFields" :key="field">
+        <span v-if="index > 0" class="applied-details__divider">·</span>
+        <span class="muted">{{ CHANGE_REQUEST_FIELD_LABELS[field] }}</span> {{ changeRequestFieldDisplayValue(field) }}
+      </template>
+    </p>
   </div>
 </div>
 
@@ -1142,65 +1254,104 @@ onMounted(async () => {
      change request — affected bookings/equipment/registrations, and a
      capacity conflict if the requested attendance exceeds a booked
      venue's capacity. No approve/reject here (E3-11, not built). -->
-<div v-if="isAssignedCoordinator && coordinatorChangeRequest" class="details-card change-request-card">
-  <div class="section-header">
-    <h2 class="section-title">
-      {{ pendingChangeRequest ? "Change request pending your review" : "Change request" }}
-    </h2>
-    <span class="badge" :class="changeRequestBadgeClass(coordinatorChangeRequest)">{{ changeRequestBadgeLabel(coordinatorChangeRequest) }}</span>
-  </div>
-  <p class="body-small muted mb-1">Submitted {{ formatDate(coordinatorChangeRequest.createdAt) }}</p>
-
-  <template v-if="isWithdrawn(coordinatorChangeRequest)">
-    <p class="body-small muted change-request-card__note">
-      {{ coordinatorChangeRequest.decisionReason }} Nothing is pending on this event anymore.
-    </p>
-  </template>
-  <template v-else-if="isAutoApplied(coordinatorChangeRequest)">
-    <p class="body-small muted change-request-card__note">
-      {{ coordinatorChangeRequest.decisionReason }} Nothing needed your review.
-    </p>
-  </template>
-  <template v-else>
-    <div class="change-request-grid">
-      <div v-for="field in coordinatorChangeRequest.fields.filter((f) => f.isCritical)" :key="field.field" class="field">
-        <p class="body-small muted mb-1">{{ CHANGE_REQUEST_FIELD_LABELS[field.field as keyof EventRequestPayload] ?? field.field }}</p>
-        <p class="body-default field-value">{{ field.oldValue ?? "—" }} → {{ field.newValue }}</p>
-      </div>
+<section v-if="isAssignedCoordinator && coordinatorChangeRequest" aria-labelledby="change-review-title">
+  <div class="details-card change-request-card">
+    <div class="section-header">
+      <h2 id="change-review-title" class="section-title">
+        {{ pendingChangeRequest ? "Change request pending your review" : "Change request" }}
+      </h2>
+      <span class="badge" :class="changeRequestBadgeClass(coordinatorChangeRequest)">{{ changeRequestBadgeLabel(coordinatorChangeRequest) }}</span>
     </div>
-    <template v-if="coordinatorChangeRequest.impact">
-      <hr class="divider" />
-      <p v-if="coordinatorChangeRequest.impact.capacityConflict" class="body-small error-text change-request-card__note">
-        Capacity conflict: {{ coordinatorChangeRequest.impact.capacityConflict.venueName }} holds
-        {{ coordinatorChangeRequest.impact.capacityConflict.capacity }}, but
-        {{ coordinatorChangeRequest.impact.capacityConflict.requestedAttendance }} is requested.
-      </p>
-      <p class="body-small muted mb-1">
-        Registrations: {{ coordinatorChangeRequest.impact.registrations.registeredCount }} registered of
-        {{ coordinatorChangeRequest.impact.registrations.total }} total.
-      </p>
-      <p class="body-small muted mb-1">
-        Venue booking(s):
-        <span v-if="coordinatorChangeRequest.impact.bookings.length === 0">none.</span>
-        <span v-else>
-          <span v-for="(booking, index) in coordinatorChangeRequest.impact.bookings" :key="booking.id">
-            {{ booking.venue?.name ?? "Unknown venue" }} ({{ booking.status }}){{ index < coordinatorChangeRequest.impact.bookings.length - 1 ? ", " : "" }}
-          </span>
-        </span>
-      </p>
-      <p class="body-small muted">
-        Equipment reservation(s):
-        <span v-if="coordinatorChangeRequest.impact.equipmentReservations.length === 0">none.</span>
-        <span v-else>
-          <span v-for="(reservation, index) in coordinatorChangeRequest.impact.equipmentReservations" :key="reservation.id">
-            Request #{{ reservation.id }} ({{ reservation.status }}){{ index < coordinatorChangeRequest.impact.equipmentReservations.length - 1 ? ", " : "" }}
-          </span>
-        </span>
+    <p class="body-small muted mb-1">Submitted {{ formatDate(coordinatorChangeRequest.createdAt) }}</p>
+
+    <template v-if="isWithdrawn(coordinatorChangeRequest)">
+      <p class="body-small muted change-request-card__note">
+        {{ coordinatorChangeRequest.decisionReason }} Nothing is pending on this event anymore.
       </p>
     </template>
-    <p v-else class="body-small muted">Affected arrangements couldn't be loaded right now.</p>
-  </template>
-</div>
+    <template v-else-if="isAutoApplied(coordinatorChangeRequest)">
+      <p class="body-small muted change-request-card__note">
+        {{ coordinatorChangeRequest.decisionReason }} Nothing needed your review.
+      </p>
+    </template>
+    <template v-else>
+      <div class="proposed-changes">
+        <div class="proposed-changes__head">
+          <p class="body-default proposed-changes__title">Proposed changes</p>
+          <p class="body-small muted">Current → requested</p>
+        </div>
+        <div class="proposed-changes__grid">
+          <div v-for="field in coordinatorChangeRequest.fields.filter((f) => f.isCritical)" :key="field.field">
+            <p class="body-small muted mb-1">{{ CHANGE_REQUEST_FIELD_LABELS[field.field as keyof EventRequestPayload] ?? field.field }}</p>
+            <div class="proposed-field">
+              <div>
+                <p class="body-small muted proposed-field__tag">Current</p>
+                <p class="body-default proposed-field__current">{{ field.oldValue ?? "—" }}</p>
+              </div>
+              <ArrowRightIcon class="proposed-field__arrow" aria-hidden="true" />
+              <div>
+                <p class="body-small proposed-field__tag proposed-field__tag--requested">Requested</p>
+                <p class="body-default proposed-field__requested">{{ field.newValue }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template v-if="coordinatorChangeRequest.impact">
+        <div v-if="conflictItems.length > 0" class="conflicts">
+          <div class="conflicts__head">
+            <p class="body-default conflicts__title">Review-blocking conflicts</p>
+            <span class="conflicts__count">{{ conflictItems.length }}</span>
+          </div>
+          <div class="conflicts__box">
+            <div v-for="(item, index) in conflictItems" :key="`${item.title}-${index}`" class="conflict-item">
+              <ExclamationTriangleIcon class="conflict-item__icon" aria-hidden="true" />
+              <div>
+                <p class="body-default conflict-item__title">{{ item.title }}</p>
+                <p class="body-small conflict-item__description">{{ item.description }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="reservations">
+          <p class="body-default reservations__title">Registration &amp; reservations</p>
+          <div class="reservations__grid">
+            <div>
+              <p class="body-small muted mb-1">Registrations</p>
+              <p class="body-default reservations__value">
+                {{ coordinatorChangeRequest.impact.registrations.registeredCount }} registered of
+                {{ coordinatorChangeRequest.impact.registrations.total }} total
+              </p>
+            </div>
+            <div>
+              <p class="body-small muted mb-1">Venue booking(s)</p>
+              <p v-if="coordinatorChangeRequest.impact.bookings.length === 0" class="body-default muted">None</p>
+              <div v-else class="reservations__list">
+                <div v-for="booking in coordinatorChangeRequest.impact.bookings" :key="booking.id" class="reservations__row">
+                  <span class="body-default">{{ booking.venue?.name ?? "Unknown venue" }}</span>
+                  <span class="badge" :class="reservationStatusBadgeClass(booking.status)">{{ booking.status }}</span>
+                </div>
+              </div>
+            </div>
+            <div>
+              <p class="body-small muted mb-1">Equipment reservation(s)</p>
+              <p v-if="coordinatorChangeRequest.impact.equipmentReservations.length === 0" class="body-default muted">None</p>
+              <div v-else class="reservations__list">
+                <div v-for="reservation in coordinatorChangeRequest.impact.equipmentReservations" :key="reservation.id" class="reservations__row">
+                  <span class="body-default">Request #{{ reservation.id }}</span>
+                  <span class="badge" :class="reservationStatusBadgeClass(reservation.status)">{{ reservation.status }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+      <p v-else class="body-small muted">Affected arrangements couldn't be loaded right now.</p>
+    </template>
+  </div>
+</section>
 
 <EventStatusTracker v-if="event.status === 'Planning'" :status="event.status"
   :last-changed-at="statusLastChangedAt(event)" :review-outcome="event.review_outcome" title="Outstanding Arrangements"
@@ -1749,6 +1900,216 @@ onMounted(async () => {
 .change-request-card__requested {
   color: var(--color-warning-800);
   margin: var(--spacing-4) 0 0;
+}
+
+/* Proposed changes --------------------------------------------------- */
+
+.proposed-changes {
+  margin: 0 0 var(--spacing-24);
+}
+
+.proposed-changes__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-12);
+}
+
+.proposed-changes__head .muted {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+}
+
+.proposed-changes__title {
+  font-weight: 700;
+}
+
+.proposed-changes__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--spacing-16);
+  padding: var(--spacing-16);
+  border-radius: var(--radius-sm);
+  background: var(--color-grey-50);
+}
+
+.proposed-field {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+}
+
+.proposed-field__arrow {
+  flex-shrink: 0;
+  width: var(--spacing-16);
+  height: var(--spacing-16);
+  color: var(--color-grey-500);
+}
+
+.proposed-field__tag {
+  margin: 0;
+}
+
+.proposed-field__tag--requested {
+  color: var(--color-purple-600);
+}
+
+.proposed-field__current {
+  color: var(--color-grey-600);
+  font-weight: 700;
+}
+
+.proposed-field__requested {
+  color: var(--color-purple-600);
+  font-weight: 700;
+}
+
+/* Review-blocking conflicts ------------------------------------------ */
+
+.conflicts {
+  margin: 0 0 var(--spacing-24);
+}
+
+.conflicts__head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  margin-bottom: var(--spacing-12);
+}
+
+.conflicts__title {
+  color: var(--color-error-600);
+  font-weight: 700;
+}
+
+.conflicts__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--spacing-20);
+  height: var(--spacing-20);
+  padding: 0 var(--spacing-6);
+  border: 1px solid var(--color-error-300);
+  border-radius: var(--radius-xs);
+  background: var(--color-base-white);
+  color: var(--color-error-600);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.conflicts__box {
+  border-radius: var(--radius-sm);
+  background: var(--color-error-200);
+}
+
+.conflict-item {
+  display: flex;
+  gap: var(--spacing-12);
+  padding: var(--spacing-16);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.conflict-item:last-child {
+  border-bottom: none;
+}
+
+.conflict-item__icon {
+  flex-shrink: 0;
+  width: var(--spacing-20);
+  height: var(--spacing-20);
+  color: var(--color-error-600);
+}
+
+.conflict-item__title {
+  color: var(--color-error-600);
+  font-weight: 700;
+}
+
+.conflict-item__description {
+  color: var(--color-grey-700);
+  margin-top: var(--spacing-4);
+}
+
+/* Registration & reservations ----------------------------------------- */
+
+.reservations__title {
+  font-weight: 700;
+  margin-bottom: var(--spacing-12);
+}
+
+.reservations__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--spacing-16) var(--spacing-24);
+}
+
+.reservations__value {
+  font-weight: 700;
+}
+
+.reservations__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+}
+
+.reservations__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-8);
+}
+
+/* Organiser's "Your change request" card ------------------------------ */
+
+.eyebrow {
+  margin: var(--spacing-16) 0 var(--spacing-8);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+}
+
+.requested-changes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--spacing-16);
+  padding: var(--spacing-16);
+  margin-bottom: var(--spacing-12);
+  border-radius: var(--radius-sm);
+  background: var(--color-grey-50);
+}
+
+.requested-changes__value {
+  margin: 0;
+  color: var(--color-purple-600);
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.applied-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+}
+
+.applied-details__row {
+  margin: 0;
+  color: var(--color-grey-900);
+}
+
+.applied-details__row .muted {
+  margin-right: var(--spacing-4);
+}
+
+.applied-details__row--grouped {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-4) var(--spacing-16);
+}
+
+.applied-details__divider {
+  color: var(--color-grey-300);
 }
 
 .history-card {
