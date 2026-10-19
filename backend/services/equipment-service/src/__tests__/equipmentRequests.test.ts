@@ -3,7 +3,7 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { equipmentRequestsRouter } from "../routes/equipmentRequests.js";
-import { validateEquipmentItems, validateStatusUpdate } from "../lib/validateEquipmentRequest.js";
+import { validateAmendedItems, validateEquipmentItems, validateStatusUpdate } from "../lib/validateEquipmentRequest.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
@@ -149,6 +149,11 @@ function buildApp(
     updatedRequest?: Record<string, unknown> | null;
     applyError?: { message: string } | null;
     releaseError?: { message: string } | null;
+    /** What the amend_equipment_request / release_equipment_for_request functions answer (migration 0042). */
+    amendOutcome?: Record<string, unknown>;
+    amendError?: { message: string } | null;
+    cancelOutcome?: Record<string, unknown>;
+    cancelError?: { message: string } | null;
     equipmentRows?: Record<string, unknown>[];
     equipmentBookingRows?: Record<string, unknown>[];
   } = {},
@@ -192,8 +197,14 @@ function buildApp(
   const equipmentTable = recordTable(options.equipmentRows ?? defaultEquipmentRows);
   const equipmentBookingTable = recordTable(options.equipmentBookingRows ?? []);
 
-  const rpcMock = vi.fn(async (fn: string) => {
+  const rpcMock = vi.fn(async (fn: string, _args?: Record<string, unknown>) => {
     if (fn === "release_equipment_for_event") return { data: null, error: options.releaseError ?? null };
+    if (fn === "amend_equipment_request") {
+      return { data: options.amendOutcome ?? { status: "Requested", changes: [] }, error: options.amendError ?? null };
+    }
+    if (fn === "release_equipment_for_request") {
+      return { data: options.cancelOutcome ?? { released: [] }, error: options.cancelError ?? null };
+    }
     return { data: null, error: options.applyError ?? null };
   });
 
@@ -442,7 +453,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Requested",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
+        items: [{ id: 1, equipmentCatalogId: null, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
       },
     ]);
   });
@@ -464,7 +475,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Arranged",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 2, reservationFlag: NO_FLAG }],
+        items: [{ id: 1, equipmentCatalogId: null, equipmentType: "Projector", quantity: 2, quantityFulfilled: 2, reservationFlag: NO_FLAG }],
       },
     ]);
   });
@@ -532,7 +543,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Requested",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
+        items: [{ id: 1, equipmentCatalogId: null, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
         event: {
           id: 7,
           name: "Alumni Gala",
@@ -631,7 +642,7 @@ describe("GET /api/equipment-requests/event/:eventId (E5-1 AC1, AC2)", () => {
           status: "Requested",
           fulfillmentNote: null,
           createdAt: "2026-01-01T00:00:00Z",
-          items: [{ id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
+          items: [{ id: 1, equipmentCatalogId: null, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
         },
       ],
     });
@@ -1105,5 +1116,283 @@ describe("POST /api/equipment-requests/events/:eventId/release (E5-6 AC4)", () =
     const { app } = buildApp({ user: organiser, event: eventRow({ status: "Cancelled" }), releaseError: { message: "boom" } });
     const res = await request(app).post("/api/equipment-requests/events/7/release");
     expect(res.status).toBe(500);
+  });
+});
+
+/** E5-2: a request still open to amendment, with one reserved item. */
+const editableRequest = {
+  id: 55,
+  event_id: 7,
+  coordinator_id: "COORD-0001",
+  status: "Partially Fulfilled",
+  fulfillment_note: "2 still to arrange",
+  created_at: "2026-01-01T00:00:00Z",
+};
+const editableItems = [
+  { id: 1, request_id: 55, equipment_type: "Projector", quantity: 5, quantity_fulfilled: 3, equipment_catalog_id: 1 },
+  { id: 2, request_id: 55, equipment_type: "Screen", quantity: 1, quantity_fulfilled: 0, equipment_catalog_id: 2 },
+];
+const twoCatalogRows = [
+  { id: 1, name: "Projector" },
+  { id: 2, name: "Screen" },
+  { id: 3, name: "Microphone" },
+];
+
+describe("validateAmendedItems", () => {
+  it("accepts existing and new rows, keeping the itemId of the ones that amend an existing item", () => {
+    const result = validateAmendedItems([
+      { itemId: 1, equipmentCatalogId: 1, quantity: 3 },
+      { equipmentCatalogId: 3, quantity: 2 },
+    ]);
+    expect(result).toEqual({
+      valid: true,
+      fields: {},
+      value: [
+        { itemId: 1, equipmentCatalogId: 1, quantity: 3 },
+        { equipmentCatalogId: 3, quantity: 2 },
+      ],
+    });
+  });
+
+  it("rejects the same existing item twice and a bad itemId, on top of the usual item checks", () => {
+    const result = validateAmendedItems([
+      { itemId: 1, equipmentCatalogId: 1, quantity: 3 },
+      { itemId: 1, equipmentCatalogId: 1, quantity: 2 },
+      { itemId: "x", equipmentCatalogId: 1, quantity: 2 },
+    ]);
+    expect(result.valid).toBe(false);
+    expect(result.fields["items[1].itemId"]).toMatch(/more than once/);
+    expect(result.fields["items[2].itemId"]).toBeDefined();
+
+    expect(validateAmendedItems([{ itemId: 1, equipmentCatalogId: 1, quantity: 0 }]).fields["items[0].quantity"]).toMatch(
+      /greater than zero/,
+    );
+    expect(validateAmendedItems([]).valid).toBe(false);
+  });
+});
+
+describe("PUT /api/equipment-requests/:id/items (E5-2 AC1, AC2)", () => {
+  const body = {
+    items: [
+      { itemId: 1, equipmentCatalogId: 1, quantity: 3 },
+      { equipmentCatalogId: 3, quantity: 2 },
+    ],
+  };
+  const amendment = {
+    status: "Partially Fulfilled",
+    changes: [
+      { kind: "quantity", equipmentType: "Projector", from: 5, to: 3, released: 0 },
+      { kind: "removed", equipmentType: "Screen", quantity: 1, released: 0 },
+      { kind: "added", equipmentType: "Microphone", quantity: 2, released: 0 },
+    ],
+  };
+
+  function amendApp(options: Parameters<typeof buildApp>[0] = {}) {
+    return buildApp({ requests: [editableRequest], items: editableItems, catalogRows: twoCatalogRows, ...options });
+  }
+
+  it("rejects anyone but a coordinator", async () => {
+    const { app } = amendApp({ user: technicalSupport });
+    expect((await request(app).put("/api/equipment-requests/55/items").send(body)).status).toBe(403);
+  });
+
+  it("rejects a coordinator who isn't the event's assigned one", async () => {
+    const { app, rpcMock } = amendApp({ event: eventRow({ coordinator_id: "COORD-0002" }) });
+    const res = await request(app).put("/api/equipment-requests/55/items").send(body);
+    expect(res.status).toBe(403);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("only allows it while the event is in Planning", async () => {
+    const { app, rpcMock } = amendApp({ event: eventRow({ status: "Confirmed" }) });
+    const res = await request(app).put("/api/equipment-requests/55/items").send(body);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/Planning/);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a fully arranged request, telling the coordinator to cancel and raise a new one", async () => {
+    const { app, rpcMock } = amendApp({ requests: [{ ...editableRequest, status: "Arranged" }] });
+    const res = await request(app).put("/api/equipment-requests/55/items").send(body);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/Cancel it/);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a cancelled request", async () => {
+    const { app } = amendApp({ requests: [{ ...editableRequest, status: "Cancelled" }] });
+    expect((await request(app).put("/api/equipment-requests/55/items").send(body)).status).toBe(409);
+  });
+
+  it("404s a request that doesn't exist and 400s a malformed id", async () => {
+    expect((await request(amendApp({ requests: [] }).app).put("/api/equipment-requests/55/items").send(body)).status).toBe(404);
+    expect((await request(amendApp().app).put("/api/equipment-requests/abc/items").send(body)).status).toBe(400);
+  });
+
+  it("surfaces item validation errors and unknown equipment types", async () => {
+    const { app, rpcMock } = amendApp();
+    const zero = await request(app)
+      .put("/api/equipment-requests/55/items")
+      .send({ items: [{ itemId: 1, equipmentCatalogId: 1, quantity: 0 }] });
+    expect(zero.status).toBe(400);
+    expect(zero.body.fields["items[0].quantity"]).toMatch(/greater than zero/);
+
+    const unknown = await request(app)
+      .put("/api/equipment-requests/55/items")
+      .send({ items: [{ itemId: 1, equipmentCatalogId: 99, quantity: 1 }] });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body.fields["items[0].equipmentCatalogId"]).toBeDefined();
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("amends through the database function and tells Technical Support exactly what changed (AC1)", async () => {
+    const { app, rpcMock, publish } = amendApp({ amendOutcome: amendment });
+
+    const res = await request(app).put("/api/equipment-requests/55/items").send(body);
+
+    expect(res.status).toBe(200);
+    expect(rpcMock).toHaveBeenCalledWith("amend_equipment_request", {
+      p_request_id: 55,
+      p_items: [
+        { itemId: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 3 },
+        { itemId: null, equipmentCatalogId: 3, equipmentType: "Microphone", quantity: 2 },
+      ],
+    });
+    expect(publish).toHaveBeenCalledWith({
+      type: "equipment.amended",
+      eventId: 7,
+      actorId: "COORD-0001",
+      recipients: { userIds: [], roles: ["technical_support"] },
+      data: { eventName: "Alumni Gala", changes: amendment.changes, released: 0 },
+    });
+    expect(res.body.changes).toEqual(amendment.changes);
+    expect(res.body.notified).toBe(true);
+    expect(res.body.equipmentRequest.id).toBe(55);
+  });
+
+  it("reports how much reserved equipment a reduction released back to inventory (AC2)", async () => {
+    const reduced = {
+      status: "Arranged",
+      changes: [{ kind: "quantity", equipmentType: "Projector", from: 5, to: 2, released: 1 }],
+    };
+    const { app, publish } = amendApp({ amendOutcome: reduced });
+
+    const res = await request(app)
+      .put("/api/equipment-requests/55/items")
+      .send({ items: [{ itemId: 1, equipmentCatalogId: 1, quantity: 2 }, { itemId: 2, equipmentCatalogId: 2, quantity: 1 }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.released).toBe(1);
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ released: 1 }) }));
+  });
+
+  it("tells nobody when the amendment changed nothing", async () => {
+    const { app, publish } = amendApp({ amendOutcome: { status: "Partially Fulfilled", changes: [] } });
+
+    const res = await request(app).put("/api/equipment-requests/55/items").send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.changes).toEqual([]);
+    expect(res.body.notified).toBe(false);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("answers 409 when the database says the request can no longer be amended, 500 for anything else", async () => {
+    const blocked = amendApp({ amendError: { message: "Equipment request cannot be amended: Arranged" } });
+    expect((await request(blocked.app).put("/api/equipment-requests/55/items").send(body)).status).toBe(409);
+    expect(blocked.publish).not.toHaveBeenCalled();
+
+    const broken = amendApp({ amendError: { message: "boom" } });
+    expect((await request(broken.app).put("/api/equipment-requests/55/items").send(body)).status).toBe(500);
+  });
+});
+
+describe("POST /api/equipment-requests/:id/cancel (E5-2 AC3)", () => {
+  function cancelApp(options: Parameters<typeof buildApp>[0] = {}) {
+    return buildApp({ requests: [editableRequest], items: editableItems, ...options });
+  }
+
+  it("rejects anyone but the event's assigned coordinator", async () => {
+    expect((await request(cancelApp({ user: technicalSupport }).app).post("/api/equipment-requests/55/cancel")).status).toBe(403);
+    const other = cancelApp({ event: eventRow({ coordinator_id: "COORD-0002" }) });
+    expect((await request(other.app).post("/api/equipment-requests/55/cancel")).status).toBe(403);
+    expect(other.rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("only allows it while the event is in Planning", async () => {
+    const { app, rpcMock } = cancelApp({ event: eventRow({ status: "Safety Review" }) });
+    const res = await request(app).post("/api/equipment-requests/55/cancel");
+    expect(res.status).toBe(409);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("releases everything reserved against the request and tells Technical Support (AC3)", async () => {
+    const released = [{ equipmentType: "Projector", quantity: 3 }];
+    const { app, rpcMock, publish } = cancelApp({ cancelOutcome: { released } });
+
+    const res = await request(app).post("/api/equipment-requests/55/cancel");
+
+    expect(res.status).toBe(200);
+    expect(rpcMock).toHaveBeenCalledWith("release_equipment_for_request", { p_request_id: 55 });
+    expect(publish).toHaveBeenCalledWith({
+      type: "equipment.released",
+      eventId: 7,
+      actorId: "COORD-0001",
+      recipients: { userIds: [], roles: ["technical_support"] },
+      data: { eventName: "Alumni Gala", reason: "coordinator_cancelled", released },
+    });
+    expect(res.body.released).toEqual(released);
+    expect(res.body.notified).toBe(true);
+  });
+
+  it("can cancel a fully arranged request too", async () => {
+    const { app, rpcMock } = cancelApp({ requests: [{ ...editableRequest, status: "Arranged" }] });
+    expect((await request(app).post("/api/equipment-requests/55/cancel")).status).toBe(200);
+    expect(rpcMock).toHaveBeenCalledWith("release_equipment_for_request", { p_request_id: 55 });
+  });
+
+  it("refuses a request that is already cancelled", async () => {
+    const { app, rpcMock } = cancelApp({ requests: [{ ...editableRequest, status: "Cancelled" }] });
+    expect((await request(app).post("/api/equipment-requests/55/cancel")).status).toBe(409);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("answers 409 on a race with an earlier cancellation and 500 for any other failure", async () => {
+    const raced = cancelApp({ cancelError: { message: "Equipment request already cancelled: 55" } });
+    expect((await request(raced.app).post("/api/equipment-requests/55/cancel")).status).toBe(409);
+    expect(raced.publish).not.toHaveBeenCalled();
+
+    const broken = cancelApp({ cancelError: { message: "boom" } });
+    expect((await request(broken.app).post("/api/equipment-requests/55/cancel")).status).toBe(500);
+  });
+});
+
+describe("cancelled requests stay out of Technical Support's way (E5-2)", () => {
+  const cancelled = { ...editableRequest, id: 56, status: "Cancelled", fulfillment_note: null };
+  const cancelledItem = { id: 9, request_id: 56, equipment_type: "Screen", quantity: 1, quantity_fulfilled: 0, equipment_catalog_id: 2 };
+
+  it("leaves them out of Technical Support's queue but still shows them to the coordinator", async () => {
+    const tableOptions = { requests: [editableRequest, cancelled], items: [...editableItems, cancelledItem] };
+
+    const support = await request(buildApp({ ...tableOptions, user: technicalSupport }).app).get("/api/equipment-requests");
+    expect(support.body.equipmentRequests.map((r: { id: number }) => r.id)).toEqual([55]);
+
+    const coord = await request(buildApp(tableOptions).app).get("/api/equipment-requests?eventId=7");
+    expect(coord.body.equipmentRequests.map((r: { id: number; status: string }) => [r.id, r.status])).toEqual([
+      [55, "Partially Fulfilled"],
+      [56, "Cancelled"],
+    ]);
+  });
+
+  it("gives Technical Support nothing to open for an event whose only request was cancelled", async () => {
+    const { app } = buildApp({ user: technicalSupport, requests: [cancelled], items: [cancelledItem] });
+    expect((await request(app).get("/api/equipment-requests/event/7")).status).toBe(403);
+  });
+
+  it("refuses a status update on a cancelled request", async () => {
+    const { app, rpcMock } = buildApp({ user: technicalSupport, requests: [cancelled], items: [cancelledItem] });
+    const res = await request(app).patch("/api/equipment-requests/56").send({ status: "Arranged" });
+    expect(res.status).toBe(409);
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 });

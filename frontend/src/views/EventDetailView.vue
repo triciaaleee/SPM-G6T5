@@ -1549,7 +1549,7 @@ onMounted(async () => {
 <div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card">
   <EquipmentRequestPanel :event-id="event.id"
     :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null" :can-submit="canCoordinatorEdit"
-    @submitted="loadEquipmentRequests" />
+    @submitted="loadEquipmentRequests" @changed="loadEquipmentRequests" />
 </div>
 
 <!-- E4-8 AC5: this event's venue requests and the state each one is in -->

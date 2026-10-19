@@ -68,7 +68,11 @@ export async function fetchEventVenueBookings(
   };
 }
 
-/** Every equipment request recorded for the event, with its items. */
+/**
+ * Every equipment request recorded for the event, with its items. A request
+ * the coordinator cancelled (E5-2) is left out: it holds nothing and nobody is
+ * waiting on it, so it must not count as an outstanding arrangement.
+ */
 export async function fetchEventEquipmentRequests(
   eventId: number,
   authorization: string,
@@ -77,5 +81,7 @@ export async function fetchEventEquipmentRequests(
     `${equipmentServiceUrl()}/api/equipment-requests?eventId=${eventId}`,
     authorization,
   );
-  return result.status === "ok" ? { status: "ok", value: result.value.equipmentRequests ?? [] } : result;
+  return result.status === "ok"
+    ? { status: "ok", value: (result.value.equipmentRequests ?? []).filter((request) => request.status !== "Cancelled") }
+    : result;
 }

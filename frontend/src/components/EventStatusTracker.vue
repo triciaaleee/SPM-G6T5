@@ -86,10 +86,11 @@ const venueArrangement = computed<{ done: boolean; label: string }>(() => {
  * request (E5-1, same as venue_bookings allowing several venues); it counts
  * as arranged only once every request on it is "Arranged" — one still sat
  * at "Requested" or "Partially Fulfilled" keeps this outstanding even if
- * another request for the same event is already fully arranged.
+ * another request for the same event is already fully arranged. A request the
+ * coordinator cancelled (E5-2) holds nothing and is left out entirely.
  */
 const equipmentArrangement = computed<{ done: boolean; label: string }>(() => {
-  const requests = props.equipmentRequests;
+  const requests = props.equipmentRequests?.filter((r) => r.status !== "Cancelled");
   if (!requests) return { done: false, label: "Equipment — checking…" };
   if (requests.length === 0) return { done: false, label: "Equipment — not yet requested" };
 

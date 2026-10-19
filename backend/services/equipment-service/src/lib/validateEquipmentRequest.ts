@@ -173,3 +173,47 @@ export function validateStatusUpdate(input: StatusUpdateInput, items: StatusUpda
   const keptNote = status === "Partially Fulfilled" && note !== "" ? note : null;
   return { valid: true, fields: {}, value: { status: status as EquipmentRequestStatus, note: keptNote, fulfillments } };
 }
+
+export interface ValidatedAmendedItem extends ValidatedEquipmentItem {
+  /** The existing request item this row amends; absent for a newly added item. */
+  itemId?: number;
+}
+
+export interface AmendmentResult {
+  valid: boolean;
+  fields: Record<string, string>;
+  value?: ValidatedAmendedItem[];
+}
+
+/**
+ * E5-2: validation for PUT /api/equipment-requests/:id/items — the request's
+ * full new item list. Each row is validated like a new request's (a real
+ * type, a whole quantity above zero); a row may also carry `itemId`, the
+ * existing item it amends (a row without one is a newly added item), and
+ * each existing item can appear only once.
+ */
+export function validateAmendedItems(input: unknown): AmendmentResult {
+  const base = validateEquipmentItems(input);
+  if (!base.valid) return { valid: false, fields: base.fields };
+
+  const raw = input as { itemId?: unknown }[];
+  const fields: Record<string, string> = {};
+  const seen = new Set<number>();
+  const value = (base.value as ValidatedEquipmentItem[]).map((item, index): ValidatedAmendedItem => {
+    const rawId = raw[index]?.itemId;
+    if (rawId === undefined || rawId === null || rawId === "") return item;
+
+    const itemId = Number(rawId);
+    if (!Number.isInteger(itemId) || itemId <= 0) {
+      fields[`items[${index}].itemId`] = "Unknown item.";
+    } else if (seen.has(itemId)) {
+      fields[`items[${index}].itemId`] = "This item appears more than once.";
+    } else {
+      seen.add(itemId);
+    }
+    return { ...item, itemId };
+  });
+
+  if (Object.keys(fields).length > 0) return { valid: false, fields };
+  return { valid: true, fields: {}, value };
+}

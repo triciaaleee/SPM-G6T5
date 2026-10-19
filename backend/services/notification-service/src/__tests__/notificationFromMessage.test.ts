@@ -481,6 +481,79 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders equipment.amended, listing what changed and what was released, linking Technical Support to the event's requests", async () => {
+    const { supabase, insert } = buildSupabase();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.amended",
+        eventId: 7,
+        recipients: { userIds: [], roles: ["technical_support"] },
+        data: {
+          eventName: "Alumni Gala",
+          released: 2,
+          changes: [
+            { kind: "quantity", equipmentType: "Projector", from: 5, to: 3, released: 2 },
+            { kind: "added", equipmentType: "Microphone", quantity: 2, released: 0 },
+            { kind: "removed", equipmentType: "Screen", quantity: 1, released: 0 },
+            { kind: "type", fromType: "Speaker", equipmentType: "Mixer", from: 2, to: 1, released: 0 },
+          ],
+        },
+      }),
+      { supabase, resolveRoleUserIds: vi.fn().mockResolvedValue(["TS-0001"]) },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "TS-0001",
+        title: "Equipment request amended",
+        body: "Alumni Gala's equipment request was amended: Projector 5 → 3; Added Microphone ×2; Removed Screen; Speaker ×2 → Mixer ×1. 2 reserved items were released back to inventory.",
+        link: "/equipment-requests/event/7",
+      }),
+    ]);
+  });
+
+  it("renders equipment.released for a coordinator cancelling one request, apart from an event cancellation", async () => {
+    const coordinatorCancelled = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.released",
+        eventId: 7,
+        recipients: { userIds: [], roles: ["technical_support"] },
+        data: {
+          eventName: "Alumni Gala",
+          reason: "coordinator_cancelled",
+          released: [{ equipmentType: "Projector", quantity: 3 }],
+        },
+      }),
+      { supabase: coordinatorCancelled.supabase, resolveRoleUserIds: vi.fn().mockResolvedValue(["TS-0001"]) },
+    );
+    expect(coordinatorCancelled.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        title: "Equipment request cancelled",
+        body: "Alumni Gala's equipment request was cancelled by its coordinator. Released back to inventory: 3× Projector.",
+        link: "/equipment-requests",
+      }),
+    ]);
+
+    const eventCancelled = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.released",
+        eventId: 7,
+        recipients: { userIds: [], roles: ["technical_support"] },
+        data: { eventName: "Alumni Gala", reason: "event_cancelled" },
+      }),
+      { supabase: eventCancelled.supabase, resolveRoleUserIds: vi.fn().mockResolvedValue(["TS-0001"]) },
+    );
+    expect(eventCancelled.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        title: "Equipment reservations released",
+        link: "/equipment-requests/event/7",
+      }),
+    ]);
+  });
+
   it("renders booking.requested", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();

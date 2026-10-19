@@ -9,6 +9,8 @@ export interface ReservationFlag {
 /** E5-1: one line item on an equipment request — type and quantity. */
 export interface EquipmentItem {
   id: number;
+  /** The catalog entry the item draws stock from; null for a request recorded before the catalog existed. */
+  equipmentCatalogId?: number | null;
   equipmentType: string;
   quantity: number;
   /** E5-3: how much of this item is currently taken off the shelf for this request. */
@@ -16,6 +18,9 @@ export interface EquipmentItem {
   /** E5-6 AC1/AC3: set once this item has been Arranged/Partially Fulfilled. */
   reservationFlag: ReservationFlag;
 }
+
+/** E5-2: the coordinator cancelled the whole request — kept as history, nothing is reserved against it. */
+export const CANCELLED_REQUEST_STATUS = "Cancelled";
 
 /** E5-3: the real values status can take on, fixed by that story. */
 export const EQUIPMENT_REQUEST_STATUSES = ["Requested", "Arranged", "Partially Fulfilled"] as const;
@@ -159,6 +164,82 @@ export async function submitEquipmentRequest(
     throw new EquipmentRequestError(body.error ?? "Failed to record the equipment request");
   }
   return body as { equipmentRequest: EquipmentRequest; notified: boolean };
+}
+
+/** One row of an amended request: an existing item (`itemId`) or a new one (no `itemId`). */
+export interface AmendedItemInput extends EquipmentItemInput {
+  itemId?: number;
+}
+
+/** What one amendment changed, as the backend reports it (migration 0042). */
+export interface AmendmentChange {
+  kind: "quantity" | "type" | "added" | "removed";
+  equipmentType: string;
+  fromType?: string;
+  from?: number;
+  to?: number;
+  quantity?: number;
+  /** How many reserved units this change released back to inventory. */
+  released: number;
+}
+
+async function readBody(res: Response): Promise<Record<string, any>> {
+  try {
+    return await res.json();
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * E5-2 AC1/AC2: the assigned coordinator amends a request's types and
+ * quantities. Lowering a quantity below what is reserved releases the
+ * surplus back to inventory (`released` says how many); Technical Support are
+ * notified of what changed unless nothing did (`changes` is empty).
+ */
+export async function amendEquipmentRequest(
+  requestId: number,
+  items: AmendedItemInput[],
+): Promise<{ equipmentRequest: EquipmentRequest; changes: AmendmentChange[]; released: number; notified: boolean }> {
+  const res = await fetch(`${apiBase}/${requestId}/items`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeader() },
+    body: JSON.stringify({ items }),
+  });
+
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+
+  if (res.status === 400) {
+    throw new EquipmentValidationError(body.fields ?? {});
+  }
+  if (!res.ok) {
+    throw new EquipmentRequestError(body.error ?? "Failed to amend the equipment request");
+  }
+  return body as { equipmentRequest: EquipmentRequest; changes: AmendmentChange[]; released: number; notified: boolean };
+}
+
+/**
+ * E5-2 AC3: the assigned coordinator cancels a request entirely. Everything
+ * reserved against it is released (`released` lists what went back) and
+ * Technical Support are notified.
+ */
+export async function cancelEquipmentRequest(
+  requestId: number,
+): Promise<{ equipmentRequest: EquipmentRequest; released: { equipmentType: string; quantity: number }[]; notified: boolean }> {
+  const res = await fetch(`${apiBase}/${requestId}/cancel`, { method: "POST", headers: authHeader() });
+
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+
+  if (!res.ok) {
+    throw new EquipmentRequestError(body.error ?? "Failed to cancel the equipment request");
+  }
+  return body as {
+    equipmentRequest: EquipmentRequest;
+    released: { equipmentType: string; quantity: number }[];
+    notified: boolean;
+  };
 }
 
 /** The equipment requests already recorded for one event (coordinator view). */

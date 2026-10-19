@@ -24,6 +24,34 @@ function attendeeEventLink(msg: InboundMessage): string | null {
   return msg.eventId !== null ? `/attendee/events/${msg.eventId}` : null;
 }
 
+/** Technical Support can't open `/events/:id` (staff only); their view of an event's requests is `/equipment-requests/event/:id`. */
+function supportEventLink(msg: InboundMessage): string | null {
+  return msg.eventId !== null ? `/equipment-requests/event/${msg.eventId}` : null;
+}
+
+interface AmendedChange {
+  kind: "quantity" | "type" | "added" | "removed";
+  equipmentType: string;
+  fromType?: string;
+  from?: number;
+  to?: number;
+  quantity?: number;
+}
+
+/** "Projector 5 → 3", "Added Microphone ×2", "Removed Screen", "Projector ×5 → Microphone ×5". */
+function describeAmendedChange(change: AmendedChange): string {
+  switch (change.kind) {
+    case "added":
+      return `Added ${change.equipmentType} ×${change.quantity ?? 1}`;
+    case "removed":
+      return `Removed ${change.equipmentType}`;
+    case "type":
+      return `${change.fromType} ×${change.from} → ${change.equipmentType} ×${change.to}`;
+    default:
+      return `${change.equipmentType} ${change.from} → ${change.to}`;
+  }
+}
+
 /**
  * One entry per message type notification-service is ready to render
  * (RabbitMQ.md section 3). A representative subset for the initial
@@ -364,17 +392,52 @@ const TEMPLATES: Record<string, Template> = {
     return {
       title: "New equipment request",
       body: `${msg.data.eventName ?? "An event"} needs ${count} equipment item${count === 1 ? "" : "s"} arranged.`,
-      link: eventLink(msg),
+      link: supportEventLink(msg),
     };
   },
 
-  /** #34 in RabbitMQ.md section 3.4 (E3-6 AC3) — to every Technical Support Staff member. */
+  /** #27 in RabbitMQ.md section 3.4 (E5-2 AC1) — to every Technical Support Staff member; `data.changes` says what changed. */
+  "equipment.amended": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    const changes = Array.isArray(msg.data.changes) ? (msg.data.changes as AmendedChange[]) : [];
+    const released = Number(msg.data.released ?? 0);
+    const lines = changes.map(describeAmendedChange);
+    const summary = lines.length > 0 ? lines.join("; ") : "its items were changed";
+    const releasedNote =
+      released > 0 ? ` ${released} reserved ${released === 1 ? "item was" : "items were"} released back to inventory.` : "";
+    return {
+      title: "Equipment request amended",
+      body: `${eventName}'s equipment request was amended: ${summary}.${releasedNote}`,
+      link: supportEventLink(msg),
+    };
+  },
+
+  /**
+   * #34 (E3-6 AC3, the event was cancelled) and #30 (E5-2 AC3,
+   * `reason: coordinator_cancelled`, the coordinator cancelled one request) in
+   * RabbitMQ.md section 3.4 — to every Technical Support Staff member.
+   */
   "equipment.released": (msg) => {
     const eventName = String(msg.data.eventName ?? "An event");
+    if (msg.data.reason === "coordinator_cancelled") {
+      const released = Array.isArray(msg.data.released)
+        ? (msg.data.released as { equipmentType: string; quantity: number }[])
+        : [];
+      const detail =
+        released.length > 0
+          ? ` Released back to inventory: ${released.map((item) => `${item.quantity}× ${item.equipmentType}`).join(", ")}.`
+          : "";
+      return {
+        title: "Equipment request cancelled",
+        body: `${eventName}'s equipment request was cancelled by its coordinator.${detail}`,
+        // The cancelled request is no longer in Technical Support's queue, so land on the queue.
+        link: "/equipment-requests",
+      };
+    }
     return {
       title: "Equipment reservations released",
       body: `${eventName} was cancelled, so its equipment reservations were released back to inventory.`,
-      link: eventLink(msg),
+      link: supportEventLink(msg),
     };
   },
 

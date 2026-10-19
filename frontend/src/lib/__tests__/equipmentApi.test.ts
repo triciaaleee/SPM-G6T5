@@ -3,6 +3,8 @@ import {
   EquipmentAccessDeniedError,
   EquipmentRequestError,
   EquipmentValidationError,
+  amendEquipmentRequest,
+  cancelEquipmentRequest,
   createCatalogItem,
   fetchEquipmentRequestsForSupport,
   updateCatalogItem,
@@ -26,6 +28,64 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("amendEquipmentRequest (E5-2)", () => {
+  const items = [
+    { itemId: 1, equipmentCatalogId: 1, quantity: 3 },
+    { equipmentCatalogId: 3, quantity: 2 },
+  ];
+
+  it("PUTs the new item list to the request with the bearer token and returns what changed", async () => {
+    const payload = { equipmentRequest: { id: 55 }, changes: [{ kind: "added" }], released: 0, notified: true };
+    fetchMock.mockResolvedValue(jsonResponse(200, payload));
+
+    expect(await amendEquipmentRequest(55, items)).toEqual(payload);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/55\/items$/);
+    expect(init.method).toBe("PUT");
+    expect(init.headers).toEqual({ "Content-Type": "application/json", Authorization: "Bearer test-token" });
+    expect(JSON.parse(init.body)).toEqual({ items });
+  });
+
+  it("throws EquipmentValidationError with the field errors on a 400", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(400, { fields: { "items[0].quantity": "Quantity must be greater than zero." } }));
+
+    const error = await amendEquipmentRequest(55, items).catch((e) => e);
+
+    expect(error).toBeInstanceOf(EquipmentValidationError);
+    expect(error.fields["items[0].quantity"]).toMatch(/greater than zero/);
+  });
+
+  it("throws EquipmentRequestError with the backend's message on any other failure", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(409, { error: "A fully arranged request can't be amended." }));
+
+    await expect(amendEquipmentRequest(55, items)).rejects.toThrow("A fully arranged request can't be amended.");
+  });
+});
+
+describe("cancelEquipmentRequest (E5-2)", () => {
+  it("POSTs to the request's cancel route and returns what was released", async () => {
+    const payload = { equipmentRequest: { id: 55 }, released: [{ equipmentType: "Projector", quantity: 3 }], notified: true };
+    fetchMock.mockResolvedValue(jsonResponse(200, payload));
+
+    expect(await cancelEquipmentRequest(55)).toEqual(payload);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/55\/cancel$/);
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ Authorization: "Bearer test-token" });
+  });
+
+  it("throws EquipmentRequestError with the backend's message when it is refused", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(409, { error: "Equipment requests can only be changed while the event is in Planning." }));
+
+    const error = await cancelEquipmentRequest(55).catch((e) => e);
+
+    expect(error).toBeInstanceOf(EquipmentRequestError);
+    expect(error.message).toMatch(/Planning/);
+  });
 });
 
 describe("fetchEquipmentRequestsForSupport", () => {
