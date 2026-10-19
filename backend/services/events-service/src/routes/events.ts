@@ -11,7 +11,13 @@ import { committedFieldValue, validateChangeRequestFields, withHeldValues } from
 import { AUTO_APPLIED_REASON_PREFIX, CHANGE_REQUEST_STATUS } from "../lib/changeRequestStatus.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
-import { checkBookingAvailability, fetchEventEquipmentRequests, fetchEventVenueBookings } from "../lib/arrangementsClient.js";
+import {
+  checkBookingAvailability,
+  fetchEventEquipmentRequests,
+  fetchEventVenueBookings,
+  flagBookingForRebooking,
+  flagEquipmentForReassessment,
+} from "../lib/arrangementsClient.js";
 import type { ArrangementEquipmentItem } from "../lib/arrangementsClient.js";
 import { fetchEventRegistrations } from "../lib/registrationsClient.js";
 import {
@@ -1564,6 +1570,41 @@ interface ChangeRequestImpact {
     | null;
 }
 
+/**
+ * What to actually check, from a request's held fields: the requested
+ * attendance (for the capacity check) and the proposed schedule (for the
+ * availability check) — a partial schedule change (e.g. just endTime)
+ * still needs a complete window, so the other two pieces fall back to
+ * what's already committed. Shared by the GET route's per-request impact
+ * loop and the approve route below, which needs the exact same inputs to
+ * decide whether this specific approval actually invalidates a booking.
+ */
+function deriveImpactInputs(
+  fields: { field: string; new_value: string }[],
+  committedDetails: Record<string, unknown>,
+): {
+  requestedAttendance: number | null;
+  proposedSchedule: { proposedDate: string; startTime: string | null; endTime: string | null } | null;
+} {
+  const attendanceField = fields.find((field) => field.field === "expectedAttendance");
+  const requestedAttendanceRaw = attendanceField ? Number(attendanceField.new_value) : null;
+  const requestedAttendance = requestedAttendanceRaw !== null && Number.isFinite(requestedAttendanceRaw) ? requestedAttendanceRaw : null;
+
+  const heldScheduleField = (field: string) => fields.find((f) => f.field === field)?.new_value;
+  const hasScheduleChange = ["proposedDate", "startTime", "endTime"].some((field) =>
+    fields.some((f) => f.field === field),
+  );
+  const proposedSchedule = hasScheduleChange
+    ? {
+        proposedDate: heldScheduleField("proposedDate") ?? (committedDetails.proposedDate as string),
+        startTime: heldScheduleField("startTime") ?? (committedDetails.startTime as string | null) ?? null,
+        endTime: heldScheduleField("endTime") ?? (committedDetails.endTime as string | null) ?? null,
+      }
+    : null;
+
+  return { requestedAttendance, proposedSchedule };
+}
+
 async function loadChangeRequestImpact(
   eventId: number,
   requestedAttendance: number | null,
@@ -1705,7 +1746,7 @@ eventsRouter.get("/:id/change-requests", async (req: AuthedRequest, res) => {
   const requestIds = (requests ?? []).map((request) => request.id);
   const { data: fieldRows, error: fieldsError } = await supabase
     .from("change_request_fields")
-    .select("request_id, field, old_value, new_value, is_critical")
+    .select("request_id, field, old_value, new_value, is_critical, applied_at")
     .in("request_id", requestIds.length > 0 ? requestIds : [-1]);
 
   if (fieldsError) {
@@ -1725,30 +1766,17 @@ eventsRouter.get("/:id/change-requests", async (req: AuthedRequest, res) => {
   const impactByRequest = new Map<number, ChangeRequestImpact | null>();
   for (const request of requests ?? []) {
     if (request.status !== CHANGE_REQUEST_STATUS.Pending) continue;
-    const fields = fieldsByRequest.get(request.id) ?? [];
-    const attendanceField = fields.find((field) => field.field === "expectedAttendance");
-    const requestedAttendance = attendanceField ? Number(attendanceField.new_value) : null;
-
-    // E3-10 AC2: only worth checking when a schedule field is actually
-    // held — a partial change (e.g. just endTime) still needs a complete
-    // window, so the other two fall back to what's already committed.
-    const heldScheduleField = (field: string) => fields.find((f) => f.field === field)?.new_value;
-    const hasScheduleChange = ["proposedDate", "startTime", "endTime"].some((field) =>
-      fields.some((f) => f.field === field),
-    );
-    const proposedSchedule = hasScheduleChange
-      ? {
-          proposedDate: heldScheduleField("proposedDate") ?? (committedDetails.proposedDate as string),
-          startTime: heldScheduleField("startTime") ?? (committedDetails.startTime as string | null) ?? null,
-          endTime: heldScheduleField("endTime") ?? (committedDetails.endTime as string | null) ?? null,
-        }
-      : null;
+    // Only the still-open fields count as "requested" for the impact
+    // check — one already applied in an earlier partial decision is
+    // already reflected in committedDetails itself.
+    const fields = (fieldsByRequest.get(request.id) ?? []).filter((f) => !f.applied_at);
+    const { requestedAttendance, proposedSchedule } = deriveImpactInputs(fields, committedDetails);
 
     impactByRequest.set(
       request.id,
       await loadChangeRequestImpact(
         event.id,
-        Number.isFinite(requestedAttendance) ? requestedAttendance : null,
+        requestedAttendance,
         proposedSchedule,
         authorization,
       ),
@@ -1767,10 +1795,353 @@ eventsRouter.get("/:id/change-requests", async (req: AuthedRequest, res) => {
         oldValue: field.old_value,
         newValue: field.new_value,
         isCritical: field.is_critical,
+        outcome: fieldOutcome(request.status, field.is_critical, !!field.applied_at),
       })),
       impact: impactByRequest.has(request.id) ? impactByRequest.get(request.id) : null,
     })),
   });
+});
+
+/**
+ * E3-11: what happened to one field — a critical field can be applied
+ * (stamped `applied_at`, migration 0041) while its request is still
+ * Pending, from an earlier partial approval that left other fields open.
+ */
+function fieldOutcome(
+  requestStatus: string,
+  isCritical: boolean,
+  alreadyApplied: boolean,
+): "pending" | "applied" | "rejected" | "withdrawn" {
+  if (!isCritical || alreadyApplied) return "applied";
+  if (requestStatus === CHANGE_REQUEST_STATUS.Pending) return "pending";
+  if (requestStatus === CHANGE_REQUEST_STATUS.AutoWithdrawn) return "withdrawn";
+  if (requestStatus === CHANGE_REQUEST_STATUS.Rejected) return "rejected";
+  return "applied";
+}
+
+/**
+ * Loads a Pending change request that belongs to this event, with its
+ * fields — shared by approve and reject below. Returns null (after
+ * writing the response itself) for every failure case, so callers can
+ * just `if (!loaded) return;`.
+ */
+async function loadPendingChangeRequest(
+  supabase: NonNullable<AuthedRequest["supabase"]>,
+  res: Response,
+  eventId: number,
+  requestId: string,
+): Promise<{ id: number; fields: { field: string; old_value: string | null; new_value: string; is_critical: boolean }[] } | null> {
+  if (!isPositiveInteger(requestId)) {
+    res.status(404).json({ error: "Change request not found" });
+    return null;
+  }
+
+  const { data: changeRequest, error: requestError } = await supabase
+    .from("change_requests")
+    .select("id, status")
+    .eq("id", Number(requestId))
+    .eq("event_id", eventId)
+    .maybeSingle();
+  if (requestError) {
+    res.status(500).json({ error: "Failed to load the change request" });
+    return null;
+  }
+  if (!changeRequest) {
+    res.status(404).json({ error: "Change request not found" });
+    return null;
+  }
+  if (changeRequest.status !== CHANGE_REQUEST_STATUS.Pending) {
+    res.status(409).json({ error: "This change request has already been decided." });
+    return null;
+  }
+
+  // Only the fields still open — one already approved in an earlier
+  // partial decision (applied_at set, see migration 0041) is resolved and
+  // out of scope for a further approve or reject call on this request.
+  const { data: fieldRows, error: fieldsError } = await supabase
+    .from("change_request_fields")
+    .select("field, old_value, new_value, is_critical")
+    .eq("request_id", changeRequest.id)
+    .is("applied_at", null);
+  if (fieldsError) {
+    res.status(500).json({ error: "Failed to load the change request" });
+    return null;
+  }
+
+  return { id: changeRequest.id, fields: fieldRows ?? [] };
+}
+
+/**
+ * Loads the event and checks the caller is its assigned coordinator — the
+ * same gate both approve and reject below share. Returns null (after
+ * writing the response) on any failure.
+ */
+async function loadEventForDecision(
+  req: AuthedRequest,
+  res: Response,
+  eventId: string,
+): Promise<{ id: number; coordinator_id: string | null; submitted_details: Record<string, unknown> } | null> {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return null;
+  }
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return null;
+  }
+
+  const { data: event, error: eventError } = await supabase
+    .from("events")
+    .select("id, coordinator_id, submitted_details")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+  if (eventError) {
+    res.status(500).json({ error: "Failed to load event" });
+    return null;
+  }
+  if (!event) {
+    res.status(404).json({ error: "Event not found" });
+    return null;
+  }
+  if (user.role !== "coordinator" || event.coordinator_id !== user.id) {
+    res.status(403).json({ error: "Only the event's assigned coordinator can decide this change request" });
+    return null;
+  }
+
+  return event as { id: number; coordinator_id: string | null; submitted_details: Record<string, unknown> };
+}
+
+/**
+ * E3-11 AC1/AC2/AC3/AC5: the coordinator approves a held change request.
+ * Every held field's value is applied, written to event history (AC1),
+ * and the event returns to Planning — AGENTS.md §3's re-review rule,
+ * broadened (with the team's sign-off) from "only venue/equipment-
+ * affecting approvals" to any held critical field, since a safety
+ * approval no longer applies once anything held on it changes.
+ *
+ * AC2/AC3: only a field that actually invalidates something gets flagged
+ * — reusing E3-10's own capacity/availability check (deriveImpactInputs +
+ * loadChangeRequestImpact) rather than flagging every venue/schedule/
+ * attendance approval regardless of whether it's a real problem. Flagging
+ * itself is delegated to venue-service/equipment-service (AGENTS.md §1:
+ * each service writes only its own tables); this route just calls them.
+ * Neither call blocks the approval itself from succeeding (AC5: no
+ * separate re-approval needed for the decision to stand) — a flagging
+ * failure is reported back, not retried or rolled back into.
+ */
+eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await loadEventForDecision(req, res, eventId);
+  if (!event) return;
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const requestId = Array.isArray(req.params.requestId) ? req.params.requestId[0] : req.params.requestId;
+  const changeRequest = await loadPendingChangeRequest(supabase, res, event.id, requestId);
+  if (!changeRequest) return;
+
+  const allCriticalFields = changeRequest.fields.filter((f) => f.is_critical);
+  const heldFieldNames = allCriticalFields.map((f) => f.field);
+
+  // E3-11: by default every held field is approved (unchanged behavior).
+  // Passing `fields` approves just that subset — the rest are simply left
+  // held, not rejected: the coordinator didn't decide on them yet, so the
+  // request stays Pending with just those remaining fields, open for a
+  // later decision (another partial approve, or an eventual reject of
+  // what's left).
+  const requestedApproveFields = Array.isArray(req.body?.fields)
+    ? (req.body.fields as unknown[]).filter((f): f is string => typeof f === "string")
+    : null;
+
+  let fieldsToApproveNames: string[];
+  if (requestedApproveFields === null) {
+    fieldsToApproveNames = heldFieldNames;
+  } else {
+    const unique = [...new Set(requestedApproveFields)];
+    const unknown = unique.filter((f) => !heldFieldNames.includes(f));
+    if (unknown.length > 0) {
+      res.status(400).json({ error: `These fields aren't held on this request: ${unknown.join(", ")}` });
+      return;
+    }
+    fieldsToApproveNames = unique;
+  }
+
+  if (fieldsToApproveNames.length === 0) {
+    res.status(400).json({ error: "Approve at least one field, or use reject to decline the whole request." });
+    return;
+  }
+
+  const remainingFieldNames = heldFieldNames.filter((f) => !fieldsToApproveNames.includes(f));
+  const criticalFields = allCriticalFields.filter((f) => fieldsToApproveNames.includes(f.field));
+  const current = event.submitted_details;
+  const updatedDetails: Record<string, unknown> = { ...current };
+  for (const field of criticalFields) {
+    updatedDetails[field.field] = field.field === "expectedAttendance" ? Number(field.new_value) : field.new_value;
+  }
+
+  const { data: updatedEvent, error: updateError } = await supabase
+    .from("events")
+    .update({ submitted_details: updatedDetails, status: EVENT_STATUS.Planning })
+    .eq("id", event.id)
+    .select(`${EVENT_COLUMNS}, organiser_id`)
+    .single();
+  if (updateError) {
+    res.status(500).json({ error: "Failed to apply the change request" });
+    return;
+  }
+
+  // The approved fields are resolved — stamp them applied (migration 0041)
+  // so they stop showing as held but the row (and its old/new value) stays
+  // for the request's own history, instead of being deleted. Whatever's
+  // left unstamped stays open, so the status update below only ever
+  // closes the request out when nothing remains.
+  if (criticalFields.length > 0) {
+    const { error: applyError } = await supabase
+      .from("change_request_fields")
+      .update({ applied_at: new Date().toISOString() })
+      .eq("request_id", changeRequest.id)
+      .in(
+        "field",
+        criticalFields.map((f) => f.field),
+      );
+    if (applyError) {
+      res.status(500).json({ error: "Failed to record the decision" });
+      return;
+    }
+  }
+
+  if (remainingFieldNames.length === 0) {
+    const { error: decideError } = await supabase
+      .from("change_requests")
+      .update({ status: CHANGE_REQUEST_STATUS.Approved, decided_by: user.id, decided_at: new Date().toISOString() })
+      .eq("id", changeRequest.id);
+    if (decideError) {
+      res.status(500).json({ error: "Failed to record the decision" });
+      return;
+    }
+  }
+
+  await recordEventHistory(
+    supabase,
+    event.id,
+    criticalFields.map((field) => ({ field: field.field, oldValue: field.old_value, newValue: field.new_value })),
+    user.id,
+  );
+
+  const authorization = req.headers.authorization!;
+  const { requestedAttendance, proposedSchedule } = deriveImpactInputs(criticalFields, current);
+  const impact = await loadChangeRequestImpact(event.id, requestedAttendance, proposedSchedule, authorization);
+
+  const bookingIdsToFlag = new Set<number>();
+  if (impact?.capacityConflict) bookingIdsToFlag.add(impact.capacityConflict.bookingId);
+  if (impact?.availabilityConflict) bookingIdsToFlag.add(impact.availabilityConflict.bookingId);
+
+  const bookingsFlagged: { bookingId: number; staffNotified: boolean }[] = [];
+  const fieldNames = criticalFields.map((f) => f.field).join(", ");
+  for (const bookingId of bookingIdsToFlag) {
+    const result = await flagBookingForRebooking(
+      bookingId,
+      `An approved change to ${fieldNames} invalidated this booking.`,
+      authorization,
+    );
+    if (result.status === "ok") bookingsFlagged.push({ bookingId, staffNotified: result.value.staffNotified });
+  }
+
+  let equipmentFlagged = false;
+  if (criticalFields.some((f) => f.field === "equipment")) {
+    const result = await flagEquipmentForReassessment(
+      event.id,
+      `An approved change to equipment requirements may affect the existing reservation.`,
+      authorization,
+    );
+    equipmentFlagged = result.status === "ok" && result.value.flaggedRequestIds.length > 0;
+  }
+
+  const eventName = eventDisplayName(updatedEvent as unknown as AssignmentEventRow);
+  const published = await getPublisher().publish({
+    type: "change.decided",
+    eventId: event.id,
+    actorId: user.id,
+    recipients: { userIds: [(updatedEvent as { organiser_id?: string }).organiser_id ?? ""].filter(Boolean), roles: [] },
+    data:
+      remainingFieldNames.length > 0
+        ? {
+            eventName,
+            outcome: "partially_approved",
+            approvedFields: criticalFields.map((f) => f.field),
+            remainingFields: remainingFieldNames,
+          }
+        : { eventName, outcome: "approved" },
+  });
+
+  res.json({
+    event: updatedEvent,
+    approvedFields: criticalFields.map((f) => f.field),
+    remainingFields: remainingFieldNames,
+    bookingsFlagged,
+    equipmentFlagged,
+    notificationsFailed: !published,
+  });
+});
+
+/**
+ * E3-11 AC4: the coordinator rejects a held change request with a
+ * required reason. Nothing is applied — the held fields stay recorded on
+ * the now-terminal Rejected row as a historical record, event untouched.
+ */
+eventsRouter.post("/:id/change-requests/:requestId/reject", async (req: AuthedRequest, res) => {
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const event = await loadEventForDecision(req, res, eventId);
+  if (!event) return;
+
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
+  const requestId = Array.isArray(req.params.requestId) ? req.params.requestId[0] : req.params.requestId;
+  const changeRequest = await loadPendingChangeRequest(supabase, res, event.id, requestId);
+  if (!changeRequest) return;
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required" });
+    return;
+  }
+
+  const { data: updated, error: decideError } = await supabase
+    .from("change_requests")
+    .update({
+      status: CHANGE_REQUEST_STATUS.Rejected,
+      decision_reason: reason,
+      decided_by: user.id,
+      decided_at: new Date().toISOString(),
+    })
+    .eq("id", changeRequest.id)
+    .select("id, status, decided_at, decision_reason")
+    .single();
+  if (decideError) {
+    res.status(500).json({ error: "Failed to record the decision" });
+    return;
+  }
+
+  const { data: eventRow } = await supabase
+    .from("events")
+    .select(`${EVENT_COLUMNS}, organiser_id`)
+    .eq("id", event.id)
+    .maybeSingle();
+  const eventName = eventRow ? eventDisplayName(eventRow as unknown as AssignmentEventRow) : `Event #${event.id}`;
+  const organiserId = (eventRow as { organiser_id?: string } | null)?.organiser_id;
+
+  let notificationsFailed = false;
+  if (organiserId) {
+    const published = await getPublisher().publish({
+      type: "change.decided",
+      eventId: event.id,
+      actorId: user.id,
+      recipients: { userIds: [organiserId], roles: [] },
+      data: { eventName, outcome: "rejected", reason },
+    });
+    notificationsFailed = !published;
+  }
+
+  res.json({ changeRequest: updated, notificationsFailed });
 });
 
 /**

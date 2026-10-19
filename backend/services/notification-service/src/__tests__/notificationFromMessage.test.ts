@@ -314,6 +314,129 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders change.decided for an approval", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "change.decided",
+        eventId: 7,
+        recipients: { userIds: ["ORG-0001"], roles: [] },
+        data: { eventName: "Nut Festival", outcome: "approved" },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "ORG-0001",
+        title: "Change request approved",
+        body: expect.stringContaining("has been approved and applied"),
+      }),
+    ]);
+  });
+
+  it("renders change.decided for a partial approval — applied fields plus what's still awaiting review", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "change.decided",
+        eventId: 7,
+        recipients: { userIds: ["ORG-0001"], roles: [] },
+        data: {
+          eventName: "Nut Festival",
+          outcome: "partially_approved",
+          approvedFields: ["expectedAttendance"],
+          remainingFields: ["startTime"],
+        },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "ORG-0001",
+        title: "Change request partially approved",
+        body: expect.stringContaining("expectedAttendance"),
+      }),
+    ]);
+    expect(insert.mock.calls[0][0][0].body).toContain("startTime");
+    expect(insert.mock.calls[0][0][0].body).toContain("still awaiting your coordinator's review");
+  });
+
+  it("renders change.decided for a rejection with its reason", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "change.decided",
+        eventId: 7,
+        recipients: { userIds: ["ORG-0001"], roles: [] },
+        data: { eventName: "Nut Festival", outcome: "rejected", reason: "Venue too small" },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "ORG-0001",
+        title: "Change request rejected",
+        body: expect.stringContaining("Venue too small"),
+      }),
+    ]);
+  });
+
+  it("renders booking.flagged_for_rebooking for the venue's own staff", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "booking.flagged_for_rebooking",
+        eventId: 7,
+        recipients: { userIds: ["VEN-0001"], roles: [] },
+        data: { venueName: "Seminar Room 3-01", reason: "Attendance change invalidated this booking" },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "VEN-0001",
+        title: "Seminar Room 3-01 — needs rebooking",
+        body: expect.stringContaining("Attendance change invalidated this booking"),
+      }),
+    ]);
+  });
+
+  it("renders equipment.flagged_for_reassessment to the technical_support role", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn().mockResolvedValue(["TS-0001"]);
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.flagged_for_reassessment",
+        eventId: 7,
+        recipients: { userIds: [], roles: ["technical_support"] },
+        data: { eventName: "Nut Festival", reason: "Equipment requirements changed" },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(resolveRoleUserIds).toHaveBeenCalledWith("technical_support");
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "TS-0001",
+        title: "Equipment request needs reassessment",
+        body: expect.stringContaining("Equipment requirements changed"),
+      }),
+    ]);
+  });
+
   it("renders clarification.requested with the message", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();

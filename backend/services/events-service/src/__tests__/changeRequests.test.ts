@@ -461,8 +461,8 @@ describe("GET /api/events/:id/change-requests", () => {
         decisionReason: null,
         createdAt: "2026-10-16T00:00:00Z",
         fields: [
-          { field: "venue", oldValue: "Grand Ballroom", newValue: "Seminar Room 3-01", isCritical: true },
-          { field: "description", oldValue: "old", newValue: "new", isCritical: false },
+          { field: "venue", oldValue: "Grand Ballroom", newValue: "Seminar Room 3-01", isCritical: true, outcome: "pending" },
+          { field: "description", oldValue: "old", newValue: "new", isCritical: false, outcome: "applied" },
         ],
         impact: {
           bookings: [{ id: 900, status: "Approved", venue: { id: 1, name: "Grand Ballroom" } }],
