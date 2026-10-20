@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
-import { sendNotifications } from "../lib/notificationsClient.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
@@ -17,7 +16,6 @@ vi.mock("../middleware/auth.js", async () => {
 });
 
 vi.mock("../lib/usersClient.js", () => ({ fetchCoordinators: vi.fn() }));
-vi.mock("../lib/notificationsClient.js", () => ({ sendNotifications: vi.fn() }));
 
 const lead = { id: "LEAD-0001", role: "coordinator_lead" };
 const coordinator = { id: "COORD-0001", role: "coordinator" };
@@ -78,7 +76,6 @@ const publish = vi.fn().mockResolvedValue(true);
 
 beforeEach(() => {
   vi.mocked(fetchCoordinators).mockReset().mockResolvedValue({ status: "ok", coordinators: COORDINATORS });
-  vi.mocked(sendNotifications).mockReset().mockResolvedValue(true);
   publish.mockReset().mockResolvedValue(true);
   setPublisherForTest({ publish });
 });
@@ -468,7 +465,7 @@ describe("POST /api/events/:id/reassign (E2-12)", () => {
     const res = await request(app).post("/api/events/7/reassign").send({ coordinatorId: "COORD-0002" });
 
     expect(res.status).toBe(409);
-    expect(sendNotifications).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("blocks the previous coordinator's actions once reassigned (AC6)", async () => {

@@ -4,36 +4,15 @@ import { requireAuth } from "../middleware/auth.js";
 
 /**
  * In-app notifications (E7-1). Anyone signed in reads and clears their own
- * feed; other services create notifications here over REST, forwarding the
- * token of the user whose action triggered them (e.g. venue-service, when
- * venue staff block out a booked venue — E4-3).
+ * feed. Notifications are created only by the RabbitMQ consumer
+ * (lib/notificationFromMessage.ts), never over REST.
  */
 export const notificationsRouter = Router();
 
 notificationsRouter.use(requireAuth);
 
-/**
- * Roles whose actions can notify someone else. Attendees never trigger a
- * notification for another user. The Event Coordinator Lead's assignments
- * and reassignments notify the coordinators and Organiser (E2-13, E2-12).
- * The Safety Officer's decisions notify the coordinator (and, on approval,
- * the Organiser) (E3-12, E3-13).
- */
-const SENDER_ROLES = new Set([
-  "venue_staff",
-  "coordinator",
-  "organiser",
-  "technical_support",
-  "coordinator_lead",
-  "safety_officer",
-]);
-
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 50;
-const MAX_BATCH = 100;
-const MAX_TITLE_LENGTH = 200;
-const MAX_BODY_LENGTH = 1000;
-const TYPE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 
 interface NotificationRow {
   id: number;
@@ -158,52 +137,4 @@ notificationsRouter.post("/:id/read", async (req: AuthedRequest, res) => {
     return;
   }
   res.status(204).end();
-});
-
-/** Creates a batch of notifications for other users. Body: { notifications: [...] }. */
-notificationsRouter.post("/", async (req: AuthedRequest, res) => {
-  if (!SENDER_ROLES.has(req.user!.role)) {
-    res.status(403).json({ error: "Your role can't send notifications" });
-    return;
-  }
-
-  const raw = (req.body as { notifications?: unknown })?.notifications;
-  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_BATCH) {
-    res.status(400).json({ error: `notifications must be a list of 1–${MAX_BATCH} items` });
-    return;
-  }
-
-  const rows = [];
-  for (const [index, item] of raw.entries()) {
-    const n = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
-    const text = (key: string) => (typeof n[key] === "string" ? (n[key] as string).trim() : "");
-    const recipientId = text("recipientId");
-    const type = text("type");
-    const title = text("title");
-    const body = text("body");
-    const link = text("link");
-
-    const problem =
-      !recipientId ? "recipientId is required"
-      : !TYPE_PATTERN.test(type) ? "type must be a snake_case identifier"
-      : !title || title.length > MAX_TITLE_LENGTH ? `title is required (at most ${MAX_TITLE_LENGTH} characters)`
-      : !body || body.length > MAX_BODY_LENGTH ? `body is required (at most ${MAX_BODY_LENGTH} characters)`
-      // In-app paths only — a notification must never link off-site.
-      : link && (!link.startsWith("/") || link.startsWith("//")) ? "link must be an in-app path"
-      : null;
-
-    if (problem) {
-      res.status(400).json({ error: `Notification ${index + 1}: ${problem}` });
-      return;
-    }
-    rows.push({ recipient_id: recipientId, type, title, body, link: link || null });
-  }
-
-  const { error } = await req.supabase!.from("notifications").insert(rows);
-  if (error) {
-    res.status(500).json({ error: "Failed to create notifications" });
-    return;
-  }
-
-  res.status(201).json({ created: rows.length });
 });

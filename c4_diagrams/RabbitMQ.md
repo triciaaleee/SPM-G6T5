@@ -147,6 +147,14 @@ Organiser cancels
 
 An event with no bookings, equipment or registrations produces only `event.cancelled`.
 
+### 3.7 Chat (chat-service)
+
+| # | Trigger | Message | Recipients | Source |
+|---|---|---|---|---|
+| 36 | Organiser or coordinator sends a chat message | `chat.message_sent` | The other party on the event's thread | E2-15 AC1 |
+
+`data` carries `eventName` and a `preview` (the message cut to 140 characters).
+
 ## 4. Messages consumed for something other than notifications
 
 | Message | Consumer | What it does |
@@ -156,6 +164,12 @@ An event with no bookings, equipment or registrations produces only `event.cance
 | `event.cancelled` | equipment-service | Releases reservations, then publishes #34 |
 | `event.cancelled` | registration-service | Cancels registrations, then publishes #35 |
 | `change.decided` | equipment-service | Re-checks reservations when the date, time or duration changed (E5-6 AC3); a reservation that no longer holds is published as `equipment.status_changed` |
+
+### Reliable delivery for `event.cancelled`
+
+The messages above are best effort: if the broker is down when a service publishes, the message is logged and dropped. That is fine for a notification. It is not fine for `event.cancelled`, which three services act on, so events-service stores it in its own `event_outbox` table (migration `0045`) right after the cancellation, publishes it, and retries from a relay (every 10 seconds) until the broker confirms it. The publisher uses a confirm channel, so "published" means the broker accepted the message.
+
+Delivery is at-least-once: a retry reuses the stored `messageId`, so every consumer of `event.cancelled` must be safe to run twice. Today they are (each only matches rows still active). The store is not in the same transaction as the cancellation, so a crash between the two can still lose the message; the window is far smaller than a broker outage.
 
 ## 5. Backlog alignment
 

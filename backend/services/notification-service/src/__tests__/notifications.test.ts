@@ -34,11 +34,10 @@ const row = {
   created_at: "2026-10-08T01:00:00Z",
 };
 
-function buildApp(options: { user?: { id: string; role: string }; rows?: unknown[]; unread?: number; insertError?: unknown } = {}) {
+function buildApp(options: { user?: { id: string; role: string }; rows?: unknown[]; unread?: number } = {}) {
   const listQuery = query({ data: options.rows ?? [row], error: null });
   const countQuery = query({ data: null, count: options.unread ?? 1, error: null });
   const updateQuery = query({ data: null, error: null });
-  const insert = vi.fn().mockResolvedValue({ error: options.insertError ?? null });
 
   // GET makes two .from("notifications") calls: the list, then the unread count.
   let selects = 0;
@@ -46,7 +45,6 @@ function buildApp(options: { user?: { id: string; role: string }; rows?: unknown
     from: vi.fn(() => ({
       select: (...args: unknown[]) => (selects++ === 0 ? listQuery : countQuery).select(...args),
       update: updateQuery.update,
-      insert,
     })),
   };
 
@@ -56,7 +54,7 @@ function buildApp(options: { user?: { id: string; role: string }; rows?: unknown
   const app = express();
   app.use(express.json());
   app.use("/api/notifications", notificationsRouter);
-  return { app, supabase, listQuery, countQuery, updateQuery, insert };
+  return { app, supabase, listQuery, countQuery, updateQuery };
 }
 
 describe("GET /api/notifications", () => {
@@ -161,69 +159,5 @@ describe("POST /api/notifications/:id/read", () => {
 
     expect(res.status).toBe(400);
     expect(updateQuery.update).not.toHaveBeenCalled();
-  });
-});
-
-describe("POST /api/notifications", () => {
-  const venueStaff = { id: "VEN-0001", role: "venue_staff" };
-  const valid = { recipientId: "COORD-0001", type: "venue_unavailable", title: "Title", body: "Body", link: "/events/7" };
-
-  it("creates notifications for other users", async () => {
-    const { app, insert } = buildApp({ user: venueStaff });
-
-    const res = await request(app).post("/api/notifications").send({ notifications: [valid] });
-
-    expect(res.status).toBe(201);
-    expect(insert).toHaveBeenCalledWith([
-      { recipient_id: "COORD-0001", type: "venue_unavailable", title: "Title", body: "Body", link: "/events/7" },
-    ]);
-  });
-
-  it("lets the Event Coordinator Lead notify about assignments (E2-13, E2-12)", async () => {
-    const { app, insert } = buildApp({ user: { id: "LEAD-0001", role: "coordinator_lead" } });
-
-    const res = await request(app)
-      .post("/api/notifications")
-      .send({ notifications: [{ ...valid, type: "event_assigned" }] });
-
-    expect(res.status).toBe(201);
-    expect(insert).toHaveBeenCalled();
-  });
-
-  it.each(["event_safety_approved", "event_safety_rejected"])(
-    "lets the Safety Officer notify about a safety decision (%s, E3-12/E3-13)",
-    async (type) => {
-      const { app, insert } = buildApp({ user: { id: "SAF-0001", role: "safety_officer" } });
-
-      const res = await request(app)
-        .post("/api/notifications")
-        .send({ notifications: [{ ...valid, type }] });
-
-      expect(res.status).toBe(201);
-      expect(insert).toHaveBeenCalled();
-    },
-  );
-
-  it("rejects attendees", async () => {
-    const { app, insert } = buildApp({ user: { id: "ATT-0001", role: "attendee" } });
-
-    const res = await request(app).post("/api/notifications").send({ notifications: [valid] });
-
-    expect(res.status).toBe(403);
-    expect(insert).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["an empty batch", { notifications: [] }],
-    ["a missing recipient", { notifications: [{ ...valid, recipientId: "" }] }],
-    ["an off-site link", { notifications: [{ ...valid, link: "https://evil.example" }] }],
-    ["a protocol-relative link", { notifications: [{ ...valid, link: "//evil.example" }] }],
-  ])("returns 400 for %s", async (_label, body) => {
-    const { app, insert } = buildApp({ user: venueStaff });
-
-    const res = await request(app).post("/api/notifications").send(body);
-
-    expect(res.status).toBe(400);
-    expect(insert).not.toHaveBeenCalled();
   });
 });
