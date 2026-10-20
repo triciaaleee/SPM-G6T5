@@ -1,15 +1,23 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import EventCard, { type CardFact } from "../components/ui/EventCard.vue";
 import { fetchMyEvents, getCurrentUser, type EventSummary } from "../lib/eventsApi";
 import { statusBadgeClass, statusLabel } from "../lib/eventStatus";
+import { eventThumbnail, formatCardDate, formatCardTimeRange } from "../lib/attendeeEvents";
 
-type ViewMode = "mine" | "all";
+/**
+ * One list for two pages: "mine" is a coordinator's own workload (/coordinator),
+ * "all" is every event in the system (/all-events, for coordinators and the
+ * Event Coordinator Lead). The route picks which.
+ */
+const props = withDefaults(defineProps<{ scope?: "mine" | "all" }>(), { scope: "mine" });
 
 const events = ref<EventSummary[]>([]);
 const loading = ref(true);
 const errorMessage = ref<string | null>(null);
 const userId = ref<string>("");
-const viewMode = ref<ViewMode>("mine");
+const role = ref<string>("");
+const viewMode = computed(() => props.scope);
 
 interface StatusGroup {
   key: string;
@@ -37,11 +45,14 @@ const STATUS_GROUPS: StatusGroup[] = [
  */
 const CLOSED_STATUSES = new Set(["Completed", "Rejected", "Cancelled"]);
 
-// Statuses that wait on the coordinator: flagged with an accent bar. Unassigned is the Lead's to act on.
+// Statuses that wait on the coordinator: flagged with a yellow border. Unassigned is the Lead's to act on.
 const NEEDS_ACTION_STATUSES = ["Requested"];
 
+/** Only the assigned coordinator is waited on, so the Lead and other coordinators' events get no flag. */
 function needsAction(event: EventSummary): boolean {
-  return NEEDS_ACTION_STATUSES.includes(event.status);
+  return (
+    role.value === "coordinator" && event.coordinator_id === userId.value && NEEDS_ACTION_STATUSES.includes(event.status)
+  );
 }
 
 function eventProposedDate(event: EventSummary): string {
@@ -53,15 +64,13 @@ function eventName(event: EventSummary): string {
   return (details?.name as string) || `Event #${event.id}`;
 }
 
-function formatDate(value: string): string {
-  const date = new Date(value);
-  const day   = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `${day}/${month}/${date.getFullYear()}`;
-}
-
-function coordinatorInitial(event: EventSummary): string {
-  return event.coordinator?.name?.charAt(0).toUpperCase() ?? "";
+/** Date and time each get their own line on the card, as on the organiser's list. */
+function cardFacts(event: EventSummary): CardFact[] {
+  const details = event.submitted_details as Record<string, string | undefined>;
+  return [
+    { icon: "calendar", text: formatCardDate(details?.proposedDate) },
+    { icon: "clock", text: formatCardTimeRange(details?.startTime, details?.endTime) },
+  ];
 }
 
 /** E1-8 AC4: "My events" is only what's assigned to this coordinator. */
@@ -124,6 +133,7 @@ onMounted(async () => {
     const [eventsData, user] = await Promise.all([fetchMyEvents(), getCurrentUser()]);
     events.value = eventsData;
     userId.value = user.id;
+    role.value = user.role;
   } catch {
     errorMessage.value = "We couldn't load your events. Please try again.";
   } finally {
@@ -134,41 +144,22 @@ onMounted(async () => {
 
 <template>
   <!--
-    Column mapping — Coordinator Workload View
+    Column mapping — Coordinator Workload / All Events View
     Desktop (12-col): outer container col 1-12, grid-desktop-margin 80px; content col 1-12, full width.
     Tablet (6-col):   content col 1-6, full width, grid-tablet-margin 32px.
     Mobile (4-col):   content col 1-4, full width, grid-mobile-margin 6px.
     Status tabs: tab row spans the full content width (12 / 6 / 4 cols) and wraps onto a second line on small screens.
-    Nested grid: card list uses a local 8-col grid (desktop), 6-col (tablet), 4-col (mobile).
+    Nested grid: card list uses a local 12-col grid (desktop, 3 cards per row), 6-col (tablet), 4-col (mobile).
   -->
   <div class="page">
     <div class="content">
 
       <div class="page-header">
         <div>
-          <h1 class="h2">{{ viewMode === "mine" ? "My workload" : "All events" }}</h1>
+          <h1 class="h2">{{ viewMode === "mine" ? "My events" : "All events" }}</h1>
           <p class="subheading">
             {{ viewMode === "mine" ? "Your assigned events. Use the tabs to filter by status." : "Every event in the system." }}
           </p>
-        </div>
-
-        <div class="view-toggle" role="group" aria-label="Event view">
-          <button
-            type="button"
-            class="toggle-btn"
-            :class="{ 'toggle-btn--active': viewMode === 'mine' }"
-            @click="viewMode = 'mine'"
-          >
-            My events
-          </button>
-          <button
-            type="button"
-            class="toggle-btn"
-            :class="{ 'toggle-btn--active': viewMode === 'all' }"
-            @click="viewMode = 'all'"
-          >
-            All events
-          </button>
         </div>
       </div>
 
@@ -202,47 +193,20 @@ onMounted(async () => {
             No active events. Completed, rejected and cancelled events are under All.
           </p>
           <div v-else class="card-grid">
-            <RouterLink
-              v-for="event in shownEvents"
-              :key="event.id"
-              :to="{ name: 'event-detail', params: { id: event.id } }"
-              class="event-card"
-              :class="{ 'event-card--needs-action': needsAction(event) }"
-            >
-              <div class="card-header">
-                <span class="badge badge-dot" :class="statusBadgeClass(event.status)">
-                  <span class="badge__dot" />
-                  {{ statusLabel(event.status) }}
-                </span>
-              </div>
-
-              <p class="card-title">{{ eventName(event) }}</p>
-              <p class="body-small muted">Event date: {{ formatDate(eventProposedDate(event)) }}</p>
-
-              <hr class="card-divider" />
-
-              <div class="card-footer">
-                <div class="card-footer__person">
-                  <span v-if="viewMode === 'all' && event.coordinator?.name" class="person-avatar">
-                    {{ coordinatorInitial(event) }}
-                  </span>
-                  <span class="body-small muted">
-                    <template v-if="viewMode === 'all'">
-                      Coordinator: {{ event.coordinator?.name ?? "Unassigned" }}
-                    </template>
-                    <template v-else>
-                      Requested by: {{ event.organiser?.name ?? "Unknown" }}
-                    </template>
-                  </span>
-                </div>
-                <svg class="card-chevron" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fill-rule="evenodd"
-                    d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z"
-                    clip-rule="evenodd"
-                  />
-                </svg>
-              </div>
-            </RouterLink>
+            <div v-for="event in shownEvents" :key="event.id" class="card-cell">
+              <EventCard
+                :to="{ name: 'event-detail', params: { id: event.id } }"
+                :thumbnail="eventThumbnail(event.id)"
+                :title="eventName(event)"
+                :status-label="statusLabel(event.status)"
+                :status-class="statusBadgeClass(event.status)"
+                :facts="cardFacts(event)"
+                :person-label="viewMode === 'all' ? 'Coordinator' : 'Requested by'"
+                :person-name="viewMode === 'all' ? event.coordinator?.name : event.organiser?.name"
+                :person-empty="viewMode === 'all' ? 'Unassigned' : 'Unknown'"
+                :class="{ 'event-card--needs-action': needsAction(event) }"
+              />
+            </div>
           </div>
         </div>
       </template>
@@ -308,41 +272,6 @@ onMounted(async () => {
   line-height: 1.375rem;
   color: var(--color-grey-500);
   margin: var(--spacing-8) 0 0;
-}
-
-.view-toggle {
-  display: flex;
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.toggle-btn {
-  appearance: none;
-  background: var(--color-base-white);
-  border: none;
-  border-right: 1px solid var(--color-grey-200);
-  cursor: pointer;
-  padding: var(--spacing-8) var(--spacing-16);
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--color-grey-600);
-  transition: background 0.1s, color 0.1s;
-}
-
-.toggle-btn:last-child {
-  border-right: none;
-}
-
-.toggle-btn:hover:not(.toggle-btn--active) {
-  background: var(--color-grey-50);
-  color: var(--color-grey-900);
-}
-
-.toggle-btn--active {
-  background: var(--color-purple-600);
-  color: var(--color-base-white);
 }
 
 .body-default {
@@ -423,7 +352,7 @@ onMounted(async () => {
 .card-grid {
   margin-top: var(--spacing-32);
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(12, 1fr);
   gap: var(--grid-desktop-gutter);
   align-content: start;
 }
@@ -440,143 +369,27 @@ onMounted(async () => {
   }
 }
 
-.event-card {
-  position: relative;
+/* Each card sits in a cell that carries the 12/6/4-column spans: 3 per row on desktop, 2 on tablet, 1 on mobile. */
+.card-cell {
   grid-column: span 4;
-  display: block;
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-24);
-  color: inherit;
-  text-decoration: none;
 }
 
-.event-card:hover {
-  background: var(--color-grey-75);
-  border-color: var(--color-grey-200);
-}
-
-/* Needs the coordinator's action: same card, plus a flat warning strip along the left edge, clipped to the rounded corners. */
-.event-card--needs-action {
-  overflow: hidden; /* clips the strip to the card's rounded corners */
-}
-
-.event-card--needs-action::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: var(--spacing-4);
-  background: var(--color-warning-300);
+@media (max-width: 1024px) {
+  .card-cell {
+    grid-column: span 3;
+  }
 }
 
 @media (max-width: 640px) {
-  .event-card {
+  .card-cell {
     grid-column: span 4;
   }
 }
 
-.card-header {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacing-8);
-}
-
-.card-title {
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.75rem;
-  color: var(--color-grey-900);
-  margin: var(--spacing-12) 0 var(--spacing-4);
-}
-
-.badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-full);
-}
-
-.badge-dot {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-4);
-}
-
-.badge__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: currentColor;
-  flex-shrink: 0;
-}
-
-/* These status colours match EventsListView.vue */
-.status-success {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: var(--color-warning-200);
-  border: 1px solid var(--color-warning-300);
-  color: var(--color-warning-900);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-.status-info {
-  background: var(--color-blue-200);
-  border: 1px solid var(--color-blue-300);
-  color: var(--color-blue-800);
-}
-
-.card-divider {
-  border: none;
-  border-top: 1px solid var(--color-grey-100);
-  margin: var(--spacing-40) 0 var(--spacing-16);
-}
-
-.card-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-8);
-}
-
-.card-footer__person {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  min-width: 0;
-}
-
-.person-avatar {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--color-purple-200);
-  color: var(--color-purple-600);
-  font-size: 0.75rem;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.card-chevron {
-  width: 20px;
-  height: 20px;
-  color: var(--color-grey-400);
-  flex-shrink: 0;
+/* Needs the coordinator's action: the shared card with a thick warning-coloured border (kept on hover too). */
+.event-card.event-card--needs-action,
+.event-card.event-card--needs-action:hover {
+  border-width: var(--spacing-4);
+  border-color: var(--color-warning-300);
 }
 </style>

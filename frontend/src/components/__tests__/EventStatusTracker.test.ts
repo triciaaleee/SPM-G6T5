@@ -155,44 +155,98 @@ describe("EventStatusTracker — outstanding arrangements (E3-1 AC3)", () => {
   });
 });
 
-describe("EventStatusTracker timeline (E3-4)", () => {
-  function mountTimeline(status: string) {
+describe("EventStatusTracker timeline", () => {
+  function mountTimeline(status: string, extra: Record<string, unknown> = {}) {
     return mount(EventStatusTracker, {
-      props: { status, lastChangedAt: "2026-10-07T02:00:00.000Z", reviewOutcome: null, showOutstanding: false },
+      props: {
+        status,
+        lastChangedAt: "2026-10-07T02:00:00.000Z",
+        submittedAt: "2026-10-01T02:00:00.000Z",
+        reviewOutcome: null,
+        showOutstanding: false,
+        ...extra,
+      },
     });
   }
+  const states = (status: string) =>
+    mountTimeline(status)
+      .findAll(".status-tracker__step")
+      .map((step) => step.attributes("data-state"));
 
-  it("places Safety Review after Requested, not back at the start", () => {
+  it("has one column per lifecycle stage, named exactly as in the lifecycle", () => {
+    const labels = mountTimeline("Planning")
+      .findAll(".status-tracker__label")
+      .map((label) => label.text());
+    expect(labels).toEqual(["Requested", "Planning", "Safety Review", "Confirmed", "Completed"]);
+  });
+
+  it("gives Safety Review its own step after Planning (E3-4)", () => {
     const wrapper = mountTimeline("Safety Review");
     const steps = wrapper.findAll(".status-tracker__step");
 
-    expect(steps[0].attributes("data-state")).toBe("complete");
-    expect(steps[1].attributes("data-state")).toBe("current");
-    expect(steps[1].text()).toContain("Safety Review");
+    expect(states("Safety Review")).toEqual(["complete", "complete", "current", "pending", "pending"]);
+    expect(steps[2].text()).toContain("Safety Review");
     expect(wrapper.text()).toContain("Operational Safety Check");
   });
 
-  it("still labels stage two Planning while the event is in Planning", () => {
+  it("shows Planning as the current step while the event is in Planning", () => {
+    expect(states("Planning")).toEqual(["complete", "current", "pending", "pending", "pending"]);
+  });
+
+  it("marks Confirmed as the current stage once safety-approved (E3-5)", () => {
+    expect(states("Confirmed")).toEqual(["complete", "complete", "complete", "current", "pending"]);
+  });
+
+  it("marks every stage done once the event is Completed (E3-5)", () => {
+    expect(states("Completed")).toEqual(["complete", "complete", "complete", "complete", "complete"]);
+  });
+
+  it("captions each step: Done with the submitted date, Current step, Not started", () => {
+    const captions = mountTimeline("Planning")
+      .findAll(".status-tracker__caption")
+      .map((caption) => caption.text());
+    expect(captions).toEqual(["Done, 1 Oct 2026", "Current step", "Not started", "Not started", "Not started"]);
+  });
+
+  it("says just Done when there is no date to show", () => {
+    const caption = mountTimeline("Planning", { submittedAt: null }).findAll(".status-tracker__caption")[0];
+    expect(caption.text()).toBe("Done");
+  });
+
+  it("draws a tick for done steps, a ringed dot for the current one and a number for the rest", () => {
     const steps = mountTimeline("Planning").findAll(".status-tracker__step");
-    expect(steps[1].text()).toContain("Planning");
+    expect(steps[0].find(".status-tracker__tick").exists()).toBe(true);
+    expect(steps[1].find(".status-tracker__inner").exists()).toBe(true);
+    expect(steps[2].find(".status-tracker__dot").text()).toBe("3");
+    // No connector after the last step.
+    expect(steps[4].find(".status-tracker__line").exists()).toBe(false);
+    expect(steps[0].find(".status-tracker__line").exists()).toBe(true);
+  });
+
+  it("relabels stage two while clarification is awaited", () => {
+    const steps = mountTimeline("Clarification Requested").findAll(".status-tracker__step");
+    expect(steps[1].text()).toContain("Clarification Requested");
     expect(steps[1].attributes("data-state")).toBe("current");
   });
-});
 
-describe("EventStatusTracker timeline (E3-5)", () => {
-  function states(status: string) {
-    return mount(EventStatusTracker, {
-      props: { status, lastChangedAt: "2026-10-07T02:00:00.000Z", reviewOutcome: null, showOutstanding: false },
-    })
-      .findAll(".status-tracker__step")
-      .map((step) => step.attributes("data-state"));
-  }
-
-  it("marks Confirmed as the current stage once safety-approved", () => {
-    expect(states("Confirmed")).toEqual(["complete", "complete", "current", "pending"]);
+  it("ends the line at a Rejected step", () => {
+    const wrapper = mountTimeline("Rejected", { reviewOutcome: "Venue unavailable" });
+    const steps = wrapper.findAll(".status-tracker__step");
+    expect(steps).toHaveLength(2);
+    expect(steps[1].text()).toContain("Rejected");
+    expect(wrapper.text()).toContain("This request was rejected: Venue unavailable");
   });
 
-  it("lights up the last stage once the event is Completed", () => {
-    expect(states("Completed")).toEqual(["complete", "complete", "complete", "current"]);
+  it("hides the steps for a Cancelled event and says why", () => {
+    const wrapper = mountTimeline("Cancelled", { reviewOutcome: "Speaker pulled out" });
+    expect(wrapper.findAll(".status-tracker__step")).toHaveLength(0);
+    expect(wrapper.text()).toContain("This event was cancelled: Speaker pulled out");
+  });
+
+  it("sits bare on the page: no card, title or 'last updated' line", () => {
+    const wrapper = mountTimeline("Planning", { title: "Event Timeline" });
+    expect(wrapper.find(".details-card").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Event Timeline");
+    expect(wrapper.text()).not.toContain("Last updated");
   });
 });

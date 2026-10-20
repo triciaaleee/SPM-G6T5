@@ -928,3 +928,79 @@ describe("EventDetailView — past change requests move to History once supersed
     expect(wrapper.text()).toContain("Past change requests");
   });
 });
+
+describe("EventDetailView — page layout", () => {
+  const withRegistration = (overrides: Partial<EventSummary> = {}) =>
+    makeEvent({
+      submitted_details: {
+        name: "Spring Gala",
+        proposedDate: "2026-11-10",
+        startTime: "10:00",
+        endTime: "18:00",
+        expectedAttendance: 200,
+        registrationNeeded: true,
+      },
+      ...overrides,
+    });
+
+  it("shows the event timeline directly under the title, above the tabs", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+
+    const timeline = wrapper
+      .findAllComponents({ name: "EventStatusTracker" })
+      .find((tracker) => tracker.props("title") === "Event Timeline");
+    expect(timeline).toBeDefined();
+    const tabBar = wrapper.find(".tab-bar");
+    expect(timeline!.element.compareDocumentPosition(tabBar.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // ...and it stays when another tab is open.
+    await tabBar.findAll("button").find((b) => b.text() === "History")!.trigger("click");
+    expect(
+      wrapper.findAllComponents({ name: "EventStatusTracker" }).some((t) => t.props("title") === "Event Timeline"),
+    ).toBe(true);
+  });
+
+  it("shows the status badge and who requested the event, and when", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+
+    expect(wrapper.find(".event-title-row .badge").text()).toBe("Planning");
+    expect(wrapper.find(".event-id").text()).toContain("requested by Olive Organiser");
+  });
+
+  it("puts venue recommendations and venue requests on the left and outstanding arrangements on the right", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+
+    const [left, right] = wrapper.findAll(".detail-grid-col");
+    expect(left.text()).toContain("Venue Recommendations");
+    expect(left.findComponent({ name: "VenueRequestsPanel" }).exists()).toBe(true);
+    expect(right.text()).toContain("Coordinator Details");
+    expect(right.text()).toContain("Outstanding Arrangements");
+    expect(left.text()).not.toContain("Outstanding Arrangements");
+  });
+
+  it("offers a Registrations tab with the count only when registration is needed", async () => {
+    const without = await mountPage(makeEvent());
+    expect(without.find(".tab-bar").text()).not.toContain("Registrations");
+
+    const wrapper = await mountPage(withRegistration());
+    expect(wrapper.find(".tab-bar").text()).toContain("Registrations (0)");
+
+    wrapper.findComponent({ name: "RegistrationsPanel" }).vm.$emit("loaded", 5);
+    await flushPromises();
+    expect(wrapper.find(".tab-bar").text()).toContain("Registrations (5)");
+  });
+
+  it("shows the registrations roster in its own tab, not on the overview", async () => {
+    const wrapper = await mountPage(withRegistration());
+    // v-show hides with display:none (isVisible() needs the page attached to the document).
+    const hidden = (el: Element) => (el as HTMLElement).style.display === "none";
+    const panel = () => wrapper.findComponent({ name: "RegistrationsPanel" });
+
+    expect(hidden(panel().element)).toBe(true);
+    expect(hidden(wrapper.find(".detail-grid").element)).toBe(false);
+
+    await wrapper.find(".tab-bar").findAll("button").find((b) => b.text().startsWith("Registrations"))!.trigger("click");
+    expect(hidden(panel().element)).toBe(false);
+    expect(hidden(wrapper.find(".detail-grid").element)).toBe(true);
+  });
+});

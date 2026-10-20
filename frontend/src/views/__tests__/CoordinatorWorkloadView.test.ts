@@ -35,11 +35,17 @@ function makeEvent(overrides: Partial<EventSummary> = {}): EventSummary {
   };
 }
 
-async function mountView(events: EventSummary[], userId = "COORD-0001") {
+async function mountView(
+  events: EventSummary[],
+  userId = "COORD-0001",
+  scope: "mine" | "all" = "mine",
+  role = "coordinator",
+) {
   vi.mocked(eventsApi.fetchMyEvents).mockResolvedValue(events);
-  vi.mocked(eventsApi.getCurrentUser).mockResolvedValue({ id: userId, role: "coordinator" });
+  vi.mocked(eventsApi.getCurrentUser).mockResolvedValue({ id: userId, role });
 
   const wrapper = mount(CoordinatorWorkloadView, {
+    props: { scope },
     global: { plugins: [router] },
   });
 
@@ -123,6 +129,18 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
     expect(wrapper.text()).toContain("Requested by: Sam Organiser");
   });
 
+  it("shows the date and time on separate lines, with a thumbnail, on each card", async () => {
+    const wrapper = await mountView([
+      makeEvent({
+        submitted_details: { name: "Gala", proposedDate: "2099-06-15", startTime: "18:00", endTime: "21:00" },
+      }),
+    ]);
+
+    const facts = wrapper.findAll(".event-card .fact").map((f) => f.text());
+    expect(facts).toEqual(["15 Jun 2099", "6:00 PM to 9:00 PM"]);
+    expect(wrapper.find(".event-card .card-thumbnail").exists()).toBe(true);
+  });
+
   it("lists events flat in status-priority order with no section headers", async () => {
     const events = [
       makeEvent({ id: 1, status: "Planning", submitted_details: { name: "Plan Event", proposedDate: "2099-01-01" } }),
@@ -155,8 +173,7 @@ describe("CoordinatorWorkloadView — My events mode (default)", () => {
       makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
       makeEvent({ id: 3, status: "Planning" }),
     ];
-    const wrapper = await mountView(events);
-    await wrapper.findAll(".toggle-btn")[1].trigger("click");
+    const wrapper = await mountView(events, "COORD-0001", "all");
 
     expect(wrapper.findAll(".event-card")).toHaveLength(3);
     expect(wrapper.findAll(".event-card--needs-action")).toHaveLength(1);
@@ -172,11 +189,14 @@ describe("CoordinatorWorkloadView — status tabs", () => {
   ];
 
   it("gives Unassigned events their own tab under All events", async () => {
-    const wrapper = await mountView([
-      makeEvent({ id: 1, status: "Requested" }),
-      makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
-    ]);
-    await wrapper.findAll(".toggle-btn")[1].trigger("click");
+    const wrapper = await mountView(
+      [
+        makeEvent({ id: 1, status: "Requested" }),
+        makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, coordinator: null }),
+      ],
+      "COORD-0001",
+      "all",
+    );
 
     const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
     expect(tabs).toEqual(["Active 2", "All 2", "Needs Review 1", "Unassigned 1"]);
@@ -205,22 +225,6 @@ describe("CoordinatorWorkloadView — status tabs", () => {
     expect(wrapper.find(".tab--active").text()).toContain("Planning");
     expect(wrapper.findAll(".event-card")).toHaveLength(1);
     expect(wrapper.findAll(".group-label")).toHaveLength(0);
-  });
-
-  it("falls back to Active when the selected tab empties after switching scope", async () => {
-    const events = [
-      makeEvent({ id: 1, status: "Requested" }),
-      makeEvent({ id: 2, status: "Planning", coordinator_id: "COORD-0002" }),
-    ];
-    const wrapper = await mountView(events);
-
-    await wrapper.findAll(".toggle-btn")[1].trigger("click"); // All events
-    await wrapper.findAll("[role='tab']")[3].trigger("click"); // Planning
-    expect(wrapper.findAll(".event-card")).toHaveLength(1);
-
-    await wrapper.findAll(".toggle-btn")[0].trigger("click"); // back to My events
-    expect(wrapper.find(".tab--active").text()).toContain("Active");
-    expect(wrapper.findAll(".event-card")).toHaveLength(1);
   });
 });
 
@@ -281,81 +285,76 @@ describe("CoordinatorWorkloadView — Active list (E3-5 AC1)", () => {
   });
 });
 
-describe("CoordinatorWorkloadView — All events mode", () => {
+describe("CoordinatorWorkloadView — All events page", () => {
   it("shows all events including those assigned to other coordinators", async () => {
     const events = [
       makeEvent({ id: 1, coordinator_id: "COORD-0001" }),
       makeEvent({ id: 2, coordinator_id: "COORD-0002", status: "Planning" }),
     ];
-    const wrapper = await mountView(events, "COORD-0001");
-
-    await wrapper.find(".toggle-btn:last-child").trigger("click");
-    await flushPromises();
+    const wrapper = await mountView(events, "COORD-0001", "all");
 
     expect(wrapper.findAll(".event-card")).toHaveLength(2);
   });
 
   it("shows 'Coordinator: X' on each card instead of organiser", async () => {
-    const wrapper = await mountView([
-      makeEvent({ coordinator: { name: "Alice Coord" } }),
-    ], "COORD-0001");
-
-    await wrapper.find(".toggle-btn:last-child").trigger("click");
+    const wrapper = await mountView([makeEvent({ coordinator: { name: "Alice Coord" } })], "COORD-0001", "all");
 
     expect(wrapper.text()).toContain("Coordinator: Alice Coord");
     expect(wrapper.text()).not.toContain("Requested by:");
   });
 
   it("shows 'Coordinator: Unassigned' when an event has no coordinator", async () => {
-    const wrapper = await mountView([
-      makeEvent({ status: "Unassigned", coordinator_id: null, coordinator: null }),
-    ]);
-
-    await wrapper.find(".toggle-btn:last-child").trigger("click");
+    const wrapper = await mountView(
+      [makeEvent({ status: "Unassigned", coordinator_id: null, coordinator: null })],
+      "COORD-0001",
+      "all",
+    );
 
     expect(wrapper.text()).toContain("Coordinator: Unassigned");
   });
 
   it("shows an empty-state message when the system has no events at all", async () => {
-    const wrapper = await mountView([]);
-
-    await wrapper.find(".toggle-btn:last-child").trigger("click");
+    const wrapper = await mountView([], "COORD-0001", "all");
 
     expect(wrapper.text()).toContain("No events in the system yet");
   });
 
-  it("updates the page heading when switching to all-events view", async () => {
-    const wrapper = await mountView([makeEvent()]);
-
-    await wrapper.find(".toggle-btn:last-child").trigger("click");
+  it("has the All events heading and no My/All toggle", async () => {
+    const wrapper = await mountView([makeEvent()], "COORD-0001", "all");
 
     expect(wrapper.find(".h2").text()).toBe("All events");
+    expect(wrapper.find(".toggle-btn").exists()).toBe(false);
+  });
+
+  it("flags only the signed-in coordinator's own Requested events, and none for the Lead", async () => {
+    const events = [
+      makeEvent({ id: 1, status: "Requested", coordinator_id: "COORD-0001" }),
+      makeEvent({ id: 2, status: "Requested", coordinator_id: "COORD-0002" }),
+    ];
+
+    const coordinatorView = await mountView(events, "COORD-0001", "all");
+    expect(coordinatorView.findAll(".event-card--needs-action")).toHaveLength(1);
+
+    const leadView = await mountView(events, "LEAD-0001", "all", "coordinator_lead");
+    expect(leadView.findAll(".event-card")).toHaveLength(2);
+    expect(leadView.findAll(".event-card--needs-action")).toHaveLength(0);
   });
 });
 
-describe("CoordinatorWorkloadView — view toggle", () => {
-  it("defaults to My events mode", async () => {
+describe("CoordinatorWorkloadView — My events page", () => {
+  it("defaults to My events and has no toggle", async () => {
     const wrapper = await mountView([]);
 
-    expect(wrapper.find(".h2").text()).toBe("My workload");
-    expect(wrapper.find(".toggle-btn--active").text()).toBe("My events");
+    expect(wrapper.find(".h2").text()).toBe("My events");
+    expect(wrapper.find(".toggle-btn").exists()).toBe(false);
   });
 
-  it("switches to All events mode when the toggle is clicked", async () => {
-    const wrapper = await mountView([makeEvent()]);
+  it("only lists events assigned to the signed-in coordinator", async () => {
+    const wrapper = await mountView([
+      makeEvent({ id: 1, coordinator_id: "COORD-0001" }),
+      makeEvent({ id: 2, coordinator_id: "COORD-0002" }),
+    ]);
 
-    await wrapper.find(".toggle-btn:last-child").trigger("click");
-
-    expect(wrapper.find(".h2").text()).toBe("All events");
-    expect(wrapper.find(".toggle-btn--active").text()).toBe("All events");
-  });
-
-  it("switches back to My events mode when clicked again", async () => {
-    const wrapper = await mountView([makeEvent()]);
-
-    await wrapper.find(".toggle-btn:last-child").trigger("click");
-    await wrapper.find(".toggle-btn:first-child").trigger("click");
-
-    expect(wrapper.find(".h2").text()).toBe("My workload");
+    expect(wrapper.findAll(".event-card")).toHaveLength(1);
   });
 });

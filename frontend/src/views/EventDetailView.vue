@@ -44,7 +44,7 @@ import {
   type ChangeRequestResult,
   type ChangeRequestEntry,
 } from "../lib/eventsApi";
-import { formatEventDate, statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
+import { formatEventDate, statusBadgeClass, statusLabel, statusLastChangedAt } from "../lib/eventStatus";
 import { hasEventEnded } from "../lib/eventTiming";
 import { REGISTRATION_STATE_LABEL, registrationState } from "../lib/registrationPeriod";
 import EventStatusTracker from "../components/EventStatusTracker.vue";
@@ -87,7 +87,9 @@ interface SubmittedEventDetails {
 
 const route = useRoute();
 const router = useRouter();
-const activeTab = ref<"overview" | "history">("overview");
+const activeTab = ref<"overview" | "registrations" | "history">("overview");
+/** Registered attendees, reported by the Registrations tab once it has loaded (shown in the tab label). */
+const registeredCount = ref(0);
 const event = ref<EventSummary | null>(null);
 const loading = ref(true);
 const accessDenied = ref(false);
@@ -264,6 +266,11 @@ async function handleComplete(): Promise<void> {
  * itself 5 days before the event or when full. The backend decides — this
  * only mirrors it (lib/registrationPeriod.ts).
  */
+/** Same audience as before: the owning organiser and coordinators, and only when registration is needed. */
+const showRegistrationsTab = computed(
+  () => (isOwnerView.value || isCoordinator.value) && registrationNeeded.value,
+);
+
 const registrationNeeded = computed(
   () => asSubmittedDetails(event.value?.submitted_details ?? {}).registrationNeeded === true,
 );
@@ -1157,13 +1164,27 @@ onMounted(async () => {
       <p v-else-if="errorMessage" class="body-default error-text">{{ errorMessage }}</p>
 
       <div v-else-if="event">
-        <h1 class="h2">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}` }}</h1>
-        <p class="body-default muted event-id">Event #{{ event.id }}</p>
+        <div class="event-title-row">
+          <h1 class="h2">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}` }}</h1>
+          <span class="badge" :class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</span>
+        </div>
+        <p class="body-default muted event-id">
+          Event #{{ event.id }}, requested by {{ event.organiser?.name ?? "Unknown" }}, submitted {{ formatEventDate(event.created_at) }}
+        </p>
+
+        <!-- The event timeline: always visible, above the tabs -->
+        <EventStatusTracker :status="event.status" :last-changed-at="statusLastChangedAt(event)"
+          :submitted-at="event.created_at" :review-outcome="event.review_outcome" title="Event Timeline"
+          :show-outstanding="false" />
 
         <div class="tab-bar">
           <button type="button" class="tab-btn" :class="{ active: activeTab === 'overview' }"
             @click="activeTab = 'overview'">
             Overview
+          </button>
+          <button v-if="showRegistrationsTab" type="button" class="tab-btn"
+            :class="{ active: activeTab === 'registrations' }" @click="activeTab = 'registrations'">
+            Registrations ({{ registeredCount }})
           </button>
           <button type="button" class="tab-btn" :class="{ active: activeTab === 'history' }"
             @click="activeTab = 'history'">
@@ -1171,7 +1192,13 @@ onMounted(async () => {
           </button>
         </div>
 
-        <div class="detail-grid">
+        <!-- Registrations tab: kept mounted (hidden) so the count in the tab label is known on load -->
+        <RegistrationsPanel v-if="showRegistrationsTab" v-show="activeTab === 'registrations'" :event-id="event.id"
+          :capacity="Number(asSubmittedDetails(event.submitted_details).expectedAttendance) || null"
+          @loaded="registeredCount = $event" />
+
+
+        <div v-show="activeTab !== 'registrations'" class="detail-grid">
           <div class="detail-grid-col">
             <template v-if="activeTab === 'overview'">
                 <div class="details-card">
@@ -1760,15 +1787,46 @@ onMounted(async () => {
   </div>
 </section>
 
-<EventStatusTracker v-if="event.status === 'Planning'" :status="event.status"
-  :last-changed-at="statusLastChangedAt(event)" :review-outcome="event.review_outcome" title="Outstanding Arrangements"
-  :show-timeline="false" :venue-bookings="venueBookings" :equipment-requests="equipmentRequests" />
+<!-- E3-14 AC3: what the Safety Officer asked to change, and which flags have cleared -->
+<SafetyChangesCard v-if="isCoordinator && safetyChanges" :change-request="safetyChanges" />
+
+<!-- Venue search: opens pre-filled with this event's date, time and attendance -->
+<div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
+  <h2 class="section-title">Venue Recommendations</h2>
+  <!-- E4-17: what the next booking is for; recommendations and Find venues follow it. Re-keyed after
+       each request so the next booking starts from the right defaults. -->
+  <BookingPlanForm v-if="canPlanBooking && suitability" :key="`${suitability.defaults.hasMainProgramme}-${suitability.defaults.liveBookingCount}`"
+    :defaults="suitability.defaults" :options="venueOptions" @update:plan="bookingPlan = $event" />
+  <VenueRecommendations :event-id="event.id" :details="event.submitted_details"
+    :can-request="isAssignedCoordinator && event.status === 'Planning'" :plan="recommendationPlan"
+    @requested="loadVenueBookings()" />
+  <AppButton variant="outline" block :to="{ name: 'venue-search', query: findVenuesQuery }">
+    Find venues
+  </AppButton>
+</div>
+
+<!-- E4-8 AC5: this event's venue requests and the state each one is in -->
+<VenueRequestsPanel v-if="isCoordinator && event.status !== 'Rejected'" :bookings="venueBookings"
+  :loading="venueBookingsLoading" :load-error="venueBookingsError" :can-withdraw="isAssignedCoordinator"
+  :suitability="suitability?.bookings" @changed="loadVenueBookings()" />
+
+<!-- E5-1: equipment requirements, recorded by the assigned coordinator while Planning -->
+<div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card">
+  <EquipmentRequestPanel :event-id="event.id"
+    :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null" :can-submit="canCoordinatorEdit"
+    @submitted="loadEquipmentRequests" @changed="loadEquipmentRequests" />
+</div>
+
+<!-- E3-4: the assigned coordinator submits a Planning event for the Safety Officer's check -->
+<div v-if="isAssignedCoordinator && event.status === 'Planning'" class="details-card">
+  <SafetyReviewPanel :event-id="event.id" @submitted="(updated) => (event = updated)" />
+</div>
+
+<ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
+  :current-user-id="currentUser.id" :read-only="isLead" />
 </template>
 
 <template v-else>
-  <EventStatusTracker :status="event.status" :last-changed-at="statusLastChangedAt(event)"
-    :review-outcome="event.review_outcome" title="Event Timeline" :show-outstanding="false" />
-
   <!-- E2-7 AC3: structured edit history, same visibility as the
                    clarification thread (owning organiser or any coordinator). -->
   <div v-if="!historyLoading && historyEntries.length > 0" class="details-card history-card">
@@ -2039,48 +2097,10 @@ onMounted(async () => {
 
 </div>
 
-<!-- E3-14 AC3: what the Safety Officer asked to change, and which flags have cleared -->
-<SafetyChangesCard v-if="isCoordinator && safetyChanges" :change-request="safetyChanges" />
-
-<!-- Venue search: opens pre-filled with this event's date, time and attendance -->
-<div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card venue-search-entry">
-  <h2 class="section-title">Venue Recommendations</h2>
-  <!-- E4-17: what the next booking is for; recommendations and Find venues follow it. Re-keyed after
-       each request so the next booking starts from the right defaults. -->
-  <BookingPlanForm v-if="canPlanBooking && suitability" :key="`${suitability.defaults.hasMainProgramme}-${suitability.defaults.liveBookingCount}`"
-    :defaults="suitability.defaults" :options="venueOptions" @update:plan="bookingPlan = $event" />
-  <VenueRecommendations :event-id="event.id" :details="event.submitted_details"
-    :can-request="isAssignedCoordinator && event.status === 'Planning'" :plan="recommendationPlan"
-    @requested="loadVenueBookings()" />
-  <AppButton variant="outline" block :to="{ name: 'venue-search', query: findVenuesQuery }">
-    Find venues
-  </AppButton>
-</div>
-
-<!-- E5-1: equipment requirements, recorded by the assigned coordinator while Planning -->
-<div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card">
-  <EquipmentRequestPanel :event-id="event.id"
-    :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null" :can-submit="canCoordinatorEdit"
-    @submitted="loadEquipmentRequests" @changed="loadEquipmentRequests" />
-</div>
-
-<!-- E4-8 AC5: this event's venue requests and the state each one is in -->
-<VenueRequestsPanel v-if="isCoordinator && event.status !== 'Rejected'" :bookings="venueBookings"
-  :loading="venueBookingsLoading" :load-error="venueBookingsError" :can-withdraw="isAssignedCoordinator"
-  :suitability="suitability?.bookings" @changed="loadVenueBookings()" />
-
-<!-- E3-4: the assigned coordinator submits a Planning event for the Safety Officer's check -->
-<div v-if="isAssignedCoordinator && event.status === 'Planning'" class="details-card">
-  <SafetyReviewPanel :event-id="event.id" @submitted="(updated) => (event = updated)" />
-</div>
-
-<!-- E3-5 AC3: who registered, read-only — stays viewable once the event is Completed.
-     registration-service only lets the owning organiser and coordinators read it. -->
-<RegistrationsPanel v-if="(isOwnerView || isCoordinator) && asSubmittedDetails(event.submitted_details).registrationNeeded"
-  :event-id="event.id" :capacity="Number(asSubmittedDetails(event.submitted_details).expectedAttendance) || null" />
-
-<ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
-  :current-user-id="currentUser.id" :read-only="isLead" />
+<!-- Outstanding arrangements: what is still to be arranged while the event is in Planning -->
+<EventStatusTracker v-if="activeTab === 'overview' && event.status === 'Planning'" :status="event.status"
+  :last-changed-at="statusLastChangedAt(event)" :review-outcome="event.review_outcome" title="Outstanding Arrangements"
+  :show-timeline="false" :venue-bookings="venueBookings" :equipment-requests="equipmentRequests" />
 
 <!-- E3-6: a popup for the mandatory cancellation reason, same pattern as
      VenueRequestsPanel's withdraw/release confirm dialog. -->
@@ -2209,7 +2229,7 @@ onMounted(async () => {
 }
 
 .event-id {
-  margin-bottom: var(--spacing-24);
+  margin-bottom: var(--spacing-32);
 }
 
 .badge {
@@ -2252,6 +2272,13 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
+.event-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-12);
+}
+
 .tab-bar {
   display: flex;
   gap: var(--spacing-24);
@@ -2263,11 +2290,10 @@ onMounted(async () => {
   background: none;
   border: none;
   padding: var(--spacing-12) 0;
-  font-size: 0.875rem;
+  font-size: 16px;
   font-weight: 700;
   color: var(--color-grey-500);
   border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
   cursor: pointer;
 }
 

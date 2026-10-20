@@ -5,15 +5,17 @@
  * AC3 — while the event is in Planning, shows which arrangements (venue,
  * equipment) are still outstanding.
  *
- * Four stages, per the story: Requested -> (Planning | Rejected |
- * Clarification Requested) -> Confirmed -> Completed. Stage 2 is a single
- * slot whose label and colour switch to whichever of the three outcomes
- * actually applies. Confirmed is reached when the Safety Officer approves
- * (E3-12) and Completed when the coordinator closes the event after it has
- * run (E3-5).
+ * The timeline is five columns, one per lifecycle stage (AGENTS.md section 3):
+ * Requested -> Planning -> Safety Review -> Confirmed -> Completed. Each shows
+ * a circle (a tick when done, a ringed dot for the current step, a number when
+ * not started), a connector line to the next stage, the stage name and a
+ * caption ("Done, 1 Oct 2026", "Current step", "Not started"). Stage 2 reads
+ * "Clarification Requested" while the organiser's answer is awaited, and
+ * Rejected ends the line at a "Rejected" step. Confirmed is reached when the
+ * Safety Officer approves (E3-12) and Completed when the coordinator closes
+ * the event after it has run (E3-5).
  */
 import { computed } from "vue";
-import { formatEventDate } from "../lib/eventStatus";
 import type { EventVenueBooking } from "../lib/venuesApi";
 import type { EquipmentRequest } from "../lib/equipmentApi";
 
@@ -23,8 +25,10 @@ const props = withDefaults(
     lastChangedAt: string;
     reviewOutcome: string | null;
     title?: string;
-    /** Show the "last updated" summary + stepper + status note. */
+    /** Show the stepper and status note (bare, no card). */
     showTimeline?: boolean;
+    /** When the request was submitted; shown under the first step once it is done. */
+    submittedAt?: string | null;
     /** Show the "Outstanding arrangements" list (only ever rendered while Planning). */
     showOutstanding?: boolean;
     /**
@@ -43,6 +47,7 @@ const props = withDefaults(
   {
     title: "Event Status",
     showTimeline: true,
+    submittedAt: null,
     showOutstanding: true,
     venueBookings: undefined,
     equipmentRequests: undefined,
@@ -101,111 +106,115 @@ const equipmentArrangement = computed<{ done: boolean; label: string }>(() => {
   return { done: false, label: `Equipment — ${outstanding.length} awaiting Technical Support` };
 });
 
-type StepVariant = "neutral" | "success" | "info" | "error";
-
-// E3-4: Safety Review sits between Planning and Confirmed, so it shares
-// stage 2's slot (labelled for it) rather than adding a step that every
-// event before it would show as pending.
+// Safety Review is its own column now (E3-4), between Planning and Confirmed.
 const STATUS_STEP_INDEX: Record<string, number> = {
   Requested: 0,
   Unassigned: 0,
   Planning: 1,
   Rejected: 1,
   "Clarification Requested": 1,
-  "Safety Review": 1,
-  Confirmed: 2,
-  Completed: 3,
-};
-
-const STAGE_TWO_VARIANT: Record<string, StepVariant> = {
-  Planning: "success",
-  Rejected: "error",
-  "Clarification Requested": "info",
-  "Safety Review": "info",
+  "Safety Review": 2,
+  Confirmed: 3,
+  Completed: 4,
 };
 
 const currentIndex = computed(() => STATUS_STEP_INDEX[props.status] ?? 0);
 
+/** Completed is the end of the line: every step, the last included, is done. */
+const allDone = computed(() => props.status === "Completed");
+
 const stage2Label = computed(() => {
   if (props.status === "Rejected") return "Rejected";
   if (props.status === "Clarification Requested") return "Clarification Requested";
-  if (props.status === "Safety Review") return "Safety Review";
   return "Planning";
 });
 
-/** Rejected is terminal — Confirmed/Completed can never happen after it,
- * so the tracker only shows the two stages that actually occurred.
- * Cancelled (E3-6) is terminal too, but — unlike Rejected — it can happen
- * from any active stage (AGENTS.md §3) and nothing here records which one,
- * so there's no honest step to highlight; the stepper is hidden entirely
- * and the status note below carries the reason instead. */
+/** Rejected is terminal — nothing after it can happen, so only the two stages that occurred are shown.
+ * Cancelled (E3-6) is terminal too, but — unlike Rejected — it can happen from any active stage
+ * (AGENTS.md §3) and nothing here records which one, so there's no honest step to highlight; the
+ * stepper is hidden entirely and the status note below carries the reason instead. */
 const steps = computed(() => {
   if (props.status === "Cancelled") return [];
 
-  const requested = { key: "requested", label: "Requested", variant: "neutral" as StepVariant };
-  const stage2 = { key: "stage2", label: stage2Label.value, variant: STAGE_TWO_VARIANT[props.status] ?? "neutral" };
+  const requested = { key: "requested", label: "Requested" };
+  const stage2 = { key: "stage2", label: stage2Label.value };
 
   if (props.status === "Rejected") return [requested, stage2];
 
   return [
     requested,
     stage2,
-    { key: "confirmed", label: "Confirmed", variant: "neutral" as StepVariant },
-    { key: "completed", label: "Completed", variant: "neutral" as StepVariant },
+    { key: "safety-review", label: "Safety Review" },
+    { key: "confirmed", label: "Confirmed" },
+    { key: "completed", label: "Completed" },
   ];
 });
 
-const trackFillPercent = computed(() =>
-  steps.value.length > 1 ? (currentIndex.value / (steps.value.length - 1)) * 100 : 0,
-);
-
 function stepState(index: number): "complete" | "current" | "pending" {
-  if (index < currentIndex.value) return "complete";
+  if (allDone.value || index < currentIndex.value) return "complete";
   if (index === currentIndex.value) return "current";
   return "pending";
+}
+
+/** "1 Oct 2026"; empty when the value isn't a date. */
+function shortDate(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** The small line under a step's name. Only dates we actually know are shown. */
+function stepCaption(index: number): string {
+  const state = stepState(index);
+  if (state === "current") return "Current step";
+  if (state === "pending") return "Not started";
+  const date =
+    index === 0 ? shortDate(props.submittedAt) : allDone.value && index === steps.value.length - 1 ? shortDate(props.lastChangedAt) : "";
+  return date ? `Done, ${date}` : "Done";
 }
 </script>
 
 <template>
-  <div class="details-card status-card">
+  <div v-if="showTimeline" class="timeline">
+    <ol v-if="steps.length > 0" class="status-tracker" aria-label="Event progress" :data-status="status"
+      :style="{ '--steps': steps.length }">
+      <li v-for="(step, index) in steps" :key="step.key" class="status-tracker__step" :data-state="stepState(index)"
+        :aria-current="stepState(index) === 'current' ? 'step' : undefined">
+        <div class="status-tracker__marker">
+          <span class="status-tracker__dot">
+            <svg v-if="stepState(index) === 'complete'" class="status-tracker__tick" viewBox="0 0 20 20" fill="none"
+              stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m5 10.5 3.25 3.25L15 7" />
+            </svg>
+            <span v-else-if="stepState(index) === 'current'" class="status-tracker__inner" />
+            <template v-else>{{ index + 1 }}</template>
+          </span>
+          <span v-if="index < steps.length - 1" class="status-tracker__line" />
+        </div>
+        <span class="status-tracker__label">{{ step.label }}</span>
+        <span class="status-tracker__caption">{{ stepCaption(index) }}</span>
+      </li>
+    </ol>
+
+    <p v-if="status === 'Clarification Requested'" class="body-default pt-8">
+      Clarification has been requested from you. This request is on hold until you respond.
+    </p>
+    <p v-else-if="status === 'Rejected'" class="body-small status-note status-note--error">
+      This request was rejected{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
+    </p>
+    <p v-else-if="status === 'Cancelled'" class="body-small status-note status-note--error">
+      This event was cancelled{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
+    </p>
+    <p v-else-if="status === 'Safety Review'" class="body-small muted pt-8">
+      Submitted for the Safety Officer's Operational Safety Check. The event can't be edited while it's under review.
+    </p>
+  </div>
+
+  <div v-if="showOutstanding && (status === 'Planning' || !showTimeline)" class="details-card status-card">
     <h2 class="section-title">{{ title }}</h2>
 
-    <template v-if="showTimeline">
-      <div class="status-summary">
-        <p class="body-small muted status-summary__date">Last updated {{ formatEventDate(lastChangedAt) }}</p>
-      </div>
-
-      <div v-if="steps.length > 0" class="status-tracker" role="list" aria-label="Event progress" :data-status="status">
-        <div class="status-tracker__track">
-          <div class="status-tracker__track-fill" :style="{ width: trackFillPercent + '%' }" />
-        </div>
-        <template v-for="(step, index) in steps" :key="step.key">
-          <div class="status-tracker__step" role="listitem" :data-state="stepState(index)"
-            :aria-current="stepState(index) === 'current' ? 'step' : undefined">
-            <span class="status-tracker__dot-slot">
-              <span class="status-tracker__dot" />
-            </span>
-            <span class="body-small status-tracker__label">{{ step.label }}</span>
-            <span v-if="stepState(index) === 'current'" class="status-tracker__here">You are here</span>
-          </div>
-        </template>
-      </div>
-
-      <p v-if="status === 'Clarification Requested'" class="body-default pt-8">
-        Clarification has been requested from you. This request is on hold until you respond.
-      </p>
-      <p v-else-if="status === 'Rejected'" class="body-small status-note status-note--error">
-        This request was rejected{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
-      </p>
-      <p v-else-if="status === 'Cancelled'" class="body-small status-note status-note--error">
-        This event was cancelled{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
-      </p>
-      <p v-else-if="status === 'Safety Review'" class="body-small muted pt-8">
-        Submitted for the Safety Officer's Operational Safety Check. The event can't be edited while it's under review.
-      </p>
-    </template>
-
-    <div v-if="status === 'Planning' && showOutstanding" class="outstanding">
+    <div v-if="status === 'Planning'" class="outstanding">
       <p class="body-small muted mb-1">Outstanding arrangements</p>
       <ul class="outstanding__list">
         <li class="outstanding__item" :class="{ 'outstanding__item--done': venueArrangement.done }">
@@ -279,152 +288,128 @@ function stepState(index: number): "complete" | "current" | "pending" {
   color: var(--color-warning-700);
 }
 
-.status-summary {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacing-12);
+/* The timeline sits bare on the page (no card). Five equal columns: each step is a circle with a
+   connector line running on to the next column, then the stage name and a caption below. */
+.timeline {
   margin-bottom: var(--spacing-32);
 }
 
-.status-summary__date {
-  margin: 0;
-}
-
-
-/* Flex with space-between, not equal grid columns: the first dot sits
-   flush against the left edge of the card and the last against the right
-   edge, with the middle two evenly spaced between them — a full-bleed
-   timeline rather than one centred inside inset columns. position:
-   relative so the track bar below can be positioned absolutely against
-   this row rather than any individual step. */
 .status-tracker {
-  position: relative;
-  display: flex;
-  justify-content: space-between;
-  width: 100%;
-}
-
-/* One continuous line spanning from the first dot's centre to the last
-   dot's centre — avoids the seams/gaps a per-step connector produces at
-   each step boundary. 15px in from each edge = half the 30px dot-slot,
-   so the line always terminates at the dot's true centre (never poking
-   out past the visible circle) no matter which size variant is showing. */
-.status-tracker__track {
-  position: absolute;
-  top: 15px;
-  left: 30px;
-  right: 15px;
-  height: 2px;
-  background: var(--color-grey-200);
-  z-index: 0;
-}
-
-.status-tracker__track-fill {
-  height: 100%;
-  background: var(--color-purple-600);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--steps), minmax(0, 1fr));
 }
 
 .status-tracker__step {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: var(--spacing-8);
-  min-height: 5.5rem;
-  text-align: center;
-  position: relative;
+  gap: var(--spacing-2);
+  min-width: 0;
 }
 
-.status-tracker__step:first-child {
-  align-items: flex-start;
-  text-align: left;
-}
-
-.status-tracker__step:last-child {
-  align-items: flex-end;
-  text-align: right;
-}
-
-.status-tracker__dot-slot {
-  position: relative;
-  z-index: 1;
-  width: 30px;
-  height: 30px;
+.status-tracker__marker {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: var(--spacing-12);
+  margin-bottom: var(--spacing-8);
 }
 
 .status-tracker__dot {
-  width: 1.125rem;
-  height: 1.125rem;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 50%;
-  border: 2px solid var(--color-grey-200);
+  border: 2px solid var(--color-grey-300);
   background: var(--color-base-white);
-  transition: all 0.15s ease;
-}
-
-.status-tracker__label {
-  color: var(--color-grey-500);
-}
-
-
-.status-tracker__here {
-  font-size: 0.6875rem;
+  color: var(--color-grey-600);
+  font-size: 0.75rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--color-purple-600);
 }
 
-.status-tracker__step[data-state="complete"] .status-tracker__dot {
-  width: 0.75rem;
-  height: 0.75rem;
-  border-color: var(--color-purple-600);
+/* The line to the next step: grey until the step before it is done. */
+.status-tracker__line {
+  flex: 1;
+  height: 2px;
+  margin-right: var(--spacing-12);
+  background: var(--color-grey-200);
+}
+
+.status-tracker__step[data-state="complete"] .status-tracker__line {
   background: var(--color-purple-600);
 }
 
-.status-tracker__step[data-state="complete"] .status-tracker__label {
-  color: var(--color-grey-600);
-  font-weight: 500;
+.status-tracker__tick {
+  width: 1rem;
+  height: 1rem;
 }
 
-.status-tracker__step[data-state="current"] .status-tracker__label {
-  color: var(--color-grey-900);
+.status-tracker__inner {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--color-purple-600);
+}
+
+.status-tracker__label {
+  font-size: 1rem;
   font-weight: 700;
+  line-height: 1.25rem;
+  color: var(--color-grey-900);
+}
+
+.status-tracker__caption {
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-500);
+}
+
+.status-tracker__step[data-state="complete"] .status-tracker__dot {
+  border-color: var(--color-purple-600);
+  background: var(--color-purple-600);
+  color: var(--color-base-white);
 }
 
 .status-tracker__step[data-state="current"] .status-tracker__dot {
-  width: 30px;
-  height: 30px;
-  border-width: 3px;
-  box-shadow: 0 0 0 4px var(--color-purple-100);
   border-color: var(--color-purple-600);
-  background: var(--color-base-white);
 }
 
-/* Rejected is a terminal, negative outcome — the whole timeline (fill,
-   dots, labels) switches from the brand purple to red instead. */
-.status-tracker[data-status="Rejected"] .status-tracker__track-fill {
-  background: var(--color-error-600);
+.status-tracker__step[data-state="current"] .status-tracker__label {
+  color: var(--color-purple-600);
 }
 
-.status-tracker[data-status="Rejected"] .status-tracker__step[data-state="complete"] .status-tracker__dot {
-  border-color: var(--color-error-600);
-  background: var(--color-error-600);
-}
-
+/* Rejected is a terminal, negative outcome — its step switches from the brand purple to red. */
 .status-tracker[data-status="Rejected"] .status-tracker__step[data-state="current"] .status-tracker__dot {
   border-color: var(--color-error-600);
-  box-shadow: 0 0 0 4px var(--color-error-200);
+}
+
+.status-tracker[data-status="Rejected"] .status-tracker__step[data-state="current"] .status-tracker__inner {
+  background: var(--color-error-600);
 }
 
 .status-tracker[data-status="Rejected"] .status-tracker__step[data-state="current"] .status-tracker__label {
   color: var(--color-error-600);
 }
 
-.status-tracker[data-status="Rejected"] .status-tracker__here {
-  color: var(--color-error-600);
+.status-tracker[data-status="Rejected"] .status-tracker__step[data-state="complete"] .status-tracker__line {
+  background: var(--color-error-600);
+}
+
+@media (max-width: 640px) {
+  /* Narrow screens: drop the captions and shrink the names so five columns still fit. */
+  .status-tracker__label {
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+
+  .status-tracker__caption {
+    display: none;
+  }
 }
 
 .status-note {
