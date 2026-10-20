@@ -43,7 +43,6 @@ import {
   type EventSummary,
   type ChangeRequestResult,
   type ChangeRequestEntry,
-  type ChangeRequestFieldEntry,
 } from "../lib/eventsApi";
 import { formatEventDate, statusBadgeClass, statusLastChangedAt } from "../lib/eventStatus";
 import { hasEventEnded } from "../lib/eventTiming";
@@ -730,11 +729,6 @@ async function submitRejectChangeRequest(): Promise<void> {
     changeDecisionSubmitting.value = false;
   }
 }
-const changedFieldMap = computed(() => {
-  const map = new Map<string, ChangeRequestFieldEntry>();
-  for (const field of latestChangeRequest.value?.fields ?? []) map.set(field.field, field);
-  return map;
-});
 
 /** Same fields as the edit form, labelled for a read-only display. */
 const CHANGE_REQUEST_FIELD_LABELS: Record<keyof EventRequestPayload, string> = {

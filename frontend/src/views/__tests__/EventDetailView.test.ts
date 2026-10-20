@@ -657,7 +657,9 @@ describe("EventDetailView — change request impact for the coordinator (E3-8 AC
   it("doesn't crash when the registration list is missing from the response", async () => {
     mockedChangeRequests.mockResolvedValue([
       pendingRequest({
-        impact: impact({ registrations: { registeredCount: 0, total: 0 } as any }),
+        impact: impact({
+          registrations: { registeredCount: 0, total: 0 } as NonNullable<ChangeRequestEntry["impact"]>["registrations"],
+        }),
       }),
     ]);
     const wrapper = await mountPage(makeEvent(), coordinator);
