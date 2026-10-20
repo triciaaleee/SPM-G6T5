@@ -1,11 +1,14 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EquipmentInventoryView from "../EquipmentInventoryView.vue";
+import EquipmentUnitsPanel from "../../components/equipment/EquipmentUnitsPanel.vue";
 import {
+  EquipmentRequestError,
   EquipmentValidationError,
+  changeStock,
   createCatalogItem,
   fetchEquipmentCatalog,
-  updateCatalogItem,
+  fetchStockHistory,
 } from "../../lib/equipmentApi";
 
 vi.mock("../../lib/equipmentApi", async () => {
@@ -14,109 +17,278 @@ vi.mock("../../lib/equipmentApi", async () => {
     ...actual,
     fetchEquipmentCatalog: vi.fn(),
     createCatalogItem: vi.fn(),
-    updateCatalogItem: vi.fn(),
+    changeStock: vi.fn(),
+    fetchStockHistory: vi.fn(),
   };
 });
 
 const mockedCatalog = vi.mocked(fetchEquipmentCatalog);
 const mockedCreate = vi.mocked(createCatalogItem);
-const mockedUpdate = vi.mocked(updateCatalogItem);
+const mockedChange = vi.mocked(changeStock);
+const mockedHistory = vi.mocked(fetchStockHistory);
 
-const projector = { id: 1, name: "Projector", totalStock: 10, availableStock: 6 };
-const microphones = { id: 2, name: "Microphones", totalStock: 4, availableStock: 0 };
+type CatalogItem = { id: number; name: string; totalStock: number; availableStock: number; unusableNow?: number };
+const projector: CatalogItem = { id: 1, name: "Projector", totalStock: 10, availableStock: 6 };
+const microphones: CatalogItem = { id: 2, name: "Microphones", totalStock: 4, availableStock: 0 };
 
-async function mountView(items = [projector, microphones]) {
+async function mountView(items: CatalogItem[] = [projector, microphones]) {
   mockedCatalog.mockResolvedValue(items.map((item) => ({ ...item })));
-  const wrapper = mount(EquipmentInventoryView);
+  // The units panel has its own tests.
+  const wrapper = mount(EquipmentInventoryView, { global: { stubs: { EquipmentUnitsPanel: true, RouterLink: true } } });
   await flushPromises();
   return wrapper;
 }
 
-function rowOf(wrapper: Awaited<ReturnType<typeof mountView>>, name: string) {
-  return wrapper.findAll("tbody tr").find((row) => row.find("th").text() === name)!;
+const row = (wrapper: Awaited<ReturnType<typeof mountView>>, id: number) => wrapper.find(`[data-testid='item-${id}']`);
+
+/** Opens the change form for an item and fills it in (the form sits in the row beneath the item). */
+async function fillChange(
+  wrapper: Awaited<ReturnType<typeof mountView>>,
+  id: number,
+  action: "add-stock" | "remove-stock",
+  quantity: string,
+  reason: string,
+) {
+  await row(wrapper, id).find(`[data-testid='${action}']`).trigger("click");
+  await wrapper.find(`#qty-${id}`).setValue(quantity);
+  await wrapper.find(`#reason-${id}`).setValue(reason);
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("EquipmentInventoryView", () => {
-  it("lists every item with its total and available stock", async () => {
+describe("EquipmentInventoryView — stock table", () => {
+  it("lists every item with its total and available stock as plain numbers, not editable fields", async () => {
     const wrapper = await mountView();
 
-    expect(wrapper.findAll("tbody tr")).toHaveLength(2);
-    const row = rowOf(wrapper, "Projector");
-    const inputs = row.findAll("input").map((input) => (input.element as HTMLInputElement).value);
-    expect(inputs).toEqual(["10", "6"]);
+    expect(wrapper.findAll("tbody tr[data-testid^='item-']")).toHaveLength(2);
+    expect(row(wrapper, 1).find("[data-testid='total']").text()).toBe("10");
+    expect(row(wrapper, 1).find("[data-testid='available']").text()).toBe("6");
+    expect(row(wrapper, 1).findAll("input")).toHaveLength(0);
+    expect(wrapper.find("thead").text()).toContain("calculated");
   });
 
   it("flags an item with nothing available", async () => {
     const wrapper = await mountView();
 
-    expect(rowOf(wrapper, "Microphones").findAll("input")[1].classes()).toContain("input--low");
-    expect(rowOf(wrapper, "Projector").findAll("input")[1].classes()).not.toContain("input--low");
+    expect(row(wrapper, 2).find("[data-testid='available']").classes()).toContain("count--low");
+    expect(row(wrapper, 1).find("[data-testid='available']").classes()).not.toContain("count--low");
   });
 
-  it("only enables Save once a number has changed", async () => {
-    const wrapper = await mountView();
-    const row = rowOf(wrapper, "Projector");
+  it("says when there is no equipment yet", async () => {
+    const wrapper = await mountView([]);
+    expect(wrapper.text()).toContain("No equipment has been added yet.");
+    expect(wrapper.find("table").exists()).toBe(false);
+  });
+});
 
-    expect(row.find("button").attributes("disabled")).toBeDefined();
-    await row.findAll("input")[0].setValue("12");
-    expect(row.find("button").attributes("disabled")).toBeUndefined();
+describe("EquipmentInventoryView — units out of use come off the available number (E5-5)", () => {
+  it("says how many units are out of use and already taken off, and says nothing when none are", async () => {
+    const wrapper = await mountView([
+      { ...projector, availableStock: 4, unusableNow: 2 },
+      { ...microphones, unusableNow: 0 },
+    ]);
+
+    expect(row(wrapper, 1).find("[data-testid='available']").text()).toContain("4");
+    expect(row(wrapper, 1).find("[data-testid='out-of-use']").text()).toBe("2 out of use");
+    expect(row(wrapper, 2).find("[data-testid='out-of-use']").exists()).toBe(false);
+    expect(wrapper.find("thead").text()).toContain("minus units out of use today");
   });
 
-  it("saves new stock numbers and shows them as saved", async () => {
-    mockedUpdate.mockResolvedValue({ ...projector, totalStock: 12, availableStock: 9 });
+  it("re-reads the numbers as soon as units are marked or cleared, so the change shows at once", async () => {
     const wrapper = await mountView();
-    const row = rowOf(wrapper, "Projector");
+    expect(row(wrapper, 1).find("[data-testid='available']").text()).toContain("6");
 
-    await row.findAll("input")[0].setValue("12");
-    await row.findAll("input")[1].setValue("9");
-    await row.find("button").trigger("click");
+    mockedCatalog.mockResolvedValue([{ ...projector, availableStock: 4, unusableNow: 2 }, { ...microphones }]);
+    wrapper.findComponent(EquipmentUnitsPanel).vm.$emit("changed");
     await flushPromises();
 
-    expect(mockedUpdate).toHaveBeenCalledWith(1, { totalStock: 12, availableStock: 9 });
-    expect(row.text()).toContain("Saved");
-    expect(row.find("button").attributes("disabled")).toBeDefined();
+    expect(mockedCatalog).toHaveBeenCalledTimes(2);
+    expect(row(wrapper, 1).find("[data-testid='available']").text()).toContain("4");
+    expect(row(wrapper, 1).find("[data-testid='out-of-use']").text()).toBe("2 out of use");
   });
 
-  it("refuses available stock above total stock without calling the API", async () => {
+  it("keeps the numbers it has if the re-read fails", async () => {
     const wrapper = await mountView();
-    const row = rowOf(wrapper, "Projector");
 
-    await row.findAll("input")[1].setValue("11");
-    await row.find("button").trigger("click");
-
-    expect(mockedUpdate).not.toHaveBeenCalled();
-    expect(row.text()).toContain("Cannot be more than total stock.");
-  });
-
-  it("refuses negative and non-numeric entries without calling the API", async () => {
-    const wrapper = await mountView();
-    const row = rowOf(wrapper, "Projector");
-
-    await row.findAll("input")[0].setValue("-3");
-    await row.find("button").trigger("click");
-    expect(row.text()).toContain("Whole number, 0 or more.");
-
-    await row.findAll("input")[0].setValue("abc");
-    await row.find("button").trigger("click");
-    expect(mockedUpdate).not.toHaveBeenCalled();
-  });
-
-  it("shows the backend's field message when it refuses a change", async () => {
-    mockedUpdate.mockRejectedValue(new EquipmentValidationError({ availableStock: "Not allowed." }));
-    const wrapper = await mountView();
-    const row = rowOf(wrapper, "Projector");
-
-    await row.findAll("input")[1].setValue("5");
-    await row.find("button").trigger("click");
+    mockedCatalog.mockRejectedValue(new Error("down"));
+    wrapper.findComponent(EquipmentUnitsPanel).vm.$emit("changed");
     await flushPromises();
 
-    expect(row.text()).toContain("Not allowed.");
+    expect(row(wrapper, 1).find("[data-testid='available']").text()).toContain("6");
+    expect(wrapper.text()).not.toContain("couldn't load");
+  });
+});
+
+describe("EquipmentInventoryView — changing stock needs a reason (E5-5)", () => {
+  it("opens a form with a quantity and a reason, and warns that only free units can be removed", async () => {
+    const wrapper = await mountView();
+
+    await row(wrapper, 1).find("[data-testid='remove-stock']").trigger("click");
+
+    const form = wrapper.find("[data-testid='change-form']");
+    expect(form.text()).toContain("Remove stock");
+    expect(form.text()).toContain("Only free units can be removed");
+    expect(form.find("#reason-1").exists()).toBe(true);
+
+    await row(wrapper, 1).find("[data-testid='add-stock']").trigger("click");
+    expect(wrapper.find("[data-testid='change-form']").text()).not.toContain("Only free units can be removed");
   });
 
+  it("won't go further without a reason, or with a bad quantity, and never calls the API", async () => {
+    const wrapper = await mountView();
+
+    await fillChange(wrapper, 1, "add-stock", "0", "  ");
+    await wrapper.find("[data-testid='change-form']").trigger("submit");
+
+    expect(wrapper.find("[data-testid='change-form']").text()).toContain("Enter a whole number, 1 or more.");
+    expect(wrapper.find("[data-testid='change-form']").text()).toContain("A reason is required.");
+    expect(wrapper.find("[role='alertdialog']").exists()).toBe(false);
+    expect(mockedChange).not.toHaveBeenCalled();
+  });
+
+  it("asks for confirmation, showing the new total and the reason, before changing anything", async () => {
+    const wrapper = await mountView();
+
+    await fillChange(wrapper, 1, "remove-stock", "3", "Sold off");
+    await wrapper.find("[data-testid='change-form']").trigger("submit");
+
+    const dialog = wrapper.find("[role='alertdialog']");
+    expect(dialog.text()).toContain("Remove 3 Projector?");
+    expect(dialog.text()).toContain("Total stock goes from 10 to 7. Reason: Sold off");
+    expect(mockedChange).not.toHaveBeenCalled();
+
+    const back = dialog.findAll("button").find((b) => b.text() === "Back")!;
+    await back.trigger("click");
+    expect(wrapper.find("[role='alertdialog']").exists()).toBe(false);
+    expect(mockedChange).not.toHaveBeenCalled();
+  });
+
+  it("adds stock once confirmed, updating the counts and saying so", async () => {
+    mockedChange.mockResolvedValue({ ...projector, totalStock: 12, availableStock: 8 });
+    const wrapper = await mountView();
+
+    await fillChange(wrapper, 1, "add-stock", "2", "  New delivery ");
+    await wrapper.find("[data-testid='change-form']").trigger("submit");
+    expect(wrapper.find("[role='alertdialog']").text()).toContain("Add 2 Projector?");
+    await wrapper.find("[data-testid='confirm-change']").trigger("click");
+    await flushPromises();
+
+    expect(mockedChange).toHaveBeenCalledWith(1, { direction: "add", quantity: 2, reason: "New delivery" });
+    expect(row(wrapper, 1).find("[data-testid='total']").text()).toBe("12");
+    expect(row(wrapper, 1).find("[data-testid='available']").text()).toBe("8");
+    expect(wrapper.find("[data-testid='stock-notice']").text()).toBe("Added 2 Projector. Total stock is now 12.");
+    expect(wrapper.find("[data-testid='change-form']").exists()).toBe(false);
+    expect(wrapper.find("[role='alertdialog']").exists()).toBe(false);
+  });
+
+  it("removes stock, confirming with a destructive button", async () => {
+    mockedChange.mockResolvedValue({ ...projector, totalStock: 7, availableStock: 3 });
+    const wrapper = await mountView();
+
+    await fillChange(wrapper, 1, "remove-stock", "3", "Sold off");
+    await wrapper.find("[data-testid='change-form']").trigger("submit");
+    expect(wrapper.find("[data-testid='confirm-change']").classes()).toContain("btn--danger-solid");
+    await wrapper.find("[data-testid='confirm-change']").trigger("click");
+    await flushPromises();
+
+    expect(mockedChange).toHaveBeenCalledWith(1, { direction: "remove", quantity: 3, reason: "Sold off" });
+    expect(wrapper.find("[data-testid='stock-notice']").text()).toBe("Removed 3 Projector. Total stock is now 7.");
+  });
+
+  it("returns to the form with the backend's message when too much is removed, keeping the counts", async () => {
+    mockedChange.mockRejectedValue(new EquipmentRequestError("Only 2 can be removed: the rest is reserved, out of use or held by requests."));
+    const wrapper = await mountView();
+
+    await fillChange(wrapper, 1, "remove-stock", "5", "Sold off");
+    await wrapper.find("[data-testid='change-form']").trigger("submit");
+    await wrapper.find("[data-testid='confirm-change']").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find("[role='alertdialog']").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='change-form'] [role='alert']").text()).toContain("Only 2 can be removed");
+    expect(row(wrapper, 1).find("[data-testid='total']").text()).toBe("10");
+  });
+
+  it("shows field errors from the backend against the right field", async () => {
+    mockedChange.mockRejectedValue(new EquipmentValidationError({ reason: "A reason is required." }));
+    const wrapper = await mountView();
+
+    await fillChange(wrapper, 1, "add-stock", "1", "x");
+    await wrapper.find("[data-testid='change-form']").trigger("submit");
+    await wrapper.find("[data-testid='confirm-change']").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find("[data-testid='change-form']").text()).toContain("A reason is required.");
+  });
+
+  it("discards the form on Cancel", async () => {
+    const wrapper = await mountView();
+
+    await row(wrapper, 1).find("[data-testid='add-stock']").trigger("click");
+    const cancel = wrapper.findAll("[data-testid='change-form'] button").find((b) => b.text() === "Cancel")!;
+    await cancel.trigger("click");
+
+    expect(wrapper.find("[data-testid='change-form']").exists()).toBe(false);
+  });
+});
+
+describe("EquipmentInventoryView — stock history", () => {
+  const changes = [
+    { id: 2, changeType: "Removed" as const, quantity: 3, totalBefore: 12, totalAfter: 9, reason: "Sold off", changedBy: "TS-0001", createdAt: "2026-10-19T03:00:00Z" },
+    { id: 1, changeType: "Added" as const, quantity: 2, totalBefore: 10, totalAfter: 12, reason: "New delivery", changedBy: "TS-0002", createdAt: "2026-10-18T03:00:00Z" },
+  ];
+
+  it("lists who changed the stock, by how much, why and when", async () => {
+    mockedHistory.mockResolvedValue(changes);
+    const wrapper = await mountView();
+
+    await row(wrapper, 1).find("[data-testid='toggle-history']").trigger("click");
+    await flushPromises();
+
+    const entries = wrapper.findAll("[data-testid='history-entry']");
+    expect(mockedHistory).toHaveBeenCalledWith(1);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].text()).toContain("Removed 3");
+    expect(entries[0].text()).toContain("(12 → 9)");
+    expect(entries[0].text()).toContain("Sold off");
+    expect(entries[0].text()).toContain("TS-0001");
+    expect(entries[1].text()).toContain("Added 2");
+  });
+
+  it("says when nothing has changed yet, and when the history can't be loaded", async () => {
+    mockedHistory.mockResolvedValueOnce([]);
+    const wrapper = await mountView();
+    await row(wrapper, 1).find("[data-testid='toggle-history']").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("No stock changes recorded yet.");
+
+    mockedHistory.mockRejectedValueOnce(new Error("down"));
+    await row(wrapper, 2).find("[data-testid='toggle-history']").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("We couldn't load the history.");
+  });
+
+  it("closes again, and refreshes after a change when it is open", async () => {
+    mockedHistory.mockResolvedValue(changes);
+    mockedChange.mockResolvedValue({ ...projector, totalStock: 11, availableStock: 7 });
+    const wrapper = await mountView();
+
+    await row(wrapper, 1).find("[data-testid='toggle-history']").trigger("click");
+    await flushPromises();
+    await fillChange(wrapper, 1, "add-stock", "1", "Top up");
+    await wrapper.find("[data-testid='change-form']").trigger("submit");
+    await wrapper.find("[data-testid='confirm-change']").trigger("click");
+    await flushPromises();
+    expect(mockedHistory).toHaveBeenCalledTimes(2);
+
+    await row(wrapper, 1).find("[data-testid='toggle-history']").trigger("click");
+    expect(wrapper.find("[data-testid='history-entry']").exists()).toBe(false);
+  });
+});
+
+describe("EquipmentInventoryView — adding an item", () => {
   it("adds an item and lists it in name order", async () => {
     mockedCreate.mockResolvedValue({ id: 3, name: "Lectern", totalStock: 4, availableStock: 4 });
     const wrapper = await mountView();
@@ -150,7 +322,7 @@ describe("EquipmentInventoryView", () => {
 
   it("shows an error when the inventory cannot be loaded", async () => {
     mockedCatalog.mockRejectedValue(new Error("boom"));
-    const wrapper = mount(EquipmentInventoryView);
+    const wrapper = mount(EquipmentInventoryView, { global: { stubs: { EquipmentUnitsPanel: true, RouterLink: true } } });
     await flushPromises();
 
     expect(wrapper.find("[role='alert']").text()).toContain("couldn't load the equipment inventory");

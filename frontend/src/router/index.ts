@@ -20,6 +20,10 @@ import LeadUnassignedQueueView from "../views/LeadUnassignedQueueView.vue";
 import LeadCoordinatorView from "../views/LeadCoordinatorView.vue";
 import SafetyReviewQueueView from "../views/SafetyReviewQueueView.vue";
 import NotificationsView from "../views/NotificationsView.vue";
+import LandingView from "../views/public/LandingView.vue";
+import PublicEventsView from "../views/public/PublicEventsView.vue";
+import PublicEventDetailView from "../views/public/PublicEventDetailView.vue";
+import PublicVenuesView from "../views/public/PublicVenuesView.vue";
 import { getStoredUser, isAuthenticated, landingRouteForRole } from "../lib/auth";
 
 export const router = createRouter({
@@ -27,6 +31,12 @@ export const router = createRouter({
   routes: [
     { path: "/login", name: "login", component: LoginView },
     { path: "/signup", name: "signup", component: SignupView },
+    // Guest pages: anyone can browse events and venues without an account.
+    // `guestOnly` sends a signed-in user to their own pages instead.
+    { path: "/welcome", name: "welcome", component: LandingView, meta: { guestOnly: true } },
+    { path: "/explore/events", name: "public-events", component: PublicEventsView, meta: { guestOnly: true } },
+    { path: "/explore/events/:id", name: "public-event-detail", component: PublicEventDetailView, meta: { guestOnly: true } },
+    { path: "/explore/venues", name: "public-venues", component: PublicVenuesView, meta: { guestOnly: true } },
     {
       path: "/",
       name: "events-list",
@@ -184,6 +194,12 @@ router.beforeEach((to) => {
   // the URL straight into the address bar — goes to login. The intended
   // destination rides along so the user lands where they meant to after
   // signing in, rather than being dumped on the default page.
+  // A guest opening the site's root gets the public landing page rather
+  // than a login form; any other protected URL still goes to login below.
+  if (to.path === "/" && !authed) {
+    return { name: "welcome" };
+  }
+
   if (to.meta.requiresAuth && !authed) {
     return {
       name: "login",
@@ -194,7 +210,7 @@ router.beforeEach((to) => {
   // Someone already signed in has no use for the login or signup form;
   // send them to their role's landing view instead of showing a form that
   // would only re-authenticate them as the same person.
-  if (authed && (to.name === "login" || to.name === "signup")) {
+  if (authed && (to.name === "login" || to.name === "signup" || to.meta.guestOnly)) {
     return { name: landingRouteForRole(getStoredUser()?.role) };
   }
 

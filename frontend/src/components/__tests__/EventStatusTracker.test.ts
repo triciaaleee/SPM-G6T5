@@ -114,6 +114,17 @@ describe("EventStatusTracker — outstanding arrangements (E3-1 AC3)", () => {
     expect(equipmentLine(wrapper).classes()).not.toContain("outstanding__item--done");
   });
 
+  it("ignores a request the coordinator cancelled (E5-2): it holds nothing and nobody is waiting on it", () => {
+    const onlyCancelled = mountTracker([], [equipmentRequest({ status: "Cancelled" })]);
+    expect(equipmentLine(onlyCancelled).text()).toBe("Equipment — not yet requested");
+
+    const withArranged = mountTracker(
+      [],
+      [equipmentRequest({ id: 500, status: "Arranged" }), equipmentRequest({ id: 501, status: "Cancelled" })],
+    );
+    expect(withArranged.findAll(".outstanding__item").some((item) => item.text().startsWith("Equipment"))).toBe(false);
+  });
+
   it("stays outstanding while a request is only partially fulfilled", () => {
     const wrapper = mountTracker([], [equipmentRequest({ status: "Partially Fulfilled" })]);
     expect(equipmentLine(wrapper).text()).toBe("Equipment — 1 awaiting Technical Support");

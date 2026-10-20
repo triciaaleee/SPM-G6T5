@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import AppButton from "../components/ui/AppButton.vue";
 import { computed, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   SignupError,
   landingRouteForRole,
@@ -36,6 +36,10 @@ const formError = ref<string | null>(null);
 const emailInUse = ref(false);
 const submitting = ref(false);
 const router = useRouter();
+const route = useRoute();
+
+/** Keeps a pending ?redirect when switching to the login form. */
+const loginLink = computed(() => ({ name: "login", query: typeof route.query.redirect === "string" ? { redirect: route.query.redirect } : {} }));
 
 /**
  * WAI-ARIA tabs pattern: only the active tab is in the Tab order, and the
@@ -93,8 +97,14 @@ async function handleSubmit() {
   submitting.value = true;
   try {
     const user = await signup(name.value, email.value, password.value, role.value);
-    // Same role-driven landing as login (AC1).
-    router.replace({ name: landingRouteForRole(user.role) });
+    // Same as login: back to where the guard (or a guest page's "Sign up
+    // to register") sent us from, else the role-driven landing (AC1).
+    const redirect = route.query.redirect;
+    if (typeof redirect === "string" && redirect.startsWith("/")) {
+      router.replace(redirect);
+    } else {
+      router.replace({ name: landingRouteForRole(user.role) });
+    }
   } catch (err) {
     if (err instanceof SignupError && err.field) {
       fieldErrors.value[err.field] = err.message;
@@ -180,7 +190,7 @@ async function handleSubmit() {
         />
         <p v-if="fieldErrors.email" id="email-error" class="body-small error-text field-error" role="alert">
           {{ fieldErrors.email }}
-          <RouterLink v-if="emailInUse" to="/login">Sign in instead</RouterLink>
+          <RouterLink v-if="emailInUse" :to="loginLink">Sign in instead</RouterLink>
         </p>
 
         <label class="field-label" for="password">Password</label>
@@ -213,7 +223,7 @@ async function handleSubmit() {
       </div>
 
       <p class="body-small muted signup-hint">
-        Already have an account? <RouterLink to="/login">Sign in</RouterLink>
+        Already have an account? <RouterLink :to="loginLink">Sign in</RouterLink>
       </p>
     </form>
   </div>

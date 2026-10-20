@@ -2,6 +2,7 @@ import "./lib/env.js";
 import cors from "cors";
 import express from "express";
 import { attendeeInfoRouter } from "./routes/attendeeInfo.js";
+import { publicVenuesRouter } from "./routes/publicVenues.js";
 import { eventBookingsRouter } from "./routes/eventBookings.js";
 import { staffRouter } from "./routes/staff.js";
 import { suitabilityRouter } from "./routes/suitability.js";
@@ -44,6 +45,8 @@ app.use("/api/venues/events", eventBookingsRouter);
 app.use("/api/venues/suitability", suitabilityRouter);
 // E6: attendees' view of where an event is held — names only, ahead of venuesRouter.
 app.use("/api/venues/attendee-info", attendeeInfoRouter);
+// Guests' view of venues and of where listed events are held — no login, ahead of venuesRouter.
+app.use("/api/venues/public", publicVenuesRouter);
 app.use("/api/venues", venuesRouter);
 
 app.get("/health", (_req, res) => {

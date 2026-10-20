@@ -16,6 +16,7 @@
 
 import { fetchEventBookingInfo } from "./eventsClient.js";
 import { occupiedWindow, overlaps, type OccupiedWindow } from "./scheduleWindow.js";
+import { fetchUnavailability, overlappingPeriods, type UnavailabilityRow } from "./unitUnavailability.js";
 
 export interface ReservationFlag {
   flagged: boolean;
@@ -70,11 +71,31 @@ export async function computeReservationFlags(
     }
   }
 
+  // E5-5: periods Technical Support marked on the units this event holds.
+  let periodsByUnit = new Map<number, UnavailabilityRow[]>();
+  try {
+    const periods = await fetchUnavailability(supabase, [...new Set(ownBookings.map((b) => b.equipment_id))]);
+    for (const period of periods) {
+      periodsByUnit.set(period.equipment_id, [...(periodsByUnit.get(period.equipment_id) ?? []), period]);
+    }
+  } catch {
+    periodsByUnit = new Map();
+  }
+
   for (const booking of ownBookings) {
     const ownEventId = itemEventIds.get(booking.request_item_id);
     if (ownEventId === undefined) continue;
     const ownWindow = windows.get(ownEventId);
     if (!ownWindow) continue;
+
+    const unusable = overlappingPeriods(periodsByUnit.get(booking.equipment_id) ?? [], ownWindow).get(booking.equipment_id);
+    if (unusable) {
+      flags.set(booking.request_item_id, {
+        flagged: true,
+        reason: `A reserved unit is unavailable (${unusable.reason}) during this event, so it needs a replacement.`,
+      });
+      continue;
+    }
 
     const rivals = allBookings.filter(
       (b) => b.equipment_id === booking.equipment_id && b.request_item_id !== booking.request_item_id && b.event_id !== ownEventId,

@@ -4,6 +4,7 @@ import express from "express";
 import { equipmentRequestsRouter } from "./routes/equipmentRequests.js";
 import { equipmentCatalogRouter } from "./routes/equipmentCatalog.js";
 import { equipmentAvailabilityRouter } from "./routes/equipmentAvailability.js";
+import { equipmentUnitsRouter } from "./routes/equipmentUnits.js";
 import { connectAndConsume } from "./lib/rabbitConsumer.js";
 import { handleEventCancelled } from "./lib/eventCancelledHandler.js";
 import { supabaseAdmin } from "./lib/supabaseAdmin.js";
@@ -32,6 +33,7 @@ app.use(express.json());
 app.use("/api/equipment-requests", equipmentRequestsRouter);
 app.use("/api/equipment-catalog", equipmentCatalogRouter);
 app.use("/api/equipment-availability", equipmentAvailabilityRouter);
+app.use("/api/equipment-units", equipmentUnitsRouter);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });

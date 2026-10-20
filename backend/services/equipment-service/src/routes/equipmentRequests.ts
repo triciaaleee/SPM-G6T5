@@ -8,9 +8,11 @@ import { computeReservationFlags, type ReservationFlag } from "../lib/reservatio
 import { releaseEquipmentForEvent } from "../lib/eventCancellation.js";
 import { occupiedWindow, type OccupiedWindow } from "../lib/scheduleWindow.js";
 import {
+  validateAmendedItems,
   validateEquipmentItems,
   validateStatusUpdate,
   type StatusUpdateItem,
+  type ValidatedAmendedItem,
   type ValidatedEquipmentItem,
 } from "../lib/validateEquipmentRequest.js";
 
@@ -43,15 +45,21 @@ interface ItemRow {
   equipment_type: string;
   quantity: number;
   quantity_fulfilled?: number;
+  equipment_catalog_id?: number | null;
 }
 
-const ITEM_COLUMNS = "id, request_id, equipment_type, quantity, quantity_fulfilled";
+const ITEM_COLUMNS = "id, request_id, equipment_type, quantity, quantity_fulfilled, equipment_catalog_id";
+
+/** E5-2: a request the coordinator cancelled — kept as history, never Technical Support's to act on. */
+const CANCELLED = "Cancelled";
 
 const NO_FLAG: ReservationFlag = { flagged: false, reason: null };
 
 function toItem(row: ItemRow, flag: ReservationFlag = NO_FLAG) {
   return {
     id: row.id,
+    // The catalog entry the item draws stock from; the coordinator's amend form pre-selects it.
+    equipmentCatalogId: row.equipment_catalog_id ?? null,
     equipmentType: row.equipment_type,
     quantity: row.quantity,
     // E5-3: how much of this item has actually been taken off the shelf
@@ -302,9 +310,11 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // E5-2: a cancelled request is no longer Technical Support's to act on.
   const { data: requests, error: requestsError } = await supabase
     .from("equipment_requests")
     .select("id, event_id, status, fulfillment_note, created_at")
+    .neq("status", CANCELLED)
     .order("created_at", { ascending: false });
 
   if (requestsError || !requests) {
@@ -384,6 +394,7 @@ equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) =
     .from("equipment_requests")
     .select("id, event_id, status, fulfillment_note, created_at")
     .eq("event_id", eventId)
+    .neq("status", CANCELLED)
     .order("created_at", { ascending: true });
 
   if (requestsError || !requests) {
@@ -506,6 +517,10 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   }
   if (!existingRequest) {
     res.status(404).json({ error: "Equipment request not found" });
+    return;
+  }
+  if (existingRequest.status === CANCELLED) {
+    res.status(409).json({ error: "This request was cancelled by the coordinator." });
     return;
   }
 
@@ -745,4 +760,243 @@ equipmentRequestsRouter.post("/events/:eventId/release", async (req: AuthedReque
   }
 
   res.json({ released: true });
+});
+
+/** What the amend and cancel routes need to know about the request and its event before changing anything. */
+type EditableRequest =
+  | { ok: true; request: { id: number; event_id: number; status: string }; eventName: string }
+  | { ok: false };
+
+/**
+ * E5-2: loads the request and checks the caller may change it — the event's
+ * assigned coordinator (same rule as raising one, E5-1), only while the event
+ * is in Planning (after that, equipment changes go through a change request,
+ * E3-11). Writes the error response itself and returns `{ ok: false }`.
+ */
+async function loadEditableRequest(req: AuthedRequest, res: import("express").Response): Promise<EditableRequest> {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return { ok: false };
+  }
+  if (user.role !== "coordinator") {
+    res.status(403).json({ error: "Only the assigned coordinator can change an equipment request" });
+    return { ok: false };
+  }
+  if (!isPositiveInteger(req.params.id)) {
+    res.status(400).json({ error: "A valid request id is required" });
+    return { ok: false };
+  }
+
+  const { data: request, error } = await supabase
+    .from("equipment_requests")
+    .select("id, event_id, status")
+    .eq("id", Number(req.params.id))
+    .maybeSingle();
+  if (error) {
+    res.status(500).json({ error: "Failed to load the equipment request" });
+    return { ok: false };
+  }
+  if (!request) {
+    res.status(404).json({ error: "Equipment request not found" });
+    return { ok: false };
+  }
+
+  const eventResult = await fetchEvent(request.event_id as number, req.headers.authorization!);
+  if (eventResult.status === "not_found") {
+    res.status(404).json({ error: "Event not found" });
+    return { ok: false };
+  }
+  if (eventResult.status === "error") {
+    res.status(502).json({ error: "Failed to load the event" });
+    return { ok: false };
+  }
+  const { event } = eventResult;
+
+  if (event.coordinator_id !== user.id) {
+    res.status(403).json({ error: "Only the assigned coordinator can change an equipment request" });
+    return { ok: false };
+  }
+  if (event.status !== "Planning") {
+    res.status(409).json({ error: "Equipment requests can only be changed while the event is in Planning." });
+    return { ok: false };
+  }
+  if (request.status === CANCELLED) {
+    res.status(409).json({ error: "This equipment request has been cancelled." });
+    return { ok: false };
+  }
+
+  const eventName = (event.submitted_details?.name as string | undefined) || `Event #${request.event_id}`;
+  return { ok: true, request: request as { id: number; event_id: number; status: string }, eventName };
+}
+
+/** The request and its items as the coordinator's panel shows them. */
+async function loadRequestView(supabase: NonNullable<AuthedRequest["supabase"]>, requestId: number) {
+  const { data: requestRow, error: requestError } = await supabase
+    .from("equipment_requests")
+    .select("id, event_id, coordinator_id, status, fulfillment_note, created_at")
+    .eq("id", requestId)
+    .maybeSingle();
+  if (requestError || !requestRow) return null;
+
+  const { data: itemRows, error: itemsError } = await supabase
+    .from("equipment_request_items")
+    .select(ITEM_COLUMNS)
+    .eq("request_id", requestId);
+  if (itemsError) return null;
+
+  return toRequest(requestRow as RequestRow, (itemRows ?? []) as ItemRow[]);
+}
+
+/** One change the amend function reports (migration 0042). */
+interface AmendmentChange {
+  kind: "quantity" | "type" | "added" | "removed";
+  equipmentType: string;
+  fromType?: string;
+  from?: number;
+  to?: number;
+  quantity?: number;
+  released: number;
+}
+
+/**
+ * E5-2 AC1/AC2: the assigned coordinator amends a request's types or
+ * quantities while it isn't fully arranged yet (Requested or Partially
+ * Fulfilled) and the event is in Planning. Lowering a quantity below what is
+ * already reserved releases the surplus back to inventory (AC2), and Technical
+ * Support are notified of exactly what changed (AC1, `equipment.amended`).
+ * Raising a quantity or adding an item reserves nothing — Technical Support
+ * arrange it. All the item, stock and reservation changes happen in one
+ * database function (amend_equipment_request, migration 0042).
+ */
+equipmentRequestsRouter.put("/:id/items", async (req: AuthedRequest, res) => {
+  const editable = await loadEditableRequest(req, res);
+  if (!editable.ok) return;
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">> & AuthedRequest;
+  const { request, eventName } = editable;
+
+  if (request.status === "Arranged") {
+    res.status(409).json({
+      error: "A fully arranged request can't be amended. Cancel it and raise a new one.",
+    });
+    return;
+  }
+
+  const body = (req.body ?? {}) as { items?: unknown };
+  const itemsResult = validateAmendedItems(body.items);
+  if (!itemsResult.valid) {
+    res.status(400).json({ error: "Validation failed", fields: itemsResult.fields });
+    return;
+  }
+  const items = itemsResult.value as ValidatedAmendedItem[];
+
+  const catalogIds = [...new Set(items.map((item) => item.equipmentCatalogId))];
+  const { data: catalogRows, error: catalogError } = await supabase
+    .from("equipment_catalog")
+    .select("id, name")
+    .in("id", catalogIds);
+  if (catalogError) {
+    res.status(500).json({ error: "Failed to validate the equipment items" });
+    return;
+  }
+  const catalogNameById = new Map((catalogRows ?? []).map((row) => [row.id as number, row.name as string]));
+  const catalogFields: Record<string, string> = {};
+  items.forEach((item, index) => {
+    if (!catalogNameById.has(item.equipmentCatalogId)) {
+      catalogFields[`items[${index}].equipmentCatalogId`] = "Select a valid equipment type.";
+    }
+  });
+  if (Object.keys(catalogFields).length > 0) {
+    res.status(400).json({ error: "Validation failed", fields: catalogFields });
+    return;
+  }
+
+  const { data: outcome, error: amendError } = await supabase.rpc("amend_equipment_request", {
+    p_request_id: request.id,
+    p_items: items.map((item) => ({
+      itemId: item.itemId ?? null,
+      equipmentCatalogId: item.equipmentCatalogId,
+      equipmentType: catalogNameById.get(item.equipmentCatalogId)!,
+      quantity: item.quantity,
+    })),
+  });
+  if (amendError) {
+    const message = amendError.message ?? "";
+    if (message.includes("cannot be amended")) {
+      res.status(409).json({ error: "This request can no longer be amended." });
+    } else if (message.includes("Unknown item")) {
+      res.status(400).json({ error: "Validation failed", fields: { items: "One of these items isn't on this request." } });
+    } else {
+      res.status(500).json({ error: "Failed to amend the equipment request" });
+    }
+    return;
+  }
+
+  const changes = ((outcome as { changes?: AmendmentChange[] } | null)?.changes ?? []) as AmendmentChange[];
+  const released = changes.reduce((sum, change) => sum + (change.released ?? 0), 0);
+
+  // Nothing actually changed: nothing to tell Technical Support.
+  let notified = false;
+  if (changes.length > 0) {
+    notified = await getPublisher().publish({
+      type: "equipment.amended",
+      eventId: request.event_id,
+      actorId: user.id,
+      recipients: { userIds: [], roles: ["technical_support"] },
+      data: { eventName, changes, released },
+    });
+  }
+
+  const equipmentRequest = await loadRequestView(supabase, request.id);
+  if (!equipmentRequest) {
+    res.status(500).json({ error: "Failed to load the updated equipment request" });
+    return;
+  }
+  res.json({ equipmentRequest, changes, released, notified });
+});
+
+/**
+ * E5-2 AC3: the assigned coordinator cancels a request entirely (while the
+ * event is in Planning). Everything reserved against it is released back to
+ * inventory in one database function (release_equipment_for_request,
+ * migration 0042), the request is kept as history with status "Cancelled",
+ * and Technical Support are notified (`equipment.released`,
+ * reason `coordinator_cancelled`). Any status can be cancelled, including a
+ * fully arranged one.
+ */
+equipmentRequestsRouter.post("/:id/cancel", async (req: AuthedRequest, res) => {
+  const editable = await loadEditableRequest(req, res);
+  if (!editable.ok) return;
+  const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">> & AuthedRequest;
+  const { request, eventName } = editable;
+
+  const { data: outcome, error: cancelError } = await supabase.rpc("release_equipment_for_request", {
+    p_request_id: request.id,
+  });
+  if (cancelError) {
+    if ((cancelError.message ?? "").includes("already cancelled")) {
+      res.status(409).json({ error: "This equipment request has been cancelled." });
+    } else {
+      res.status(500).json({ error: "Failed to cancel the equipment request" });
+    }
+    return;
+  }
+
+  const released = ((outcome as { released?: { equipmentType: string; quantity: number }[] } | null)?.released ??
+    []) as { equipmentType: string; quantity: number }[];
+
+  const notified = await getPublisher().publish({
+    type: "equipment.released",
+    eventId: request.event_id,
+    actorId: user.id,
+    recipients: { userIds: [], roles: ["technical_support"] },
+    data: { eventName, reason: "coordinator_cancelled", released },
+  });
+
+  const equipmentRequest = await loadRequestView(supabase, request.id);
+  if (!equipmentRequest) {
+    res.status(500).json({ error: "Failed to load the updated equipment request" });
+    return;
+  }
+  res.json({ equipmentRequest, released, notified });
 });

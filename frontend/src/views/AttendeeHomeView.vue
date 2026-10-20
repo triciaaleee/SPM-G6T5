@@ -11,7 +11,7 @@ import { eventThumbnail, formatCardDate, formatCardTimeRange, isPastRegistration
  * what is still to come and what has already happened. Only the fields
  * registration-service returns for an attendee are shown.
  */
-type EventsTab = "upcoming" | "past" | "withdrawn";
+type EventsTab = "upcoming" | "past" | "withdrawn" | "cancelled";
 
 const registrations = ref<MyRegistration[]>([]);
 const loading = ref(true);
@@ -39,16 +39,22 @@ const past = computed(() =>
 const withdrawn = computed(() =>
   registrations.value.filter((r) => r.status === "Withdrawn").sort((a, b) => startsAt(b) - startsAt(a)),
 );
+// Events the organiser cancelled (E3-6) — kept apart from the attendee's own withdrawals.
+const cancelled = computed(() =>
+  registrations.value.filter((r) => r.status === "Cancelled").sort((a, b) => startsAt(b) - startsAt(a)),
+);
 
 const tabs: { key: EventsTab; label: string }[] = [
   { key: "upcoming", label: "Upcoming" },
   { key: "past", label: "Past" },
   { key: "withdrawn", label: "Withdrawn" },
+  { key: "cancelled", label: "Cancelled" },
 ];
 
 const visible = computed(() => {
   if (activeTab.value === "past") return past.value;
   if (activeTab.value === "withdrawn") return withdrawn.value;
+  if (activeTab.value === "cancelled") return cancelled.value;
   return upcoming.value;
 });
 
@@ -56,6 +62,7 @@ const EMPTY_MESSAGES: Record<EventsTab, string> = {
   upcoming: "You have no upcoming events.",
   past: "You have no past events.",
   withdrawn: "You haven't withdrawn from any events.",
+  cancelled: "None of your events have been cancelled.",
 };
 
 function eventTitle(registration: MyRegistration): string {

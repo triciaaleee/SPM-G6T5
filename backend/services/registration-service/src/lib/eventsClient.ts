@@ -34,6 +34,8 @@ export interface AttendeeEventInfo {
   listed?: boolean;
   /** The state is OPEN: Confirmed, in the registration period, not started. */
   open: boolean;
+  /** E6-4: the event has started (Singapore time), so a place can no longer be withdrawn. */
+  hasStarted?: boolean;
 }
 
 export type FetchEventsResult = { status: "ok"; events: AttendeeEventInfo[] } | { status: "error" };

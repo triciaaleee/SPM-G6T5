@@ -394,7 +394,13 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
   res.status(existing ? 200 : 201).json({ registration: toRegistration(saved as RegistrationRow) });
 });
 
-/** Give up a place. The row is kept as Withdrawn rather than deleted. */
+/**
+ * Give up a place (E6-4). The row is kept as Withdrawn rather than deleted,
+ * and the place is free at once (only Registered rows are counted). Allowed
+ * any time before the event starts — even inside the last 5 days, when
+ * registration itself has closed; the freed place stays unavailable then
+ * unless the coordinator forces registration open (AGENTS.md §3b).
+ */
 registrationsRouter.patch("/event/:eventId/withdraw", async (req: AuthedRequest, res) => {
   if (!requireAttendee(req, res)) return;
   const { supabase, user } = req;
@@ -423,6 +429,24 @@ registrationsRouter.patch("/event/:eventId/withdraw", async (req: AuthedRequest,
     res.status(409).json({ error: "You have already withdrawn from this event", code: "already_withdrawn" });
     return;
   }
+  if ((existing as RegistrationRow).status === REGISTRATION_STATUS.cancelled) {
+    res.status(409).json({ error: "This event was cancelled by the organiser", code: "event_cancelled" });
+    return;
+  }
+
+  const events = await fetchAttendeeEvents([eventId], req.headers.authorization!);
+  if (events.status === "error") {
+    res.status(502).json({ error: "Failed to load the event" });
+    return;
+  }
+  const event = events.events.find((e) => e.id === eventId);
+  if (event?.hasStarted) {
+    res.status(409).json({
+      error: "This event has already started, so you can no longer withdraw",
+      code: "event_started",
+    });
+    return;
+  }
 
   const { data: updated, error: updateError } = await supabase!
     .from("registrations")
@@ -435,13 +459,13 @@ registrationsRouter.patch("/event/:eventId/withdraw", async (req: AuthedRequest,
     return;
   }
 
-  // E6-4 / #105 row 7: confirms the attendee's own withdrawal.
+  // E6-4 / #105 row 7: confirms the attendee's own withdrawal, naming the event.
   await getPublisher().publish({
     type: "registration.withdrawn",
     eventId,
     actorId: user!.id,
     recipients: { userIds: [user!.id], roles: [] },
-    data: {},
+    data: event?.name ? { eventName: event.name } : {},
   });
 
   res.json({ registration: toRegistration(updated as RegistrationRow) });
@@ -451,11 +475,12 @@ registrationsRouter.patch("/event/:eventId/withdraw", async (req: AuthedRequest,
  * What an attendee sees when they open an event: name, description, date,
  * time, venue(s) and their own registration status — and nothing else.
  *
- * Access: allowed if they hold a Registered place, or if registration has
- * opened for the event, even if it is now full or closed (so they can look
- * before signing up). Otherwise denied
- * — an event that isn't open, that they aren't registered for, is
- * indistinguishable from one that doesn't exist.
+ * Access: allowed if they hold a Registered place, or held one when the
+ * organiser cancelled the event (Cancelled — E6-4, so they can see what
+ * happened), or if registration has opened for the event, even if it is now
+ * full or closed (so they can look before signing up). Otherwise denied — an
+ * event that isn't listed, that they hold no place for, is indistinguishable
+ * from one that doesn't exist.
  */
 registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) => {
   if (!requireAttendee(req, res)) return;
@@ -488,7 +513,8 @@ registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) 
   }
   const event = events.events.find((e) => e.id === eventId);
 
-  const hasPlace = registrationStatus === REGISTRATION_STATUS.registered;
+  const hasPlace =
+    registrationStatus === REGISTRATION_STATUS.registered || registrationStatus === REGISTRATION_STATUS.cancelled;
   if (!event || (!hasPlace && !(event.listed ?? event.open))) {
     console.warn(`Attendee ${user!.id} denied access to event ${eventId} (not registered, not listed)`);
     res.status(403).json({ error: "Access denied" });
@@ -524,6 +550,7 @@ registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) 
       registrationState: attendeeState(event, slots),
       registrationStatus,
       open: event.open,
+      hasStarted: event.hasStarted ?? false,
     },
   });
 });

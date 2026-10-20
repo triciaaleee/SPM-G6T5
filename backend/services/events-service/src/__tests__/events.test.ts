@@ -2165,6 +2165,7 @@ describe("attendee access (E6)", () => {
           accessibility: validPayload.accessibility,
           capacity: 50,
           organiserName: "Pat Organiser",
+          hasStarted: false,
           name: validPayload.name,
           description: "Campus tour and icebreakers",
           proposedDate: "2099-01-01",
@@ -2176,6 +2177,17 @@ describe("attendee access (E6)", () => {
       // Of the organiser only the display name is returned: never their id or email.
       expect(JSON.stringify(res.body)).not.toMatch(/pat@example\.com|ORG-0001/);
       expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
+    });
+
+    it("marks an event that has already started (E6-4: attendees can withdraw only before this)", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1");
+
+      expect(res.body.events[0].hasStarted).toBe(true);
     });
 
     it("returns the organiser's name, tolerating an embedded array and a missing or blank organiser", async () => {

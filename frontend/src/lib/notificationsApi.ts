@@ -48,3 +48,16 @@ export async function markNotificationRead(id: number): Promise<void> {
   await redirectIfUnauthenticated(res);
   if (!res.ok) throw new Error("Failed to mark notification as read");
 }
+
+/** Window event the bell listens for to re-fetch now instead of at its next poll. */
+export const NOTIFICATIONS_REFRESH_EVENT = "notifications:refresh";
+
+/**
+ * Asks the bell to re-fetch after an action that sends the user a
+ * notification (e.g. registering). Delayed because the notification is
+ * written asynchronously — the backend publishes to RabbitMQ and
+ * notification-service stores it a moment later.
+ */
+export function requestNotificationsRefresh(delayMs = 1500): void {
+  window.setTimeout(() => window.dispatchEvent(new Event(NOTIFICATIONS_REFRESH_EVENT)), delayMs);
+}

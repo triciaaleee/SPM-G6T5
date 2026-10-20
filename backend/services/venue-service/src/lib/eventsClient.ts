@@ -131,3 +131,28 @@ async function fetchVenueBookingInfoBatch(
   const body = (await res.json()) as { events?: VenueBookingInfo[] };
   return { status: "ok", events: body.events ?? [] };
 }
+
+/** An event guests may see, as events-service's public listing returns it (the fields venue-service uses). */
+export interface PublicEvent {
+  id: number;
+  name: string | null;
+  proposedDate: string | null;
+  startTime: string | null;
+}
+
+/**
+ * Every event listed for guests (events-service GET /api/events/public). No
+ * token: that route is public, so there is nothing to forward. Used to keep
+ * venue-service's own public routes to events guests can already see.
+ */
+export async function fetchPublicEvents(): Promise<{ status: "ok"; events: PublicEvent[] } | { status: "error" }> {
+  let res: Response;
+  try {
+    res = await fetch(`${eventsServiceUrl()}/api/events/public`);
+  } catch {
+    return { status: "error" };
+  }
+  if (!res.ok) return { status: "error" };
+  const body = (await res.json()) as { events?: PublicEvent[] };
+  return { status: "ok", events: body.events ?? [] };
+}

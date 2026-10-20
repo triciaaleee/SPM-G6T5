@@ -46,6 +46,8 @@ function buildApp(
     equipmentRows?: { id: number; status: string }[];
     bookingRows?: { equipment_id: number; event_id: number }[];
     catalogRow?: { available_stock: number } | null;
+    /** E5-5: periods Technical Support marked on units (migration 0043). */
+    unavailabilityRows?: { id: number; equipment_id: number; reason: string; start_date: string; end_date: string | null; note: string | null }[];
     eventsById?: Record<number, TestEvent>;
     bookingInfoStatus?: number;
   } = {},
@@ -53,12 +55,27 @@ function buildApp(
   const equipmentSelect = query({ data: options.equipmentRows ?? [], error: null });
   const bookingSelect = query({ data: options.bookingRows ?? [], error: null });
   const catalogSelect = query({ data: options.catalogRow ?? null, error: null });
+  // Honours `.in("equipment_id", ids)`, like the real table.
+  const unavailabilitySelect = {
+    select: vi.fn(() => {
+      let rows = options.unavailabilityRows ?? [];
+      const q: Record<string, any> = {};
+      q.in = vi.fn((field: string, values: unknown[]) => {
+        rows = rows.filter((r) => values.includes((r as Record<string, unknown>)[field]));
+        return q;
+      });
+      q.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
+        Promise.resolve({ data: rows, error: null }).then(resolve, reject);
+      return q;
+    }),
+  };
 
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === "equipment") return { select: equipmentSelect.select };
       if (table === "equipment_booking") return { select: bookingSelect.select };
       if (table === "equipment_catalog") return { select: catalogSelect.select };
+      if (table === "equipment_unavailability") return { select: unavailabilitySelect.select };
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -179,6 +196,65 @@ describe("GET /api/equipment-availability", () => {
     const res = await request(app).get("/api/equipment-availability?eventId=7&type=Projector&quantity=1");
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ totalUnits: 3, unusableCount: 2, availableCount: 1 });
+  });
+
+  // E5-5 AC1: a unit marked unusable for a period overlapping the event is excluded for that period only.
+  describe("units marked unusable for a period (E5-5)", () => {
+    const units = [
+      { id: 1, status: "Available" },
+      { id: 2, status: "Available" },
+    ];
+    const period = (overrides: Record<string, unknown> = {}) => ({
+      id: 1,
+      equipment_id: 1,
+      reason: "Under Maintenance",
+      start_date: "2026-09-19",
+      end_date: "2026-09-21",
+      note: null,
+      ...overrides,
+    });
+    const check = (unavailabilityRows: ReturnType<typeof period>[]) => {
+      const { app } = buildApp({ eventsById: { 7: testEvent({ id: 7 }) }, equipmentRows: units, unavailabilityRows });
+      return request(app).get("/api/equipment-availability?eventId=7&type=Projector&quantity=2");
+    };
+
+    it("excludes a unit whose period covers the event's date", async () => {
+      const res = await check([period()]);
+      expect(res.body).toMatchObject({ totalUnits: 2, unusableCount: 1, availableCount: 1, shortfall: 1 });
+    });
+
+    it("counts both the first and the last day of the period", async () => {
+      expect((await check([period({ start_date: "2026-09-20", end_date: "2026-09-20" })])).body.unusableCount).toBe(1);
+      expect((await check([period({ start_date: "2026-09-10", end_date: "2026-09-20" })])).body.unusableCount).toBe(1);
+      expect((await check([period({ start_date: "2026-09-20", end_date: "2026-09-30" })])).body.unusableCount).toBe(1);
+    });
+
+    it("keeps a unit available on days outside its period", async () => {
+      expect((await check([period({ start_date: "2026-09-10", end_date: "2026-09-19" })])).body.unusableCount).toBe(0);
+      expect((await check([period({ start_date: "2026-09-21", end_date: "2026-09-25" })])).body).toMatchObject({
+        unusableCount: 0,
+        availableCount: 2,
+        shortfall: 0,
+      });
+    });
+
+    it("excludes a unit with no end date from its start date onwards, but not before it", async () => {
+      expect((await check([period({ start_date: "2026-09-01", end_date: null })])).body.unusableCount).toBe(1);
+      expect((await check([period({ start_date: "2026-10-01", end_date: null })])).body.unusableCount).toBe(0);
+    });
+
+    it("doesn't count a unit twice when it is also unusable by status", async () => {
+      const { app } = buildApp({
+        eventsById: { 7: testEvent({ id: 7 }) },
+        equipmentRows: [
+          { id: 1, status: "Damaged" },
+          { id: 2, status: "Available" },
+        ],
+        unavailabilityRows: [period({ equipment_id: 1 })],
+      });
+      const res = await request(app).get("/api/equipment-availability?eventId=7&type=Projector&quantity=1");
+      expect(res.body).toMatchObject({ unusableCount: 1, availableCount: 1 });
+    });
   });
 
   // AC1: a unit booked to another event with an overlapping window is excluded.

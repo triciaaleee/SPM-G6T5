@@ -232,6 +232,18 @@ describe("GET /event/:eventId (roster)", () => {
     expect(from).not.toHaveBeenCalled();
   });
 
+  it("gives a non-owning organiser nothing at all: no body beyond the refusal, no roster read, no names looked up", async () => {
+    clients.canViewEvent.mockResolvedValue({ status: "denied" });
+    const { app, from } = buildApp(organiser, query({ data: [row()], error: null }));
+
+    const res = await request(app).get("/api/registrations/event/1");
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "Access denied" });
+    expect(from).not.toHaveBeenCalled();
+    expect(clients.fetchUserNames).not.toHaveBeenCalled();
+  });
+
   it("answers 502 when events-service can't be reached", async () => {
     clients.canViewEvent.mockResolvedValue({ status: "error" });
     const { app } = buildApp(organiser);
@@ -422,8 +434,57 @@ describe("PATCH /event/:eventId/withdraw", () => {
         type: "registration.withdrawn",
         eventId: 1,
         recipients: { userIds: ["ATT-0001"], roles: [] },
+        data: { eventName: "Freshman Orientation Fair" },
       }),
     );
+  });
+
+  it("still lets the attendee withdraw inside the last 5 days, when registration has closed", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({
+      status: "ok",
+      events: [eventInfo({ open: false, registrationState: "CLOSED", hasStarted: false })],
+    });
+    const updateQuery = query({ data: null, error: null }, { data: row({ status: "Withdrawn" }), error: null });
+    const { app } = buildApp(attendee, query({ data: null, error: null }, { data: row(), error: null }), updateQuery);
+
+    const res = await request(app).patch("/api/registrations/event/1/withdraw");
+
+    expect(res.status).toBe(200);
+    expect(updateQuery.update).toHaveBeenCalledWith({ status: "Withdrawn" });
+  });
+
+  it("refuses once the event has started (409 event_started), keeping the place", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ open: false, hasStarted: true })] });
+    const updateQuery = query({ data: null, error: null });
+    const { app } = buildApp(attendee, query({ data: null, error: null }, { data: row(), error: null }), updateQuery);
+
+    const res = await request(app).patch("/api/registrations/event/1/withdraw");
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("event_started");
+    expect(updateQuery.update).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("refuses a registration the organiser's cancellation already ended (409 event_cancelled)", async () => {
+    const { app } = buildApp(attendee, query({ data: null, error: null }, { data: row({ status: "Cancelled" }), error: null }));
+
+    const res = await request(app).patch("/api/registrations/event/1/withdraw");
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("event_cancelled");
+    expect(clients.fetchAttendeeEvents).not.toHaveBeenCalled();
+  });
+
+  it("answers 502 without withdrawing when the event can't be loaded", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "error" });
+    const updateQuery = query({ data: null, error: null });
+    const { app } = buildApp(attendee, query({ data: null, error: null }, { data: row(), error: null }), updateQuery);
+
+    const res = await request(app).patch("/api/registrations/event/1/withdraw");
+
+    expect(res.status).toBe(502);
+    expect(updateQuery.update).not.toHaveBeenCalled();
   });
 
   it("answers 404 when the attendee isn't registered", async () => {
@@ -467,6 +528,7 @@ describe("GET /event/:eventId/view (attendee view)", () => {
       slotsLeft: null,
       registrationStatus: "Registered",
       open: false,
+      hasStarted: false,
     });
   });
 
@@ -498,6 +560,7 @@ describe("GET /event/:eventId/view (attendee view)", () => {
         "capacity",
         "description",
         "endTime",
+        "hasStarted",
         "id",
         "name",
         "open",
@@ -547,6 +610,25 @@ describe("GET /event/:eventId/view (attendee view)", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     expect((await request(app).get("/api/registrations/event/1/view")).status).toBe(403);
+  });
+
+  it("lets an attendee whose registration was Cancelled see the event the organiser cancelled", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ open: false, listed: false })] });
+    const { app } = buildApp(attendee, query({ data: null, error: null }, { data: { status: "Cancelled" }, error: null }));
+
+    const res = await request(app).get("/api/registrations/event/1/view");
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.registrationStatus).toBe("Cancelled");
+  });
+
+  it("passes on whether the event has started", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ hasStarted: true })] });
+    const { app } = buildApp(attendee, query({ data: null, error: null }, { data: { status: "Registered" }, error: null }));
+
+    const res = await request(app).get("/api/registrations/event/1/view");
+
+    expect(res.body.event.hasStarted).toBe(true);
   });
 
   it("denies an event that doesn't exist the same way", async () => {
