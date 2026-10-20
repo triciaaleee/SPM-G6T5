@@ -1647,7 +1647,7 @@ describe("PATCH /api/events/:id", () => {
   describe("coordinator edits during Planning (E3-7, issue #32)", () => {
     const coordinator = { id: "COORD-0001", role: "coordinator" };
 
-    it("lets the assigned coordinator edit a non-critical field", async () => {
+    it("lets the assigned coordinator edit a field", async () => {
       const oldDetails = { ...validPayload, equipment: "Old equipment list" };
       const { from, update, historyInsert } = buildPatchSupabase({
         event: {
@@ -1670,7 +1670,7 @@ describe("PATCH /api/events/:id", () => {
       expect(historyInsert).toHaveBeenCalled();
     });
 
-    it("blocks a critical-field change from the coordinator (AC1)", async () => {
+    it("lets the assigned coordinator edit a formerly-critical field (venue/schedule/capacity)", async () => {
       const oldDetails = { ...validPayload, venue: "Old Hall" };
       const { from, update, historyInsert } = buildPatchSupabase({
         event: {
@@ -1680,14 +1680,17 @@ describe("PATCH /api/events/:id", () => {
           coordinator_id: coordinator.id,
           submitted_details: oldDetails,
         },
+        updatedEvent: { id: 1, status: "Planning" },
       });
       const app = buildApp({ from }, coordinator);
 
       const res = await request(app).patch("/api/events/1").send(validPayload);
 
-      expect(res.status).toBe(400);
-      expect(update).not.toHaveBeenCalled();
-      expect(historyInsert).not.toHaveBeenCalled();
+      expect(res.status).toBe(200);
+      expect(update).toHaveBeenCalledWith({
+        submitted_details: expect.objectContaining({ venue: validPayload.venue }),
+      });
+      expect(historyInsert).toHaveBeenCalled();
     });
 
     it("blocks a coordinator who isn't the assigned one (AC3)", async () => {
@@ -2142,6 +2145,7 @@ describe("attendee access (E6)", () => {
         {
           id: 1,
           status: "Confirmed",
+          registration_open_date: "2020-01-01",
           submitted_details: confirmedDetails,
           organiser: { name: "Pat Organiser", email: "pat@example.com", id: "ORG-0001" },
         },
@@ -2155,10 +2159,13 @@ describe("attendee access (E6)", () => {
         {
           id: 1,
           registrationNeeded: true,
+          registrationState: "OPEN",
+          listed: true,
           open: true,
           accessibility: validPayload.accessibility,
           capacity: 50,
           organiserName: "Pat Organiser",
+          hasStarted: false,
           name: validPayload.name,
           description: "Campus tour and icebreakers",
           proposedDate: "2099-01-01",
@@ -2172,12 +2179,23 @@ describe("attendee access (E6)", () => {
       expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
     });
 
+    it("marks an event that has already started (E6-4: attendees can withdraw only before this)", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1");
+
+      expect(res.body.events[0].hasStarted).toBe(true);
+    });
+
     it("returns the organiser's name, tolerating an embedded array and a missing or blank organiser", async () => {
       const supabase = buildAttendeeInfoSupabase([
-        { id: 1, status: "Confirmed", submitted_details: confirmedDetails, organiser: [{ name: "  Array Organiser " }] },
-        { id: 2, status: "Confirmed", submitted_details: confirmedDetails, organiser: null },
-        { id: 3, status: "Confirmed", submitted_details: confirmedDetails, organiser: { name: "   " } },
-        { id: 4, status: "Confirmed", submitted_details: confirmedDetails },
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails, organiser: [{ name: "  Array Organiser " }] },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails, organiser: null },
+        { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails, organiser: { name: "   " } },
+        { id: 4, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails },
       ]);
       const app = buildApp(supabase, attendee);
 
@@ -2194,11 +2212,11 @@ describe("attendee access (E6)", () => {
     it("returns the accessibility note trimmed, and null for blank or NA/None answers", async () => {
       const withNote = (accessibility: unknown) => ({ ...confirmedDetails, accessibility });
       const supabase = buildAttendeeInfoSupabase([
-        { id: 1, status: "Confirmed", submitted_details: withNote("  Step-free entry and a hearing loop.  ") },
-        { id: 2, status: "Confirmed", submitted_details: withNote("   ") },
-        { id: 3, status: "Confirmed", submitted_details: withNote("NA") },
-        { id: 4, status: "Confirmed", submitted_details: withNote("None.") },
-        { id: 5, status: "Confirmed", submitted_details: withNote(undefined) },
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withNote("  Step-free entry and a hearing loop.  ") },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withNote("   ") },
+        { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withNote("NA") },
+        { id: 4, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withNote("None.") },
+        { id: 5, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withNote(undefined) },
       ]);
       const app = buildApp(supabase, attendee);
 
@@ -2216,12 +2234,12 @@ describe("attendee access (E6)", () => {
     it("returns the expected attendance as capacity, and null when it is missing or not a positive whole number", async () => {
       const withAttendance = (expectedAttendance: unknown) => ({ ...confirmedDetails, expectedAttendance });
       const supabase = buildAttendeeInfoSupabase([
-        { id: 1, status: "Confirmed", submitted_details: withAttendance(120) },
-        { id: 2, status: "Confirmed", submitted_details: withAttendance("80") },
-        { id: 3, status: "Confirmed", submitted_details: withAttendance(null) },
-        { id: 4, status: "Confirmed", submitted_details: withAttendance(0) },
-        { id: 5, status: "Confirmed", submitted_details: withAttendance(2.5) },
-        { id: 6, status: "Confirmed", submitted_details: withAttendance(undefined) },
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance(120) },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance("80") },
+        { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance(null) },
+        { id: 4, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance(0) },
+        { id: 5, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance(2.5) },
+        { id: 6, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance(undefined) },
       ]);
       const app = buildApp(supabase, attendee);
 
@@ -2240,9 +2258,9 @@ describe("attendee access (E6)", () => {
     it("marks an event not open unless Confirmed, registration is needed, and it has not ended", async () => {
       const supabase = buildAttendeeInfoSupabase([
         { id: 1, status: "Planning", submitted_details: confirmedDetails },
-        { id: 2, status: "Confirmed", submitted_details: { ...confirmedDetails, registrationNeeded: false } },
-        { id: 3, status: "Confirmed", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
-        { id: 4, status: "Confirmed", submitted_details: confirmedDetails },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, registrationNeeded: false } },
+        { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
+        { id: 4, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails },
       ]);
       const app = buildApp(supabase, attendee);
 
@@ -2286,7 +2304,7 @@ describe("attendee access (E6)", () => {
     }
 
     it("includes the accessibility note on open events", async () => {
-      const supabase = buildOpenSupabase([{ id: 1, status: "Confirmed", submitted_details: confirmedDetails }]);
+      const supabase = buildOpenSupabase([{ id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails }]);
       const app = buildApp(supabase, attendee);
 
       const res = await request(app).get("/api/events/open-for-registration");
@@ -2299,6 +2317,7 @@ describe("attendee access (E6)", () => {
         {
           id: 1,
           status: "Confirmed",
+          registration_open_date: "2020-01-01",
           submitted_details: confirmedDetails,
           organiser: { name: "Pat Organiser", email: "pat@example.com" },
         },
@@ -2312,7 +2331,7 @@ describe("attendee access (E6)", () => {
     });
 
     it("includes the capacity on open events", async () => {
-      const supabase = buildOpenSupabase([{ id: 1, status: "Confirmed", submitted_details: confirmedDetails }]);
+      const supabase = buildOpenSupabase([{ id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails }]);
       const app = buildApp(supabase, attendee);
 
       const res = await request(app).get("/api/events/open-for-registration");
@@ -2322,9 +2341,9 @@ describe("attendee access (E6)", () => {
 
     it("lists only open events, with the whitelisted fields", async () => {
       const supabase = buildOpenSupabase([
-        { id: 1, status: "Confirmed", submitted_details: confirmedDetails },
-        { id: 2, status: "Confirmed", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
-        { id: 3, status: "Confirmed", submitted_details: { ...confirmedDetails, registrationNeeded: false } },
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
+        { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, registrationNeeded: false } },
       ]);
       const app = buildApp(supabase, attendee);
 
@@ -2334,6 +2353,31 @@ describe("attendee access (E6)", () => {
       expect(res.body.events.map((e: { id: number }) => e.id)).toEqual([1]);
       expect(JSON.stringify(res.body)).not.toContain("INTERNAL");
       expect(supabase.eq).toHaveBeenCalledWith("status", "Confirmed");
+    });
+
+    it("lists events that haven't been forced closed or ended with their state, including closed ones, but not unopened ones", async () => {
+      const supabase = buildOpenSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails },
+        {
+          id: 2,
+          status: "Confirmed",
+          registration_open_date: "2020-01-01",
+          registration_override: "FORCE_CLOSED",
+          submitted_details: confirmedDetails,
+        },
+        { id: 3, status: "Confirmed", registration_open_date: "2999-01-01", submitted_details: confirmedDetails },
+        { id: 4, status: "Confirmed", submitted_details: confirmedDetails },
+        { id: 5, status: "Confirmed", registration_override: "FORCE_OPEN", submitted_details: confirmedDetails },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.body.events.map((e: { id: number; registrationState: string }) => [e.id, e.registrationState])).toEqual([
+        [1, "OPEN"],
+        [2, "CLOSED"],
+        [5, "OPEN"],
+      ]);
     });
 
     it("refuses non-attendees", async () => {

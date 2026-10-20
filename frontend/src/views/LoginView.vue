@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import AppButton from "../components/ui/AppButton.vue";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { LockedOutError, landingRouteForRole, login } from "../lib/auth";
 
@@ -11,6 +11,9 @@ const lockedOut = ref(false);
 const submitting = ref(false);
 const router = useRouter();
 const route = useRoute();
+
+/** Keeps a pending ?redirect when switching to the signup form. */
+const signupLink = computed(() => ({ name: "signup", query: typeof route.query.redirect === "string" ? { redirect: route.query.redirect } : {} }));
 
 async function handleSubmit() {
   errorMessage.value = null;
@@ -82,7 +85,7 @@ async function handleSubmit() {
       </AppButton>
 
       <p class="body-small muted signup-hint">
-        No account yet? <RouterLink to="/signup">Sign up</RouterLink>
+        No account yet? <RouterLink :to="signupLink">Sign up</RouterLink>
       </p>
     </form>
   </div>

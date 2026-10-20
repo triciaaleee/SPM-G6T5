@@ -13,6 +13,7 @@ import {
 import { registrationBadgeClass } from "../lib/registrationStatus";
 import { eventThumbnail, formatCardTimeRange, formatLongDate, slotsLabel } from "../lib/attendeeEvents";
 import { getStoredUser, landingRouteForRole } from "../lib/auth";
+import { requestNotificationsRefresh } from "../lib/notificationsApi";
 
 /**
  * One event as an attendee sees it: name, description, date, time, venues,
@@ -47,6 +48,8 @@ const withdrawError = ref<string | null>(null);
 
 const registering = ref(false);
 const registerError = ref<string | null>(null);
+// Shown once a Register click succeeds; the bell notification is the lasting copy.
+const registerSuccess = ref(false);
 
 const paragraphs = computed(() =>
   (event.value?.description ?? "")
@@ -55,7 +58,18 @@ const paragraphs = computed(() =>
     .filter(Boolean),
 );
 
-const canWithdraw = computed(() => event.value?.registrationStatus === "Registered");
+// E6-4: a place can be given up any time before the event starts — even
+// inside the last 5 days, when registration itself has closed.
+const canWithdraw = computed(
+  () => event.value?.registrationStatus === "Registered" && event.value.hasStarted !== true,
+);
+const hasStartedWithPlace = computed(
+  () => event.value?.registrationStatus === "Registered" && event.value.hasStarted === true,
+);
+
+// Withdrawing gives the place up at once, so it is confirmed first.
+const confirmingWithdraw = ref(false);
+const withdrawSuccess = ref(false);
 
 // Registering lives here, not on the Discover cards. A withdrawn attendee may register again.
 const canRegister = computed(
@@ -75,14 +89,18 @@ async function handleRegister() {
   if (!event.value || registering.value) return;
   registering.value = true;
   registerError.value = null;
+  registerSuccess.value = false;
+  withdrawSuccess.value = false;
   try {
     await register(eventId);
     event.value = { ...event.value, registrationStatus: "Registered", slotsLeft: adjustSlots(-1) };
+    registerSuccess.value = true;
+    requestNotificationsRefresh();
   } catch (err) {
     if (err instanceof RegistrationRequestError && err.code === "already_registered") {
       // Registered elsewhere (another tab): the page was just out of date.
       event.value = { ...event.value, registrationStatus: "Registered" };
-    } else if (err instanceof RegistrationRequestError && err.code === "not_open") {
+    } else if (err instanceof RegistrationRequestError && (err.code === "not_open" || err.code === "closed")) {
       event.value = { ...event.value, open: false };
       registerError.value = "This event is no longer open for registration.";
     } else if (err instanceof RegistrationRequestError && err.code === "event_full") {
@@ -97,22 +115,41 @@ async function handleRegister() {
   }
 }
 
+function askToWithdraw() {
+  withdrawError.value = null;
+  confirmingWithdraw.value = true;
+}
+
+function cancelWithdraw() {
+  if (!withdrawing.value) confirmingWithdraw.value = false;
+}
+
 async function handleWithdraw() {
   if (!event.value || withdrawing.value) return;
   withdrawing.value = true;
   withdrawError.value = null;
+  registerSuccess.value = false;
+  withdrawSuccess.value = false;
   try {
     await withdraw(eventId);
     event.value = { ...event.value, registrationStatus: "Withdrawn", slotsLeft: adjustSlots(1) };
+    withdrawSuccess.value = true;
+    requestNotificationsRefresh();
   } catch (err) {
     if (err instanceof RegistrationRequestError && err.code === "already_withdrawn") {
       // Withdrawn elsewhere (another tab): the page was just out of date.
       event.value = { ...event.value, registrationStatus: "Withdrawn" };
+    } else if (err instanceof RegistrationRequestError && err.code === "event_started") {
+      event.value = { ...event.value, hasStarted: true };
+      withdrawError.value = "This event has already started, so you can no longer withdraw.";
+    } else if (err instanceof RegistrationRequestError && err.code === "event_cancelled") {
+      event.value = { ...event.value, registrationStatus: "Cancelled" };
     } else {
       withdrawError.value = err instanceof Error ? err.message : "Failed to withdraw";
     }
   } finally {
     withdrawing.value = false;
+    confirmingWithdraw.value = false;
   }
 }
 
@@ -177,14 +214,45 @@ onMounted(async () => {
             {{ registering ? "Registering…" : "Register" }}
           </AppButton>
         </div>
+        <p v-else-if="event.registrationStatus === 'Cancelled'" class="body-default muted" data-testid="event-cancelled">
+          The organiser cancelled this event
+        </p>
+        <p v-else-if="hasStartedWithPlace" class="body-default muted" data-testid="event-started">
+          This event has started
+        </p>
+        <p v-else-if="!canWithdraw && event.open === false" class="body-default muted" data-testid="registration-closed">
+          {{ event.registrationState === "NOT_OPEN" ? "Registration hasn't opened yet" : "Registration is closed" }}
+        </p>
         <div v-else-if="canWithdraw" class="actions">
-          <AppButton variant="danger" class="action-button" :disabled="withdrawing" @click="handleWithdraw">
+          <AppButton variant="danger" class="action-button" :disabled="withdrawing" @click="askToWithdraw">
             {{ withdrawing ? "Withdrawing…" : "Withdraw registration" }}
           </AppButton>
         </div>
       </div>
       <p v-if="registerError" class="full body-small error-text" role="alert">{{ registerError }}</p>
+      <p v-if="registerSuccess" class="full body-small success-text" role="status" data-testid="register-success">
+        You're registered. A confirmation has been sent to your notifications.
+      </p>
       <p v-if="withdrawError" class="full body-small error-text" role="alert">{{ withdrawError }}</p>
+      <p v-if="withdrawSuccess" class="full body-small success-text" role="status" data-testid="withdraw-success">
+        You've withdrawn from this event. A confirmation has been sent to your notifications.
+      </p>
+
+      <!-- E6-4: withdrawing frees the place at once (it may be taken), so confirm first. -->
+      <div v-if="confirmingWithdraw" class="modal-overlay" @click.self="cancelWithdraw" @keydown.esc="cancelWithdraw">
+        <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="withdraw-title" aria-describedby="withdraw-body">
+          <p id="withdraw-title" class="modal-title">Withdraw from this event?</p>
+          <p id="withdraw-body" class="body-default muted">
+            Your place at "{{ event.name || `Event #${event.id}` }}" will be released straight away.
+          </p>
+          <div class="modal-actions">
+            <AppButton variant="outline" :disabled="withdrawing" @click="cancelWithdraw">Keep my place</AppButton>
+            <AppButton variant="danger-solid" :disabled="withdrawing" data-testid="confirm-withdraw" @click="handleWithdraw">
+              {{ withdrawing ? "Withdrawing…" : "Withdraw" }}
+            </AppButton>
+          </div>
+        </div>
+      </div>
 
       <div v-if="paragraphs.length > 0" class="description">
         <p v-for="(paragraph, index) in paragraphs" :key="index" class="body-default">{{ paragraph }}</p>
@@ -442,6 +510,11 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
+/* Style.md 3.2: success text is Green Success/600. */
+.success-text {
+  color: var(--color-success-600);
+}
+
 .denied {
   padding: var(--spacing-24);
   background: var(--color-grey-50);
@@ -469,6 +542,48 @@ onMounted(async () => {
 .status-warning {
   background: var(--color-warning-100);
   color: var(--color-warning-900);
+}
+
+.status-error {
+  background: var(--color-error-200);
+  color: var(--color-error-600);
+}
+
+/* Withdraw confirmation: same modal as the organiser's delete-draft dialog, over the Drawer scrim (Style.md 3.5). */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-24);
+  background: var(--color-grey-alpha-40-dark);
+}
+
+.modal {
+  width: 100%;
+  max-width: 400px;
+  padding: var(--spacing-24);
+  background: var(--color-base-white);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+}
+
+/* Subheading, bold */
+.modal-title {
+  margin: 0 0 var(--spacing-8);
+  font-size: 1.125rem;
+  line-height: 1.375rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-8);
+  margin-top: var(--spacing-24);
 }
 
 /* Register: the page's one solid button (Style.md 3.4). */

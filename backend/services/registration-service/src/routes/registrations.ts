@@ -26,9 +26,6 @@ registrationsRouter.use(requireAuth);
 
 const REGISTRATION_COLUMNS = "registration_id, event_id, user_id, status, created_at, additional_info";
 
-/** Postgres unique_violation — a second registration racing past the lookup. */
-const PG_UNIQUE_VIOLATION = "23505";
-
 /** additional_info is free-form, so cap it rather than let one row grow without bound. */
 const MAX_ADDITIONAL_INFO_CHARS = 5000;
 
@@ -96,6 +93,14 @@ function slotsLeft(capacity: number | null | undefined, registered: number): num
   return capacity == null ? null : Math.max(0, capacity - registered);
 }
 
+/**
+ * The state attendees see: events-service's NOT_OPEN / OPEN / CLOSED, with an
+ * OPEN event that has no places left shown as FULL (this service owns the count).
+ */
+function attendeeState(event: AttendeeEventInfo, slots: number | null): string | undefined {
+  return event.registrationState === "OPEN" && slots === 0 ? "FULL" : event.registrationState;
+}
+
 /** Ids of the events that have a cap — the only ones worth counting. */
 function cappedEventIds(events: AttendeeEventInfo[]): number[] {
   return events.filter((event) => event.capacity != null).map((event) => event.id);
@@ -148,13 +153,17 @@ registrationsRouter.get("/open-events", async (req: AuthedRequest, res) => {
   }
 
   res.json({
-    events: open.events.map((event) => ({
-      ...event,
-      organiserName: event.organiserName ?? null,
-      capacity: event.capacity ?? null,
-      slotsLeft: slotsLeft(event.capacity, registered.counts.get(event.id) ?? 0),
-      registrationStatus: statusByEvent.get(event.id) ?? null,
-    })),
+    events: open.events.map((event) => {
+      const slots = slotsLeft(event.capacity, registered.counts.get(event.id) ?? 0);
+      return {
+        ...event,
+        organiserName: event.organiserName ?? null,
+        capacity: event.capacity ?? null,
+        slotsLeft: slots,
+        registrationState: attendeeState(event, slots),
+        registrationStatus: statusByEvent.get(event.id) ?? null,
+      };
+    }),
   });
 });
 
@@ -310,7 +319,11 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
     return;
   }
   if (!event.open) {
-    res.status(409).json({ error: "This event is not open for registration", code: "not_open" });
+    res.status(409).json(
+      event.registrationState === "CLOSED"
+        ? { error: "Registration for this event is closed", code: "closed" }
+        : { error: "This event is not open for registration", code: "not_open" },
+    );
     return;
   }
 
@@ -333,68 +346,38 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  // Full events take no more registrations. The count and the write below
-  // are separate steps, not one transaction, so two attendees registering
-  // for the last place at the same instant could both get in — accepted,
-  // the same trade-off as the rest of this service's application-level checks.
-  if (event.capacity != null) {
-    const registered = await countRegistered(supabase!, [eventId]);
-    if (!registered.ok) {
-      res.status(500).json({ error: "Failed to register" });
-      return;
-    }
-    if (slotsLeft(event.capacity, registered.counts.get(eventId) ?? 0) === 0) {
-      res.status(409).json({ error: "This event is full", code: "event_full" });
-      return;
-    }
-  }
-
-  if (existing) {
-    // Re-registering after a withdrawal: same row, back to Registered. New
-    // additional_info replaces the old; leaving it out keeps what was there.
-    const { data: updated, error: updateError } = await supabase!
-      .from("registrations")
-      .update({
-        status: REGISTRATION_STATUS.registered,
-        ...(req.body?.additionalInfo !== undefined ? { additional_info: info.value } : {}),
-      })
-      .eq("registration_id", (existing as RegistrationRow).registration_id)
-      .select(REGISTRATION_COLUMNS)
-      .single();
-    if (updateError || !updated) {
-      res.status(500).json({ error: "Failed to register" });
-      return;
-    }
-    // E6-3 / #105 row 6: confirms the attendee's own registration.
-    await getPublisher().publish({
-      type: "registration.confirmed",
-      eventId,
-      actorId: user!.id,
-      recipients: { userIds: [user!.id], roles: [] },
-      data: { eventName: event.name },
-    });
-    res.json({ registration: toRegistration(updated as RegistrationRow) });
+  // The count and the write happen together inside register_for_event
+  // (migration 0040), serialised per event, so two attendees going for the
+  // last place can't both get in. Re-registering after a withdrawal reuses
+  // the same row: new additional_info replaces the old; leaving it out keeps
+  // what was there.
+  const { data: outcome, error: registerError } = await supabase!.rpc("register_for_event", {
+    p_event_id: eventId,
+    p_user_id: user!.id,
+    p_capacity: event.capacity ?? null,
+    p_additional_info: info.value,
+    p_set_info: req.body?.additionalInfo !== undefined,
+  });
+  if (registerError) {
+    res.status(500).json({ error: "Failed to register" });
     return;
   }
-
-  const { data: created, error: insertError } = await supabase!
-    .from("registrations")
-    .insert({
-      event_id: eventId,
-      user_id: user!.id,
-      status: REGISTRATION_STATUS.registered,
-      additional_info: info.value,
-    })
-    .select(REGISTRATION_COLUMNS)
-    .single();
-
-  if (insertError?.code === PG_UNIQUE_VIOLATION) {
-    // Two requests for the same event both passed the lookup; the unique
-    // constraint caught the second.
+  if (outcome === "already_registered") {
     alreadyRegistered();
     return;
   }
-  if (insertError || !created) {
+  if (outcome === "full") {
+    res.status(409).json({ error: "This event is full", code: "event_full" });
+    return;
+  }
+
+  const { data: saved, error: loadError } = await supabase!
+    .from("registrations")
+    .select(REGISTRATION_COLUMNS)
+    .eq("event_id", eventId)
+    .eq("user_id", user!.id)
+    .single();
+  if (loadError || !saved) {
     res.status(500).json({ error: "Failed to register" });
     return;
   }
@@ -408,10 +391,16 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
     data: { eventName: event.name },
   });
 
-  res.status(201).json({ registration: toRegistration(created as RegistrationRow) });
+  res.status(existing ? 200 : 201).json({ registration: toRegistration(saved as RegistrationRow) });
 });
 
-/** Give up a place. The row is kept as Withdrawn rather than deleted. */
+/**
+ * Give up a place (E6-4). The row is kept as Withdrawn rather than deleted,
+ * and the place is free at once (only Registered rows are counted). Allowed
+ * any time before the event starts — even inside the last 5 days, when
+ * registration itself has closed; the freed place stays unavailable then
+ * unless the coordinator forces registration open (AGENTS.md §3b).
+ */
 registrationsRouter.patch("/event/:eventId/withdraw", async (req: AuthedRequest, res) => {
   if (!requireAttendee(req, res)) return;
   const { supabase, user } = req;
@@ -440,6 +429,24 @@ registrationsRouter.patch("/event/:eventId/withdraw", async (req: AuthedRequest,
     res.status(409).json({ error: "You have already withdrawn from this event", code: "already_withdrawn" });
     return;
   }
+  if ((existing as RegistrationRow).status === REGISTRATION_STATUS.cancelled) {
+    res.status(409).json({ error: "This event was cancelled by the organiser", code: "event_cancelled" });
+    return;
+  }
+
+  const events = await fetchAttendeeEvents([eventId], req.headers.authorization!);
+  if (events.status === "error") {
+    res.status(502).json({ error: "Failed to load the event" });
+    return;
+  }
+  const event = events.events.find((e) => e.id === eventId);
+  if (event?.hasStarted) {
+    res.status(409).json({
+      error: "This event has already started, so you can no longer withdraw",
+      code: "event_started",
+    });
+    return;
+  }
 
   const { data: updated, error: updateError } = await supabase!
     .from("registrations")
@@ -452,13 +459,13 @@ registrationsRouter.patch("/event/:eventId/withdraw", async (req: AuthedRequest,
     return;
   }
 
-  // E6-4 / #105 row 7: confirms the attendee's own withdrawal.
+  // E6-4 / #105 row 7: confirms the attendee's own withdrawal, naming the event.
   await getPublisher().publish({
     type: "registration.withdrawn",
     eventId,
     actorId: user!.id,
     recipients: { userIds: [user!.id], roles: [] },
-    data: {},
+    data: event?.name ? { eventName: event.name } : {},
   });
 
   res.json({ registration: toRegistration(updated as RegistrationRow) });
@@ -468,10 +475,12 @@ registrationsRouter.patch("/event/:eventId/withdraw", async (req: AuthedRequest,
  * What an attendee sees when they open an event: name, description, date,
  * time, venue(s) and their own registration status — and nothing else.
  *
- * Access: allowed if they hold a Registered place, or if the event is open
- * for registration (so they can look before signing up). Otherwise denied
- * — an event that isn't open, that they aren't registered for, is
- * indistinguishable from one that doesn't exist.
+ * Access: allowed if they hold a Registered place, or held one when the
+ * organiser cancelled the event (Cancelled — E6-4, so they can see what
+ * happened), or if registration has opened for the event, even if it is now
+ * full or closed (so they can look before signing up). Otherwise denied — an
+ * event that isn't listed, that they hold no place for, is indistinguishable
+ * from one that doesn't exist.
  */
 registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) => {
   if (!requireAttendee(req, res)) return;
@@ -504,9 +513,10 @@ registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) 
   }
   const event = events.events.find((e) => e.id === eventId);
 
-  const hasPlace = registrationStatus === REGISTRATION_STATUS.registered;
-  if (!event || (!hasPlace && !event.open)) {
-    console.warn(`Attendee ${user!.id} denied access to event ${eventId} (not registered, not open)`);
+  const hasPlace =
+    registrationStatus === REGISTRATION_STATUS.registered || registrationStatus === REGISTRATION_STATUS.cancelled;
+  if (!event || (!hasPlace && !(event.listed ?? event.open))) {
+    console.warn(`Attendee ${user!.id} denied access to event ${eventId} (not registered, not listed)`);
     res.status(403).json({ error: "Access denied" });
     return;
   }
@@ -523,6 +533,7 @@ registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) 
     return;
   }
 
+  const slots = slotsLeft(event.capacity, registered.counts.get(eventId) ?? 0);
   res.json({
     event: {
       id: event.id,
@@ -535,9 +546,11 @@ registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) 
       accessibility: event.accessibility,
       organiserName: event.organiserName ?? null,
       capacity: event.capacity ?? null,
-      slotsLeft: slotsLeft(event.capacity, registered.counts.get(eventId) ?? 0),
+      slotsLeft: slots,
+      registrationState: attendeeState(event, slots),
       registrationStatus,
       open: event.open,
+      hasStarted: event.hasStarted ?? false,
     },
   });
 });

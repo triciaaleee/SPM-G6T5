@@ -547,7 +547,12 @@ describe("handleInboundMessage", () => {
     );
 
     expect(insert).toHaveBeenCalledWith([
-      expect.objectContaining({ recipient_id: "ATT-0001", title: "Registration confirmed" }),
+      expect.objectContaining({
+        recipient_id: "ATT-0001",
+        title: "Registration confirmed",
+        body: 'Your registration for "Nut Festival" is confirmed.',
+        link: "/attendee/events/7",
+      }),
     ]);
   });
 
@@ -570,6 +575,176 @@ describe("handleInboundMessage", () => {
         recipient_id: "ATT-0001",
         title: "Registration withdrawn",
         body: "You have withdrawn your registration.",
+        link: "/attendee/events/7",
+      }),
+    ]);
+  });
+
+  it("renders registration.cancelled_by_event, linking attendees to their own event page", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "registration.cancelled_by_event",
+        eventId: 7,
+        recipients: { userIds: ["ATT-0001"], roles: [] },
+        data: { eventName: "Spring Gala" },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "ATT-0001",
+        title: "Event cancelled",
+        body: 'Your registration for "Spring Gala" was cancelled because the event itself was cancelled.',
+        link: "/attendee/events/7",
+      }),
+    ]);
+  });
+
+  it("renders equipment.amended, listing what changed and what was released, linking Technical Support to the event's requests", async () => {
+    const { supabase, insert } = buildSupabase();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.amended",
+        eventId: 7,
+        recipients: { userIds: [], roles: ["technical_support"] },
+        data: {
+          eventName: "Alumni Gala",
+          released: 2,
+          changes: [
+            { kind: "quantity", equipmentType: "Projector", from: 5, to: 3, released: 2 },
+            { kind: "added", equipmentType: "Microphone", quantity: 2, released: 0 },
+            { kind: "removed", equipmentType: "Screen", quantity: 1, released: 0 },
+            { kind: "type", fromType: "Speaker", equipmentType: "Mixer", from: 2, to: 1, released: 0 },
+          ],
+        },
+      }),
+      { supabase, resolveRoleUserIds: vi.fn().mockResolvedValue(["TS-0001"]) },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "TS-0001",
+        title: "Equipment request amended",
+        body: "Alumni Gala's equipment request was amended: Projector 5 → 3; Added Microphone ×2; Removed Screen; Speaker ×2 → Mixer ×1. 2 reserved items were released back to inventory.",
+        link: "/equipment-requests/event/7",
+      }),
+    ]);
+  });
+
+  it("renders equipment.released for a coordinator cancelling one request, apart from an event cancellation", async () => {
+    const coordinatorCancelled = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.released",
+        eventId: 7,
+        recipients: { userIds: [], roles: ["technical_support"] },
+        data: {
+          eventName: "Alumni Gala",
+          reason: "coordinator_cancelled",
+          released: [{ equipmentType: "Projector", quantity: 3 }],
+        },
+      }),
+      { supabase: coordinatorCancelled.supabase, resolveRoleUserIds: vi.fn().mockResolvedValue(["TS-0001"]) },
+    );
+    expect(coordinatorCancelled.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        title: "Equipment request cancelled",
+        body: "Alumni Gala's equipment request was cancelled by its coordinator. Released back to inventory: 3× Projector.",
+        link: "/equipment-requests",
+      }),
+    ]);
+
+    const eventCancelled = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.released",
+        eventId: 7,
+        recipients: { userIds: [], roles: ["technical_support"] },
+        data: { eventName: "Alumni Gala", reason: "event_cancelled" },
+      }),
+      { supabase: eventCancelled.supabase, resolveRoleUserIds: vi.fn().mockResolvedValue(["TS-0001"]) },
+    );
+    expect(eventCancelled.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        title: "Equipment reservations released",
+        link: "/equipment-requests/event/7",
+      }),
+    ]);
+  });
+
+  it("renders equipment.unusable for the coordinator, with and without an end date (E5-5 AC2)", async () => {
+    const dated = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.unusable",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: {
+          eventName: "Alumni Gala",
+          equipmentType: "Projector",
+          reason: "Damaged",
+          startDate: "2026-11-03",
+          endDate: "2026-11-07",
+        },
+      }),
+      { supabase: dated.supabase, resolveRoleUserIds: vi.fn() },
+    );
+    expect(dated.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "Reserved equipment unavailable",
+        body: "Projector reserved for Alumni Gala is damaged from 3 Nov 2026 to 7 Nov 2026. Technical Support will need to arrange a replacement.",
+        link: "/events/7",
+      }),
+    ]);
+
+    const openEnded = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.unusable",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: {
+          eventName: "Alumni Gala",
+          equipmentType: "Projector",
+          reason: "Under Maintenance",
+          startDate: "2026-11-03",
+          endDate: null,
+        },
+      }),
+      { supabase: openEnded.supabase, resolveRoleUserIds: vi.fn() },
+    );
+    expect(openEnded.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        body: "Projector reserved for Alumni Gala is under maintenance from 3 Nov 2026 until further notice. Technical Support will need to arrange a replacement.",
+      }),
+    ]);
+
+    const several = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.unusable",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: {
+          eventName: "Alumni Gala",
+          equipmentType: "Projector",
+          quantity: 2,
+          reason: "Damaged",
+          startDate: "2026-11-03",
+          endDate: "2026-11-07",
+        },
+      }),
+      { supabase: several.supabase, resolveRoleUserIds: vi.fn() },
+    );
+    expect(several.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        body: "2 Projector units reserved for Alumni Gala are damaged from 3 Nov 2026 to 7 Nov 2026. Technical Support will need to arrange a replacement.",
       }),
     ]);
   });

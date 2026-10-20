@@ -72,3 +72,18 @@ export function occupiedWindow(schedule: WindowSchedule): OccupiedWindow | null 
 export function overlaps(a: OccupiedWindow, b: OccupiedWindow): boolean {
   return a.startMs < b.endMs && b.startMs < a.endMs;
 }
+
+/**
+ * E5-5: the window a unit-unavailability period covers — `startDate` through
+ * `endDate`, both inclusive whole days, or open-ended (until marked usable
+ * again) when `endDate` is null. Same wall-clock-as-UTC reading as
+ * `occupiedWindow`, so the two compare directly. Null for a malformed date.
+ */
+export function dateRangeWindow(startDate: string, endDate: string | null): OccupiedWindow | null {
+  const startMs = dateStartMs(startDate);
+  if (startMs === null) return null;
+  if (endDate === null) return { startMs, endMs: Number.MAX_SAFE_INTEGER };
+  const endDayMs = dateStartMs(endDate);
+  if (endDayMs === null) return null;
+  return { startMs, endMs: endDayMs + DAY_MS };
+}

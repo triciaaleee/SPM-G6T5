@@ -31,6 +31,41 @@ export function eventEndsAt(details: Record<string, unknown>): Date | null {
   return Number.isNaN(endsAt.getTime()) ? null : endsAt;
 }
 
+/** Used when an event has a date but no start time: it starts at the beginning of that day. */
+const START_OF_DAY = "00:00";
+
+/**
+ * The moment the event starts, or null when it has no valid date (or an
+ * unreadable start time). Mirrors eventEndsAt.
+ */
+export function eventStartsAt(details: Record<string, unknown>): Date | null {
+  const date = details.proposedDate;
+  if (typeof date !== "string" || !DATE_PATTERN.test(date)) return null;
+
+  const startTime = details.startTime === undefined || details.startTime === null ? START_OF_DAY : details.startTime;
+  if (typeof startTime !== "string" || !TIME_PATTERN.test(startTime)) return null;
+
+  const startsAt = new Date(`${date}T${startTime}:00${EVENT_UTC_OFFSET}`);
+  return Number.isNaN(startsAt.getTime()) ? null : startsAt;
+}
+
+/**
+ * True once the event has started (Singapore time). An event whose start
+ * can't be worked out is treated as not started. E6-4: attendees may
+ * withdraw any time before this.
+ */
+export function hasEventStarted(details: Record<string, unknown>, now: Date = new Date()): boolean {
+  const startsAt = eventStartsAt(details);
+  return startsAt !== null && startsAt.getTime() <= now.getTime();
+}
+
+/** The start of a local (Singapore) calendar day, or null for a malformed date. */
+export function localDateStart(date: unknown): Date | null {
+  if (typeof date !== "string" || !DATE_PATTERN.test(date)) return null;
+  const start = new Date(`${date}T00:00:00${EVENT_UTC_OFFSET}`);
+  return Number.isNaN(start.getTime()) ? null : start;
+}
+
 /**
  * True once the event's end time has passed. An event whose end can't be
  * worked out is treated as not ended, so nothing that depends on it having

@@ -4,7 +4,12 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { BellIcon } from "@heroicons/vue/24/outline";
 import { XMarkIcon } from "@heroicons/vue/20/solid";
-import { fetchNotifications, markNotificationsRead, type AppNotification } from "../../lib/notificationsApi";
+import {
+  NOTIFICATIONS_REFRESH_EVENT,
+  fetchNotifications,
+  markNotificationsRead,
+  type AppNotification,
+} from "../../lib/notificationsApi";
 
 /**
  * E7-1: the header's notification bell. The badge flags unread
@@ -14,8 +19,9 @@ import { fetchNotifications, markNotificationsRead, type AppNotification } from 
  * header isn't being looked at.
  *
  * Notification-service has no push channel yet (the C4 model plans a
- * broker), so the feed is polled, and refreshed whenever the tab regains
- * focus.
+ * broker), so the feed is polled, refreshed whenever the tab regains
+ * focus, and refreshed on request after an action that notifies the user
+ * (`requestNotificationsRefresh`).
  */
 
 const POLL_MS = 30_000;
@@ -167,6 +173,7 @@ onMounted(() => {
   document.addEventListener("click", onDocumentClick);
   document.addEventListener("keydown", onKeydown);
   document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener(NOTIFICATIONS_REFRESH_EVENT, refresh);
 });
 
 onBeforeUnmount(() => {
@@ -175,6 +182,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("click", onDocumentClick);
   document.removeEventListener("keydown", onKeydown);
   document.removeEventListener("visibilitychange", onVisible);
+  window.removeEventListener(NOTIFICATIONS_REFRESH_EVENT, refresh);
   document.title = baseTitle;
 });
 </script>

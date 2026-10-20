@@ -324,6 +324,11 @@ onMounted(async () => {
                   {{ item.equipmentType }}
                 </strong>
 
+                <!-- E5-5 / E5-6 AC3: a reserved unit that is now unusable for the event needs re-arranging. -->
+                <p v-if="item.reservationFlag?.flagged" class="body-small flag-note" data-testid="reservation-flag" role="alert">
+                  {{ item.reservationFlag.reason }}
+                </p>
+
                 <!-- E5-4: checked automatically against the event's own date and time. -->
                 <template v-if="r.status === 'Requested'">
                   <p v-if="availabilityFor(item).loading" class="body-small muted">Checking availability…</p>
@@ -649,6 +654,15 @@ onMounted(async () => {
 
 .availability-result--short {
   color: var(--color-error-600);
+}
+
+/* A reserved unit that no longer holds (E5-5): the Warning set's "needs attention" role. */
+.flag-note {
+  margin: var(--spacing-4) 0 0;
+  padding: var(--spacing-4) var(--spacing-8);
+  border-radius: var(--radius-xs);
+  background: var(--color-warning-100);
+  color: var(--color-warning-900);
 }
 
 .request-card__note {

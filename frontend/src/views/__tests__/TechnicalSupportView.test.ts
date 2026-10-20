@@ -64,6 +64,7 @@ function makeRequest(options: Options = {}): EquipmentRequestWithEvent {
       equipmentType: item.type,
       quantity: item.quantity,
       quantityFulfilled: item.fulfilled ?? 0,
+      reservationFlag: { flagged: false, reason: null },
     })),
     event: { id: eventId, name, proposedDate: dayKey(offset), startTime: start, endTime: end, venue },
   };

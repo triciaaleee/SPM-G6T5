@@ -20,6 +20,7 @@ function registration(event: Partial<NonNullable<MyRegistration["event"]>> | nul
       endTime: "16:00",
       venues: [],
       accessibility: null,
+      organiserName: null,
       ...event,
     },
   };

@@ -19,6 +19,47 @@ function eventLink(msg: InboundMessage): string | null {
   return msg.eventId !== null ? `/events/${msg.eventId}` : null;
 }
 
+/** Attendees can't open `/events/:id` (staff only); their view of an event lives under `/attendee/events/:id`. */
+function attendeeEventLink(msg: InboundMessage): string | null {
+  return msg.eventId !== null ? `/attendee/events/${msg.eventId}` : null;
+}
+
+/** Technical Support can't open `/events/:id` (staff only); their view of an event's requests is `/equipment-requests/event/:id`. */
+function supportEventLink(msg: InboundMessage): string | null {
+  return msg.eventId !== null ? `/equipment-requests/event/${msg.eventId}` : null;
+}
+
+/** "2026-11-03" → "3 Nov 2026"; anything else is shown as given, and nothing gives "". */
+function formatUnavailabilityDate(value: unknown): string {
+  if (typeof value !== "string" || value === "") return "";
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+interface AmendedChange {
+  kind: "quantity" | "type" | "added" | "removed";
+  equipmentType: string;
+  fromType?: string;
+  from?: number;
+  to?: number;
+  quantity?: number;
+}
+
+/** "Projector 5 → 3", "Added Microphone ×2", "Removed Screen", "Projector ×5 → Microphone ×5". */
+function describeAmendedChange(change: AmendedChange): string {
+  switch (change.kind) {
+    case "added":
+      return `Added ${change.equipmentType} ×${change.quantity ?? 1}`;
+    case "removed":
+      return `Removed ${change.equipmentType}`;
+    case "type":
+      return `${change.fromType} ×${change.from} → ${change.equipmentType} ×${change.to}`;
+    default:
+      return `${change.equipmentType} ${change.from} → ${change.to}`;
+  }
+}
+
 /**
  * One entry per message type notification-service is ready to render
  * (RabbitMQ.md section 3). A representative subset for the initial
@@ -255,14 +296,14 @@ const TEMPLATES: Record<string, Template> = {
   "registration.confirmed": (msg) => ({
     title: "Registration confirmed",
     body: `Your registration for "${msg.data.eventName ?? "this event"}" is confirmed.`,
-    link: eventLink(msg),
+    link: attendeeEventLink(msg),
   }),
 
-  /** #32 in RabbitMQ.md section 3.5 (#105 row 7) — to the withdrawing attendee. No eventName: the withdraw route doesn't fetch the event, so this falls back to generic wording. */
+  /** #32 in RabbitMQ.md section 3.5 (#105 row 7) — to the withdrawing attendee. Generic wording if eventName is missing. */
   "registration.withdrawn": (msg) => ({
     title: "Registration withdrawn",
     body: `You have withdrawn your registration${msg.data.eventName ? ` for "${msg.data.eventName}"` : ""}.`,
-    link: eventLink(msg),
+    link: attendeeEventLink(msg),
   }),
 
   /** #15 in RabbitMQ.md section 3.3 (#106 row 1) — to the venue's assigned staff member. */
@@ -359,17 +400,52 @@ const TEMPLATES: Record<string, Template> = {
     return {
       title: "New equipment request",
       body: `${msg.data.eventName ?? "An event"} needs ${count} equipment item${count === 1 ? "" : "s"} arranged.`,
-      link: eventLink(msg),
+      link: supportEventLink(msg),
     };
   },
 
-  /** #34 in RabbitMQ.md section 3.4 (E3-6 AC3) — to every Technical Support Staff member. */
+  /** #27 in RabbitMQ.md section 3.4 (E5-2 AC1) — to every Technical Support Staff member; `data.changes` says what changed. */
+  "equipment.amended": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    const changes = Array.isArray(msg.data.changes) ? (msg.data.changes as AmendedChange[]) : [];
+    const released = Number(msg.data.released ?? 0);
+    const lines = changes.map(describeAmendedChange);
+    const summary = lines.length > 0 ? lines.join("; ") : "its items were changed";
+    const releasedNote =
+      released > 0 ? ` ${released} reserved ${released === 1 ? "item was" : "items were"} released back to inventory.` : "";
+    return {
+      title: "Equipment request amended",
+      body: `${eventName}'s equipment request was amended: ${summary}.${releasedNote}`,
+      link: supportEventLink(msg),
+    };
+  },
+
+  /**
+   * #34 (E3-6 AC3, the event was cancelled) and #30 (E5-2 AC3,
+   * `reason: coordinator_cancelled`, the coordinator cancelled one request) in
+   * RabbitMQ.md section 3.4 — to every Technical Support Staff member.
+   */
   "equipment.released": (msg) => {
     const eventName = String(msg.data.eventName ?? "An event");
+    if (msg.data.reason === "coordinator_cancelled") {
+      const released = Array.isArray(msg.data.released)
+        ? (msg.data.released as { equipmentType: string; quantity: number }[])
+        : [];
+      const detail =
+        released.length > 0
+          ? ` Released back to inventory: ${released.map((item) => `${item.quantity}× ${item.equipmentType}`).join(", ")}.`
+          : "";
+      return {
+        title: "Equipment request cancelled",
+        body: `${eventName}'s equipment request was cancelled by its coordinator.${detail}`,
+        // The cancelled request is no longer in Technical Support's queue, so land on the queue.
+        link: "/equipment-requests",
+      };
+    }
     return {
       title: "Equipment reservations released",
       body: `${eventName} was cancelled, so its equipment reservations were released back to inventory.`,
-      link: eventLink(msg),
+      link: supportEventLink(msg),
     };
   },
 
@@ -377,8 +453,32 @@ const TEMPLATES: Record<string, Template> = {
   "registration.cancelled_by_event": (msg) => ({
     title: "Event cancelled",
     body: `Your registration${msg.data.eventName ? ` for "${msg.data.eventName}"` : ""} was cancelled because the event itself was cancelled.`,
-    link: eventLink(msg),
+    link: attendeeEventLink(msg),
   }),
+
+  /**
+   * #29 in RabbitMQ.md section 3.4 (E5-5 AC2) — to the assigned coordinator of
+   * each event holding a reservation on a unit Technical Support just marked
+   * unusable. `data.quantity` is how many of that event's units are affected
+   * (1 if absent). `data.startDate` / `data.endDate` are YYYY-MM-DD; no end date
+   * means "until it is marked usable again".
+   */
+  "equipment.unusable": (msg) => {
+    const eventName = String(msg.data.eventName ?? "Your event");
+    const equipmentType = String(msg.data.equipmentType ?? "A reserved item");
+    const reason = String(msg.data.reason ?? "unavailable").toLowerCase();
+    const from = formatUnavailabilityDate(msg.data.startDate);
+    const to = formatUnavailabilityDate(msg.data.endDate);
+    const period = to ? `from ${from} to ${to}` : `from ${from} until further notice`;
+    const quantity = Math.max(1, Number(msg.data.quantity ?? 1));
+    const subject =
+      quantity > 1 ? `${quantity} ${equipmentType} units reserved for ${eventName} are` : `${equipmentType} reserved for ${eventName} is`;
+    return {
+      title: "Reserved equipment unavailable",
+      body: `${subject} ${reason} ${period}. Technical Support will need to arrange a replacement.`,
+      link: eventLink(msg),
+    };
+  },
 
   /** #28 in RabbitMQ.md section 3.4 (#107 row 5) — to the assigned coordinator. */
   "equipment.status_changed": (msg) => {

@@ -74,7 +74,7 @@ describe("AttendeeEventsView", () => {
     const wrapper = await mountView();
 
     const tabs = wrapper.findAll('[role="tab"]');
-    expect(tabs.map((t) => t.text())).toEqual(["Upcoming", "Past", "Withdrawn"]);
+    expect(tabs.map((t) => t.text())).toEqual(["Upcoming", "Past", "Withdrawn", "Cancelled"]);
     expect(wrapper.findAll(".event-card")).toHaveLength(2);
 
     await tabs[1].trigger("click");
@@ -128,6 +128,25 @@ describe("AttendeeEventsView", () => {
     expect(wrapper.findAll(".event-card h2").map((h) => h.text())).toEqual(["Event 2", "Event 3"]);
     expect(wrapper.findAll(".badge").map((b) => b.text())).toEqual(["Withdrawn", "Withdrawn"]);
     expect(wrapper.find(".status-over").exists()).toBe(false);
+  });
+
+  it("puts registrations for events the organiser cancelled under Cancelled, apart from withdrawals", async () => {
+    mockedFetch.mockResolvedValue([
+      registration(1, { status: "Withdrawn" }),
+      registration(2, { status: "Cancelled" }),
+    ]);
+    const wrapper = await mountView();
+    const tabs = wrapper.findAll('[role="tab"]');
+
+    expect(wrapper.findAll(".event-card")).toHaveLength(0);
+
+    await tabs[2].trigger("click");
+    expect(wrapper.findAll(".event-card h2").map((h) => h.text())).toEqual(["Event 1"]);
+
+    await tabs[3].trigger("click");
+    expect(wrapper.findAll(".event-card h2").map((h) => h.text())).toEqual(["Event 2"]);
+    expect(wrapper.find(".badge").text()).toBe("Cancelled");
+    expect(wrapper.find(".badge").classes()).toContain("status-error");
   });
 
   it("has no Withdraw button, and the status badge has a leading dot like the organiser's card", async () => {

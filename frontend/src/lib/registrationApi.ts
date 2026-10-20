@@ -1,5 +1,5 @@
 import { authHeader, redirectIfUnauthenticated } from "./eventsApi";
-import type { RegistrationStatus } from "./registrationStatus";
+import type { RegistrationStateValue, RegistrationStatus } from "./registrationStatus";
 
 /** The attendee-facing fields of an event, as registration-service returns them. */
 export interface RegisteredEventInfo {
@@ -44,6 +44,10 @@ export interface AttendeeEventView {
   /** Null when the attendee has no registration for this event. */
   registrationStatus: RegistrationStatus | null;
   open: boolean;
+  /** Open, full, closed, or not yet open; absent from older responses. */
+  registrationState?: RegistrationStateValue;
+  /** E6-4: the event has started, so a place can no longer be withdrawn. */
+  hasStarted?: boolean;
 }
 
 /** An event open for registration, with the caller's own registration status for it (null if none). */
@@ -61,6 +65,7 @@ export interface OpenEvent {
   /** Places still free (0 = full); null when the event has no cap. */
   slotsLeft: number | null;
   registrationStatus: RegistrationStatus | null;
+  registrationState?: RegistrationStateValue;
 }
 
 /** The backend refused the event: the attendee isn't registered and it isn't open (or it doesn't exist). */

@@ -28,8 +28,14 @@ export interface AttendeeEventInfo {
   capacity: number | null;
   /** The organiser's display name (name only), or null when it isn't known. */
   organiserName?: string | null;
-  /** Confirmed, registration needed and not yet ended — decided by events-service. */
+  /** Registration state decided by events-service (it can't see the count, so never FULL here). */
+  registrationState?: "NOT_OPEN" | "OPEN" | "CLOSED";
+  /** Registration has opened for attendees (open date reached or forced open). */
+  listed?: boolean;
+  /** The state is OPEN: Confirmed, in the registration period, not started. */
   open: boolean;
+  /** E6-4: the event has started (Singapore time), so a place can no longer be withdrawn. */
+  hasStarted?: boolean;
 }
 
 export type FetchEventsResult = { status: "ok"; events: AttendeeEventInfo[] } | { status: "error" };
@@ -53,7 +59,7 @@ export async function fetchAttendeeEvents(eventIds: number[], authorization: str
   return getEvents(`/api/events/attendee-info?ids=${eventIds.join(",")}`, authorization);
 }
 
-/** Every event currently open for registration. */
+/** Every event whose registration has opened (open, full or closed) — not ones still to open. */
 export async function fetchOpenEvents(authorization: string): Promise<FetchEventsResult> {
   return getEvents("/api/events/open-for-registration", authorization);
 }

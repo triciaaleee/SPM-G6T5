@@ -3,6 +3,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEventBookingInfo } from "../lib/eventsClient.js";
 import { fetchUnitsByType, unitsBlocked } from "../lib/equipmentConflicts.js";
+import { unusableUnitsInWindow } from "../lib/unitUnavailability.js";
 import { occupiedWindow } from "../lib/scheduleWindow.js";
 import { validateAvailabilityQuery } from "../lib/validateAvailabilityQuery.js";
 
@@ -26,8 +27,9 @@ equipmentAvailabilityRouter.use(requireAuth);
 
 /**
  * AC1: how many usable units of `type` are free for `eventId`'s own
- * date/time. AC2: units marked Damaged/Under Maintenance never count.
- * AC3: the shortfall against `quantity`, if any.
+ * date/time. AC2: units marked Damaged/Under Maintenance never count — whether
+ * by status (unusable indefinitely) or by a period (E5-5) that overlaps this
+ * event. AC3: the shortfall against `quantity`, if any.
  */
 equipmentAvailabilityRouter.get("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -84,7 +86,17 @@ equipmentAvailabilityRouter.get("/", async (req: AuthedRequest, res) => {
   }
 
   const totalUnits = equipmentRows.length;
-  const usableIds = equipmentRows.filter((row) => row.status === "Available").map((row) => row.id);
+  const availableIds = equipmentRows.filter((row) => row.status === "Available").map((row) => row.id);
+
+  // E5-5: a period overlapping the event's date takes a unit out too.
+  let unusableInWindow: Set<number>;
+  try {
+    unusableInWindow = await unusableUnitsInWindow(supabase, availableIds, targetWindow);
+  } catch {
+    res.status(500).json({ error: "Failed to load equipment unavailability" });
+    return;
+  }
+  const usableIds = availableIds.filter((id) => !unusableInWindow.has(id));
   const unusableCount = totalUnits - usableIds.length;
 
   let reservedElsewhereCount: number;

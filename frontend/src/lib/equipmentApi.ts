@@ -9,6 +9,8 @@ export interface ReservationFlag {
 /** E5-1: one line item on an equipment request — type and quantity. */
 export interface EquipmentItem {
   id: number;
+  /** The catalog entry the item draws stock from; null for a request recorded before the catalog existed. */
+  equipmentCatalogId?: number | null;
   equipmentType: string;
   quantity: number;
   /** E5-3: how much of this item is currently taken off the shelf for this request. */
@@ -16,6 +18,9 @@ export interface EquipmentItem {
   /** E5-6 AC1/AC3: set once this item has been Arranged/Partially Fulfilled. */
   reservationFlag: ReservationFlag;
 }
+
+/** E5-2: the coordinator cancelled the whole request — kept as history, nothing is reserved against it. */
+export const CANCELLED_REQUEST_STATUS = "Cancelled";
 
 /** E5-3: the real values status can take on, fixed by that story. */
 export const EQUIPMENT_REQUEST_STATUSES = ["Requested", "Arranged", "Partially Fulfilled"] as const;
@@ -62,7 +67,10 @@ export interface EquipmentCatalogItem {
   id: number;
   name: string;
   totalStock: number;
+  /** Stock not held by requests, minus the units out of use today (they return when their period ends). */
   availableStock: number;
+  /** How many units are out of use today and so already taken off `availableStock`; absent from older responses. */
+  unusableNow?: number;
 }
 
 export interface EquipmentItemInput {
@@ -97,6 +105,8 @@ const apiBase =
   (import.meta.env.VITE_EQUIPMENT_API_URL as string | undefined) ?? "http://localhost:4005/api/equipment-requests";
 const catalogApiBase =
   (import.meta.env.VITE_EQUIPMENT_CATALOG_API_URL as string | undefined) ?? "http://localhost:4005/api/equipment-catalog";
+const unitsApiBase =
+  (import.meta.env.VITE_EQUIPMENT_UNITS_API_URL as string | undefined) ?? "http://localhost:4005/api/equipment-units";
 const availabilityApiBase =
   (import.meta.env.VITE_EQUIPMENT_AVAILABILITY_API_URL as string | undefined) ??
   "http://localhost:4005/api/equipment-availability";
@@ -159,6 +169,245 @@ export async function submitEquipmentRequest(
     throw new EquipmentRequestError(body.error ?? "Failed to record the equipment request");
   }
   return body as { equipmentRequest: EquipmentRequest; notified: boolean };
+}
+
+/** One row of an amended request: an existing item (`itemId`) or a new one (no `itemId`). */
+export interface AmendedItemInput extends EquipmentItemInput {
+  itemId?: number;
+}
+
+/** What one amendment changed, as the backend reports it (migration 0042). */
+export interface AmendmentChange {
+  kind: "quantity" | "type" | "added" | "removed";
+  equipmentType: string;
+  fromType?: string;
+  from?: number;
+  to?: number;
+  quantity?: number;
+  /** How many reserved units this change released back to inventory. */
+  released: number;
+}
+
+async function readBody(res: Response): Promise<Record<string, any>> {
+  try {
+    return await res.json();
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * E5-2 AC1/AC2: the assigned coordinator amends a request's types and
+ * quantities. Lowering a quantity below what is reserved releases the
+ * surplus back to inventory (`released` says how many); Technical Support are
+ * notified of what changed unless nothing did (`changes` is empty).
+ */
+export async function amendEquipmentRequest(
+  requestId: number,
+  items: AmendedItemInput[],
+): Promise<{ equipmentRequest: EquipmentRequest; changes: AmendmentChange[]; released: number; notified: boolean }> {
+  const res = await fetch(`${apiBase}/${requestId}/items`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeader() },
+    body: JSON.stringify({ items }),
+  });
+
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+
+  if (res.status === 400) {
+    throw new EquipmentValidationError(body.fields ?? {});
+  }
+  if (!res.ok) {
+    throw new EquipmentRequestError(body.error ?? "Failed to amend the equipment request");
+  }
+  return body as { equipmentRequest: EquipmentRequest; changes: AmendmentChange[]; released: number; notified: boolean };
+}
+
+/**
+ * E5-2 AC3: the assigned coordinator cancels a request entirely. Everything
+ * reserved against it is released (`released` lists what went back) and
+ * Technical Support are notified.
+ */
+export async function cancelEquipmentRequest(
+  requestId: number,
+): Promise<{ equipmentRequest: EquipmentRequest; released: { equipmentType: string; quantity: number }[]; notified: boolean }> {
+  const res = await fetch(`${apiBase}/${requestId}/cancel`, { method: "POST", headers: authHeader() });
+
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+
+  if (!res.ok) {
+    throw new EquipmentRequestError(body.error ?? "Failed to cancel the equipment request");
+  }
+  return body as {
+    equipmentRequest: EquipmentRequest;
+    released: { equipmentType: string; quantity: number }[];
+    notified: boolean;
+  };
+}
+
+/** E5-5: why a unit is out of use. */
+export const UNIT_UNAVAILABILITY_REASONS = ["Damaged", "Under Maintenance"] as const;
+export type UnitUnavailabilityReason = (typeof UNIT_UNAVAILABILITY_REASONS)[number];
+
+/** E5-5: one period a unit is unusable. `endDate` null means until it is marked usable again. */
+export interface UnitUnavailabilityPeriod {
+  id: number;
+  reason: UnitUnavailabilityReason;
+  /** YYYY-MM-DD, inclusive. */
+  startDate: string;
+  endDate: string | null;
+  note: string | null;
+}
+
+/** E5-5: one physical unit. `status` is its own condition (Available, or Damaged/Under Maintenance with no dates). */
+export interface EquipmentUnit {
+  id: number;
+  type: string;
+  status: string;
+  /** Optional tag for the physical unit, e.g. the sticker number on it. */
+  label: string | null;
+  /** Periods running now or still to come. */
+  periods: UnitUnavailabilityPeriod[];
+}
+
+/** What marking a type's units unusable for a period would do to one unit. */
+export type UnitImpactState = "free" | "reserved" | "unavailable";
+
+export interface UnitImpactEvent {
+  eventId: number;
+  eventName: string;
+  proposedDate: string | null;
+  startTime: string | null;
+}
+
+export interface UnitImpact {
+  id: number;
+  label: string | null;
+  /** free: nothing reserved then. reserved: held for the events listed. unavailable: already out of use (`reason`). */
+  state: UnitImpactState;
+  reason: string | null;
+  events: UnitImpactEvent[];
+}
+
+export interface UnitImpactPreview {
+  type: string;
+  units: UnitImpact[];
+  /** How many units could be marked (not already out of use). */
+  pickable: number;
+  /** The units the system would take for `quantity`: free ones first, then those reserved for the events furthest away. */
+  suggested: number[];
+}
+
+export interface MarkUnitsInput {
+  type: string;
+  unitIds: number[];
+  reason: UnitUnavailabilityReason;
+  startDate: string;
+  endDate?: string;
+  note?: string;
+}
+
+export interface MarkUnitsResult {
+  periods: { unitId: number; label: string | null; period: UnitUnavailabilityPeriod }[];
+  /** Events holding one of the marked units in the period, whose coordinators are notified. */
+  affectedEvents: { eventId: number; eventName: string; units: number }[];
+  notified: boolean;
+}
+
+/** Technical Support: every unit with its running and upcoming unusable periods (E5-5). */
+export async function fetchEquipmentUnits(): Promise<EquipmentUnit[]> {
+  const res = await fetch(unitsApiBase, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) throw new Error("Failed to load equipment units");
+  return ((await res.json()) as { units: EquipmentUnit[] }).units;
+}
+
+/**
+ * E5-5: the preview before marking units unusable — every unit of `type` with
+ * its state for the period (free, reserved for which events, or already out of
+ * use), and the units suggested for `quantity`. Nothing is saved.
+ */
+export async function fetchUnitImpact(
+  type: string,
+  period: { startDate: string; endDate?: string; quantity?: number },
+): Promise<UnitImpactPreview> {
+  const query = new URLSearchParams({ type, startDate: period.startDate });
+  if (period.endDate) query.set("endDate", period.endDate);
+  if (period.quantity !== undefined) query.set("quantity", String(period.quantity));
+
+  const res = await fetch(`${unitsApiBase}/impact?${query}`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+
+  if (res.status === 400) throw new EquipmentValidationError(body.fields ?? {});
+  if (!res.ok) throw new EquipmentRequestError(body.error ?? "Failed to check the impact");
+  return body as UnitImpactPreview;
+}
+
+/**
+ * E5-5 AC1/AC2: mark the chosen units unusable for a period. `affectedEvents`
+ * lists the events holding one of them in that period, whose coordinators are
+ * notified (`notified` is false when any notice couldn't be sent).
+ */
+export async function markUnitsUnusable(input: MarkUnitsInput): Promise<MarkUnitsResult> {
+  const res = await fetch(`${unitsApiBase}/mark`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeader() },
+    body: JSON.stringify(input),
+  });
+
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+
+  if (res.status === 400) throw new EquipmentValidationError(body.fields ?? {});
+  if (!res.ok) throw new EquipmentRequestError(body.error ?? "Failed to mark the equipment unusable");
+  return body as MarkUnitsResult;
+}
+
+/** Mark units usable again by removing the given unusable periods (typically a group marked together). */
+export async function clearUnavailability(periodIds: number[]): Promise<number> {
+  const res = await fetch(`${unitsApiBase}/unavailability/clear`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeader() },
+    body: JSON.stringify({ periodIds }),
+  });
+
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+  if (!res.ok) throw new EquipmentRequestError(body.error ?? "Failed to mark the equipment usable again");
+  return (body as { removed: number }).removed;
+}
+
+/** Set or clear a unit's label (blank clears it). */
+export async function setUnitLabel(unitId: number, label: string): Promise<{ id: number; label: string | null }> {
+  const res = await fetch(`${unitsApiBase}/${unitId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeader() },
+    body: JSON.stringify({ label }),
+  });
+
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+
+  if (res.status === 400) throw new EquipmentValidationError(body.fields ?? {});
+  if (!res.ok) throw new EquipmentRequestError(body.error ?? "Failed to save the label");
+  return (body as { unit: { id: number; label: string | null } }).unit;
+}
+
+/** Mark a unit usable again by removing one of its unusable periods. */
+export async function markUnitUsable(unitId: number, periodId: number): Promise<void> {
+  const res = await fetch(`${unitsApiBase}/${unitId}/unavailability/${periodId}`, {
+    method: "DELETE",
+    headers: authHeader(),
+  });
+
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) {
+    const body = await readBody(res);
+    throw new EquipmentRequestError(body.error ?? "Failed to mark the equipment usable again");
+  }
 }
 
 /** The equipment requests already recorded for one event (coordinator view). */
@@ -271,10 +520,50 @@ export function createCatalogItem(name: string, totalStock: number): Promise<Equ
   return writeCatalog(catalogApiBase, "POST", { name, totalStock }, "Failed to add the equipment item");
 }
 
-/** E5-1 AC3: correct an item's total and/or available stock. */
-export function updateCatalogItem(
-  id: number,
-  changes: { totalStock?: number; availableStock?: number },
-): Promise<EquipmentCatalogItem> {
-  return writeCatalog(`${catalogApiBase}/${id}`, "PATCH", changes, "Failed to update the equipment item");
+/** One recorded change to an item's total stock. */
+export interface StockChange {
+  id: number;
+  changeType: "Added" | "Removed";
+  quantity: number;
+  totalBefore: number;
+  totalAfter: number;
+  reason: string;
+  /** The user id of whoever made the change. */
+  changedBy: string | null;
+  createdAt: string;
+}
+
+export interface StockChangeInput {
+  direction: "add" | "remove";
+  quantity: number | string;
+  reason: string;
+}
+
+/**
+ * Add or remove stock of an item, with a reason. The unit rows are created or
+ * removed to match, and only free units (not reserved, not out of use) can be
+ * removed — the error says how many can go when too many were asked for.
+ * Available stock is derived and is never set directly.
+ */
+export async function changeStock(id: number, change: StockChangeInput): Promise<EquipmentCatalogItem> {
+  const res = await fetch(`${catalogApiBase}/${id}/stock`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeader() },
+    body: JSON.stringify(change),
+  });
+
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+
+  if (res.status === 400 && body.fields) throw new EquipmentValidationError(body.fields);
+  if (!res.ok || !body.equipment) throw new EquipmentRequestError(body.error ?? "Failed to change the stock");
+  return body.equipment as EquipmentCatalogItem;
+}
+
+/** The most recent stock changes of an item, newest first. */
+export async function fetchStockHistory(id: number): Promise<StockChange[]> {
+  const res = await fetch(`${catalogApiBase}/${id}/stock-history`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  if (!res.ok) throw new Error("Failed to load the stock history");
+  return ((await res.json()) as { changes: StockChange[] }).changes;
 }

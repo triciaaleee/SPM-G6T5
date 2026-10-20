@@ -332,6 +332,36 @@ export function updateVenue(venueId: number, draft: VenueDraft): Promise<VenueUp
   return sendVenue(`${apiBase}/staff/venues/${venueId}`, "PATCH", draft, "Failed to update the venue");
 }
 
+/** One side of a persisted, flagged overlap pair — no `hasCoordinator`, unlike `OverlapSide`: this list is for display, not for notifying. */
+interface BufferOverlapRecordSide {
+  bookingId: number;
+  eventId: number | null;
+  eventName: string | null;
+  window: string;
+}
+
+/** E4-13 AC2: one persisted, flagged setup/turnaround overlap pair, as GET /buffer-overlaps returns it. */
+export interface BufferOverlapRecord {
+  id: number;
+  detectedAt: string;
+  first: BufferOverlapRecordSide;
+  second: BufferOverlapRecordSide;
+}
+
+/**
+ * E4-13 AC2/AC3: the venue's currently flagged overlap pairs — a persisted
+ * list Venue Staff can revisit, not a one-shot preview. There is no
+ * dismiss action: a pair leaves this list only when it stops overlapping
+ * (reconciled server-side).
+ */
+export async function fetchBufferOverlaps(venueId: number): Promise<BufferOverlapRecord[]> {
+  const res = await fetch(`${apiBase}/staff/venues/${venueId}/buffer-overlaps`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? "Failed to load flagged bookings");
+  return (body as { overlaps: BufferOverlapRecord[] }).overlaps;
+}
+
 /** Bookings at one venue between two local dates, inclusive (at most 42 days). */
 export async function fetchVenueBookings(venueId: number, from: string, to: string): Promise<VenueBooking[]> {
   const params = new URLSearchParams({ from, to });
