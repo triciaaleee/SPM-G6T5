@@ -147,6 +147,12 @@ Organiser cancels
 
 An event with no bookings, equipment or registrations produces only `event.cancelled`.
 
+### 3.7 Chat (chat-service)
+
+| # | Trigger | Message | Recipients | Source |
+|---|---|---|---|---|
+| 36 | New chat message | `message.sent` | The other party (coordinator if the organiser sent it, organiser if the coordinator sent it) | E2-15 |
+
 ## 4. Messages consumed for something other than notifications
 
 | Message | Consumer | What it does |
