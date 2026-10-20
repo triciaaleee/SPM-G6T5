@@ -69,7 +69,7 @@ export interface BookingRow {
   decided_at: string | null;
 }
 
-interface VenueRow {
+export interface VenueRow {
   id: number;
   name: string;
   location: string;
@@ -77,7 +77,7 @@ interface VenueRow {
   turnaround_minutes: number | null;
 }
 
-const VENUE_COLUMNS = "id, name, location, setup_minutes, turnaround_minutes";
+export const VENUE_COLUMNS = "id, name, location, setup_minutes, turnaround_minutes";
 
 export interface ConflictDetail {
   bookingId: number;
@@ -255,7 +255,7 @@ interface BlockingBookingWindow {
 }
 
 /** Every booking that currently blocks `venue`, with the window it occupies. */
-async function blockingWindows(
+export async function blockingWindows(
   supabase: Supabase,
   venue: VenueRow,
   authorization: string,

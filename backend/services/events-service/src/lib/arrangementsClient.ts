@@ -85,3 +85,78 @@ export async function fetchEventEquipmentRequests(
     ? { status: "ok", value: (result.value.equipmentRequests ?? []).filter((request) => request.status !== "Cancelled") }
     : result;
 }
+
+/**
+ * E3-11 AC2: flags a booking for rebooking after a coordinator approves a
+ * held change that actually invalidated it (events-service decided that
+ * using the same capacity/availability check E3-10 already runs — see
+ * loadChangeRequestImpact in routes/events.ts). venue-service owns the
+ * write and its own venue-staff notification; this just calls it.
+ */
+export async function flagBookingForRebooking(
+  bookingId: number,
+  reason: string,
+  authorization: string,
+): Promise<FetchResult<{ staffNotified: boolean }>> {
+  try {
+    const res = await fetch(`${venueServiceUrl()}/api/venues/bookings/${bookingId}/flag-for-rebooking`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: authorization },
+      body: JSON.stringify({ reason }),
+    });
+    if (!res.ok) return { status: "error" };
+    return { status: "ok", value: (await res.json()) as { staffNotified: boolean } };
+  } catch {
+    return { status: "error" };
+  }
+}
+
+/**
+ * E3-11 AC3: flags every equipment request on the event for Technical
+ * Support to reassess, after the coordinator approves a change that held
+ * the `equipment` field. equipment-service owns the write and its own
+ * technical_support notification.
+ */
+export async function flagEquipmentForReassessment(
+  eventId: number,
+  reason: string,
+  authorization: string,
+): Promise<FetchResult<{ flaggedRequestIds: number[]; notified: boolean }>> {
+  try {
+    const res = await fetch(`${equipmentServiceUrl()}/api/equipment-requests/flag-for-event/${eventId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: authorization },
+      body: JSON.stringify({ reason }),
+    });
+    if (!res.ok) return { status: "error" };
+    return { status: "ok", value: (await res.json()) as { flaggedRequestIds: number[]; notified: boolean } };
+  } catch {
+    return { status: "error" };
+  }
+}
+
+export interface BookingAvailability {
+  available: boolean;
+  unavailabilityConflict: { reason: string; description: string } | null;
+  bookingConflict: { bookingId: number; status: string; window: string } | null;
+}
+
+/**
+ * E3-10 AC2: whether a *proposed* new date/time for an existing booking
+ * would clash with the venue's block-out periods or another booking —
+ * read-only, venue-service's own re-check re-run early so the coordinator
+ * sees it before deciding on a held schedule change.
+ */
+export async function checkBookingAvailability(
+  bookingId: number,
+  schedule: { proposedDate: string; startTime: string | null; endTime: string | null },
+  authorization: string,
+): Promise<FetchResult<BookingAvailability>> {
+  const params = new URLSearchParams({ proposedDate: schedule.proposedDate });
+  if (schedule.startTime) params.set("startTime", schedule.startTime);
+  if (schedule.endTime) params.set("endTime", schedule.endTime);
+  return getJson<BookingAvailability>(
+    `${venueServiceUrl()}/api/venues/bookings/${bookingId}/availability-check?${params.toString()}`,
+    authorization,
+  );
+}

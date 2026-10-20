@@ -7,6 +7,7 @@ import {
   BOOKING_STATUS,
   UNAVAILABLE_BOOKING_STATUSES,
   blocksVenue,
+  canTransition,
   isBlockingBooking,
   type BookingStatus,
 } from "../lib/bookingStatus.js";
@@ -14,6 +15,7 @@ import { formatWindow, occupiedWindow, overlaps, type OccupiedWindow } from "../
 import { fetchEvent, fetchVenueBookingInfo } from "../lib/eventsClient.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { withdrawBooking, type WithdrawalAction } from "../lib/bookingWithdrawal.js";
+import { blockingWindows } from "../lib/bookingDecisions.js";
 import {
   PERIOD_COLUMNS,
   describePeriod,
@@ -543,6 +545,207 @@ function eventWindow(
   if (!window) return { ok: false, fields: { date: "This event has no date to book a venue for." } };
   return { ok: true, window };
 }
+
+/**
+ * E3-10 AC2: whether a *proposed* new date/time for an existing booking
+ * would run into trouble — read-only, used by events-service to assess a
+ * held change request before the coordinator decides on it (AGENTS.md §3a
+ * is the full booking-decision lifecycle this only re-checks against,
+ * never writes). Checked the same two ways a real decision is:
+ *   - the venue's own block-out periods (lib/unavailability findClashingPeriod)
+ *   - any other booking that already blocks the venue for an overlapping
+ *     window (lib/bookingDecisions blockingWindows), excluding this
+ *     booking's own current hold on itself.
+ */
+venuesRouter.get("/bookings/:bookingId/availability-check", async (req: AuthedRequest, res) => {
+  const supabase = req.supabase!;
+  const rawId = Array.isArray(req.params.bookingId) ? req.params.bookingId[0] : req.params.bookingId;
+  if (!BOOKING_ID_PATTERN.test(rawId)) {
+    res.status(400).json({ error: "Invalid booking id" });
+    return;
+  }
+
+  const proposedDate = queryString(req.query.proposedDate);
+  const startTime = queryString(req.query.startTime);
+  const endTime = queryString(req.query.endTime);
+  const fields: Record<string, string> = {};
+  if (!proposedDate) fields.proposedDate = "This field is required.";
+  if (startTime && !TIME_PATTERN.test(startTime)) fields.startTime = "Enter a valid time (HH:MM).";
+  if (endTime && !TIME_PATTERN.test(endTime)) fields.endTime = "Enter a valid time (HH:MM).";
+  if (Object.keys(fields).length > 0) {
+    res.status(400).json({ error: "Invalid request", fields });
+    return;
+  }
+
+  const { data: booking, error: bookingError } = await supabase
+    .from("venue_bookings")
+    .select("id, venue_id")
+    .eq("id", Number(rawId))
+    .maybeSingle();
+  if (bookingError) {
+    res.status(500).json({ error: "Failed to load the booking" });
+    return;
+  }
+  if (!booking) {
+    res.status(404).json({ error: "Booking not found" });
+    return;
+  }
+
+  const { data: venue, error: venueError } = await supabase
+    .from("venues")
+    .select(VENUE_COLUMNS)
+    .eq("id", booking.venue_id)
+    .maybeSingle();
+  if (venueError) {
+    res.status(500).json({ error: "Failed to load the venue" });
+    return;
+  }
+  if (!venue) {
+    res.status(404).json({ error: "Venue not found" });
+    return;
+  }
+
+  const window = occupiedWindow({ proposedDate, startTime: startTime || null, endTime: endTime || null }, venue);
+  if (!window) {
+    res.status(400).json({ error: "Invalid request", fields: { proposedDate: "Enter a valid date." } });
+    return;
+  }
+
+  const [periodResult, blocking] = await Promise.all([
+    findClashingPeriod(supabase, venue.id, window),
+    blockingWindows(supabase, venue, req.headers.authorization!, booking.id),
+  ]);
+
+  if (periodResult.status === "error") {
+    res.status(500).json({ error: "Failed to check the venue's availability" });
+    return;
+  }
+  if (blocking === null) {
+    res.status(502).json({ error: "Failed to check other bookings for this venue" });
+    return;
+  }
+
+  const bookingClash = blocking.find((clash) => overlaps(window, clash.window));
+
+  res.json({
+    available: !periodResult.period && !bookingClash,
+    unavailabilityConflict: periodResult.period
+      ? { reason: periodResult.period.reason, description: describePeriod(periodResult.period) }
+      : null,
+    bookingConflict: bookingClash
+      ? {
+          bookingId: bookingClash.booking.id,
+          status: bookingClash.booking.status,
+          window: formatWindow(bookingClash.window),
+        }
+      : null,
+  });
+});
+
+/**
+ * E3-11 AC2: the coordinator approved a held change request that actually
+ * invalidates this booking (E3-10's own capacity/availability check found
+ * a real conflict — events-service decides that, not here). Moves the
+ * booking to `Replacement Required`, the one transition AGENTS.md §3a
+ * allows from `Approved`, and tells the venue's own staff member — not
+ * the coordinator, who already knows (they just approved it). The
+ * booking itself is never released automatically (AC2): the coordinator
+ * still does that by hand once they've found a replacement (E4-15).
+ */
+venuesRouter.post("/bookings/:bookingId/flag-for-rebooking", async (req: AuthedRequest, res) => {
+  const supabase = req.supabase!;
+  const rawId = Array.isArray(req.params.bookingId) ? req.params.bookingId[0] : req.params.bookingId;
+  if (!BOOKING_ID_PATTERN.test(rawId)) {
+    res.status(400).json({ error: "Invalid booking id" });
+    return;
+  }
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required" });
+    return;
+  }
+
+  const { data: booking, error: bookingError } = await supabase
+    .from("venue_bookings")
+    .select("id, venue_id, event_id, status")
+    .eq("id", Number(rawId))
+    .maybeSingle();
+  if (bookingError) {
+    res.status(500).json({ error: "Failed to load the booking" });
+    return;
+  }
+  if (!booking) {
+    res.status(404).json({ error: "Booking not found" });
+    return;
+  }
+
+  // Same ownership rule as requesting a venue (POST /bookings above):
+  // events-service decides who the assigned coordinator is.
+  const eventResult = await fetchEvent(booking.event_id, req.headers.authorization!);
+  if (eventResult.status === "not_found") {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+  if (eventResult.status === "error") {
+    res.status(502).json({ error: "Failed to load the event" });
+    return;
+  }
+  if (eventResult.event.coordinator_id !== req.user!.id) {
+    res.status(403).json({ error: "Only the event's assigned coordinator can flag this booking" });
+    return;
+  }
+
+  if (!canTransition(booking.status as BookingStatus, BOOKING_STATUS.replacementRequired)) {
+    res.status(409).json({ error: `A booking in "${booking.status}" can't be flagged for rebooking` });
+    return;
+  }
+
+  const { data: updated, error: updateError } = await supabase
+    .from("venue_bookings")
+    .update({
+      status: BOOKING_STATUS.replacementRequired,
+      decision_reason: reason,
+      decided_by: req.user!.id,
+      decided_at: new Date().toISOString(),
+    })
+    .eq("id", booking.id)
+    .eq("status", booking.status) // only this exact prior status — belt and braces against a concurrent decision
+    .select("id, status")
+    .maybeSingle();
+  if (updateError) {
+    res.status(500).json({ error: "Failed to flag the booking" });
+    return;
+  }
+  if (!updated) {
+    res.status(409).json({ error: "This booking changed while it was being flagged. Refresh and try again." });
+    return;
+  }
+
+  const { data: venueRow } = await supabase
+    .from("venues")
+    .select("id, name, staff_id")
+    .eq("id", booking.venue_id)
+    .maybeSingle();
+  const staffId = (venueRow as { staff_id: string | null } | null)?.staff_id ?? null;
+
+  let staffNotified = false;
+  if (staffId) {
+    // RabbitMQ.md #12 family — a new type distinct from the existing
+    // booking.replacement_required (that one tells the *coordinator* when
+    // a venue block-out catches their booking; this tells the *venue's
+    // staff* a coordinator-approved change invalidated one of theirs).
+    staffNotified = await getPublisher().publish({
+      type: "booking.flagged_for_rebooking",
+      eventId: booking.event_id,
+      actorId: req.user!.id,
+      recipients: { userIds: [staffId], roles: [] },
+      data: { venueName: (venueRow as { name: string } | null)?.name ?? "This venue", reason },
+    });
+  }
+
+  res.json({ booking: updated, staffNotified });
+});
 
 /**
  * E4-8: request a venue for one event. The booking is created as

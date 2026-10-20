@@ -762,6 +762,74 @@ equipmentRequestsRouter.post("/events/:eventId/release", async (req: AuthedReque
   res.json({ released: true });
 });
 
+/**
+ * E3-11 AC3: the coordinator approved a held change request whose
+ * `equipment` field was touched — the organiser's stated requirements
+ * changed, so every equipment request already recorded for the event is
+ * flagged for Technical Support to reassess. Nothing about the actual
+ * reservation (quantity_fulfilled, item rows) is touched automatically
+ * (no automatic process, per the clarification behind this story); the
+ * flag is purely informational until a human acts on it.
+ */
+equipmentRequestsRouter.post("/flag-for-event/:eventId", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+
+  if (!isPositiveInteger(req.params.eventId)) {
+    res.status(400).json({ error: "A valid eventId is required" });
+    return;
+  }
+  const eventId = Number(req.params.eventId);
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required" });
+    return;
+  }
+
+  const eventResult = await fetchEvent(eventId, req.headers.authorization!);
+  if (eventResult.status === "not_found") {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+  if (eventResult.status === "error") {
+    res.status(502).json({ error: "Failed to load the event" });
+    return;
+  }
+  if (eventResult.event.coordinator_id !== user.id) {
+    res.status(403).json({ error: "Only the event's assigned coordinator can flag its equipment requests" });
+    return;
+  }
+
+  const flaggedAt = new Date().toISOString();
+  const { data: flagged, error: flagError } = await supabase
+    .from("equipment_requests")
+    .update({ flagged_for_reassessment: true, flag_reason: reason, flagged_at: flaggedAt })
+    .eq("event_id", eventId)
+    .select("id");
+  if (flagError) {
+    res.status(500).json({ error: "Failed to flag the event's equipment requests" });
+    return;
+  }
+
+  const eventName = (eventResult.event.submitted_details?.name as string | undefined) || `Event #${eventId}`;
+  let notified = false;
+  if ((flagged ?? []).length > 0) {
+    notified = await getPublisher().publish({
+      type: "equipment.flagged_for_reassessment",
+      eventId,
+      actorId: user.id,
+      recipients: { userIds: [], roles: ["technical_support"] },
+      data: { eventName, reason },
+    });
+  }
+
+  res.json({ flaggedRequestIds: (flagged ?? []).map((r) => r.id), notified });
+});
+
 /** What the amend and cancel routes need to know about the request and its event before changing anything. */
 type EditableRequest =
   | { ok: true; request: { id: number; event_id: number; status: string }; eventName: string }

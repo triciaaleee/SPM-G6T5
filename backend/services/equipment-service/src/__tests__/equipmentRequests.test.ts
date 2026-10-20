@@ -104,6 +104,21 @@ function recordTable(seedRows: Record<string, unknown>[]) {
         Promise.resolve({ data: null, error: null }).then(resolve, reject);
       return q;
     }),
+    update: vi.fn((patch: Record<string, unknown>) => {
+      let matched: Record<string, unknown>[] = [];
+      const q: Record<string, any> = {};
+      q.eq = vi.fn((field: string, value: unknown) => {
+        matched = rows.filter((r) => r[field] === value);
+        for (const row of matched) Object.assign(row, patch);
+        return q;
+      });
+      q.select = vi.fn(() => ({
+        then: (resolve: (v: unknown) => unknown) => Promise.resolve({ data: matched, error: null }).then(resolve),
+      }));
+      q.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
+        Promise.resolve({ data: matched, error: null }).then(resolve, reject);
+      return q;
+    }),
     get rows() {
       return rows;
     },
@@ -214,7 +229,12 @@ function buildApp(
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === "equipment_requests") {
-        return { insert: requestInsert, select: requestsTable.select, delete: vi.fn(() => deleteQuery) };
+        return {
+          insert: requestInsert,
+          select: requestsTable.select,
+          delete: vi.fn(() => deleteQuery),
+          update: requestsTable.update,
+        };
       }
       if (table === "equipment_request_items") {
         return { insert: itemsInsert, select: itemsTable.select };
@@ -1189,6 +1209,70 @@ describe("POST /api/equipment-requests/events/:eventId/release (E5-6 AC4)", () =
     const { app } = buildApp({ user: organiser, event: eventRow({ status: "Cancelled" }), releaseError: { message: "boom" } });
     const res = await request(app).post("/api/equipment-requests/events/7/release");
     expect(res.status).toBe(500);
+  });
+});
+
+describe("POST /api/equipment-requests/flag-for-event/:eventId (E3-11 AC3)", () => {
+  it("rejects a non-assigned coordinator", async () => {
+    const { app } = buildApp({ event: eventRow({ coordinator_id: "COORD-0002" }) });
+    const res = await request(app)
+      .post("/api/equipment-requests/flag-for-event/7")
+      .send({ reason: "Equipment requirements changed" });
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects a missing reason", async () => {
+    const { app } = buildApp();
+    const res = await request(app).post("/api/equipment-requests/flag-for-event/7").send({});
+    expect(res.status).toBe(400);
+  });
+
+  it("404s when the event doesn't exist", async () => {
+    const { app } = buildApp({ eventStatus: 404 });
+    const res = await request(app)
+      .post("/api/equipment-requests/flag-for-event/7")
+      .send({ reason: "Equipment requirements changed" });
+    expect(res.status).toBe(404);
+  });
+
+  it("flags every equipment request for the event and notifies Technical Support", async () => {
+    const { app, requestsTable, publish } = buildApp({
+      requests: [
+        { id: 55, event_id: 7, coordinator_id: "COORD-0001", status: "Arranged", fulfillment_note: null, created_at: "2026-01-01T00:00:00Z" },
+        { id: 56, event_id: 7, coordinator_id: "COORD-0001", status: "Requested", fulfillment_note: null, created_at: "2026-01-02T00:00:00Z" },
+        { id: 99, event_id: 8, coordinator_id: "COORD-0001", status: "Requested", fulfillment_note: null, created_at: "2026-01-03T00:00:00Z" },
+      ],
+    });
+    const res = await request(app)
+      .post("/api/equipment-requests/flag-for-event/7")
+      .send({ reason: "Equipment requirements changed" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.flaggedRequestIds.sort()).toEqual([55, 56]);
+    expect(res.body.notified).toBe(true);
+    expect(requestsTable.rows.find((r) => r.id === 55)).toMatchObject({
+      flagged_for_reassessment: true,
+      flag_reason: "Equipment requirements changed",
+    });
+    expect(requestsTable.rows.find((r) => r.id === 99)).not.toMatchObject({ flagged_for_reassessment: true });
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "equipment.flagged_for_reassessment",
+        recipients: { userIds: [], roles: ["technical_support"] },
+      }),
+    );
+  });
+
+  it("doesn't notify when the event has no equipment requests to flag", async () => {
+    const { app, publish } = buildApp({ requests: [] });
+    const res = await request(app)
+      .post("/api/equipment-requests/flag-for-event/7")
+      .send({ reason: "Equipment requirements changed" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.flaggedRequestIds).toEqual([]);
+    expect(res.body.notified).toBe(false);
+    expect(publish).not.toHaveBeenCalled();
   });
 });
 

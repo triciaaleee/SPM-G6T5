@@ -236,13 +236,24 @@ export interface ChangeRequestFieldEntry {
   oldValue: string | null;
   newValue: string;
   isCritical: boolean;
+  /** E3-11: what happened to this specific field — e.g. a critical field rejected in an otherwise-approved request. */
+  outcome: "pending" | "applied" | "rejected" | "withdrawn";
 }
 
 export interface ChangeRequestImpact {
   bookings: { id: number; status: string; venue: { id: number; name: string } | null }[];
   equipmentReservations: { id: number; status: string; items: { id: number; equipmentType: string; quantity: number; quantityFulfilled: number }[] }[];
-  registrations: { registeredCount: number; total: number };
+  registrations: {
+    registeredCount: number;
+    total: number;
+    registrations: { registrationId: number; userId: string; name: string | null; status: string }[];
+  };
   capacityConflict: { bookingId: number; venueName: string; capacity: number; requestedAttendance: number } | null;
+  availabilityConflict: {
+    bookingId: number;
+    unavailabilityConflict: { reason: string; description: string } | null;
+    bookingConflict: { bookingId: number; status: string; window: string } | null;
+  } | null;
 }
 
 export interface ChangeRequestEntry {
@@ -269,6 +280,59 @@ export async function fetchChangeRequests(id: number): Promise<ChangeRequestEntr
   if (!res.ok) throw new Error("Failed to load change requests");
   const body = await res.json();
   return body.changeRequests as ChangeRequestEntry[];
+}
+
+/**
+ * Thrown when the backend refuses a change-request decision (wrong role,
+ * not the assigned coordinator, request no longer Pending, missing reason
+ * on a reject). The message is server-provided and safe to show directly.
+ */
+export class ChangeRequestDecisionError extends Error {}
+
+export interface ApproveChangeRequestResult {
+  event: EventSummary;
+  approvedFields: string[];
+  /** Held fields not included in this approval — left pending, not rejected, open for a later decision. */
+  remainingFields: string[];
+}
+
+/**
+ * E3-11 AC1/2/3: the assigned coordinator approves a held change request.
+ * Passing `fields` approves just that subset of the held critical fields —
+ * the rest are simply left held (not rejected) for a later decision.
+ * Omitting `fields` approves everything held, same as before.
+ */
+export async function approveChangeRequest(
+  eventId: number,
+  requestId: number,
+  options?: { fields?: string[] },
+): Promise<ApproveChangeRequestResult> {
+  const res = await fetch(`${apiBase}/${eventId}/change-requests/${requestId}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ fields: options?.fields }),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ChangeRequestDecisionError(body.error ?? "We couldn't approve this change. Please try again.");
+  return body as ApproveChangeRequestResult;
+}
+
+/** E3-11 AC4: the assigned coordinator rejects a held change request with a required reason. */
+export async function rejectChangeRequest(eventId: number, requestId: number, reason: string): Promise<EventSummary> {
+  const res = await fetch(`${apiBase}/${eventId}/change-requests/${requestId}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ reason }),
+  });
+
+  await redirectIfUnauthenticated(res);
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ChangeRequestDecisionError(body.error ?? "We couldn't reject this change. Please try again.");
+  return body.event as EventSummary;
 }
 
 export interface EventHistoryEntry {

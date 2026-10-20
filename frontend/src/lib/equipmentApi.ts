@@ -163,10 +163,10 @@ export async function submitEquipmentRequest(
   const body = await res.json();
 
   if (res.status === 400) {
-    throw new EquipmentValidationError(body.fields ?? {});
+    throw new EquipmentValidationError((body.fields as Record<string, string> | undefined) ?? {});
   }
   if (!res.ok) {
-    throw new EquipmentRequestError(body.error ?? "Failed to record the equipment request");
+    throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to record the equipment request");
   }
   return body as { equipmentRequest: EquipmentRequest; notified: boolean };
 }
@@ -188,7 +188,7 @@ export interface AmendmentChange {
   released: number;
 }
 
-async function readBody(res: Response): Promise<Record<string, any>> {
+async function readBody(res: Response): Promise<Record<string, unknown>> {
   try {
     return await res.json();
   } catch {
@@ -216,10 +216,10 @@ export async function amendEquipmentRequest(
   const body = await readBody(res);
 
   if (res.status === 400) {
-    throw new EquipmentValidationError(body.fields ?? {});
+    throw new EquipmentValidationError((body.fields as Record<string, string> | undefined) ?? {});
   }
   if (!res.ok) {
-    throw new EquipmentRequestError(body.error ?? "Failed to amend the equipment request");
+    throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to amend the equipment request");
   }
   return body as { equipmentRequest: EquipmentRequest; changes: AmendmentChange[]; released: number; notified: boolean };
 }
@@ -238,7 +238,7 @@ export async function cancelEquipmentRequest(
   const body = await readBody(res);
 
   if (!res.ok) {
-    throw new EquipmentRequestError(body.error ?? "Failed to cancel the equipment request");
+    throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to cancel the equipment request");
   }
   return body as {
     equipmentRequest: EquipmentRequest;
@@ -341,9 +341,9 @@ export async function fetchUnitImpact(
   await redirectIfUnauthenticated(res);
   const body = await readBody(res);
 
-  if (res.status === 400) throw new EquipmentValidationError(body.fields ?? {});
-  if (!res.ok) throw new EquipmentRequestError(body.error ?? "Failed to check the impact");
-  return body as UnitImpactPreview;
+  if (res.status === 400) throw new EquipmentValidationError((body.fields as Record<string, string> | undefined) ?? {});
+  if (!res.ok) throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to check the impact");
+  return body as unknown as UnitImpactPreview;
 }
 
 /**
@@ -361,9 +361,9 @@ export async function markUnitsUnusable(input: MarkUnitsInput): Promise<MarkUnit
   await redirectIfUnauthenticated(res);
   const body = await readBody(res);
 
-  if (res.status === 400) throw new EquipmentValidationError(body.fields ?? {});
-  if (!res.ok) throw new EquipmentRequestError(body.error ?? "Failed to mark the equipment unusable");
-  return body as MarkUnitsResult;
+  if (res.status === 400) throw new EquipmentValidationError((body.fields as Record<string, string> | undefined) ?? {});
+  if (!res.ok) throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to mark the equipment unusable");
+  return body as unknown as MarkUnitsResult;
 }
 
 /** Mark units usable again by removing the given unusable periods (typically a group marked together). */
@@ -376,7 +376,7 @@ export async function clearUnavailability(periodIds: number[]): Promise<number> 
 
   await redirectIfUnauthenticated(res);
   const body = await readBody(res);
-  if (!res.ok) throw new EquipmentRequestError(body.error ?? "Failed to mark the equipment usable again");
+  if (!res.ok) throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to mark the equipment usable again");
   return (body as { removed: number }).removed;
 }
 
@@ -391,8 +391,8 @@ export async function setUnitLabel(unitId: number, label: string): Promise<{ id:
   await redirectIfUnauthenticated(res);
   const body = await readBody(res);
 
-  if (res.status === 400) throw new EquipmentValidationError(body.fields ?? {});
-  if (!res.ok) throw new EquipmentRequestError(body.error ?? "Failed to save the label");
+  if (res.status === 400) throw new EquipmentValidationError((body.fields as Record<string, string> | undefined) ?? {});
+  if (!res.ok) throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to save the label");
   return (body as { unit: { id: number; label: string | null } }).unit;
 }
 
@@ -406,7 +406,7 @@ export async function markUnitUsable(unitId: number, periodId: number): Promise<
   await redirectIfUnauthenticated(res);
   if (!res.ok) {
     const body = await readBody(res);
-    throw new EquipmentRequestError(body.error ?? "Failed to mark the equipment usable again");
+    throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to mark the equipment usable again");
   }
 }
 
@@ -451,13 +451,13 @@ export async function updateEquipmentRequestStatus(
   const body = await res.json();
 
   if (res.status === 400) {
-    throw new EquipmentValidationError(body.fields ?? {});
+    throw new EquipmentValidationError((body.fields as Record<string, string> | undefined) ?? {});
   }
   if (res.status === 409 && body.shortfalls) {
-    throw new EquipmentReservationShortfallError(body.error ?? "Not enough equipment available for this change.", body.shortfalls);
+    throw new EquipmentReservationShortfallError((body.error as string | undefined) ?? "Not enough equipment available for this change.", body.shortfalls);
   }
   if (!res.ok) {
-    throw new EquipmentRequestError(body.error ?? "Failed to update the equipment request");
+    throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to update the equipment request");
   }
   return body as { equipmentRequest: EquipmentRequest; notified: boolean };
 }
@@ -476,7 +476,7 @@ export async function checkEquipmentAvailability(
   await redirectIfUnauthenticated(res);
   const body = await res.json();
   if (!res.ok) {
-    throw new EquipmentRequestError(body.error ?? "Failed to check equipment availability");
+    throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to check equipment availability");
   }
   return body as EquipmentAvailability;
 }
@@ -555,8 +555,8 @@ export async function changeStock(id: number, change: StockChangeInput): Promise
   await redirectIfUnauthenticated(res);
   const body = await readBody(res);
 
-  if (res.status === 400 && body.fields) throw new EquipmentValidationError(body.fields);
-  if (!res.ok || !body.equipment) throw new EquipmentRequestError(body.error ?? "Failed to change the stock");
+  if (res.status === 400 && body.fields) throw new EquipmentValidationError(body.fields as Record<string, string>);
+  if (!res.ok || !body.equipment) throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to change the stock");
   return body.equipment as EquipmentCatalogItem;
 }
 

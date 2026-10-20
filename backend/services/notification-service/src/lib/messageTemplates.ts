@@ -528,6 +528,61 @@ const TEMPLATES: Record<string, Template> = {
       link,
     };
   },
+
+  /** RabbitMQ.md #13 (E3-11 AC1/AC4) — the coordinator's decision on a held change request, to the organiser. */
+  "change.decided": (msg) => {
+    const eventName = String(msg.data.eventName ?? "Your event");
+    const link = eventLink(msg);
+    if (msg.data.outcome === "approved") {
+      return {
+        title: "Change request approved",
+        body: `Your requested change to "${eventName}" has been approved and applied.`,
+        link,
+      };
+    }
+    if (msg.data.outcome === "partially_approved") {
+      const approved = Array.isArray(msg.data.approvedFields) ? msg.data.approvedFields.join(", ") : "";
+      const remaining = Array.isArray(msg.data.remainingFields) ? msg.data.remainingFields.join(", ") : "";
+      return {
+        title: "Change request partially approved",
+        body: `Your requested change to "${eventName}" was partially approved — ${approved} applied. ${remaining} still awaiting your coordinator's review.`,
+        link,
+      };
+    }
+    const reason = msg.data.reason ? `: ${msg.data.reason}` : ".";
+    return {
+      title: "Change request rejected",
+      body: `Your requested change to "${eventName}" was rejected${reason}`,
+      link,
+    };
+  },
+
+  /**
+   * E3-11 AC2 — distinct from the existing `booking.replacement_required`
+   * (that one tells the *coordinator* a venue block-out caught their
+   * booking); this tells the *venue's own staff* that a coordinator's
+   * approved change request invalidated one of theirs.
+   */
+  "booking.flagged_for_rebooking": (msg) => {
+    const venueName = String(msg.data.venueName ?? "A venue");
+    const reason = msg.data.reason ? ` (${msg.data.reason})` : "";
+    return {
+      title: `${venueName} — needs rebooking`,
+      body: `An approved change request means this booking for ${venueName} needs to be replaced${reason}.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** E3-11 AC3 — to every Technical Support member; the coordinator already knows (they just approved it). */
+  "equipment.flagged_for_reassessment": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    const reason = msg.data.reason ? `: ${msg.data.reason}` : ".";
+    return {
+      title: "Equipment request needs reassessment",
+      body: `"${eventName}"'s equipment requirements changed${reason} Please reassess the existing reservation.`,
+      link: eventLink(msg),
+    };
+  },
 };
 
 /** `null` for a type with no template yet — the caller logs and skips it. */

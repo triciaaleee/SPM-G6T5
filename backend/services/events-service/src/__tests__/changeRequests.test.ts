@@ -372,12 +372,24 @@ describe("GET /api/events/:id/change-requests", () => {
     bookings?: { id: number; status: string; venue: { id: number; name: string; capacity: number } | null }[];
     equipmentRequests?: { id: number; status: string; items: unknown[] }[];
     registrations?: { registrationId: number; userId: string; status: string; name: string | null }[];
+    availability?: {
+      available: boolean;
+      unavailabilityConflict?: { reason: string; description: string } | null;
+      bookingConflict?: { bookingId: number; status: string; window: string } | null;
+    };
     fail?: "bookings" | "equipment" | "registrations";
   }) {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         const json = (body: unknown, ok = true) => ({ ok, status: ok ? 200 : 500, json: async () => body });
+        if (url.includes("/availability-check")) {
+          return json({
+            available: options.availability?.available ?? true,
+            unavailabilityConflict: options.availability?.unavailabilityConflict ?? null,
+            bookingConflict: options.availability?.bookingConflict ?? null,
+          });
+        }
         if (url.includes("/api/venues/events/")) {
           return json({ bookings: options.bookings ?? [] }, options.fail !== "bookings");
         }
@@ -449,14 +461,22 @@ describe("GET /api/events/:id/change-requests", () => {
         decisionReason: null,
         createdAt: "2026-10-16T00:00:00Z",
         fields: [
-          { field: "venue", oldValue: "Grand Ballroom", newValue: "Seminar Room 3-01", isCritical: true },
-          { field: "description", oldValue: "old", newValue: "new", isCritical: false },
+          { field: "venue", oldValue: "Grand Ballroom", newValue: "Seminar Room 3-01", isCritical: true, outcome: "pending" },
+          { field: "description", oldValue: "old", newValue: "new", isCritical: false, outcome: "applied" },
         ],
         impact: {
           bookings: [{ id: 900, status: "Approved", venue: { id: 1, name: "Grand Ballroom" } }],
           equipmentReservations: [{ id: 50, status: "Arranged", items: [] }],
-          registrations: { registeredCount: 1, total: 2 },
+          registrations: {
+            registeredCount: 1,
+            total: 2,
+            registrations: [
+              { registrationId: 1, userId: "ATT-1", name: "Ash", status: "Registered" },
+              { registrationId: 2, userId: "ATT-2", name: "Bo", status: "Withdrawn" },
+            ],
+          },
           capacityConflict: null,
+          availabilityConflict: null,
         },
       },
     ]);
@@ -483,6 +503,108 @@ describe("GET /api/events/:id/change-requests", () => {
       capacity: 300,
       requestedAttendance: 350,
     });
+  });
+
+  it("ignores a Withdrawn booking's venue when checking capacity — only an active booking holds the venue", async () => {
+    // Regression: a withdrawn/rejected booking doesn't actually hold a
+    // venue, so flagging a conflict against it names a venue the event
+    // no longer has. Found live: an earlier withdrawn Boardroom A (cap.
+    // 20) booking was reported as the conflict instead of the real,
+    // currently Approved Seminar Room 3-01 (cap. 40) booking.
+    stubArrangementsFetch({
+      bookings: [
+        { id: 93, status: "Withdrawn", venue: { id: 7, name: "Boardroom A", capacity: 20 } },
+        { id: 94, status: "Approved", venue: { id: 4, name: "Seminar Room 3-01", capacity: 40 } },
+      ],
+    });
+    const app = buildApp({
+      storedRequests: [
+        { id: 55, status: "Pending", decided_at: null, decision_reason: null, created_at: "2026-10-16T00:00:00Z" },
+      ],
+      storedFields: [
+        { request_id: 55, field: "expectedAttendance", old_value: "15", new_value: "55", is_critical: true },
+      ],
+    });
+    const res = await request(app).get("/api/events/7/change-requests");
+
+    expect(res.status).toBe(200);
+    expect(res.body.changeRequests[0].impact.capacityConflict).toEqual({
+      bookingId: 94,
+      venueName: "Seminar Room 3-01",
+      capacity: 40,
+      requestedAttendance: 55,
+    });
+  });
+
+  it("checks availability when a schedule field is held, flagging an unavailability clash", async () => {
+    stubArrangementsFetch({
+      bookings: [{ id: 900, status: "Approved", venue: { id: 1, name: "Grand Ballroom", capacity: 300 } }],
+      availability: {
+        available: false,
+        unavailabilityConflict: { reason: "maintenance", description: "on 2026-11-10 (all day)" },
+      },
+    });
+    const app = buildApp({
+      storedRequests: [
+        { id: 55, status: "Pending", decided_at: null, decision_reason: null, created_at: "2026-10-16T00:00:00Z" },
+      ],
+      storedFields: [
+        { request_id: 55, field: "startTime", old_value: "18:00", new_value: "19:00", is_critical: true },
+      ],
+    });
+    const res = await request(app).get("/api/events/7/change-requests");
+
+    expect(res.status).toBe(200);
+    expect(res.body.changeRequests[0].impact.availabilityConflict).toEqual({
+      bookingId: 900,
+      unavailabilityConflict: { reason: "maintenance", description: "on 2026-11-10 (all day)" },
+      bookingConflict: null,
+    });
+  });
+
+  it("flags a rival-booking clash the same way", async () => {
+    stubArrangementsFetch({
+      bookings: [{ id: 900, status: "Approved", venue: { id: 1, name: "Grand Ballroom", capacity: 300 } }],
+      availability: {
+        available: false,
+        bookingConflict: { bookingId: 901, status: "Approved", window: "2026-11-10 09:30–12:45" },
+      },
+    });
+    const app = buildApp({
+      storedRequests: [
+        { id: 55, status: "Pending", decided_at: null, decision_reason: null, created_at: "2026-10-16T00:00:00Z" },
+      ],
+      storedFields: [
+        { request_id: 55, field: "endTime", old_value: "21:00", new_value: "22:00", is_critical: true },
+      ],
+    });
+    const res = await request(app).get("/api/events/7/change-requests");
+
+    expect(res.body.changeRequests[0].impact.availabilityConflict).toEqual({
+      bookingId: 900,
+      unavailabilityConflict: null,
+      bookingConflict: { bookingId: 901, status: "Approved", window: "2026-11-10 09:30–12:45" },
+    });
+  });
+
+  it("doesn't check availability when no schedule field is held", async () => {
+    const fetchSpy = vi.fn(async (url: string) => {
+      if (url.includes("/availability-check")) throw new Error("should not have been called");
+      const json = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
+      if (url.includes("/api/venues/events/")) {
+        return json({ bookings: [{ id: 900, status: "Approved", venue: { id: 1, name: "Grand Ballroom", capacity: 300 } }] });
+      }
+      if (url.includes("/api/equipment-requests")) return json({ equipmentRequests: [] });
+      if (url.includes("/api/registrations/event/")) return json({ registrations: [] });
+      throw new Error(`unexpected fetch url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const app = buildApp(pendingRequestWithVenue);
+    const res = await request(app).get("/api/events/7/change-requests");
+
+    expect(res.status).toBe(200);
+    expect(res.body.changeRequests[0].impact.availabilityConflict).toBeNull();
   });
 
   it("doesn't compute impact for an Approved or Rejected request", async () => {
