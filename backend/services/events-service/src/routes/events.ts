@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth, requireAuthOrInternal } from "../middleware/auth.js";
+import { requireInternal } from "../middleware/internal.js";
 import { normaliseDraftEventRequest, validateEventRequest } from "../lib/validateEventRequest.js";
 import type { ValidatedEventRequest } from "../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../lib/validation.js";
@@ -126,6 +127,10 @@ export const eventsRouter = Router();
 // forward, so this one route accepts an internal token too. Every other
 // route keeps requireAuth only.
 eventsRouter.get("/venue-booking-info", requireAuthOrInternal, venueBookingInfoHandler);
+
+// venue-service and equipment-service tell us an arrangement the event was
+// approved on was lost (see arrangementsChangedHandler). Internal callers only.
+eventsRouter.post("/:id/arrangements-changed", requireInternal, arrangementsChangedHandler);
 
 eventsRouter.use(requireAuth);
 
@@ -987,8 +992,8 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   if (!isClarificationResponse && !isDirectEdit && !isDraftSubmit) {
     res.status(409).json({
       error:
-        existing.status === EVENT_STATUS.Confirmed
-          ? "This event is Confirmed and can no longer be edited directly. Raise a change request instead."
+        existing.status === EVENT_STATUS.Confirmed || existing.status === EVENT_STATUS.NeedsReview
+          ? "This event is past Planning and can no longer be edited directly. Raise a change request instead."
           : "This request can no longer be edited or changed at this stage.",
     });
     return;
@@ -1127,6 +1132,7 @@ const CANCELLABLE_STATUSES = new Set<string>([
   EVENT_STATUS.Planning,
   EVENT_STATUS.SafetyReview,
   EVENT_STATUS.Confirmed,
+  EVENT_STATUS.NeedsReview,
 ]);
 
 /**
@@ -1300,7 +1306,7 @@ eventsRouter.post("/:id/change-requests", async (req: AuthedRequest, res) => {
   // status (Draft, Unassigned, Requested, Clarification Requested,
   // Planning, Safety Review) already has a direct-edit or other path, so a
   // change request only ever makes sense from Confirmed.
-  if (existing.status !== EVENT_STATUS.Confirmed) {
+  if (existing.status !== EVENT_STATUS.Confirmed && existing.status !== EVENT_STATUS.NeedsReview) {
     res.status(409).json({
       error: "Change requests can only be raised once the event is Confirmed.",
     });
@@ -1508,6 +1514,28 @@ eventsRouter.post("/:id/change-requests", async (req: AuthedRequest, res) => {
   const eventName = eventDisplayName(existing as unknown as AssignmentEventRow);
   let notificationsFailed = false;
   let autoResolved = false;
+
+  // A held critical field puts a Confirmed event into Needs Review until the
+  // coordinator decides it (AGENTS.md section 3). The status filter makes it
+  // a no-op if the event already moved on; an event already in Needs Review
+  // stays there.
+  if (upsertedCritical.length > 0 && existing.status === EVENT_STATUS.Confirmed) {
+    const { error: reviewError } = await supabase
+      .from("events")
+      .update({ status: EVENT_STATUS.NeedsReview })
+      .eq("id", existing.id)
+      .eq("status", EVENT_STATUS.Confirmed);
+    if (reviewError) {
+      res.status(500).json({ error: "Failed to raise change request" });
+      return;
+    }
+    await recordEventHistory(
+      supabase,
+      existing.id,
+      [{ field: "Status", oldValue: EVENT_STATUS.Confirmed, newValue: EVENT_STATUS.NeedsReview }],
+      user.id,
+    );
+  }
 
   if (targetRequestId && upsertedCritical.length === 0 && !willHoldSomething && revertedFields.length > 0) {
     // Every held field just got reverted — nothing left to decide. Close
@@ -1902,7 +1930,7 @@ async function loadEventForDecision(
   req: AuthedRequest,
   res: Response,
   eventId: string,
-): Promise<{ id: number; coordinator_id: string | null; submitted_details: Record<string, unknown> } | null> {
+): Promise<{ id: number; status: string; coordinator_id: string | null; submitted_details: Record<string, unknown> } | null> {
   const { supabase, user } = req;
   if (!supabase || !user) {
     res.status(401).json({ error: "Unauthenticated" });
@@ -1915,7 +1943,7 @@ async function loadEventForDecision(
 
   const { data: event, error: eventError } = await supabase
     .from("events")
-    .select("id, coordinator_id, submitted_details")
+    .select("id, status, coordinator_id, submitted_details")
     .eq("id", Number(eventId))
     .maybeSingle();
   if (eventError) {
@@ -1931,7 +1959,7 @@ async function loadEventForDecision(
     return null;
   }
 
-  return event as { id: number; coordinator_id: string | null; submitted_details: Record<string, unknown> };
+  return event as { id: number; status: string; coordinator_id: string | null; submitted_details: Record<string, unknown> };
 }
 
 /**
@@ -2003,7 +2031,7 @@ eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedR
 
   const { data: updatedEvent, error: updateError } = await supabase
     .from("events")
-    .update({ submitted_details: updatedDetails, status: EVENT_STATUS.Planning })
+    .update({ submitted_details: updatedDetails, status: statusAfterApproval(event.status), safety_approval_stale: true })
     .eq("id", event.id)
     .select(`${EVENT_COLUMNS}, organiser_id`)
     .single();
@@ -2143,6 +2171,36 @@ eventsRouter.post("/:id/change-requests/:requestId/reject", async (req: AuthedRe
     return;
   }
 
+  // Rejecting the last open request on a Needs Review event whose approved
+  // arrangements never changed (safety_approval_stale is still false) settles
+  // it: the event returns straight to Confirmed, no new safety review.
+  let returnedToConfirmed = false;
+  if (event.status === EVENT_STATUS.NeedsReview) {
+    const { count } = await supabase
+      .from("change_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("event_id", event.id)
+      .eq("status", CHANGE_REQUEST_STATUS.Pending);
+    if ((count ?? 0) === 0) {
+      const { data: reverted } = await supabase
+        .from("events")
+        .update({ status: EVENT_STATUS.Confirmed })
+        .eq("id", event.id)
+        .eq("status", EVENT_STATUS.NeedsReview)
+        .eq("safety_approval_stale", false)
+        .select("id");
+      returnedToConfirmed = (reverted ?? []).length > 0;
+      if (returnedToConfirmed) {
+        await recordEventHistory(
+          supabase,
+          event.id,
+          [{ field: "Status", oldValue: EVENT_STATUS.NeedsReview, newValue: EVENT_STATUS.Confirmed }],
+          user.id,
+        );
+      }
+    }
+  }
+
   const { data: eventRow } = await supabase
     .from("events")
     .select(`${EVENT_COLUMNS}, organiser_id`)
@@ -2163,7 +2221,7 @@ eventsRouter.post("/:id/change-requests/:requestId/reject", async (req: AuthedRe
     notificationsFailed = !published;
   }
 
-  res.json({ changeRequest: updated, notificationsFailed });
+  res.json({ changeRequest: updated, returnedToConfirmed, notificationsFailed });
 });
 
 /**
@@ -2677,9 +2735,22 @@ eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) =
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
-  if (event.status !== EVENT_STATUS.Planning) {
-    res.status(409).json({ error: "Only an event in Planning can be submitted for safety review" });
+  if (event.status !== EVENT_STATUS.Planning && event.status !== EVENT_STATUS.NeedsReview) {
+    res.status(409).json({ error: "Only an event in Planning or Needs Review can be submitted for safety review" });
     return;
+  }
+
+  // Needs Review is settled only once every change request is decided.
+  if (event.status === EVENT_STATUS.NeedsReview) {
+    const { count } = await (req as Required<Pick<AuthedRequest, "supabase">>).supabase
+      .from("change_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("event_id", event.id)
+      .eq("status", CHANGE_REQUEST_STATUS.Pending);
+    if ((count ?? 0) > 0) {
+      res.status(409).json({ error: "Decide the open change request before submitting for safety review" });
+      return;
+    }
   }
 
   const parsed = parseSafetyNotes(req.body);
@@ -2720,7 +2791,7 @@ eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) =
   }
   if (submissionId === null) {
     // Moved on, or reassigned, since the checks above.
-    res.status(409).json({ error: "This event is no longer in Planning or no longer assigned to you" });
+    res.status(409).json({ error: "This event is no longer in Planning or Needs Review, or no longer assigned to you" });
     return;
   }
 
@@ -3717,3 +3788,98 @@ eventsRouter.post("/:id/reassign", async (req: AuthedRequest, res) => {
 
   res.json({ event: data, notificationsFailed: !published });
 });
+
+
+/**
+ * Where an event goes when its coordinator approves a held change: a
+ * Confirmed or Needs Review event stays in Needs Review to be re-arranged
+ * and re-checked; a Safety Review event returns to Planning (AGENTS.md
+ * section 3); Planning stays in Planning.
+ */
+function statusAfterApproval(current: string): string {
+  if (current === EVENT_STATUS.Confirmed || current === EVENT_STATUS.NeedsReview) return EVENT_STATUS.NeedsReview;
+  return EVENT_STATUS.Planning;
+}
+
+/**
+ * venue-service / equipment-service: an arrangement the event relied on is
+ * gone (a booking became Replacement Required, a reserved unit became
+ * unusable). Internal callers only. Confirmed -> Needs Review; Safety
+ * Review -> Planning; an event already in Needs Review just has its safety
+ * approval marked stale. Any other status needs nothing: Planning is being
+ * arranged anyway and the rest are closed or not yet approved. Idempotent,
+ * so a repeat call after the event has moved is a harmless no-op.
+ */
+async function arrangementsChangedHandler(req: AuthedRequest, res: Response): Promise<void> {
+  // Loaded on use: this is the one route with no end-user request to carry a client.
+  const { supabaseAdmin: supabase } = await import("../lib/supabaseAdmin.js");
+  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  if (!isPositiveInteger(eventId)) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required" });
+    return;
+  }
+
+  const { data: event, error } = await supabase
+    .from("events")
+    .select(`${EVENT_COLUMNS}, organiser_id`)
+    .eq("id", Number(eventId))
+    .maybeSingle();
+  if (error) {
+    res.status(500).json({ error: "Failed to load event" });
+    return;
+  }
+  if (!event) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+
+  const row = event as unknown as AssignmentEventRow & { status: string; coordinator_id: string | null; organiser_id: string | null };
+  const from = row.status;
+  let to: string | null = null;
+  if (from === EVENT_STATUS.Confirmed) to = EVENT_STATUS.NeedsReview;
+  else if (from === EVENT_STATUS.SafetyReview) to = EVENT_STATUS.Planning;
+  else if (from === EVENT_STATUS.NeedsReview) to = EVENT_STATUS.NeedsReview;
+
+  if (to === null) {
+    res.json({ changed: false, status: from });
+    return;
+  }
+
+  const { data: updated, error: updateError } = await supabase
+    .from("events")
+    .update({ status: to, safety_approval_stale: true })
+    .eq("id", row.id)
+    .eq("status", from)
+    .select("id");
+  if (updateError) {
+    res.status(500).json({ error: "Failed to update the event" });
+    return;
+  }
+  if ((updated ?? []).length === 0) {
+    res.status(409).json({ error: "The event changed status; try again" });
+    return;
+  }
+
+  if (to === from) {
+    res.json({ changed: false, status: to });
+    return;
+  }
+
+  const eventName = eventDisplayName(row);
+  const userIds = [row.coordinator_id, row.organiser_id].filter((id): id is string => Boolean(id));
+  const fromSafety = from === EVENT_STATUS.SafetyReview;
+  const published = await getPublisher().publish({
+    type: fromSafety ? "event.returned_to_planning" : "event.needs_review",
+    eventId: row.id,
+    actorId: null,
+    recipients: { userIds, roles: fromSafety ? ["safety_officer"] : [] },
+    data: { eventName, reason },
+  });
+
+  res.json({ changed: true, status: to, notificationsFailed: !published });
+}

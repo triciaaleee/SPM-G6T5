@@ -171,8 +171,8 @@ equipmentRequestsRouter.post("/", async (req: AuthedRequest, res) => {
     res.status(403).json({ error: "Only the assigned coordinator can record equipment requirements" });
     return;
   }
-  if (event.status !== "Planning") {
-    res.status(409).json({ error: "Equipment requirements can only be recorded while the event is in Planning." });
+  if (event.status !== "Planning" && event.status !== "Needs Review") {
+    res.status(409).json({ error: "Equipment requirements can only be recorded while the event is in Planning or Needs Review." });
     return;
   }
 
@@ -885,8 +885,8 @@ async function loadEditableRequest(req: AuthedRequest, res: import("express").Re
     res.status(403).json({ error: "Only the assigned coordinator can change an equipment request" });
     return { ok: false };
   }
-  if (event.status !== "Planning") {
-    res.status(409).json({ error: "Equipment requests can only be changed while the event is in Planning." });
+  if (event.status !== "Planning" && event.status !== "Needs Review") {
+    res.status(409).json({ error: "Equipment requests can only be changed while the event is in Planning or Needs Review." });
     return { ok: false };
   }
   if (request.status === CANCELLED) {

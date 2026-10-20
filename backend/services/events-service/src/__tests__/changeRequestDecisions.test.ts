@@ -62,11 +62,18 @@ interface Options {
   flagBookingOk?: boolean;
   flagEquipmentOk?: boolean;
   flaggedRequestIds?: number[];
+  /** The event's status when the decision is made; left out, the fixture has none. */
+  eventStatus?: string;
+  /** Other Pending requests left on the event after a rejection (Needs Review only). */
+  pendingRemaining?: number;
+  /** Whether the Needs Review -> Confirmed update matches a row (approval not stale). */
+  revertMatches?: boolean;
 }
 
 function buildApp(options: Options = {}) {
   const event = {
     id: 163,
+    status: options.eventStatus,
     coordinator_id: options.coordinatorId === undefined ? "COORD-0001" : options.coordinatorId,
     submitted_details: submittedDetails,
     // Reject's handler re-selects the event with organiser_id afterwards;
@@ -91,6 +98,9 @@ function buildApp(options: Options = {}) {
   const eventsUpdateChain: any = {};
   eventsUpdateChain.eq = () => eventsUpdateChain;
   eventsUpdateChain.select = () => eventsUpdateChain;
+  // Only the Needs Review -> Confirmed update awaits the chain directly.
+  eventsUpdateChain.then = (resolve: (v: unknown) => unknown) =>
+    Promise.resolve({ data: options.revertMatches === false ? [] : [{ id: 163 }], error: null }).then(resolve);
   eventsUpdateChain.single = resolved(
     options.eventUpdateError ? null : reloadedEvent,
     options.eventUpdateError ? { message: "boom" } : null,
@@ -98,6 +108,9 @@ function buildApp(options: Options = {}) {
 
   const changeRequestSelectChain: any = {};
   changeRequestSelectChain.eq = () => changeRequestSelectChain;
+  // The Needs Review check counts the event's other Pending requests.
+  changeRequestSelectChain.then = (resolve: (v: unknown) => unknown) =>
+    Promise.resolve({ count: options.pendingRemaining ?? 0, error: null }).then(resolve);
   changeRequestSelectChain.maybeSingle = resolved(
     options.changeRequestError ? null : options.changeRequest === undefined ? { id: 5, status: "Pending" } : options.changeRequest,
     options.changeRequestError ? { message: "boom" } : null,
@@ -412,6 +425,54 @@ describe("POST /api/events/:id/change-requests/:requestId/approve", () => {
       expect(res.body.remainingFields).toEqual([]);
       expect(changeRequestUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ status: "Approved" }));
     });
+  });
+});
+
+describe("Needs Review (AGENTS.md section 3)", () => {
+  it.each([
+    ["Confirmed", "Needs Review"],
+    ["Needs Review", "Needs Review"],
+    ["Safety Review", "Planning"],
+    ["Planning", "Planning"],
+  ])("approving a held change on a %s event leaves it %s and marks the safety approval stale", async (from, to) => {
+    const { app, eventsUpdateSpy } = buildApp({ eventStatus: from });
+    const res = await request(app).post("/api/events/163/change-requests/5/approve");
+
+    expect(res.status).toBe(200);
+    expect(eventsUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ status: to, safety_approval_stale: true }));
+  });
+
+  it("rejecting the last open request returns an unchanged Needs Review event straight to Confirmed", async () => {
+    const { app, eventsUpdateSpy } = buildApp({ eventStatus: "Needs Review" });
+    const res = await request(app).post("/api/events/163/change-requests/5/reject").send({ reason: "Not feasible" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.returnedToConfirmed).toBe(true);
+    expect(eventsUpdateSpy).toHaveBeenCalledWith({ status: "Confirmed" });
+  });
+
+  it("keeps the event in Needs Review when its safety approval is already stale (an arrangement was lost)", async () => {
+    const { app } = buildApp({ eventStatus: "Needs Review", revertMatches: false });
+    const res = await request(app).post("/api/events/163/change-requests/5/reject").send({ reason: "Not feasible" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.returnedToConfirmed).toBe(false);
+  });
+
+  it("keeps the event in Needs Review while another request is still open", async () => {
+    const { app, eventsUpdateSpy } = buildApp({ eventStatus: "Needs Review", pendingRemaining: 1 });
+    const res = await request(app).post("/api/events/163/change-requests/5/reject").send({ reason: "Not feasible" });
+
+    expect(res.body.returnedToConfirmed).toBe(false);
+    expect(eventsUpdateSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not touch the status when rejecting on a Confirmed event", async () => {
+    const { app, eventsUpdateSpy } = buildApp({ eventStatus: "Confirmed" });
+    const res = await request(app).post("/api/events/163/change-requests/5/reject").send({ reason: "Not feasible" });
+
+    expect(res.body.returnedToConfirmed).toBe(false);
+    expect(eventsUpdateSpy).not.toHaveBeenCalled();
   });
 });
 

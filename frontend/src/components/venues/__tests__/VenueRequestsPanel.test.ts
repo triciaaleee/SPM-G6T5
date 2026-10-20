@@ -55,6 +55,35 @@ describe("VenueRequestsPanel", () => {
     expect(rows[1].find(".badge").classes()).toContain("status-success");
   });
 
+  it("offers Find replacement on a Replacement Required booking, linking to venue search", () => {
+    const wrapper = mount(VenueRequestsPanel, {
+      props: {
+        bookings: [makeBooking({ status: "Replacement Required" })],
+        loading: false,
+        loadError: null,
+        canWithdraw: true,
+        findReplacementTo: { name: "venue-search", query: { eventId: "7" } },
+      },
+      global: { stubs: { RouterLink: { props: ["to"], template: '<a class="stub-link" :data-to="JSON.stringify(to)"><slot /></a>' } } },
+    });
+
+    const link = wrapper.find(".stub-link");
+    expect(link.exists()).toBe(true);
+    expect(link.text()).toBe("Find replacement");
+    expect(JSON.parse(link.attributes("data-to")!)).toEqual({ name: "venue-search", query: { eventId: "7" } });
+  });
+
+  it("hides Find replacement for other statuses and for non-coordinators", () => {
+    const approved = mount(VenueRequestsPanel, {
+      props: { bookings: [makeBooking({ status: "Approved" })], loading: false, loadError: null, canWithdraw: true, findReplacementTo: { name: "venue-search" } },
+      global: { stubs: { RouterLink: true } },
+    });
+    expect(approved.text()).not.toContain("Find replacement");
+
+    const readOnly = mountPanel({ bookings: [makeBooking({ status: "Replacement Required" })] });
+    expect(readOnly.text()).not.toContain("Find replacement");
+  });
+
   it("shows when a hold expires", () => {
     const wrapper = mountPanel({
       bookings: [makeBooking({ status: "On Hold", holdExpiresAt: "2026-10-09T02:00:00.000Z" })],

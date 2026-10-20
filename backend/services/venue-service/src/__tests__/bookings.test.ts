@@ -318,6 +318,14 @@ describe("POST /api/venues/bookings", () => {
     });
   });
 
+  it("accepts a request for a Needs Review event, so a lost venue can be replaced", async () => {
+    const { app, insert } = buildApp({ eventStatus: "Needs Review" });
+    const res = await submit(app);
+
+    expect(res.status).toBe(201);
+    expect(insert).toHaveBeenCalledWith({ venue_id: 1, event_id: 7, status: "Requested" });
+  });
+
   it("AC1: tells the venue's assigned staff a request is waiting on them", async () => {
     const { app, publish } = buildApp({ staffId: "VENUE-0007" });
     const res = await submit(app);

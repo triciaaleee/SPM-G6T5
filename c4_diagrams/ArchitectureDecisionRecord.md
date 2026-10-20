@@ -199,7 +199,7 @@ Registrations are a separate entity with their own data and roles (attendee, org
 
 | ID | Assumption | Confirm with |
 |---|---|---|
-| A9 | A `Safety Review` or `Confirmed` event returns to `Planning` when a booking becomes `Replacement Required` or an approved change affects its venues or equipment, and must pass safety review again | Customer |
+| A9 | A `Confirmed` event moves to `Needs Review` (a `Safety Review` event returns to `Planning`) when a booking becomes `Replacement Required`, reserved equipment is lost, or a change request holds a critical field. Once settled it must pass safety review again, unless only a change request was raised and it was rejected | Customer |
 | A10 | A safety rejection returns the event to `Planning`; it does not end the event | Customer |
 | A11 | A tentative hold lasts a fixed 72 hours from when Venue Staff place it | Customer |
 | A12 | The action that stops a hold expiring is a Venue Staff approve or reject decision | Customer |

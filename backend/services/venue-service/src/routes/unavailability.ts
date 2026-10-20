@@ -3,7 +3,7 @@ import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { BOOKING_STATUS } from "../lib/bookingStatus.js";
-import { fetchVenueBookingInfo } from "../lib/eventsClient.js";
+import { fetchVenueBookingInfo, reportArrangementsChanged } from "../lib/eventsClient.js";
 import { getPublisher, type OutboundMessage } from "../lib/rabbitPublisher.js";
 import {
   PERIOD_COLUMNS,
@@ -226,6 +226,16 @@ async function flagAndNotify(
     // extra notification here since `buildMessage` below already tells
     // this booking's coordinator about the block-out itself.
     await reconcileBufferOverlapsSafely(supabase, venue.id, authorization);
+
+    // The event was approved on this venue: tell events-service so a
+    // Confirmed event moves to Needs Review and the coordinator can request
+    // a replacement. Best-effort; the booking is already flagged.
+    const flaggedEvents = new Map(affected.filter(needsReplacement).map((b) => [b.eventId, b]));
+    await Promise.all(
+      [...flaggedEvents.keys()].map((eventId) =>
+        reportArrangementsChanged(eventId, `${venue.name} is unavailable (${period.reason})`),
+      ),
+    );
   }
 
   const messages = affected

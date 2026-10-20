@@ -3,6 +3,7 @@ import type { Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
+import { reportArrangementsChanged } from "../lib/eventsClient.js";
 import { todaySingapore } from "../lib/effectiveStock.js";
 import { dateRangeWindow } from "../lib/scheduleWindow.js";
 import { impactForUnits, suggestUnits, type ImpactUnit, type UnitRecord } from "../lib/unitImpact.js";
@@ -259,6 +260,7 @@ equipmentUnitsRouter.post("/mark", async (req: AuthedRequest, res) => {
   const affectedEvents: { eventId: number; eventName: string; units: number }[] = [];
   for (const { event, units: count } of byEvent.values()) {
     affectedEvents.push({ eventId: event.eventId, eventName: event.eventName, units: count });
+    await reportArrangementsChanged(event.eventId, `${count} reserved ${type} unit${count === 1 ? " is" : "s are"} unusable (${reason})`);
     if (!event.coordinatorId) {
       notified = false;
       continue;

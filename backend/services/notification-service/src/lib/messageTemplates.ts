@@ -286,6 +286,31 @@ const TEMPLATES: Record<string, Template> = {
   },
 
   /** #8 in RabbitMQ.md section 3.2 (#105 row 1) — same text for the organiser and every Safety Officer. */
+  /**
+   * A Confirmed event lost something it was approved on (a venue, a reserved
+   * equipment unit) or the organiser raised a change request: it moves to
+   * Needs Review until the coordinator settles it. Sent to the coordinator
+   * and the organiser.
+   */
+  "event.needs_review": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    return {
+      title: `${eventName} needs review`,
+      body: `"${eventName}" is now Needs Review: ${msg.data.reason ?? "its arrangements changed"}. It returns to Confirmed once this is settled.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** The same loss while the event was in Safety Review: it goes back to Planning (and the Safety Officer is told). */
+  "event.returned_to_planning": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    return {
+      title: `${eventName} returned to Planning`,
+      body: `"${eventName}" was in Safety Review but ${msg.data.reason ?? "its arrangements changed"}. It is back in Planning and must be resubmitted for safety review.`,
+      link: eventLink(msg),
+    };
+  },
+
   "safety.submitted": (msg) => ({
     title: "Submitted for safety review",
     body: `"${msg.data.eventName ?? "An event"}" has been submitted for its Operational Safety Check.`,

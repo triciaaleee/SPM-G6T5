@@ -17,6 +17,7 @@
  */
 import AppButton from "../ui/AppButton.vue";
 import { computed, ref } from "vue";
+import type { RouteLocationRaw } from "vue-router";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/vue/16/solid";
 import {
   describeBookingFailure,
@@ -44,6 +45,8 @@ const props = defineProps<{
   canWithdraw?: boolean;
   /** E4-17: each booking's purpose, headcount and suitability; left out, none is shown. */
   suitability?: BookingSuitability[];
+  /** Where "Find replacement" goes: venue search pre-filled for this event. Left out, the button is hidden. */
+  findReplacementTo?: RouteLocationRaw;
 }>();
 
 /** E4-17: suitability only matters for bookings still holding or asking for a venue. */
@@ -183,6 +186,9 @@ async function confirmAction(): Promise<void> {
           <p v-if="booking.status === 'Rejected' && booking.decisionReason" class="body-small reason">
             Reason: {{ booking.decisionReason }}
           </p>
+          <p v-if="booking.status === 'Replacement Required'" class="body-small reason">
+            This venue is no longer available. Find a replacement, then release this booking.
+          </p>
           <p v-if="actionErrorId === booking.id" class="body-small error-text" role="alert">
             {{ actionError }}
           </p>
@@ -191,6 +197,10 @@ async function confirmAction(): Promise<void> {
           <span class="badge" :class="bookingStatusBadgeClass(booking.status)">
             {{ bookingStatusLabel(booking.status) }}
           </span>
+          <AppButton v-if="canWithdraw && findReplacementTo && booking.status === 'Replacement Required'"
+            variant="primary" size="sm" class="action-btn" :to="findReplacementTo">
+            Find replacement
+          </AppButton>
           <!-- E4-9: withdraw a pending request/hold, or release an Approved
                booking. Approving/rejecting stays Venue Staff's (E4-10). -->
           <AppButton variant="outline" size="sm" class="action-btn" v-if="canWithdraw && actionFor(booking.status)" type="button"

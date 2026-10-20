@@ -565,7 +565,7 @@ async function rejectBooking(
 
 /**
  * AC1/AC2/AC3: holding or approving takes the venue, so the event must
- * still be in Planning and nothing else may hold the period. Both the
+ * still be in Planning (or Needs Review, where a lost venue is replaced) and nothing else may hold the period. Both the
  * status and the schedule come from venue-booking-info — the one view of
  * an event venue staff are allowed to read.
  */
@@ -583,7 +583,7 @@ async function holdOrApprove(
     return { outcome: { status: "blocked", message: "This booking's event is no longer available" } };
   }
 
-  if (event.status !== "Planning") {
+  if (event.status !== "Planning" && event.status !== "Needs Review") {
     return {
       outcome: {
         status: "blocked",

@@ -5,7 +5,7 @@
 export function statusBadgeClass(status: string): string {
   if (status === "Planning" || status === "Confirmed" || status === "Completed") return "status-success";
   if (status === "Rejected" || status === "Cancelled") return "status-error";
-  if (status === "Clarification Requested") return "status-info";
+  if (status === "Clarification Requested" || status === "Needs Review") return "status-info";
   return "status-warning"; // Requested
 }
 
@@ -43,7 +43,13 @@ export function statusLabel(status: string): string {
  * rejection note / clarification thread, not this summary field).
  */
 export function reviewOutcomeLabel(status: string): string {
-  if (status === "Planning" || status === "Safety Review" || status === "Confirmed" || status === "Completed") {
+  if (
+    status === "Planning" ||
+    status === "Safety Review" ||
+    status === "Confirmed" ||
+    status === "Needs Review" ||
+    status === "Completed"
+  ) {
     return "Approved";
   }
   if (status === "Rejected") return "Rejected";
