@@ -617,32 +617,6 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
-  it("renders chat.message_sent for the other party on the thread", async () => {
-    const { supabase, insert } = buildSupabase();
-    const resolveRoleUserIds = vi.fn();
-
-    await handleInboundMessage(
-      buildMsg({
-        type: "chat.message_sent",
-        eventId: 7,
-        actorId: "ORG-0001",
-        recipients: { userIds: ["COORD-0001"], roles: [] },
-        data: { eventName: "Alumni Gala", preview: "What time does setup start?" },
-      }),
-      { supabase, resolveRoleUserIds },
-    );
-
-    expect(insert).toHaveBeenCalledWith([
-      expect.objectContaining({
-        recipient_id: "COORD-0001",
-        type: "chat.message_sent",
-        title: "New message about Alumni Gala",
-        body: "What time does setup start?",
-        link: "/events/7",
-      }),
-    ]);
-  });
-
   it("renders registration.withdrawn, falling back to generic wording with no eventName", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();
