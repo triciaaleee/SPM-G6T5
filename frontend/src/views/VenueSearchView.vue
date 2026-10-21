@@ -606,8 +606,8 @@ onMounted(async () => {
 }
 
 .tab--active {
-  color: var(--color-purple-700);
-  border-bottom-color: var(--color-purple-600);
+  color: var(--color-blue-700);
+  border-bottom-color: var(--color-blue-600);
 }
 
 .timeslots {

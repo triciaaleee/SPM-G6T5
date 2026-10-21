@@ -199,7 +199,7 @@ function matchedFeatures(venue: Venue): string[] {
       <p v-if="venues.length > 0" class="body-small muted">{{ venues.length }} suitable</p>
     </div>
 
-    <p v-if="plan === null" class="body-small muted">Complete the booking plan above to see suitable venues.</p>
+    <p v-if="plan === null" class="body-small muted">Complete the details above to see suitable venues.</p>
 
     <p v-else-if="loading" class="body-small muted">Finding suitable venues…</p>
 

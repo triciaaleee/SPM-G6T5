@@ -811,8 +811,8 @@ onMounted(async () => {
 
 .tab--active,
 .tab--active:hover {
-  border-bottom-color: var(--color-purple-600);
-  color: var(--color-purple-600);
+  border-bottom-color: var(--color-blue-600);
+  color: var(--color-blue-600);
 }
 
 .schedule__day {

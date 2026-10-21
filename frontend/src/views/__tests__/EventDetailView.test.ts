@@ -117,6 +117,15 @@ function button(wrapper: Awaited<ReturnType<typeof mountPage>>, text: string) {
   return wrapper.findAll("button").find((b) => b.text() === text);
 }
 
+/** Opens one of the page's tabs (Overview, Arrangements, Registrations, History) by its label. */
+async function openTab(wrapper: Awaited<ReturnType<typeof mountPage>>, label: string) {
+  await wrapper
+    .find(".tab-bar")
+    .findAll("button")
+    .find((b) => b.text().startsWith(label))!
+    .trigger("click");
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -278,6 +287,7 @@ describe("EventDetailView — a Completed event's record (E3-5 AC3)", () => {
       },
     ]);
     const wrapper = await mountPage(makeEvent({ status: "Completed" }));
+    await openTab(wrapper, "Arrangements");
 
     expect(mockedBookings).toHaveBeenCalledWith(7);
     expect(wrapper.text()).toContain("Grand Ballroom");
@@ -301,6 +311,38 @@ describe("EventDetailView — a Completed event's record (E3-5 AC3)", () => {
 
     expect(wrapper.text()).toContain("Status changed from");
     expect(wrapper.text()).toContain("'Completed'");
+  });
+});
+
+describe("EventDetailView — edit history empty state", () => {
+  it("says there is no edit history yet when nothing has been changed", async () => {
+    mockedHistory.mockResolvedValue([]);
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    await button(wrapper, "History")!.trigger("click");
+
+    const empty = wrapper.get('[data-testid="history-empty"]');
+    expect(empty.text()).toBe("No edit history yet. Changes made to this event will appear here.");
+    expect(wrapper.text()).toContain("Edit history");
+    expect(wrapper.find(".history-list").exists()).toBe(false);
+  });
+
+  it("shows the list, not the empty message, once there are edits", async () => {
+    mockedHistory.mockResolvedValue([
+      {
+        id: 1,
+        field: "Venue",
+        old_value: "Main Hall",
+        new_value: "Sports Hall",
+        changed_by: coordinator.id,
+        changed_by_user: { name: "Casey Coordinator", role: "coordinator" },
+        changed_at: "2026-11-10T11:00:00.000Z",
+      },
+    ] as Awaited<ReturnType<typeof fetchEventHistory>>);
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    await button(wrapper, "History")!.trigger("click");
+
+    expect(wrapper.find('[data-testid="history-empty"]').exists()).toBe(false);
+    expect(wrapper.findAll(".history-list__item")).toHaveLength(1);
   });
 });
 
@@ -960,22 +1002,240 @@ describe("EventDetailView — page layout", () => {
     ).toBe(true);
   });
 
-  it("shows the status badge and who requested the event, and when", async () => {
+  it("shows the event id and the status badge in one row, above the title", async () => {
     const wrapper = await mountPage(makeEvent({ status: "Planning" }));
 
-    expect(wrapper.find(".event-title-row .badge").text()).toBe("Planning");
-    expect(wrapper.find(".event-id").text()).toContain("requested by Olive Organiser");
+    const meta = wrapper.find(".event-title-row .event-meta");
+    expect(meta.find(".event-id").text()).toBe("Event #7");
+    expect(meta.find(".badge").text()).toBe("Planning");
+    expect(wrapper.find(".event-title-row h1").text()).toBe("Spring Gala");
+    // The row comes before the title.
+    expect(
+      meta.element.compareDocumentPosition(wrapper.find(".event-title-row h1").element) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
-  it("puts venue recommendations and venue requests on the left and outstanding arrangements on the right", async () => {
+  it("keeps the coordinator and safety review cards on the Overview's right, and the venue and equipment panels off it", async () => {
     const wrapper = await mountPage(makeEvent({ status: "Planning" }));
 
     const [left, right] = wrapper.findAll(".detail-grid-col");
-    expect(left.text()).toContain("Venue Recommendations");
-    expect(left.findComponent({ name: "VenueRequestsPanel" }).exists()).toBe(true);
-    expect(right.text()).toContain("Coordinator Details");
-    expect(right.text()).toContain("Outstanding Arrangements");
-    expect(left.text()).not.toContain("Outstanding Arrangements");
+    expect(right.find(".coordinator-card").exists()).toBe(true);
+    expect(right.findComponent({ name: "SafetyReviewPanel" }).exists()).toBe(true);
+    expect(wrapper.text()).not.toContain("Outstanding Arrangements");
+    // Venue and equipment work now lives on the Arrangements tab.
+    expect(left.text()).not.toContain("Venue Recommendations");
+    expect(wrapper.findComponent({ name: "VenueRequestsPanel" }).exists()).toBe(false);
+    expect(wrapper.findComponent({ name: "EquipmentRequestPanel" }).exists()).toBe(false);
+  });
+
+  const liveBooking = (status: string, id = 1) => ({
+    id,
+    status,
+    holdExpiresAt: null,
+    decisionReason: null,
+    createdAt: "2026-10-07T02:00:00Z",
+    venue: { id: 1, name: "Grand Ballroom", location: "Central Campus" },
+  });
+
+  it("lays the Arrangements tab out as one full-width column: venue requests, then recommendations, then equipment", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    await openTab(wrapper, "Arrangements");
+
+    const column = wrapper.get(".arrangements");
+    // The Overview's two-column grid stays in the page but hidden.
+    const grid = wrapper.get(".detail-grid");
+    expect((grid.element as HTMLElement).style.display).toBe("none");
+    expect(column.findAll(".detail-grid-col")).toHaveLength(0);
+
+    const requests = column.findComponent({ name: "VenueRequestsPanel" }).element;
+    const venues = column.get('[data-testid="venue-recommendations"]').element;
+    const equipment = column.findComponent({ name: "EquipmentRequestPanel" }).element;
+    const follows = (a: Element, b: Element) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(follows(requests, venues)).toBeTruthy();
+    expect(follows(venues, equipment)).toBeTruthy();
+  });
+
+  const recommendationsCard = (wrapper: Awaited<ReturnType<typeof mountPage>>) =>
+    wrapper.find('[data-testid="venue-recommendations"]');
+  const requestAnother = (wrapper: Awaited<ReturnType<typeof mountPage>>) =>
+    wrapper.find('[data-testid="request-another-venue"]');
+
+  it("shows the Venue Recommendations card, and no Request another venue button, before any venue is requested", async () => {
+    mockedBookings.mockResolvedValue([]);
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    await openTab(wrapper, "Arrangements");
+
+    expect(recommendationsCard(wrapper).exists()).toBe(true);
+    expect(recommendationsCard(wrapper).text()).toContain("Find venues");
+    expect(requestAnother(wrapper).exists()).toBe(false);
+  });
+
+  it("keeps the Venue Recommendations card when every booking was withdrawn, rejected or expired", async () => {
+    mockedBookings.mockResolvedValue([liveBooking("Withdrawn", 1), liveBooking("Rejected", 2), liveBooking("Expired", 3)] as never);
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    await openTab(wrapper, "Arrangements");
+
+    expect(recommendationsCard(wrapper).exists()).toBe(true);
+    expect(requestAnother(wrapper).exists()).toBe(false);
+  });
+
+  it.each(["Requested", "On Hold", "Approved", "Replacement Required"])(
+    "swaps the recommendations card for a Request another venue button once a booking is %s",
+    async (status) => {
+      mockedBookings.mockResolvedValue([liveBooking(status)] as never);
+      const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+      await openTab(wrapper, "Arrangements");
+
+      expect(recommendationsCard(wrapper).exists()).toBe(false);
+      expect(requestAnother(wrapper).text()).toBe("Add Venue Request");
+      // A ghost button with a plus icon to the left of its text.
+      expect(requestAnother(wrapper).classes()).toContain("btn--ghost");
+      expect(requestAnother(wrapper).element.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+      // The button sits inside the Venue Requests card, below the request list.
+      const panel = wrapper.getComponent({ name: "VenueRequestsPanel" });
+      expect(panel.find('[data-testid="request-another-venue"]').exists()).toBe(true);
+      expect(
+        panel.get(".request-list").element.compareDocumentPosition(requestAnother(wrapper).element) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    },
+  );
+
+  it("opens the Add another venue form in the Venue Requests card, and Cancel closes it", async () => {
+    mockedBookings.mockResolvedValue([liveBooking("Approved")] as never);
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    await openTab(wrapper, "Arrangements");
+
+    await requestAnother(wrapper).trigger("click");
+
+    const form = wrapper.get('[data-testid="add-venue"]');
+    expect(form.get("h3").text()).toBe("Add another venue");
+    expect(form.findComponent({ name: "VenueRecommendations" }).exists()).toBe(true);
+    expect(form.text()).toContain("Find venues");
+    expect(form.text()).toContain("Cancel");
+    expect(requestAnother(wrapper).exists()).toBe(false);
+    expect(wrapper.getComponent({ name: "VenueRequestsPanel" }).find('[data-testid="add-venue"]').exists()).toBe(true);
+
+    await form.get(".add-venue__cancel").trigger("click");
+    expect(wrapper.find('[data-testid="add-venue"]').exists()).toBe(false);
+    expect(requestAnother(wrapper).exists()).toBe(true);
+  });
+
+  it("closes the form and reloads the requests once a venue has been requested from it", async () => {
+    mockedBookings.mockResolvedValue([liveBooking("Approved")] as never);
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    await openTab(wrapper, "Arrangements");
+    await requestAnother(wrapper).trigger("click");
+    mockedBookings.mockClear();
+
+    // The only Venue Recommendations on the page is the one inside the open form.
+    wrapper.getComponent({ name: "VenueRecommendations" }).vm.$emit("requested", 2);
+    await flushPromises();
+
+    expect(mockedBookings).toHaveBeenCalledWith(7);
+    expect(wrapper.find('[data-testid="add-venue"]').exists()).toBe(false);
+    expect(requestAnother(wrapper).exists()).toBe(true);
+  });
+
+  it("offers Request another venue only to the assigned coordinator while the event is in Planning", async () => {
+    mockedBookings.mockResolvedValue([liveBooking("Approved")] as never);
+
+    const other = await mountPage(makeEvent({ status: "Planning" }), { id: "COORD-0002", role: "coordinator" });
+    await openTab(other, "Arrangements");
+    expect(requestAnother(other).exists()).toBe(false);
+
+    const confirmed = await mountPage(makeEvent({ status: "Confirmed" }));
+    await openTab(confirmed, "Arrangements");
+    expect(requestAnother(confirmed).exists()).toBe(false);
+  });
+
+  it("offers the Arrangements tab to coordinators only, and not on a rejected request", async () => {
+    const coordinatorPage = await mountPage(makeEvent({ status: "Planning" }));
+    expect(coordinatorPage.find(".tab-bar").text()).toContain("Arrangements");
+
+    const rejected = await mountPage(makeEvent({ status: "Rejected" }));
+    expect(rejected.find(".tab-bar").text()).not.toContain("Arrangements");
+
+    const organiser = await mountPage(makeEvent({ status: "Planning", organiser_id: "ORG-0001" } as Partial<EventSummary>), {
+      id: "ORG-0001",
+      role: "organiser",
+    });
+    expect(organiser.find(".tab-bar").text()).not.toContain("Arrangements");
+  });
+
+  it("shows a count badge on the Arrangements tab when arrangements need review, and none when they don't", async () => {
+    const none = await mountPage(makeEvent({ status: "Planning" }));
+    expect(none.find('[data-testid="arrangements-badge"]').exists()).toBe(false);
+
+    mockedBookings.mockResolvedValue([
+      { id: 1, status: "Replacement Required", holdExpiresAt: null, decisionReason: null, createdAt: "2026-10-07T02:00:00Z", venue: null },
+      { id: 2, status: "On Hold", holdExpiresAt: "2026-10-20T02:00:00Z", decisionReason: null, createdAt: "2026-10-07T02:00:00Z", venue: null },
+      { id: 3, status: "Approved", holdExpiresAt: null, decisionReason: null, createdAt: "2026-10-07T02:00:00Z", venue: null },
+    ]);
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    expect(wrapper.find('[data-testid="arrangements-badge"]').text()).toBe("2");
+    expect(wrapper.find(".tab-bar").text()).toContain("Arrangements");
+    expect(
+      wrapper.find(".tab-bar").findAll("button").find((b) => b.text().startsWith("Arrangements"))!.attributes("aria-label"),
+    ).toBe("Arrangements, 2 need review");
+  });
+
+  it("gives the safety review card the venue and equipment lists, and lets only the assigned coordinator submit", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    expect(wrapper.findComponent({ name: "SafetyReviewPanel" }).props("canSubmit")).toBe(true);
+
+    const other = await mountPage(makeEvent({ status: "Planning" }), { id: "COORD-0002", role: "coordinator" });
+    expect(other.findComponent({ name: "SafetyReviewPanel" }).props("canSubmit")).toBe(false);
+
+    const organiser = await mountPage(makeEvent({ status: "Planning", organiser_id: "ORG-0001" } as Partial<EventSummary>), {
+      id: "ORG-0001",
+      role: "organiser",
+    });
+    expect(organiser.findComponent({ name: "SafetyReviewPanel" }).props("canSubmit")).toBe(false);
+  });
+
+  it("shows the coordinator as an avatar, name and role, with a You badge for the assigned coordinator", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    const card = wrapper.find(".coordinator-card");
+
+    expect(card.find(".section-title").text()).toBe("Coordinator");
+    expect(card.find(".coordinator-avatar").text()).toBe("C");
+    expect(card.find(".coordinator-person__name").text()).toBe("Casey Coordinator");
+    expect(card.find(".coordinator-person__role").text()).toBe("Assigned coordinator");
+    expect(card.find(".you-badge").text()).toBe("You");
+    expect(card.find("hr.divider").exists()).toBe(true);
+  });
+
+  it("has no You badge for another coordinator, who is told the event is not theirs", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }), { id: "COORD-0002", role: "coordinator" });
+    const card = wrapper.find(".coordinator-card");
+
+    expect(card.find(".you-badge").exists()).toBe(false);
+    expect(card.text()).toContain("assigned to another coordinator");
+  });
+
+  it("shows an empty avatar and no role when no coordinator is assigned", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Unassigned", coordinator_id: null, coordinator: null }));
+    const card = wrapper.find(".coordinator-card");
+
+    expect(card.find(".coordinator-person__name").text()).toBe("Not yet assigned");
+    expect(card.find(".coordinator-avatar--empty").exists()).toBe(true);
+    expect(card.find(".coordinator-person__role").exists()).toBe(false);
+  });
+
+  it("asks the Planning coordinator to follow up with the organiser through a full-width Request clarification button", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }));
+    const card = wrapper.find(".coordinator-card");
+
+    expect(card.text()).not.toContain("Coordinator actions");
+    expect(card.text()).toContain("Need more information from the organiser? Ask a follow-up question.");
+    // Plain text on the card, not the yellow warning box other notes use.
+    const help = card.get('[data-testid="clarification-help"]');
+    expect(help.classes()).toContain("coordinator-help");
+    expect(help.classes()).not.toContain("review-actions__note");
+    const clarify = card.findAll("button").find((b) => b.text() === "Request clarification");
+    expect(clarify).toBeDefined();
+    expect(clarify!.classes()).toContain("btn--block");
   });
 
   it("offers a Registrations tab with the count only when registration is needed", async () => {

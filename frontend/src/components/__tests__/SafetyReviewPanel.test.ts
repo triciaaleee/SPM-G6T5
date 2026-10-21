@@ -16,8 +16,36 @@ vi.mock("../../lib/eventsApi", async (importOriginal) => {
 
 const { SafetyReviewSubmitError } = await import("../../lib/eventsApi");
 
+/** One approved venue and no equipment: everything settled, so Submit is enabled. */
+const READY = {
+  venueBookings: [
+    { id: 1, status: "Approved", holdExpiresAt: null, decisionReason: null, createdAt: "2026-10-07T02:00:00Z", venue: null },
+  ],
+  equipmentRequests: [],
+} as const;
+
+function booking(status: string, id: number) {
+  return { id, status, holdExpiresAt: null, decisionReason: null, createdAt: "2026-10-07T02:00:00Z", venue: null };
+}
+
+function equipmentRequest(items: { quantity: number; quantityFulfilled: number }[]) {
+  return {
+    id: 1,
+    eventId: 7,
+    status: "Requested",
+    fulfillmentNote: null,
+    createdAt: "2026-10-07T02:00:00Z",
+    items: items.map((item, index) => ({
+      id: index + 1,
+      equipmentType: "Projector",
+      reservationFlag: { flagged: false, reason: null },
+      ...item,
+    })),
+  };
+}
+
 async function openAndFill(notes: Partial<Record<string, string>> = {}) {
-  const wrapper = mount(SafetyReviewPanel, { props: { eventId: 7 } });
+  const wrapper = mount(SafetyReviewPanel, { props: { eventId: 7, ...READY } });
   await wrapper.get("button").trigger("click");
   const values = {
     equipmentPlacement: "Projector at the back",
@@ -100,7 +128,7 @@ describe("SafetyReviewPanel — the last safety decision (E3-13)", () => {
   }
 
   async function mountPanel() {
-    const wrapper = mount(SafetyReviewPanel, { props: { eventId: 7 } });
+    const wrapper = mount(SafetyReviewPanel, { props: { eventId: 7, ...READY } });
     await flushPromises();
     return wrapper;
   }
@@ -149,5 +177,81 @@ describe("SafetyReviewPanel — the last safety decision (E3-13)", () => {
 
     expect(wrapper.find('[data-testid="safety-decision"]').exists()).toBe(false);
     expect(wrapper.get("button").text()).toBe("Submit for safety review");
+  });
+});
+
+describe("SafetyReviewPanel — readiness checklist", () => {
+  function mountWith(props: Record<string, unknown>) {
+    return mount(SafetyReviewPanel, { props: { eventId: 7, ...props } });
+  }
+
+  it("shows each arrangement with its caption and a Pending / Done badge", async () => {
+    const wrapper = mountWith({
+      venueBookings: [booking("Approved", 1), booking("Requested", 2), booking("Requested", 3)],
+      equipmentRequests: [equipmentRequest([{ quantity: 1, quantityFulfilled: 1 }, { quantity: 2, quantityFulfilled: 2 }, { quantity: 3, quantityFulfilled: 3 }])],
+    });
+    await flushPromises();
+
+    const venues = wrapper.get('[data-testid="check-venues"]');
+    expect(venues.text()).toContain("Venues approved");
+    expect(venues.text()).toContain("1 of 3 approved, 2 awaiting Venue Staff");
+    expect(venues.text()).toContain("Pending");
+
+    const equipment = wrapper.get('[data-testid="check-equipment"]');
+    expect(equipment.text()).toContain("Equipment reserved");
+    expect(equipment.text()).toContain("All 3 requested items arranged");
+    expect(equipment.text()).toContain("Done");
+  });
+
+  it("disables Submit, and says why, until every venue is approved", async () => {
+    const wrapper = mountWith({
+      venueBookings: [booking("Approved", 1), booking("Requested", 2)],
+      equipmentRequests: [],
+    });
+    await flushPromises();
+
+    expect(wrapper.get("button").attributes("disabled")).toBeDefined();
+    expect(wrapper.get('[data-testid="submit-note"]').text()).toContain("Available once all venues are approved.");
+    expect(wrapper.get('[data-testid="submit-note"]').text()).toContain("can't be edited while it is under review");
+  });
+
+  it("disables Submit, and says why, while equipment is still to be reserved", async () => {
+    const wrapper = mountWith({
+      venueBookings: [booking("Approved", 1)],
+      equipmentRequests: [equipmentRequest([{ quantity: 2, quantityFulfilled: 1 }])],
+    });
+    await flushPromises();
+
+    expect(wrapper.get("button").attributes("disabled")).toBeDefined();
+    expect(wrapper.get('[data-testid="submit-note"]').text()).toContain("Available once all requested equipment is reserved.");
+  });
+
+  it("enables Submit once everything is settled, and opens the notes form", async () => {
+    const wrapper = mountWith({ ...READY });
+    await flushPromises();
+
+    expect(wrapper.get("button").attributes("disabled")).toBeUndefined();
+    expect(wrapper.get('[data-testid="submit-note"]').text()).toContain("Ready to submit.");
+    await wrapper.get("button").trigger("click");
+    expect(wrapper.find("form").exists()).toBe(true);
+  });
+
+  it("keeps Submit disabled while the arrangements are still loading", async () => {
+    const wrapper = mountWith({});
+    await flushPromises();
+
+    expect(wrapper.get("button").attributes("disabled")).toBeDefined();
+    expect(wrapper.get('[data-testid="check-venues"]').text()).toContain("Checking…");
+  });
+
+  it("is read-only for anyone who can't submit: checklist only, no button, no decision lookup", async () => {
+    fetchSafetyReviews.mockClear();
+    const wrapper = mountWith({ ...READY, canSubmit: false });
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="safety-checklist"]').exists()).toBe(true);
+    expect(wrapper.find("button").exists()).toBe(false);
+    expect(wrapper.find('[data-testid="submit-note"]').exists()).toBe(false);
+    expect(fetchSafetyReviews).not.toHaveBeenCalled();
   });
 });
