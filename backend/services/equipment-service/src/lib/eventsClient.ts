@@ -5,6 +5,8 @@
  * exactly as if the coordinator had asked for the event directly.
  */
 
+import { signInternalToken } from "./internalAuth.js";
+
 export interface EventForEquipment {
   id: number;
   status: string;
@@ -38,6 +40,25 @@ export async function fetchEvent(eventId: number, authorization: string): Promis
 
   const body = (await res.json()) as { event?: EventForEquipment };
   return body.event ? { status: "ok", event: body.event } : { status: "not_found" };
+}
+
+/**
+ * Tells events-service that equipment the event was approved on can no
+ * longer be supplied (a reserved unit became unusable), so a Confirmed event
+ * moves to Needs Review (or a Safety Review one back to Planning).
+ * Best-effort and after the write has committed.
+ */
+export async function reportArrangementsChanged(eventId: number, reason: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${eventsServiceUrl()}/api/events/${eventId}/arrangements-changed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Auth": signInternalToken("equipment-service") },
+      body: JSON.stringify({ reason }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**

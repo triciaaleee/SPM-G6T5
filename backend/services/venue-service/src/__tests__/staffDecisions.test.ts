@@ -423,15 +423,25 @@ describe("canTransition", () => {
     expect(canTransition("On Hold", "Rejected")).toBe(true);
   });
 
-  it("treats Rejected, Expired and Withdrawn as end states", () => {
-    for (const from of ["Rejected", "Expired", "Withdrawn"] as const) {
+  it("Cancelled is the system's: only an Approved booking can be cancelled, and it is an end state", () => {
+    expect(canTransition("Approved", "Cancelled")).toBe(true);
+    for (const from of ["Requested", "On Hold", "Rejected", "Expired", "Withdrawn", "Replacement Required"] as const) {
+      expect(canTransition(from, "Cancelled")).toBe(false);
+    }
+    for (const to of ["Approved", "On Hold", "Requested", "Withdrawn", "Replacement Required"] as const) {
+      expect(canTransition("Cancelled", to)).toBe(false);
+    }
+  });
+
+  it("treats Rejected, Expired, Withdrawn and Cancelled as end states", () => {
+    for (const from of ["Rejected", "Expired", "Withdrawn", "Cancelled"] as const) {
       expect(canTransition(from, "Approved")).toBe(false);
       expect(canTransition(from, "On Hold")).toBe(false);
     }
   });
 
   it("AC5: offers no way back to Requested, so a decision can't be overridden", () => {
-    for (const from of ["On Hold", "Approved", "Rejected", "Expired", "Withdrawn"] as const) {
+    for (const from of ["On Hold", "Approved", "Rejected", "Expired", "Withdrawn", "Cancelled"] as const) {
       expect(canTransition(from, "Requested")).toBe(false);
     }
   });

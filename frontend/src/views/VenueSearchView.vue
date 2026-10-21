@@ -109,12 +109,14 @@ function prefillFromPlan(): void {
 /**
  * E4-8: a venue can only be requested for an event, so the action appears
  * only when the search was opened from one (?eventId=) and that event is
- * still in Planning — the only status a booking request may be made in
- * (AGENTS.md §3a). The outcome stays on the card it came from: a refusal
+ * still in Planning or Needs Review — the only statuses a booking request may be
+ * made in (AGENTS.md §3a). The outcome stays on the card it came from: a refusal
  * carries the clashing occupied window, which is the point of the message
  * (AC4/AC6).
  */
-const canRequest = computed(() => sourceEvent.value?.status === "Planning");
+const canRequest = computed(
+  () => sourceEvent.value?.status === "Planning" || sourceEvent.value?.status === "Needs Review",
+);
 
 const requestingVenueId = ref<number | null>(null);
 const requestedVenueIds = ref<Set<number>>(new Set());

@@ -18,16 +18,9 @@ Records the significant decisions behind `c1-system-context.dsl`, `c2-containers
 
 The diagrams show the target. Each item below is a gap between the diagrams and the repo, with the work needed to close it.
 
-### 1.1 Notifications go over REST, not through the broker
+### 1.1 Notifications go over REST, not through the broker (closed)
 
-C2 shows every notification trigger published to RabbitMQ (D6). Today venue-service and equipment-service call `POST /api/notifications` directly (`lib/notificationsClient.ts`), and events-service sends none. Closing this means:
-
-- running RabbitMQ locally (`RabbitMQ.md` section 6);
-- adding `RABBITMQ_URL` to `backend/.env.example` and `backend/README.md`;
-- an `amqplib` publisher in each publishing service and a consumer in each consuming service, following section 4;
-- a `message_id` column on notifications so a redelivered message does not create a second feed entry (rule M5).
-
-`POST /api/notifications` can stay while triggers move over one at a time.
+Every service now publishes its notification triggers to RabbitMQ (D6) and notification-service consumes them. The REST route `POST /api/notifications` and each service's `lib/notificationsClient.ts` have been removed; `GET /api/notifications` and the read endpoints remain, because the frontend reads its feed through them.
 
 ### 1.2 The API gateway does not exist yet
 
@@ -206,7 +199,7 @@ Registrations are a separate entity with their own data and roles (attendee, org
 
 | ID | Assumption | Confirm with |
 |---|---|---|
-| A9 | A `Safety Review` or `Confirmed` event returns to `Planning` when a booking becomes `Replacement Required` or an approved change affects its venues or equipment, and must pass safety review again | Customer |
+| A9 | A `Confirmed` event moves to `Needs Review` (a `Safety Review` event returns to `Planning`) when a booking becomes `Replacement Required`, reserved equipment is lost, or a change request holds a critical field. Once settled it must pass safety review again, unless only a change request was raised and it was rejected | Customer |
 | A10 | A safety rejection returns the event to `Planning`; it does not end the event | Customer |
 | A11 | A tentative hold lasts a fixed 72 hours from when Venue Staff place it | Customer |
 | A12 | The action that stops a hold expiring is a Venue Staff approve or reject decision | Customer |

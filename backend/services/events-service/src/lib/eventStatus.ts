@@ -11,6 +11,7 @@ export const EVENT_STATUS = {
   Planning: "Planning",
   SafetyReview: "Safety Review",
   Confirmed: "Confirmed",
+  NeedsReview: "Needs Review",
   Completed: "Completed",
   Rejected: "Rejected",
   Cancelled: "Cancelled",

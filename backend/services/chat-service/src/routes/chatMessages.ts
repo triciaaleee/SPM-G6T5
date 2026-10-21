@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEvent, fetchEventsForRole, type EventForChat } from "../lib/eventsClient.js";
-import { sendNotification } from "../lib/notificationsClient.js";
+import { getPublisher } from "../lib/rabbitPublisher.js";
 import { validateMessageBody } from "../lib/validateChatMessage.js";
 
 /**
@@ -307,16 +307,13 @@ chatRouter.post("/:eventId/messages", async (req: AuthedRequest, res) => {
   const eventName = eventDisplayName(access.event, eventId);
   const preview = bodyResult.value!.length > 140 ? `${bodyResult.value!.slice(0, 140)}…` : bodyResult.value!;
 
-  const notified = await sendNotification(
-    {
-      recipientId,
-      type: "chat_message",
-      title: `New message about ${eventName}`,
-      body: preview,
-      link: `/events/${eventId}`,
-    },
-    req.headers.authorization!,
-  );
+  const notified = await getPublisher().publish({
+    type: "message.sent",
+    eventId,
+    actorId: user.id,
+    recipients: { userIds: [recipientId], roles: [] },
+    data: { eventName, preview, senderRole: user.role },
+  });
 
   res.status(201).json({ message: toMessage(row as MessageRow, user.id), notified });
 });

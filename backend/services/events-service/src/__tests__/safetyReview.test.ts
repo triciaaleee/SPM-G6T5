@@ -56,6 +56,8 @@ function buildApp(
     equipmentServiceFails?: boolean;
     submissionId?: number | null;
     rpcError?: { message: string } | null;
+    /** Open (Pending) change requests on the event, counted when it is in Needs Review. */
+    pendingChangeRequests?: number;
   } = {},
 ) {
   const event = options.event === undefined ? { id: 7, status: "Planning", coordinator_id: coordinator.id } : options.event;
@@ -76,7 +78,22 @@ function buildApp(
   });
 
   (globalThis as any).__mockSupabase = {
-    from: vi.fn((table: string) => (table === "access_denials" ? { insert: denialInsert } : { select: eventsSelect })),
+    from: vi.fn((table: string) => {
+      if (table === "access_denials") return { insert: denialInsert };
+      if (table === "change_requests") {
+        return {
+          select: () => {
+            const chain: any = {
+              eq: () => chain,
+              then: (resolve: (value: unknown) => unknown) =>
+                resolve({ count: options.pendingChangeRequests ?? 0, error: null }),
+            };
+            return chain;
+          },
+        };
+      }
+      return { select: eventsSelect };
+    }),
     rpc,
   };
   (globalThis as any).__mockUser = options.user ?? coordinator;
@@ -151,6 +168,34 @@ describe("POST /api/events/:id/submit-safety-review (E3-4)", () => {
         recipients: { userIds: ["ORG-0001"], roles: ["safety_officer"] },
       }),
     );
+  });
+
+  it("lets the coordinator resubmit from Needs Review once the change request is decided", async () => {
+    const { app, rpc } = buildApp({ event: { id: 7, status: "Needs Review", coordinator_id: coordinator.id } });
+    const res = await submit(app);
+
+    expect(res.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith("submit_event_for_safety_review", expect.objectContaining({ p_event_id: 7 }));
+  });
+
+  it("blocks submission from Needs Review while a change request is still open", async () => {
+    const { app, rpc } = buildApp({
+      event: { id: 7, status: "Needs Review", coordinator_id: coordinator.id },
+      pendingChangeRequests: 1,
+    });
+    const res = await submit(app);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/change request/i);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("still blocks an event in Confirmed", async () => {
+    const { app, rpc } = buildApp({ event: { id: 7, status: "Confirmed", coordinator_id: coordinator.id } });
+    const res = await submit(app);
+
+    expect(res.status).toBe(409);
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it("AC2: blocks an event with no approved venue booking", async () => {

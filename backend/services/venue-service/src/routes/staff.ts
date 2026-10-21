@@ -384,7 +384,7 @@ staffRouter.get("/venues/:venueId/buffer-overlaps", async (req: AuthedRequest, r
 
 /**
  * Every booking at one venue between `from` and `to` (inclusive, local
- * "YYYY-MM-DD" dates), earliest first. Every booking is tied to an event
+ * "YYYY-MM-DD" dates), or all of them when neither is given, earliest first. Every booking is tied to an event
  * (migration 0015) and carries that event's booking-relevant details.
  */
 staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
@@ -398,10 +398,12 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // No range at all means every booking, whenever it is (the venue schedule's default list).
+  const allTime = from === "" && to === "";
   const fields: Record<string, string> = {};
-  if (!isRealDate(from)) fields.from = "Enter a valid date (YYYY-MM-DD).";
-  if (!isRealDate(to)) fields.to = "Enter a valid date (YYYY-MM-DD).";
-  if (!fields.from && !fields.to) {
+  if (!allTime && !isRealDate(from)) fields.from = "Enter a valid date (YYYY-MM-DD).";
+  if (!allTime && !isRealDate(to)) fields.to = "Enter a valid date (YYYY-MM-DD).";
+  if (!allTime && !fields.from && !fields.to) {
     const days = (Date.parse(to) - Date.parse(from)) / DAY_MS;
     if (days < 0) fields.to = "The end date must not be before the start date.";
     else if (days >= MAX_RANGE_DAYS) fields.to = `The range can cover at most ${MAX_RANGE_DAYS} days.`;
@@ -454,7 +456,7 @@ staffRouter.get("/:venueId/bookings", async (req: AuthedRequest, res) => {
   const bookings = bookingRows
     .flatMap((booking) => {
       const event = eventsById.get(booking.event_id);
-      if (!event?.proposedDate || event.proposedDate < from || event.proposedDate > to) return [];
+      if (!event?.proposedDate || (!allTime && (event.proposedDate < from || event.proposedDate > to))) return [];
       return [{ booking, event, date: event.proposedDate, startTime: toHourMinute(event.startTime) }];
     })
     .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));

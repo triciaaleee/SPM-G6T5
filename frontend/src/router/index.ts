@@ -10,7 +10,6 @@ import SignupView from "../views/SignupView.vue";
 import VenueSearchView from "../views/VenueSearchView.vue";
 import VenueAvailabilityView from "../views/VenueAvailabilityView.vue";
 import VenueStaff from "../views/VenueStaff.vue";
-import VenueRequestQueue from "../views/VenueRequestQueue.vue";
 import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
 import TechnicalSupportView from "../views/TechnicalSupportView.vue";
 import EquipmentRequestDetailView from "../views/EquipmentRequestDetailView.vue";
@@ -110,12 +109,11 @@ export const router = createRouter({
       meta: { requiresAuth: true, roles: ["coordinator"] },
     },
     {
-      // E4-10: venue staff's decision queue — every request still waiting
-      // on them, soonest event first.
+      // E4-10: the decision queue now lives on the venue schedule's Requests tab.
+      // Kept as a redirect because notifications link here.
       path: "/venue-requests",
       name: "venue-requests",
-      component: VenueRequestQueue,
-      meta: { requiresAuth: true, roles: ["venue_staff"] },
+      redirect: { name: "venue-schedule", query: { tab: "requested" } },
     },
     {
       // E4-4: venue availability calendar — when a venue could realistically

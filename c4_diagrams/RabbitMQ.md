@@ -18,7 +18,7 @@ One durable queue per consuming service, bound only to the routing keys it acts 
 | Queue | Bindings | Why |
 |---|---|---|
 | `notification-service` | `#` (everything) | Every message names people to notify |
-| `events-service` | `booking.replacement_required` | Returns a `Safety Review` or `Confirmed` event to `Planning` (AGENTS.md section 3, re-review) |
+| `events-service` | `booking.replacement_required` | Moves a `Confirmed` event to `Needs Review`, or a `Safety Review` event to `Planning` (AGENTS.md section 3). Today venue-service reports it over REST (`POST /api/events/:id/arrangements-changed`, internal token) after the booking write commits |
 | `venue-service` | `event.cancelled` | Withdraws every active booking of the event (E3-6) |
 | `equipment-service` | `event.cancelled`, `change.decided` | Releases reservations (E3-6) or re-checks them after a date, time or duration change (E5-6 AC3) |
 | `registration-service` | `event.cancelled` | Closes registration and cancels every place (E3-6) |
@@ -85,7 +85,7 @@ Every message has the same outer shape, so notification-service can route any of
 | 8 | Coordinator submits for safety review | `safety.submitted` | All safety officers, Organiser | E3-4 AC8 |
 | 9 | Safety officer approves (event `Confirmed`) | `safety.decided` (`outcome: approved`) | Assigned coordinator, Organiser | Wk4 A20 "confirmation"; E3-12; E7-2 |
 | 10 | Safety officer rejects or requests changes | `safety.decided` (`outcome: rejected` or `changes_requested`, with reason) | Assigned coordinator | E3-13 AC1; E7-2 |
-| 11 | Event returns to `Planning` for re-review | `event.rereview` | Assigned coordinator, Organiser; safety officers if it was in `Safety Review` | Wk4 A20 "important event changes"; AGENTS.md section 3 (assumption A9) |
+| 11 | Event moves to `Needs Review` (was `Confirmed`) or returns to `Planning` (was `Safety Review`) when an approved arrangement is lost (a booking `Cancelled` by a block-out, or `Replacement Required`) | `event.needs_review` / `event.returned_to_planning` | Assigned coordinator, Organiser; safety officers if it was in `Safety Review` | Wk4 A20 "important event changes"; AGENTS.md section 3 (assumption A9) |
 | 12 | Organiser raises a change request | `change.requested` | Assigned coordinator | Wk4 A20 "important event changes"; E3-9 AC1 |
 | 13 | Coordinator decides a change request | `change.decided` | Organiser; venue staff of affected bookings and Technical Support if venue or equipment is affected | E3-11 AC1 to AC4 |
 | 14 | Organiser cancels the event | `event.cancelled` (with reason) | Organiser (confirmation); assigned coordinator with the reason (leads if `Unassigned`) | Wk4 A20 "cancellation"; E3-6 AC1 |
@@ -147,15 +147,27 @@ Organiser cancels
 
 An event with no bookings, equipment or registrations produces only `event.cancelled`.
 
+### 3.7 Chat (chat-service)
+
+| # | Trigger | Message | Recipients | Source |
+|---|---|---|---|---|
+| 36 | New chat message | `message.sent` | The other party (coordinator if the organiser sent it, organiser if the coordinator sent it) | E2-15 |
+
 ## 4. Messages consumed for something other than notifications
 
 | Message | Consumer | What it does |
 |---|---|---|
-| `booking.replacement_required` | events-service | Moves a `Safety Review` or `Confirmed` event back to `Planning`, then publishes `event.rereview` (#11) |
+| `booking.replacement_required` | events-service | Moves a `Confirmed` event to `Needs Review` or a `Safety Review` event back to `Planning`, then publishes `event.needs_review` / `event.returned_to_planning` (#11) |
 | `event.cancelled` | venue-service | Withdraws every active booking, then publishes #33 |
 | `event.cancelled` | equipment-service | Releases reservations, then publishes #34 |
 | `event.cancelled` | registration-service | Cancels registrations, then publishes #35 |
 | `change.decided` | equipment-service | Re-checks reservations when the date, time or duration changed (E5-6 AC3); a reservation that no longer holds is published as `equipment.status_changed` |
+
+### Reliable delivery for `event.cancelled`
+
+The messages above are best effort: if the broker is down when a service publishes, the message is logged and dropped. That is fine for a notification. It is not fine for `event.cancelled`, which three services act on, so events-service stores it in its own `event_outbox` table (migration `0045`) right after the cancellation, publishes it, and retries from a relay (every 10 seconds) until the broker confirms it. The publisher uses a confirm channel, so "published" means the broker accepted the message.
+
+Delivery is at-least-once: a retry reuses the stored `messageId`, so every consumer of `event.cancelled` must be safe to run twice. Today they are (each only matches rows still active). The store is not in the same transaction as the cancellation, so a crash between the two can still lose the message; the window is far smaller than a broker outage.
 
 ## 5. Backlog alignment
 

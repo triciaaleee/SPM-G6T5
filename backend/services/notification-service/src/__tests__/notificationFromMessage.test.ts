@@ -109,6 +109,30 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders message.sent for the other party, same text either direction", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "message.sent",
+        eventId: 7,
+        actorId: "ORG-0001",
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: { eventName: "Alumni Gala", preview: "What time does setup start?", senderRole: "organiser" },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "New message about Alumni Gala",
+        body: "What time does setup start?",
+      }),
+    ]);
+  });
+
   it("renders the leads' notification for request.submitted", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();
@@ -529,6 +553,43 @@ describe("handleInboundMessage", () => {
 
     expect(insert).toHaveBeenCalledWith([
       expect.objectContaining({ recipient_id: "ORG-0001", title: "Submitted for safety review" }),
+    ]);
+  });
+
+  it("renders event.needs_review", async () => {
+    const { supabase, insert } = buildSupabase();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "event.needs_review",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001", "ORG-0001"], roles: [] },
+        data: { eventName: "Nut Festival", reason: "Great Lawn is unavailable (Floor resurfacing)" },
+      }),
+      { supabase, resolveRoleUserIds: vi.fn() },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({ recipient_id: "COORD-0001", title: "Nut Festival needs review", link: "/events/7" }),
+      expect.objectContaining({ recipient_id: "ORG-0001", title: "Nut Festival needs review" }),
+    ]);
+  });
+
+  it("renders event.returned_to_planning", async () => {
+    const { supabase, insert } = buildSupabase();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "event.returned_to_planning",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: { eventName: "Nut Festival", reason: "Great Lawn is unavailable" },
+      }),
+      { supabase, resolveRoleUserIds: vi.fn().mockResolvedValue([]) },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({ recipient_id: "COORD-0001", title: "Nut Festival returned to Planning" }),
     ]);
   });
 

@@ -37,6 +37,7 @@ export const REGISTRATION_DATE_EDITABLE_STATUSES: string[] = [
   EVENT_STATUS.Planning,
   EVENT_STATUS.SafetyReview,
   EVENT_STATUS.Confirmed,
+  EVENT_STATUS.NeedsReview,
 ];
 
 export function parseOverride(value: unknown): RegistrationOverride {

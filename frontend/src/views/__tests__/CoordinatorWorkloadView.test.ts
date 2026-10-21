@@ -199,14 +199,14 @@ describe("CoordinatorWorkloadView — status tabs", () => {
     );
 
     const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
-    expect(tabs).toEqual(["Active 2", "All 2", "Needs Review 1", "Unassigned 1"]);
+    expect(tabs).toEqual(["Active 2", "All 2", "Awaiting Review 1", "Unassigned 1"]);
   });
 
   it("renders Active and All tabs plus one tab per non-empty group, with counts", async () => {
     const wrapper = await mountView(tabEvents());
 
     const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
-    expect(tabs).toEqual(["Active 3", "All 3", "Needs Review 2", "Planning 1"]);
+    expect(tabs).toEqual(["Active 3", "All 3", "Awaiting Review 2", "Planning 1"]);
   });
 
   it("defaults to Active and shows every open event in one flat grid", async () => {

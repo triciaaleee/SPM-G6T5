@@ -3,7 +3,7 @@ import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { BOOKING_STATUS } from "../lib/bookingStatus.js";
-import { fetchVenueBookingInfo } from "../lib/eventsClient.js";
+import { fetchVenueBookingInfo, reportArrangementsChanged } from "../lib/eventsClient.js";
 import { getPublisher, type OutboundMessage } from "../lib/rabbitPublisher.js";
 import {
   PERIOD_COLUMNS,
@@ -58,11 +58,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /**
  * Bookings a block-out can still affect: pending (Requested, On Hold) as
  * well as approved — none can be honoured once the venue is blocked.
- * Rejected, Expired, Withdrawn and already-flagged bookings are left alone.
+ * Rejected, Expired, Withdrawn, Cancelled and already-flagged bookings are left alone.
  */
 const LIVE_BOOKING_STATUSES = [BOOKING_STATUS.requested, BOOKING_STATUS.onHold, BOOKING_STATUS.approved];
 
-/** Only an Approved booking may move to Replacement Required (AGENTS.md §3a). */
+/** Only an Approved booking is cancelled by a block-out (AGENTS.md §3a); pending ones keep their status. */
 function needsReplacement(booking: { status: string }): boolean {
   return booking.status === BOOKING_STATUS.approved;
 }
@@ -215,17 +215,30 @@ async function flagAndNotify(
   if (toFlag.length > 0) {
     const { error } = await supabase
       .from("venue_bookings")
-      .update({ status: BOOKING_STATUS.replacementRequired })
+      .update({
+        status: BOOKING_STATUS.cancelled,
+        decision_reason: `${venue.name} became unavailable: ${period.reason}`,
+        decided_at: new Date().toISOString(),
+      })
       .in("id", toFlag)
       .eq("status", BOOKING_STATUS.approved);
     if (error) return { flagged: false, coordinatorsNotified: 0, notificationsFailed: false };
 
-    // E4-13 AC3: an Approved booking just flagged Replacement Required
-    // leaves UNAVAILABLE_BOOKING_STATUSES, which can resolve an overlap it
-    // was part of. Best-effort and after the write above has committed; no
+    // E4-13 AC3: an Approved booking just Cancelled leaves
+    // UNAVAILABLE_BOOKING_STATUSES, which can resolve an overlap it was part of. Best-effort and after the write above has committed; no
     // extra notification here since `buildMessage` below already tells
     // this booking's coordinator about the block-out itself.
     await reconcileBufferOverlapsSafely(supabase, venue.id, authorization);
+
+    // The event was approved on this venue: tell events-service so a
+    // Confirmed event moves to Needs Review and the coordinator can request
+    // a replacement. Best-effort; the booking is already cancelled.
+    const flaggedEvents = new Map(affected.filter(needsReplacement).map((b) => [b.eventId, b]));
+    await Promise.all(
+      [...flaggedEvents.keys()].map((eventId) =>
+        reportArrangementsChanged(eventId, `${venue.name} is unavailable (${period.reason})`),
+      ),
+    );
   }
 
   const messages = affected
@@ -261,11 +274,13 @@ unavailabilityRouter.get("/", async (req: AuthedRequest, res) => {
   const from = typeof req.query.from === "string" ? req.query.from : "";
   const to = typeof req.query.to === "string" ? req.query.to : "";
 
+  // No range at all means every period, whenever it is (the venue schedule's default list).
+  const allTime = from === "" && to === "";
   const fields: Record<string, string> = {};
   if (venueId === null) fields.venueId = "Pick a venue.";
-  if (!isRealDate(from)) fields.from = "Enter a valid date (YYYY-MM-DD).";
-  if (!isRealDate(to)) fields.to = "Enter a valid date (YYYY-MM-DD).";
-  if (!fields.from && !fields.to) {
+  if (!allTime && !isRealDate(from)) fields.from = "Enter a valid date (YYYY-MM-DD).";
+  if (!allTime && !isRealDate(to)) fields.to = "Enter a valid date (YYYY-MM-DD).";
+  if (!allTime && !fields.from && !fields.to) {
     const days = (Date.parse(to) - Date.parse(from)) / DAY_MS;
     if (days < 0) fields.to = "The end date must not be before the start date.";
     else if (days >= MAX_RANGE_DAYS) fields.to = `The range can cover at most ${MAX_RANGE_DAYS} days.`;
@@ -275,12 +290,9 @@ unavailabilityRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const { data, error } = await req
-    .supabase!.from("venue_unavailability")
-    .select(PERIOD_COLUMNS)
-    .eq("venue_id", venueId!)
-    .lte("start_date", to)
-    .gte("end_date", from)
+  let query = req.supabase!.from("venue_unavailability").select(PERIOD_COLUMNS).eq("venue_id", venueId!);
+  if (!allTime) query = query.lte("start_date", to).gte("end_date", from);
+  const { data, error } = await query
     .order("start_date")
     .order("start_time", { nullsFirst: true });
 

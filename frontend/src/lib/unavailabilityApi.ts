@@ -41,7 +41,7 @@ export interface AffectedBooking {
   occupiedStart: string | null;
   occupiedEnd: string | null;
   hasCoordinator: boolean;
-  /** True for an Approved booking, which moves to Replacement Required; pending ones keep their status. */
+  /** True for an Approved booking, which is cancelled; pending ones keep their status. */
   replacementRequired: boolean;
 }
 
@@ -73,8 +73,9 @@ function toBody(draft: PeriodDraft): string {
 const jsonHeaders = () => ({ ...authHeader(), "Content-Type": "application/json" });
 
 /** Periods at one venue overlapping `from`..`to` (inclusive, at most 42 days). */
-export async function fetchUnavailability(venueId: number, from: string, to: string): Promise<UnavailabilityPeriod[]> {
-  const params = new URLSearchParams({ venueId: String(venueId), from, to });
+/** With no range, every period at the venue. */
+export async function fetchUnavailability(venueId: number, from?: string, to?: string): Promise<UnavailabilityPeriod[]> {
+  const params = new URLSearchParams({ venueId: String(venueId), ...(from && to ? { from, to } : {}) });
   const res = await fetch(`${apiBase}?${params}`, { headers: authHeader() });
   await redirectIfUnauthenticated(res);
   const body = await res.json();

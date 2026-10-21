@@ -136,6 +136,16 @@ const TEMPLATES: Record<string, Template> = {
     };
   },
 
+  /** #36 in RabbitMQ.md section 3.7 (E2-15) — chat-service's first RabbitMQ trigger. Always the other party, so one rendering for everyone. */
+  "message.sent": (msg) => {
+    const eventName = String(msg.data.eventName ?? "an event");
+    return {
+      title: `New message about ${eventName}`,
+      body: String(msg.data.preview ?? ""),
+      link: eventLink(msg),
+    };
+  },
+
   /**
    * #104 (E7-2a): first trigger migrated off direct REST (ARD section
    * 1.1) — events-service's `POST /:id/assign` now publishes this instead
@@ -286,6 +296,31 @@ const TEMPLATES: Record<string, Template> = {
   },
 
   /** #8 in RabbitMQ.md section 3.2 (#105 row 1) — same text for the organiser and every Safety Officer. */
+  /**
+   * A Confirmed event lost something it was approved on (a venue, a reserved
+   * equipment unit) or the organiser raised a change request: it moves to
+   * Needs Review until the coordinator settles it. Sent to the coordinator
+   * and the organiser.
+   */
+  "event.needs_review": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    return {
+      title: `${eventName} needs review`,
+      body: `"${eventName}" is now Needs Review: ${msg.data.reason ?? "its arrangements changed"}. It returns to Confirmed once this is settled.`,
+      link: eventLink(msg),
+    };
+  },
+
+  /** The same loss while the event was in Safety Review: it goes back to Planning (and the Safety Officer is told). */
+  "event.returned_to_planning": (msg) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    return {
+      title: `${eventName} returned to Planning`,
+      body: `"${eventName}" was in Safety Review but ${msg.data.reason ?? "its arrangements changed"}. It is back in Planning and must be resubmitted for safety review.`,
+      link: eventLink(msg),
+    };
+  },
+
   "safety.submitted": (msg) => ({
     title: "Submitted for safety review",
     body: `"${msg.data.eventName ?? "An event"}" has been submitted for its Operational Safety Check.`,
@@ -339,7 +374,7 @@ const TEMPLATES: Record<string, Template> = {
     const venueName = String(msg.data.venueName ?? "The venue");
     return {
       title: `Alternative venue needed for ${eventName}`,
-      body: `${venueName} is unavailable ${msg.data.period ?? ""}: ${msg.data.reason ?? ""}. ${eventName} on ${msg.data.date ?? ""} needs a replacement venue.`,
+      body: `${venueName} is unavailable ${msg.data.period ?? ""}: ${msg.data.reason ?? ""}. Your booking was cancelled, and ${eventName} on ${msg.data.date ?? ""} needs a replacement venue.`,
       link: eventLink(msg),
     };
   },

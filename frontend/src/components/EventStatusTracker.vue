@@ -115,6 +115,7 @@ const STATUS_STEP_INDEX: Record<string, number> = {
   "Clarification Requested": 1,
   "Safety Review": 2,
   Confirmed: 3,
+  "Needs Review": 3,
   Completed: 4,
 };
 
@@ -145,7 +146,8 @@ const steps = computed(() => {
     requested,
     stage2,
     { key: "safety-review", label: "Safety Review" },
-    { key: "confirmed", label: "Confirmed" },
+    // Needs Review shares Confirmed's slot: the event is past safety approval but something changed.
+    { key: "confirmed", label: props.status === "Needs Review" ? "Needs Review" : "Confirmed" },
     { key: "completed", label: "Completed" },
   ];
 });
@@ -206,6 +208,10 @@ function stepCaption(index: number): string {
     <p v-else-if="status === 'Cancelled'" class="body-small status-note status-note--error">
       This event was cancelled{{ reviewOutcome ? `: ${reviewOutcome}` : "." }}
     </p>
+    <p v-else-if="status === 'Needs Review'" class="body-small muted pt-8">
+      Something this event was approved on has changed (its venue, equipment or a change request). It returns to
+      Confirmed once everything is settled.
+    </p>
     <p v-else-if="status === 'Safety Review'" class="body-small muted pt-8">
       Submitted for the Safety Officer's Operational Safety Check. The event can't be edited while it's under review.
     </p>
@@ -214,7 +220,7 @@ function stepCaption(index: number): string {
   <div v-if="showOutstanding && (status === 'Planning' || !showTimeline)" class="details-card status-card">
     <h2 class="section-title">{{ title }}</h2>
 
-    <div v-if="status === 'Planning'" class="outstanding">
+    <div v-if="(status === 'Planning' || status === 'Needs Review') && showOutstanding" class="outstanding">
       <p class="body-small muted mb-1">Outstanding arrangements</p>
       <ul class="outstanding__list">
         <li class="outstanding__item" :class="{ 'outstanding__item--done': venueArrangement.done }">
