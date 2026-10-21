@@ -355,7 +355,11 @@ describe("PUT /api/venues/unavailability/:id (edit)", () => {
     expect(periodUpdate).toHaveBeenCalledWith({
       start_date: "2026-10-14", end_date: "2026-10-16", all_day: true, start_time: null, end_time: null, reason: "Extended works",
     });
-    expect(update).toHaveBeenCalledWith({ status: "Replacement Required" });
+    expect(update).toHaveBeenCalledWith({
+      status: "Cancelled",
+      decision_reason: expect.stringMatching(/became unavailable: /),
+      decided_at: expect.any(String),
+    });
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: "booking.replacement_required" }));
     expect(res.body).toMatchObject({ period: { id: 4, reason: "Extended works" }, coordinatorsNotified: 1 });
   });
@@ -390,7 +394,23 @@ describe("POST /api/venues/unavailability (AC1 + AC2)", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it("flags affected bookings Replacement Required and notifies their coordinators", async () => {
+  it("tells events-service about each flagged booking's event, so a Confirmed event moves to Needs Review", async () => {
+    process.env.INTERNAL_SERVICE_SECRET = "test-internal-secret";
+    const { app, fetchMock } = buildApp({
+      bookings: [{ id: 1, event_id: 1, status: "Approved" }, { id: 2, event_id: 2, status: "Approved" }],
+      events: [eventInfo(1, "2026-10-13", "10:00", "12:00"), eventInfo(2, "2026-11-01", "10:00", "12:00")],
+    });
+
+    const res = await request(app).post("/api/venues/unavailability").send(fullDays);
+
+    expect(res.status).toBe(201);
+    const reported = fetchMock.mock.calls.filter(([url]) => String(url).includes("/arrangements-changed"));
+    expect(reported).toHaveLength(1);
+    expect(String(reported[0][0])).toContain("/api/events/1/arrangements-changed");
+    expect((reported[0][1] as { method?: string }).method).toBe("POST");
+  });
+
+  it("cancels affected Approved bookings and notifies their coordinators", async () => {
     const { app, update, updateQuery, publish } = buildApp({
       bookings: [{ id: 1, event_id: 1, status: "Approved" }, { id: 2, event_id: 2, status: "Approved" }],
       events: [eventInfo(1, "2026-10-13", "10:00", "12:00"), eventInfo(2, "2026-11-01", "10:00", "12:00")],
@@ -399,7 +419,11 @@ describe("POST /api/venues/unavailability (AC1 + AC2)", () => {
     const res = await request(app).post("/api/venues/unavailability").send(fullDays);
 
     expect(res.status).toBe(201);
-    expect(update).toHaveBeenCalledWith({ status: "Replacement Required" });
+    expect(update).toHaveBeenCalledWith({
+      status: "Cancelled",
+      decision_reason: expect.stringMatching(/became unavailable: /),
+      decided_at: expect.any(String),
+    });
     expect(updateQuery.in).toHaveBeenCalledWith("id", [1]);
     expect(updateQuery.eq).toHaveBeenCalledWith("status", "Approved");
 

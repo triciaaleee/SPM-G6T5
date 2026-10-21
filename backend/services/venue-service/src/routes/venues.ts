@@ -797,8 +797,8 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
     return;
   }
   // §3a: — → `Requested` happens while venue arrangements are being made.
-  if (eventResult.event.status !== "Planning") {
-    res.status(409).json({ error: "A venue can only be requested while the event is in Planning" });
+  if (eventResult.event.status !== "Planning" && eventResult.event.status !== "Needs Review") {
+    res.status(409).json({ error: "A venue can only be requested while the event is in Planning or Needs Review" });
     return;
   }
 

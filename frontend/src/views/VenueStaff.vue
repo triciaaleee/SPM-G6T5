@@ -140,7 +140,10 @@ const bookingsError = ref<string | null>(null);
  * (with a badge) rather than disappearing from both tabs.
  */
 function inTab(booking: ScheduleBooking, tab: (typeof TABS)[number]): boolean {
-  return booking.status === tab.status || (tab.key === "bookings" && booking.status === "Replacement Required");
+  return (
+    booking.status === tab.status ||
+    (tab.key === "bookings" && (booking.status === "Replacement Required" || booking.status === "Cancelled"))
+  );
 }
 
 /** Approved bookings in the date range, earliest first. Requests and holds come from the decision queue below. */
@@ -377,7 +380,7 @@ function onBlockOutSaved(result: CreatePeriodResult): void {
     notice.value = { text: `${verb} It shows as unavailable on the calendar.`, warning: false };
   } else {
     const parts = [];
-    if (flagged > 0) parts.push(`${flagged} booking${flagged === 1 ? "" : "s"} marked Replacement Required`);
+    if (flagged > 0) parts.push(`${flagged} booking${flagged === 1 ? "" : "s"} cancelled`);
     if (pending > 0) parts.push(`${pending} pending request${pending === 1 ? "" : "s"} clash with it`);
     const notified = result.notificationsFailed
       ? "but we couldn't notify the coordinators — please let them know directly."
@@ -671,6 +674,7 @@ onMounted(async () => {
                   <span class="row__name">{{ booking.event.name || "Untitled event" }}</span>
                   <span class="row__venue">{{ venueName(booking.venueId) }}</span>
                   <span v-if="booking.status === 'Replacement Required'" class="replacement-badge">Replacement Required</span>
+                   <span v-else-if="booking.status === 'Cancelled'" class="replacement-badge">Cancelled — venue unavailable</span>
                 </span>
                 <!-- E4-17: set up for this booking's own session, not the whole event. -->
                 <span class="row__people">

@@ -17,6 +17,7 @@
  */
 import AppButton from "../ui/AppButton.vue";
 import { computed, ref } from "vue";
+import type { RouteLocationRaw } from "vue-router";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/vue/16/solid";
 import {
   describeBookingFailure,
@@ -27,7 +28,7 @@ import {
   type BookingSuitability,
   type EventVenueBooking,
 } from "../../lib/venuesApi";
-import { bookingStatusBadgeClass, bookingStatusLabel } from "../../lib/bookingStatus";
+import { bookingStatusBadgeClass, bookingStatusLabel, isActiveBooking } from "../../lib/bookingStatus";
 
 /**
  * The bookings are owned by the event page rather than fetched here: the
@@ -44,6 +45,8 @@ const props = defineProps<{
   canWithdraw?: boolean;
   /** E4-17: each booking's purpose, headcount and suitability; left out, none is shown. */
   suitability?: BookingSuitability[];
+  /** Where "Find replacement" goes: venue search pre-filled for this event. Left out, the button is hidden. */
+  findReplacementTo?: RouteLocationRaw;
 }>();
 
 /** E4-17: suitability only matters for bookings still holding or asking for a venue. */
@@ -57,6 +60,18 @@ function purposeAndHeadcount(booking: BookingSuitability): string {
 }
 
 const emit = defineEmits<{ changed: [] }>();
+
+/**
+ * "Find replacement" is offered on a booking that needs a new venue: one
+ * flagged Replacement Required, or one the system Cancelled because its venue
+ * became unavailable. A Cancelled booking only offers it while the event has
+ * no other live booking, so it doesn't linger once a replacement is requested.
+ */
+function offersReplacement(booking: EventVenueBooking): boolean {
+  if (booking.status === "Replacement Required") return true;
+  if (booking.status !== "Cancelled") return false;
+  return !(props.bookings ?? []).some((other) => other.id !== booking.id && isActiveBooking(other.status));
+}
 
 const bookings = computed(() => props.bookings ?? []);
 
@@ -180,8 +195,15 @@ async function confirmAction(): Promise<void> {
           </p>
           <!-- E4-10 AC4: Venue Staff must record why they refused, and the
                coordinator is told it. -->
-          <p v-if="booking.status === 'Rejected' && booking.decisionReason" class="body-small reason">
+          <p v-if="(booking.status === 'Rejected' || booking.status === 'Cancelled') && booking.decisionReason"
+            class="body-small reason">
             Reason: {{ booking.decisionReason }}
+          </p>
+          <p v-if="booking.status === 'Cancelled' && offersReplacement(booking)" class="body-small reason">
+            This booking was cancelled automatically. Find a replacement venue for the event.
+          </p>
+          <p v-if="booking.status === 'Replacement Required'" class="body-small reason">
+            This venue is no longer available. Find a replacement, then release this booking.
           </p>
           <p v-if="actionErrorId === booking.id" class="body-small error-text" role="alert">
             {{ actionError }}
@@ -191,6 +213,10 @@ async function confirmAction(): Promise<void> {
           <span class="badge" :class="bookingStatusBadgeClass(booking.status)">
             {{ bookingStatusLabel(booking.status) }}
           </span>
+          <AppButton v-if="canWithdraw && findReplacementTo && offersReplacement(booking)"
+            variant="primary" size="sm" class="action-btn" :to="findReplacementTo">
+            Find replacement
+          </AppButton>
           <!-- E4-9: withdraw a pending request/hold, or release an Approved
                booking. Approving/rejecting stays Venue Staff's (E4-10). -->
           <AppButton variant="outline" size="sm" class="action-btn" v-if="canWithdraw && actionFor(booking.status)" type="button"

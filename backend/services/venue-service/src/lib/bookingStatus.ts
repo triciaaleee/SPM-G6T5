@@ -12,6 +12,7 @@ export const BOOKING_STATUSES = [
   "Expired",
   "Replacement Required",
   "Withdrawn",
+  "Cancelled",
 ] as const;
 
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
@@ -26,14 +27,16 @@ export const BOOKING_STATUS = {
   /** E4-3: an Approved booking caught by a block-out; its coordinator must find another venue. */
   replacementRequired: "Replacement Required",
   withdrawn: "Withdrawn",
+  /** Week 7 change 2: an Approved booking the system cancelled because its venue became unavailable. */
+  cancelled: "Cancelled",
 } as const satisfies Record<string, BookingStatus>;
 
 /**
  * Bookings that can make a venue unavailable (AGENTS.md §3a). `Requested`
  * is deliberately absent: a request is not a hold, so several coordinators
  * may request the same venue and slot at once and the first one Venue Staff
- * put `On Hold` or `Approved` wins. `Rejected`, `Expired`, `Withdrawn` and
- * `Replacement Required` all free the venue.
+ * put `On Hold` or `Approved` wins. `Rejected`, `Expired`, `Withdrawn`,
+ * `Cancelled` and `Replacement Required` all free the venue.
  *
  * This is the status filter for the database query; an `On Hold` row also
  * has to still be unexpired, which is what blocksVenue below decides.
@@ -87,18 +90,21 @@ export const HOLD_EXPIRY_WARNING_HOURS = 12;
  * there is no path back to `Requested` — to try again the coordinator makes
  * a new request (E4-10: no override of a Venue Staff decision).
  *
- * `Withdrawn` is the coordinator's (E4-9) and `Replacement Required` the
- * venue-unavailability flow's (Week 7 change 2); both are listed so this
- * stays the one description of the machine.
+ * `Withdrawn` is the coordinator's (E4-9). `Cancelled` is the system's, when
+ * a block-out period cuts across an Approved booking (Week 7 change 2).
+ * `Replacement Required` is the flag an approved change request puts on a
+ * booking it invalidated (E3-11). All are listed so this stays the one
+ * description of the machine.
  */
 const ALLOWED_TRANSITIONS: Record<BookingStatus, readonly BookingStatus[]> = {
   Requested: ["On Hold", "Approved", "Rejected", "Withdrawn"],
   "On Hold": ["Approved", "Rejected", "Expired", "Withdrawn"],
-  Approved: ["Replacement Required", "Withdrawn"],
+  Approved: ["Replacement Required", "Cancelled", "Withdrawn"],
   Rejected: [],
   Expired: [],
   "Replacement Required": ["Withdrawn"],
   Withdrawn: [],
+  Cancelled: [],
 };
 
 export function canTransition(from: BookingStatus, to: BookingStatus): boolean {

@@ -118,10 +118,18 @@ function buildApp(options: Options = {}) {
     eq: resolved(null, options.resolveError ? { message: "boom" } : null),
   }));
 
+  // events.update() is awaited after one or two .eq() filters (the Needs
+  // Review move adds a status filter), so the chain is thenable at every depth.
+  const updateEvent = vi.fn((_patch: Record<string, unknown>) => {
+    const result = { data: null, error: options.updateError ? { message: "boom" } : null };
+    const chain: any = { eq: () => chain, then: (resolve: (value: unknown) => unknown) => resolve(result) };
+    return chain;
+  });
+
   const tables: Record<string, any> = {
     events: {
       select: () => ({ eq: () => ({ maybeSingle: resolved(event) }) }),
-      update: () => ({ eq: resolved(null, options.updateError ? { message: "boom" } : null) }),
+      update: updateEvent,
     },
     event_history: { insert: resolved(null) },
     change_requests: {
@@ -146,7 +154,7 @@ function buildApp(options: Options = {}) {
   // Stashed rather than returned alongside `app` so every existing
   // `const app = buildApp(...)` call site keeps working unchanged; only
   // tests that care about the exact insert/update payload reach for this.
-  (app as any).__spies = { insertChangeRequest, updateChangeRequest };
+  (app as any).__spies = { insertChangeRequest, updateChangeRequest, updateEvent };
   return app;
 }
 
@@ -161,6 +169,27 @@ describe("POST /api/events/:id/change-requests", () => {
     const app = buildApp({ status: "Planning" });
     const res = await request(app).post("/api/events/7/change-requests").send({ description: "New text" });
     expect(res.status).toBe(409);
+  });
+
+  it("moves a Confirmed event to Needs Review when a critical field is held", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/events/7/change-requests").send({ expectedAttendance: 150 });
+    expect(res.status).toBe(201);
+    expect((app as any).__spies.updateEvent).toHaveBeenCalledWith({ status: "Needs Review" });
+  });
+
+  it("leaves the status alone when only a non-critical field changes", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/events/7/change-requests").send({ description: "New text" });
+    expect(res.status).toBe(201);
+    expect((app as any).__spies.updateEvent).not.toHaveBeenCalledWith({ status: "Needs Review" });
+  });
+
+  it("accepts another change request while the event is already in Needs Review", async () => {
+    const app = buildApp({ status: "Needs Review" });
+    const res = await request(app).post("/api/events/7/change-requests").send({ expectedAttendance: 150 });
+    expect(res.status).toBe(201);
+    expect((app as any).__spies.updateEvent).not.toHaveBeenCalledWith({ status: "Needs Review" });
   });
 
   it("blocks a Completed event", async () => {

@@ -132,6 +132,26 @@ async function fetchVenueBookingInfoBatch(
   return { status: "ok", events: body.events ?? [] };
 }
 
+/**
+ * Tells events-service that a booking the event was approved on is gone
+ * (now Replacement Required), so it can move a Confirmed event to Needs
+ * Review (or a Safety Review one back to Planning) and the coordinator can
+ * request a replacement. Best-effort and after the booking write has
+ * committed: a failure leaves the booking flagged and is only reported.
+ */
+export async function reportArrangementsChanged(eventId: number, reason: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${eventsServiceUrl()}/api/events/${eventId}/arrangements-changed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Auth": signInternalToken("venue-service") },
+      body: JSON.stringify({ reason }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** An event guests may see, as events-service's public listing returns it (the fields venue-service uses). */
 export interface PublicEvent {
   id: number;

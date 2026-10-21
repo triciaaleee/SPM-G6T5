@@ -41,7 +41,7 @@ export interface AffectedBooking {
   occupiedStart: string | null;
   occupiedEnd: string | null;
   hasCoordinator: boolean;
-  /** True for an Approved booking, which moves to Replacement Required; pending ones keep their status. */
+  /** True for an Approved booking, which is cancelled; pending ones keep their status. */
   replacementRequired: boolean;
 }
 

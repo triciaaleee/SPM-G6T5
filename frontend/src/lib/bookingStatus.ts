@@ -10,6 +10,7 @@ export const BOOKING_STATUSES = [
   "Expired",
   "Replacement Required",
   "Withdrawn",
+  "Cancelled",
 ] as const;
 
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
@@ -22,7 +23,9 @@ export type BookingStatus = (typeof BOOKING_STATUSES)[number];
  */
 export function bookingStatusBadgeClass(status: string): string {
   if (status === "Approved") return "status-success";
-  if (status === "Rejected" || status === "Expired" || status === "Withdrawn") return "status-error";
+  if (status === "Rejected" || status === "Expired" || status === "Withdrawn" || status === "Cancelled") {
+    return "status-error";
+  }
   if (status === "Replacement Required") return "status-info";
   return "status-warning"; // Requested / On Hold
 }

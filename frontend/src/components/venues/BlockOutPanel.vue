@@ -341,7 +341,7 @@ onBeforeUnmount(() => {
               </ul>
               <p class="warning__body">
                 <template v-if="flaggedCount > 0">
-                  Approved bookings will be marked Replacement Required and their coordinators told to find another
+                  Approved bookings will be cancelled and their coordinators told to find another
                   venue.
                 </template>
                 <template v-if="pendingCount > 0">

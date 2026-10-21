@@ -285,7 +285,7 @@ const showRegistrationControls = computed(
   () =>
     isAssignedCoordinator.value &&
     registrationNeeded.value &&
-    ["Planning", "Safety Review", "Confirmed"].includes(event.value?.status ?? ""),
+    ["Planning", "Safety Review", "Confirmed", "Needs Review"].includes(event.value?.status ?? ""),
 );
 
 const registrationDateInput = ref("");
@@ -345,7 +345,9 @@ const canEditDirectly = computed(
 /** E3-9: once Confirmed, direct edits are blocked but the organiser can
  * raise a change request instead — the only edit path left at this
  * status. */
-const canRequestChange = computed(() => isOwnerView.value && event.value?.status === "Confirmed");
+const canRequestChange = computed(
+  () => isOwnerView.value && (event.value?.status === "Confirmed" || event.value?.status === "Needs Review"),
+);
 /** Past Confirmed (Completed/Cancelled/etc.) there's no edit path at all. */
 const editBlockedMessage = computed(() => {
   if (!isOwnerView.value || !event.value) return null;
@@ -355,7 +357,8 @@ const editBlockedMessage = computed(() => {
     status === "Unassigned" ||
     status === "Planning" ||
     status === "Clarification Requested" ||
-    status === "Confirmed"
+    status === "Confirmed" ||
+    status === "Needs Review"
   )
     return null;
   return "This request can no longer be edited or changed at this stage.";
@@ -671,6 +674,12 @@ async function refreshAfterChangeDecision(updatedEvent: EventSummary): Promise<v
   fieldApprovalSelection.value = {};
   changeDecisionReason.value = "";
   await loadChangeRequests();
+  // The decision can change the attendance, schedule, venue or accessibility the
+  // venue plan and recommendations are built from, and it can flag bookings or
+  // equipment (and move the event to Needs Review), so reload what depends on them.
+  if (isCoordinator.value) {
+    await Promise.all([loadVenueBookings(), loadEquipmentRequests()]);
+  }
 }
 
 async function handleApproveChangeRequest(): Promise<void> {
@@ -895,7 +904,9 @@ const bookingPlan = ref<BookingPlan | null>(null);
 const venueOptions = ref<VenueFilterOptions | null>(null);
 
 /** Planning the next booking is the assigned coordinator's, while venues may be requested (E4-8). */
-const canPlanBooking = computed(() => isAssignedCoordinator.value && event.value?.status === "Planning");
+const canPlanBooking = computed(
+  () => isAssignedCoordinator.value && (event.value?.status === "Planning" || event.value?.status === "Needs Review"),
+);
 
 /** The recommendations' plan: undefined keeps E4-7's whole-event view where no booking is being planned. */
 const recommendationPlan = computed(() =>
@@ -973,6 +984,7 @@ const CANCELLABLE_STATUSES = new Set([
   "Planning",
   "Safety Review",
   "Confirmed",
+  "Needs Review",
 ]);
 const canCancelEvent = computed(
   () => isOwnerView.value && !!event.value && CANCELLABLE_STATUSES.has(event.value.status),
@@ -1112,8 +1124,10 @@ onMounted(async () => {
     // viewable (E3-5 AC3), not sit on "Loading…".
     const showsVenueRequests = user.role === "coordinator" && eventData.status !== "Rejected";
     await Promise.all([
-      eventData.status === "Planning" || showsVenueRequests ? loadVenueBookings() : undefined,
-      eventData.status === "Planning" ? loadEquipmentRequests() : undefined,
+      eventData.status === "Planning" || eventData.status === "Needs Review" || showsVenueRequests
+        ? loadVenueBookings()
+        : undefined,
+      eventData.status === "Planning" || eventData.status === "Needs Review" ? loadEquipmentRequests() : undefined,
     ]);
   } catch (err) {
     if (err instanceof AccessDeniedError) {
@@ -1760,7 +1774,7 @@ onMounted(async () => {
   </div>
 </section>
 
-<EventStatusTracker v-if="event.status === 'Planning'" :status="event.status"
+<EventStatusTracker v-if="event.status === 'Planning' || event.status === 'Needs Review'" :status="event.status"
   :last-changed-at="statusLastChangedAt(event)" :review-outcome="event.review_outcome" title="Outstanding Arrangements"
   :show-timeline="false" :venue-bookings="venueBookings" :equipment-requests="equipmentRequests" />
 </template>
@@ -1956,6 +1970,12 @@ onMounted(async () => {
                       This request has been approved and moved to Planning. You can still ask the organiser a
                       follow-up question if you need more information.
                     </p>
+                    <p v-if="event.status === 'Needs Review'" class="body-small muted review-actions__note "
+                      data-testid="needs-review-note">
+                      This event is in Needs Review: its venue, equipment or a change request changed after it was
+                      confirmed. Request a replacement venue or equipment, decide any open change request, then submit
+                      it for safety review again below. It returns to Confirmed once the Safety Officer approves.
+                    </p>
                     <p v-if="event.status === 'Clarification Requested'" class="body-small muted review-actions__note ">
                       Clarification has been requested from the Organiser. Approval is blocked until it's resolved.
                     </p>
@@ -1980,7 +2000,7 @@ onMounted(async () => {
                     </div>
 
                     <div v-else class="review-actions__buttons">
-                      <template v-if="event.status !== 'Planning'">
+                      <template v-if="event.status !== 'Planning' && event.status !== 'Needs Review'">
                         <AppButton variant="primary" type="button" :disabled="!canApprove || isReviewing"
                           @click="handleApprove">
                           Accept
@@ -1991,7 +2011,7 @@ onMounted(async () => {
           {{ event.status === "Clarification Requested" ? "Clarification Requested" : "Request Clarification" }}
         </AppButton>
 
-        <template v-if="event.status !== 'Planning'">
+        <template v-if="event.status !== 'Planning' && event.status !== 'Needs Review'">
                         <AppButton variant="danger" type="button" :disabled="!canReject || isReviewing"
                           @click="openReject">
                           Reject
@@ -2047,10 +2067,10 @@ onMounted(async () => {
   <h2 class="section-title">Venue Recommendations</h2>
   <!-- E4-17: what the next booking is for; recommendations and Find venues follow it. Re-keyed after
        each request so the next booking starts from the right defaults. -->
-  <BookingPlanForm v-if="canPlanBooking && suitability" :key="`${suitability.defaults.hasMainProgramme}-${suitability.defaults.liveBookingCount}`"
+  <BookingPlanForm v-if="canPlanBooking && suitability" :key="`${suitability.defaults.hasMainProgramme}-${suitability.defaults.liveBookingCount}-${JSON.stringify(suitability.defaults)}`"
     :defaults="suitability.defaults" :options="venueOptions" @update:plan="bookingPlan = $event" />
   <VenueRecommendations :event-id="event.id" :details="event.submitted_details"
-    :can-request="isAssignedCoordinator && event.status === 'Planning'" :plan="recommendationPlan"
+    :can-request="canPlanBooking" :plan="recommendationPlan"
     @requested="loadVenueBookings()" />
   <AppButton variant="outline" block :to="{ name: 'venue-search', query: findVenuesQuery }">
     Find venues
@@ -2060,17 +2080,19 @@ onMounted(async () => {
 <!-- E5-1: equipment requirements, recorded by the assigned coordinator while Planning -->
 <div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card">
   <EquipmentRequestPanel :event-id="event.id"
-    :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null" :can-submit="canCoordinatorEdit"
+    :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null"
+    :can-submit="canCoordinatorEdit || (isAssignedCoordinator && event.status === 'Needs Review')"
     @submitted="loadEquipmentRequests" @changed="loadEquipmentRequests" />
 </div>
 
 <!-- E4-8 AC5: this event's venue requests and the state each one is in -->
 <VenueRequestsPanel v-if="isCoordinator && event.status !== 'Rejected'" :bookings="venueBookings"
   :loading="venueBookingsLoading" :load-error="venueBookingsError" :can-withdraw="isAssignedCoordinator"
-  :suitability="suitability?.bookings" @changed="loadVenueBookings()" />
+  :suitability="suitability?.bookings" :find-replacement-to="{ name: 'venue-search', query: findVenuesQuery }"
+  @changed="loadVenueBookings()" />
 
 <!-- E3-4: the assigned coordinator submits a Planning event for the Safety Officer's check -->
-<div v-if="isAssignedCoordinator && event.status === 'Planning'" class="details-card">
+<div v-if="isAssignedCoordinator && (event.status === 'Planning' || event.status === 'Needs Review')" class="details-card">
   <SafetyReviewPanel :event-id="event.id" @submitted="(updated) => (event = updated)" />
 </div>
 

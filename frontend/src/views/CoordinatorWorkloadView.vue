@@ -20,12 +20,13 @@ interface StatusGroup {
 // "Unassigned" isn't a coordinator's to act on — the Lead assigns it
 // (E2-13) — so it's its own group, seen only under "All events".
 const STATUS_GROUPS: StatusGroup[] = [
-  { key: "needs-review",  label: "Needs Review",            statuses: ["Requested"] },
+  { key: "awaiting-review", label: "Awaiting Review",        statuses: ["Requested"] },
   { key: "unassigned",    label: "Unassigned",              statuses: ["Unassigned"] },
   { key: "clarification", label: "Clarification Requested", statuses: ["Clarification Requested"] },
   { key: "planning",      label: "Planning",                statuses: ["Planning"] },
   { key: "safety-review", label: "Safety Review",           statuses: ["Safety Review"] },
   { key: "confirmed",     label: "Confirmed",               statuses: ["Confirmed"] },
+  { key: "needs-review",  label: "Needs Review",            statuses: ["Needs Review"] },
   { key: "completed",     label: "Completed",               statuses: ["Completed"] },
   { key: "rejected",      label: "Rejected",                statuses: ["Rejected"] },
   { key: "cancelled",     label: "Cancelled",               statuses: ["Cancelled"] },
@@ -38,7 +39,7 @@ const STATUS_GROUPS: StatusGroup[] = [
 const CLOSED_STATUSES = new Set(["Completed", "Rejected", "Cancelled"]);
 
 // Statuses that wait on the coordinator: flagged with an accent bar. Unassigned is the Lead's to act on.
-const NEEDS_ACTION_STATUSES = ["Requested"];
+const NEEDS_ACTION_STATUSES = ["Requested", "Needs Review"];
 
 function needsAction(event: EventSummary): boolean {
   return NEEDS_ACTION_STATUSES.includes(event.status);

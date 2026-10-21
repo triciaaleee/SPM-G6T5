@@ -597,6 +597,22 @@ describe("EventDetailView — change request impact for the coordinator (E3-8 AC
     });
   });
 
+  it("reloads the venue bookings (and so the recommendations' plan) after a change is approved", async () => {
+    mockedChangeRequests.mockResolvedValue([pendingRequest()]);
+    mockedApproveChangeRequest.mockResolvedValue({
+      event: makeEvent({ status: "Needs Review" }),
+      approvedFields: ["expectedAttendance"],
+      remainingFields: [],
+    });
+    const wrapper = await mountPage(makeEvent(), coordinator);
+    const loadsBefore = mockedBookings.mock.calls.length;
+
+    await button(wrapper, "Approve selected (1)")!.trigger("click");
+    await flushPromises();
+
+    expect(mockedBookings.mock.calls.length).toBeGreaterThan(loadsBefore);
+  });
+
   it("shows an explicit unavailability-period conflict banner", async () => {
     mockedChangeRequests.mockResolvedValue([
       pendingRequest({

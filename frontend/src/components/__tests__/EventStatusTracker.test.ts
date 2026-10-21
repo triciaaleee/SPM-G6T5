@@ -196,3 +196,31 @@ describe("EventStatusTracker timeline (E3-5)", () => {
     expect(states("Completed")).toEqual(["complete", "complete", "complete", "current"]);
   });
 });
+
+describe("EventStatusTracker — Needs Review", () => {
+  it("shares Confirmed's slot, labelled Needs Review, with the info variant and an explanation", () => {
+    const wrapper = mount(EventStatusTracker, {
+      props: { status: "Needs Review", lastChangedAt: "2026-10-07T02:00:00.000Z", reviewOutcome: null },
+    });
+
+    const labels = wrapper.findAll(".status-tracker__label").map((label) => label.text());
+    expect(labels).toEqual(["Requested", "Planning", "Needs Review", "Completed"]);
+    const current = wrapper.find(".status-tracker__step[data-state='current']");
+    expect(current.text()).toContain("Needs Review");
+    expect(wrapper.text()).toContain("returns to");
+  });
+
+  it("lists outstanding arrangements while in Needs Review", () => {
+    const wrapper = mount(EventStatusTracker, {
+      props: {
+        status: "Needs Review",
+        lastChangedAt: "2026-10-07T02:00:00.000Z",
+        reviewOutcome: null,
+        showTimeline: false,
+        venueBookings: [booking({ status: "Replacement Required" })],
+        equipmentRequests: [],
+      },
+    });
+    expect(wrapper.find(".outstanding").exists()).toBe(true);
+  });
+});

@@ -399,6 +399,26 @@ describe("POST /api/equipment-units/mark (E5-5)", () => {
     expect(res.body).toMatchObject({ affectedEvents: [], notified: true });
   });
 
+  it("tells events-service about each affected event, so a Confirmed event moves to Needs Review", async () => {
+    process.env.INTERNAL_SERVICE_SECRET = "test-internal-secret";
+    const { app, fetchMock } = buildApp({
+      bookings: [
+        { id: 1, equipment_id: 12, event_id: 1, request_item_id: 100 },
+        { id: 3, equipment_id: 14, event_id: 2, request_item_id: 102 },
+      ],
+      events: [event(1), event(2, { proposedDate: "2099-06-20" })],
+    });
+
+    const res = await request(app).post("/api/equipment-units/mark").send({ ...body, unitIds: [12, 14] });
+
+    expect(res.status).toBe(201);
+    const urls = fetchMock.mock.calls.map(([url]) => String(url)).filter((url) => url.includes("/arrangements-changed"));
+    expect(urls.sort()).toEqual([
+      expect.stringContaining("/api/events/1/arrangements-changed"),
+      expect.stringContaining("/api/events/2/arrangements-changed"),
+    ]);
+  });
+
   it("tells nobody when none of the units is reserved", async () => {
     const { app, publish } = buildApp();
     await request(app).post("/api/equipment-units/mark").send(body);

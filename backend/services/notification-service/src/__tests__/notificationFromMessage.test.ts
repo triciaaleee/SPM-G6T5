@@ -556,6 +556,43 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders event.needs_review", async () => {
+    const { supabase, insert } = buildSupabase();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "event.needs_review",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001", "ORG-0001"], roles: [] },
+        data: { eventName: "Nut Festival", reason: "Great Lawn is unavailable (Floor resurfacing)" },
+      }),
+      { supabase, resolveRoleUserIds: vi.fn() },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({ recipient_id: "COORD-0001", title: "Nut Festival needs review", link: "/events/7" }),
+      expect.objectContaining({ recipient_id: "ORG-0001", title: "Nut Festival needs review" }),
+    ]);
+  });
+
+  it("renders event.returned_to_planning", async () => {
+    const { supabase, insert } = buildSupabase();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "event.returned_to_planning",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: { eventName: "Nut Festival", reason: "Great Lawn is unavailable" },
+      }),
+      { supabase, resolveRoleUserIds: vi.fn().mockResolvedValue([]) },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({ recipient_id: "COORD-0001", title: "Nut Festival returned to Planning" }),
+    ]);
+  });
+
   it("renders registration.confirmed", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();
