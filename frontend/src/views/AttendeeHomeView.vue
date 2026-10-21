@@ -260,8 +260,8 @@ onMounted(async () => {
 
 .tab--active,
 .tab--active:hover {
-  color: var(--color-purple-600);
-  border-bottom-color: var(--color-purple-600);
+  color: var(--color-blue-600);
+  border-bottom-color: var(--color-blue-600);
 }
 
 /* Card list: nested grid with the page's column count, each card spanning a third of it. */

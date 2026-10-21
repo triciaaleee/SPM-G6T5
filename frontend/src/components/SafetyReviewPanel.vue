@@ -7,6 +7,13 @@
  * equipment item it names is listed here so the coordinator knows what to
  * chase.
  *
+ * The card opens with a readiness checklist (venues approved, equipment
+ * reserved) so the coordinator sees what is still to settle, and the Submit
+ * button stays disabled until both are done. The backend makes the final
+ * call; the checklist only mirrors its rule (lib/safetyReadiness.ts). The
+ * organiser and other coordinators see the checklist read-only
+ * (`canSubmit` false).
+ *
  * E3-13: if the Safety Officer's most recent decision sent the event back
  * to Planning, it is shown at the top with the reason, so the coordinator
  * doesn't have to rely on the notification while reworking the
@@ -14,6 +21,9 @@
  */
 import AppButton from "./ui/AppButton.vue";
 import { computed, onMounted, reactive, ref } from "vue";
+import { equipmentReadiness, isReadyForSafetyReview, venueReadiness } from "../lib/safetyReadiness";
+import type { EquipmentRequest } from "../lib/equipmentApi";
+import type { EventVenueBooking } from "../lib/venuesApi";
 import {
   fetchSafetyReviews,
   SafetyReviewSubmitError,
@@ -24,7 +34,17 @@ import {
   type SafetyReviewDecision,
 } from "../lib/eventsApi";
 
-const props = defineProps<{ eventId: number }>();
+const props = withDefaults(
+  defineProps<{
+    eventId: number;
+    /** This event's venue bookings and equipment requests; undefined while they are still loading. */
+    venueBookings?: EventVenueBooking[];
+    equipmentRequests?: EquipmentRequest[];
+    /** Only the assigned coordinator submits; everyone else sees the checklist read-only. */
+    canSubmit?: boolean;
+  }>(),
+  { venueBookings: undefined, equipmentRequests: undefined, canSubmit: true },
+);
 
 const emit = defineEmits<{ submitted: [event: EventSummary] }>();
 
@@ -86,7 +106,25 @@ function formatTimestamp(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+const venues = computed(() => venueReadiness(props.venueBookings));
+const equipment = computed(() => equipmentReadiness(props.equipmentRequests));
+const ready = computed(() => isReadyForSafetyReview(props.venueBookings, props.equipmentRequests));
+
+const checklist = computed(() => [
+  { key: "venues", label: "Venues approved", ...venues.value },
+  { key: "equipment", label: "Equipment reserved", ...equipment.value },
+]);
+
+/** Under the Submit button: why it is disabled, or that it is ready. */
+const submitNote = computed(() => {
+  const review = "The event can't be edited while it is under review.";
+  if (!venues.value.done) return `Available once all venues are approved. ${review}`;
+  if (!equipment.value.done) return `Available once all requested equipment is reserved. ${review}`;
+  return `Ready to submit. ${review}`;
+});
+
 onMounted(async () => {
+  if (!props.canSubmit) return;
   try {
     decisions.value = await fetchSafetyReviews(props.eventId);
   } catch {
@@ -141,7 +179,7 @@ async function submit(): Promise<void> {
 
 <template>
   <section class="sr-panel" aria-labelledby="safety-review-title">
-    <p id="safety-review-title" class="body-default font-semibold sr-title">Safety Review</p>
+    <h2 id="safety-review-title" class="sr-title">Ready for safety review</h2>
 
     <div v-if="lastReturnedDecision" class="sr-decision" data-testid="safety-decision">
       <p class="body-small font-semibold">{{ DECISION_HEADINGS[lastReturnedDecision.outcome] }}</p>
@@ -152,56 +190,74 @@ async function submit(): Promise<void> {
       <p class="body-small">Fix the arrangements, then submit for safety review again.</p>
     </div>
 
-    <p class="body-small muted">
-      Once the venue is approved and all requested equipment is reserved, submit this event for the Safety
-      Officer's Operational Safety Check. The event can't be edited while it's under review.
-    </p>
+    <ul class="sr-checklist" data-testid="safety-checklist">
+      <li v-for="item in checklist" :key="item.key" class="sr-check" :data-testid="`check-${item.key}`">
+        <span class="sr-check__mark" :class="{ 'sr-check__mark--done': item.done }" aria-hidden="true">
+          <svg v-if="item.done" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="m5 10.5 3.25 3.25L15 7" />
+          </svg>
+        </span>
+        <div class="sr-check__text">
+          <p class="sr-check__label">{{ item.label }}</p>
+          <p class="sr-check__caption">{{ item.caption }}</p>
+        </div>
+        <span class="sr-badge" :class="item.done ? 'sr-badge--done' : 'sr-badge--pending'">
+          {{ item.done ? "Done" : "Pending" }}
+        </span>
+      </li>
+    </ul>
 
-    <AppButton variant="primary" v-if="!formOpen" type="button" class="sr-open" @click="openForm">
-      Submit for safety review
-    </AppButton>
-
-    <form v-else class="sr-form" novalidate @submit.prevent="submit">
-      <div v-if="outstanding" class="sr-outstanding" role="alert">
-        <p class="body-small font-semibold">Settle these before submitting:</p>
-        <ul class="sr-outstanding__list">
-          <li v-if="outstanding.noApprovedVenue" class="body-small">This event has no approved venue booking.</li>
-          <li v-for="booking in outstanding.bookings" :key="`b-${booking.bookingId}`" class="body-small">
-            {{ booking.venueName ?? `Venue booking #${booking.bookingId}` }} is still {{ booking.status }}.
-          </li>
-          <li
-            v-for="item in outstanding.equipment"
-            :key="`e-${item.requestId}-${item.equipmentType}`"
-            class="body-small"
-          >
-            {{ item.equipmentType }}: {{ item.quantityReserved }} of {{ item.quantity }} reserved.
-          </li>
-        </ul>
-      </div>
-      <p v-if="generalError" class="body-small error-text" role="alert">{{ generalError }}</p>
-
-      <div v-for="field in NOTE_FIELDS" :key="field.key" class="field">
-        <label :for="`sr-${field.key}`" class="body-small sr-label">{{ field.label }}</label>
-        <p :id="`sr-${field.key}-hint`" class="body-small muted sr-hint">{{ field.hint }}</p>
-        <textarea
-          :id="`sr-${field.key}`"
-          v-model="notes[field.key]"
-          rows="3"
-          maxlength="2000"
-          class="sr-input"
-          :aria-describedby="`sr-${field.key}-hint`"
-          :aria-invalid="!!fieldErrors[field.key]"
-        />
-        <p v-if="fieldErrors[field.key]" class="body-small error-text">{{ fieldErrors[field.key] }}</p>
-      </div>
-
-      <div class="sr-actions">
-        <AppButton variant="primary" type="submit" :disabled="submitting">
-          {{ submitting ? "Submitting…" : "Submit for safety review" }}
+    <template v-if="canSubmit">
+      <template v-if="!formOpen">
+        <AppButton variant="primary" block type="button" :disabled="!ready" @click="openForm">
+          Submit for safety review
         </AppButton>
-        <AppButton variant="outline" type="button" :disabled="submitting" @click="closeForm">Cancel</AppButton>
-      </div>
-    </form>
+        <p class="sr-note" data-testid="submit-note">{{ submitNote }}</p>
+      </template>
+
+      <form v-else class="sr-form" novalidate @submit.prevent="submit">
+        <div v-if="outstanding" class="sr-outstanding" role="alert">
+          <p class="body-small font-semibold">Settle these before submitting:</p>
+          <ul class="sr-outstanding__list">
+            <li v-if="outstanding.noApprovedVenue" class="body-small">This event has no approved venue booking.</li>
+            <li v-for="booking in outstanding.bookings" :key="`b-${booking.bookingId}`" class="body-small">
+              {{ booking.venueName ?? `Venue booking #${booking.bookingId}` }} is still {{ booking.status }}.
+            </li>
+            <li
+              v-for="item in outstanding.equipment"
+              :key="`e-${item.requestId}-${item.equipmentType}`"
+              class="body-small"
+            >
+              {{ item.equipmentType }}: {{ item.quantityReserved }} of {{ item.quantity }} reserved.
+            </li>
+          </ul>
+        </div>
+        <p v-if="generalError" class="body-small error-text" role="alert">{{ generalError }}</p>
+
+        <div v-for="field in NOTE_FIELDS" :key="field.key" class="field">
+          <label :for="`sr-${field.key}`" class="body-small sr-label">{{ field.label }}</label>
+          <p :id="`sr-${field.key}-hint`" class="body-small muted sr-hint">{{ field.hint }}</p>
+          <textarea
+            :id="`sr-${field.key}`"
+            v-model="notes[field.key]"
+            rows="3"
+            maxlength="2000"
+            class="sr-input"
+            :aria-describedby="`sr-${field.key}-hint`"
+            :aria-invalid="!!fieldErrors[field.key]"
+          />
+          <p v-if="fieldErrors[field.key]" class="body-small error-text">{{ fieldErrors[field.key] }}</p>
+        </div>
+
+        <div class="sr-actions">
+          <AppButton variant="primary" type="submit" :disabled="submitting">
+            {{ submitting ? "Submitting…" : "Submit for safety review" }}
+          </AppButton>
+          <AppButton variant="outline" type="button" :disabled="submitting" @click="closeForm">Cancel</AppButton>
+        </div>
+      </form>
+    </template>
   </section>
 </template>
 
@@ -224,18 +280,110 @@ async function submit(): Promise<void> {
   color: var(--color-error-600);
 }
 
+/* The card itself (Style.md 3.3 surfaces): same as the page's other cards. */
 .sr-panel {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-12);
+  gap: var(--spacing-24);
+  background: var(--color-grey-50);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-32);
 }
 
 .sr-title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 2rem;
   color: var(--color-grey-900);
 }
 
-.sr-open {
-  align-self: flex-start;
+/* Readiness checklist: a circle, the item and what is left, and a badge on the right. */
+.sr-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+}
+
+.sr-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-12);
+}
+
+.sr-check__mark {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid var(--color-grey-300);
+  background: var(--color-base-white);
+  color: var(--color-base-white);
+}
+
+.sr-check__mark--done {
+  border-color: var(--color-success-700);
+  background: var(--color-success-700);
+}
+
+.sr-check__mark svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.sr-check__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sr-check__label {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  color: var(--color-grey-900);
+}
+
+.sr-check__caption {
+  margin: var(--spacing-2) 0 0;
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-500);
+}
+
+.sr-badge {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+  padding: var(--spacing-4) var(--spacing-12);
+  border-radius: var(--radius-xs);
+}
+
+.sr-badge--pending {
+  background: var(--color-grey-100);
+  color: var(--color-grey-600);
+}
+
+.sr-badge--done {
+  background: var(--color-success-200);
+  color: var(--color-success-700);
+}
+
+.sr-note {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-500);
+  margin-top:-12px;
 }
 
 .sr-form {

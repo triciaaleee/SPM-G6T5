@@ -482,8 +482,8 @@ onMounted(async () => {
 
 .tab--active,
 .tab--active:hover {
-  color: var(--color-purple-600);
-  border-bottom-color: var(--color-purple-600);
+  color: var(--color-blue-600);
+  border-bottom-color: var(--color-blue-600);
 }
 
 .tab-count {
@@ -499,8 +499,8 @@ onMounted(async () => {
 }
 
 .tab--active .tab-count {
-  background: var(--color-purple-100);
-  color: var(--color-purple-800);
+  background: var(--color-blue-100);
+  color: var(--color-blue-800);
 }
 
 /* Filters ------------------------------------------------------------------ */

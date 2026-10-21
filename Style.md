@@ -170,7 +170,7 @@ Use Grey Alpha tokens to create hierarchy, separation, and contrast without intr
 | `Colors/Purple Primary/800` | `#3F037A` | Deep emphasis |
 | `Colors/Purple Primary/900` | `#230244` | — |
 
-**USE:** `600` for CTAs, primary buttons, active tabs, focus rings, and links.  
+**USE:** `600` for CTAs, primary buttons, focus rings, and links. Active tabs are Secondary Blue, not purple (Section 2.8).  
 **AVOID:** Using `400` or below for interactive text — insufficient contrast on white.
 
 ### 2.5 Red / Error
@@ -243,12 +243,13 @@ Treat this the way a secondary colour is meant to work: a minority presence that
 | `Colors/Secondary Blue/900` | `#0F173A` | 17.4:1 | — |
 
 **USE:** As an occasional relief accent — badges/tags, category markers, or a rare secondary action — when a view is already carrying heavy purple density (nav, primary CTA, links, active states, focus rings all purple) and one more purple element would blur which purple thing is actually primary. This is the *only* case where it substitutes for purple in an interactive element.  
+**USE:** `600` (label) and `700` for the selected tab in underline tabs, with a 2px `600` underline and a `100` / `800` count pill, so the nav bar and tabs both mark "where you are" in blue (Section 3.5b, Underline tabs). This is deliberate: the nav bar and tabs are the two places Secondary Blue marks the current location, keeping purple for actions.  
 **USE:** `100`–`300` as background fills behind dark text — `Grey/900` (`#222222`) or `Purple Primary/800` (`#3F037A`) both clear AA comfortably on top of any of these three.  
 **USE:** `500`–`900` directly as text, icon, link, or border colour on white/light surfaces — `500` clears AA at 4.5:1, `600` and darker pass AAA.  
 **AVOID:** Using `100`–`300` as text, icon, link, or border colour — insufficient contrast on white or light surfaces (this is the same category Purple Primary/100–300 falls into).  
 **AVOID:** Using `400` for normal-weight body text — it lands under AA (3.1:1); fine for large text (≥18px/700 or ≥24px) or non-text accents only.  
 **AVOID:** Pairing `300` directly against `Purple Primary/600` for adjacent large fills (e.g. side-by-side banner blocks) — the two sit fairly close in lightness and can feel muddy together at that scale; use `300` as a *fill*, not next to the primary at equal visual weight.  
-**AVOID:** Reaching for Secondary Blue as the *default* outline/secondary button colour. It is a minority accent, not a second brand colour — see Section 3.4.
+**AVOID:** Reaching for Secondary Blue as the *default* outline/secondary button colour. It is a minority accent, not a second brand colour — see Section 3.4. (Marking the current page or the selected tab is not a button, so it is not covered by this rule.)
 
 
 ### 2.9 Orchid (Role Accent)
@@ -391,7 +392,7 @@ Pages for visitors who are not signed in (`frontend/src/components/public/`, `fr
 | Public header | `Base/White` fill, 1px `Grey/100` bottom border, sticky. Logo and nav links as in Section 3.5a; on the right an outline "Log in" and a primary "Sign up" (`AppButton` `sm`). | Every guest page. App.vue's header is for signed-in users only. |
 | Public footer | `Base/White` fill, 1px `Grey/100` top border. Logo, tagline in Small Text `Grey/500`, link columns with a Small Text / Tag heading in `Grey/900` and Body Small links in `Grey/500` (`Purple Primary/700` on hover). | Every guest page. |
 | Section tag | `Purple Primary/100` fill, `Purple Primary/700` text, Small Text / Tag, `spacing-24` tall, `radius-full`. | The small label above a landing-page section heading ("Events", "Venues"). |
-| Underline tabs | Body Small 700 `Grey/500`; the selected tab `Purple Primary/700` with a 2px `Purple Primary/600` underline (Section 3.1 Selected). A count pill beside each label: `Grey/75` / `Grey/600`, selected `Purple Primary/100` / `Purple Primary/800`. | Filtering a guest list (All events / Open for registration / Registration closed). |
+| Underline tabs | Body Small 700 `Grey/500`; the selected tab `Secondary Blue/700` with a 2px `Secondary Blue/600` underline (Section 2.8). A count pill beside each label: `Grey/75` / `Grey/600`, selected `Secondary Blue/100` / `Secondary Blue/800`. | Filtering a guest list (All events / Open for registration / Registration closed). |
 | Venue card | Same shell as the event card (`Base/White`, 1px `Grey/100`, `radius-lg`, `shadow-card`). A 3:1 image area — `Purple Primary/50` with a `Purple Primary/300` building icon until venues have photos; H6 name; Body Small facts with `Grey/500` icons; a "Next event" box in `Purple Primary/50` (`Grey/50` when there is none), `radius-xs`. | A venue on the guest pages. |
 | Guest register panel | A card beside the event (`radius-lg`, `shadow-card`): a note that guest registration isn't available, an `xl` primary "Sign up to register", and a "Log in to register" link. Both carry `?redirect=` to the attendee event page. | Where a signed-in attendee would see Register (E6: guests must sign up first). |
 

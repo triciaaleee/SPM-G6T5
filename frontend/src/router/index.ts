@@ -90,7 +90,17 @@ export const router = createRouter({
       path: "/coordinator",
       name: "coordinator-workload",
       component: CoordinatorWorkloadView,
+      props: { scope: "mine" },
       meta: { requiresAuth: true, roles: ["coordinator"] },
+    },
+    {
+      // Every event in the system, for coordinators and the Event Coordinator
+      // Lead (the backend lists all non-draft events for both roles).
+      path: "/all-events",
+      name: "all-events",
+      component: CoordinatorWorkloadView,
+      props: { scope: "all" },
+      meta: { requiresAuth: true, roles: ["coordinator", "coordinator_lead"] },
     },
     {
       path: "/venues",

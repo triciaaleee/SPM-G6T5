@@ -34,6 +34,15 @@ afterEach(() => {
 });
 
 describe("BookingPlanForm", () => {
+  it("asks 'What is this venue for?' with the design's hint, placeholder and headcount prompt for a later venue", () => {
+    const wrapper = mountForm(1);
+
+    expect(wrapper.text()).toContain("What is this venue for?");
+    expect(wrapper.text()).toContain("Another venue for part of the event. Size it for its own session.");
+    expect(wrapper.get("input").attributes("placeholder")).toBe("1 to 300");
+    expect(wrapper.text()).toContain("Enter a headcount to see venues for this booking.");
+  });
+
   it("AC6: the first booking defaults to the main programme for the whole attendance", () => {
     const wrapper = mountForm(0);
     expect(lastPlan(wrapper)).toEqual({
@@ -137,9 +146,11 @@ describe("VenueRequestsPanel suitability", () => {
     });
 
     const rows = wrapper.findAll(".request-row");
-    expect(rows[0].text()).toContain("Main programme · 300 people");
-    expect(rows[0].text()).toContain("Suitable for this booking");
-    expect(rows[1].text()).toContain("Breakout · 60 people");
+    expect(rows[0].text()).toContain("Main programme, 300 people");
+    // A suitable venue gets no extra line; only a mismatch is called out.
+    expect(rows[0].text()).not.toContain("Suitable for this booking");
+    expect(rows[0].find(".suitability").exists()).toBe(false);
+    expect(rows[1].text()).toContain("Breakout, 60 people");
     expect(rows[1].text()).toContain("Unsuitable: holds 40, needs 60; no Whiteboard");
   });
 

@@ -16,9 +16,10 @@
  * list inside is a single column at every breakpoint.
  */
 import AppButton from "../ui/AppButton.vue";
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { RouteLocationRaw } from "vue-router";
-import { CheckCircleIcon, XCircleIcon } from "@heroicons/vue/16/solid";
+import { CheckIcon, XCircleIcon } from "@heroicons/vue/16/solid";
+import { EllipsisHorizontalIcon } from "@heroicons/vue/20/solid";
 import {
   describeBookingFailure,
   describeSuitabilityReasons,
@@ -54,9 +55,10 @@ const SUITABILITY_STATUSES = new Set(["Requested", "On Hold", "Approved", "Repla
 
 const suitabilityById = computed(() => new Map((props.suitability ?? []).map((s) => [s.bookingId, s])));
 
-/** e.g. "Breakout · 60 people". */
+/** e.g. "Breakout, 60 people". */
 function purposeAndHeadcount(booking: BookingSuitability): string {
-  return booking.headcount === null ? purposeLabel(booking) : `${purposeLabel(booking)} · ${booking.headcount} people`;
+  if (booking.headcount === null) return purposeLabel(booking);
+  return `${purposeLabel(booking)}, ${booking.headcount} ${booking.headcount === 1 ? "person" : "people"}`;
 }
 
 const emit = defineEmits<{ changed: [] }>();
@@ -75,17 +77,17 @@ function offersReplacement(booking: EventVenueBooking): boolean {
 
 const bookings = computed(() => props.bookings ?? []);
 
+/** "19 Oct 2026, 10:26 PM": day-first date, 12-hour time. */
 function formatMoment(value: string | null): string {
   if (!value) return "";
   const at = new Date(value);
   if (Number.isNaN(at.getTime())) return value;
-  return at.toLocaleString("en-US", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const date = at.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  // Newer ICU puts a narrow no-break space before AM/PM; use a plain space so it reads (and copies) normally.
+  const time = at
+    .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+    .replace(/\u202f/g, " ");
+  return `${date}, ${time}`;
 }
 
 /**
@@ -97,6 +99,58 @@ function actionFor(status: string): "withdraw" | "release" | null {
   if (status === "Requested" || status === "On Hold") return "withdraw";
   if (status === "Approved" || status === "Replacement Required") return "release";
   return null;
+}
+
+/** The text of a row's menu item: what choosing it does. */
+function actionLabel(status: string): string {
+  return actionFor(status) === "withdraw" ? "Withdraw request" : "Release venue";
+}
+
+/**
+ * The ··· menu on a row: one open at a time. It closes on an outside click or Escape (focus goes back to the
+ * button that opened it), like the account menu in App.vue.
+ */
+const openMenuId = ref<number | null>(null);
+const menuTriggers = new Map<number, HTMLElement>();
+
+function setMenuTrigger(id: number, el: unknown): void {
+  if (el instanceof HTMLElement) menuTriggers.set(id, el);
+  else menuTriggers.delete(id);
+}
+
+function toggleMenu(id: number): void {
+  openMenuId.value = openMenuId.value === id ? null : id;
+}
+
+function closeMenu(returnFocus = false): void {
+  const id = openMenuId.value;
+  openMenuId.value = null;
+  if (returnFocus && id !== null) menuTriggers.get(id)?.focus();
+}
+
+function onDocumentPointerDown(event: PointerEvent): void {
+  if (openMenuId.value === null) return;
+  if (!(event.target instanceof Element) || !event.target.closest("[data-row-menu]")) closeMenu();
+}
+
+function onDocumentKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape" && openMenuId.value !== null) closeMenu(true);
+}
+
+onMounted(() => {
+  document.addEventListener("pointerdown", onDocumentPointerDown);
+  document.addEventListener("keydown", onDocumentKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", onDocumentPointerDown);
+  document.removeEventListener("keydown", onDocumentKeydown);
+});
+
+/** Choosing the menu item closes the menu and opens the confirm modal. */
+function chooseAction(booking: EventVenueBooking): void {
+  closeMenu();
+  requestAction(booking);
 }
 
 // One action at a time, with the outcome shown on the row it came from —
@@ -172,24 +226,17 @@ async function confirmAction(): Promise<void> {
     <ul v-else class="request-list">
       <li v-for="booking in bookings" :key="booking.id" class="request-row">
         <div class="request-venue">
-          <p class="body-default request-name">{{ booking.venue?.name ?? "Venue unavailable" }}</p>
-          <p v-if="booking.venue" class="body-small muted">{{ booking.venue.location }}</p>
-          <!-- E4-17: what this venue is for, and whether it suits that (AC2–AC4). -->
+          <p v-if="booking.venue" class="request-location">{{ booking.venue.location }}</p>
+          <p class="request-name">{{ booking.venue?.name ?? "Venue unavailable" }}</p>
+          <!-- E4-17: what this venue is for, and whether it suits that (AC2–AC4). Only a mismatch is called out. -->
           <template v-if="suitabilityById.get(booking.id)">
-            <p class="body-small purpose">{{ purposeAndHeadcount(suitabilityById.get(booking.id)!) }}</p>
-            <p v-if="SUITABILITY_STATUSES.has(booking.status) && suitabilityById.get(booking.id)!.suitability"
-              class="body-small suitability"
-              :class="suitabilityById.get(booking.id)!.suitability!.suitable ? 'suitability--ok' : 'suitability--bad'">
-              <template v-if="suitabilityById.get(booking.id)!.suitability!.suitable">
-                <CheckCircleIcon class="suitability__icon" aria-hidden="true" />Suitable for this booking
-              </template>
-              <template v-else>
-                <XCircleIcon class="suitability__icon" aria-hidden="true" />Unsuitable:
-                {{ describeSuitabilityReasons(suitabilityById.get(booking.id)!.suitability!.reasons).join("; ") }}
-              </template>
+            <p class="request-purpose">{{ purposeAndHeadcount(suitabilityById.get(booking.id)!) }}</p>
+            <p v-if="SUITABILITY_STATUSES.has(booking.status) && suitabilityById.get(booking.id)!.suitability
+              && !suitabilityById.get(booking.id)!.suitability!.suitable" class="body-small suitability suitability--bad">
+              <XCircleIcon class="suitability__icon" aria-hidden="true" />Unsuitable:
+              {{ describeSuitabilityReasons(suitabilityById.get(booking.id)!.suitability!.reasons).join("; ") }}
             </p>
           </template>
-          <p class="body-small muted">Requested {{ formatMoment(booking.createdAt) }}</p>
           <p v-if="booking.status === 'On Hold' && booking.holdExpiresAt" class="body-small muted">
             Hold expires {{ formatMoment(booking.holdExpiresAt) }}
           </p>
@@ -208,30 +255,37 @@ async function confirmAction(): Promise<void> {
           <p v-if="actionErrorId === booking.id" class="body-small error-text" role="alert">
             {{ actionError }}
           </p>
+          <p class="request-requested">Requested {{ formatMoment(booking.createdAt) }}</p>
         </div>
         <div class="request-status">
           <span class="badge" :class="bookingStatusBadgeClass(booking.status)">
+            <CheckIcon v-if="booking.status === 'Approved'" class="badge__icon" aria-hidden="true" />
             {{ bookingStatusLabel(booking.status) }}
           </span>
           <AppButton v-if="canWithdraw && findReplacementTo && offersReplacement(booking)"
             variant="primary" size="sm" class="action-btn" :to="findReplacementTo">
             Find replacement
           </AppButton>
-          <!-- E4-9: withdraw a pending request/hold, or release an Approved
-               booking. Approving/rejecting stays Venue Staff's (E4-10). -->
-          <AppButton variant="outline" size="sm" class="action-btn" v-if="canWithdraw && actionFor(booking.status)" type="button"
-            :disabled="actingId === booking.id" @click="requestAction(booking)">
-            {{
-              actingId === booking.id
-                ? "Working…"
-                : actionFor(booking.status) === "withdraw"
-                  ? "Withdraw"
-                  : "Release"
-            }}
-          </AppButton>
+          <!-- E4-9: withdraw a pending request/hold, or release an Approved booking, from a ··· menu.
+               Approving/rejecting stays Venue Staff's (E4-10). -->
+          <div v-if="canWithdraw && actionFor(booking.status)" class="row-menu" data-row-menu>
+            <button type="button" class="menu-trigger" aria-haspopup="menu" :aria-expanded="openMenuId === booking.id"
+              :aria-label="`More actions for ${booking.venue?.name ?? 'this venue'}`" :disabled="actingId === booking.id"
+              :ref="(el) => setMenuTrigger(booking.id, el)" @click="toggleMenu(booking.id)">
+              <EllipsisHorizontalIcon class="menu-trigger__icon" aria-hidden="true" />
+            </button>
+            <div v-if="openMenuId === booking.id" class="menu" role="menu">
+              <button type="button" role="menuitem" class="menu-item" @click="chooseAction(booking)">
+                {{ actionLabel(booking.status) }}
+              </button>
+            </div>
+          </div>
         </div>
       </li>
     </ul>
+
+    <!-- Under the list once it has loaded: the page puts "Request another venue" here. -->
+    <slot v-if="!loading && props.bookings && !loadError" name="actions" />
 
     <!-- E4-9: a small confirm dialog in place of the browser's native confirm(). -->
     <div v-if="pendingAction" class="modal-overlay" @click.self="cancelAction">
@@ -289,12 +343,7 @@ async function confirmAction(): Promise<void> {
   color: var(--color-error-600);
 }
 
-/* E4-17: Style.md 3.1 success/error text for the suitability line. */
-.purpose {
-  color: var(--color-grey-700);
-  font-weight: 700;
-}
-
+/* E4-17: Style.md 3.1 error text for the unsuitable line. */
 .suitability {
   display: flex;
   align-items: flex-start;
@@ -330,33 +379,161 @@ async function confirmAction(): Promise<void> {
   justify-content: space-between;
   gap: var(--spacing-16);
   background: var(--color-base-white);
-  border: 1px solid var(--color-grey-100);
+  border: 1px solid var(--color-grey-200);
   border-radius: var(--radius-xs);
-  padding: var(--spacing-16);
+  padding: var(--spacing-24);
+}
+
+.request-venue {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.request-venue p {
+  margin: 0;
+}
+
+.request-location {
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-500);
 }
 
 .request-name {
+  font-size: 1.25rem;
   font-weight: 700;
+  line-height: 1.75rem;
+  color: var(--color-grey-900);
+  overflow-wrap: anywhere;
+}
+
+.request-purpose {
+  font-size: 1rem;
+  line-height: 1.5rem;
+  color: var(--color-grey-700);
+}
+
+/* A clear gap before the timestamp, as in the design. */
+.request-requested {
+  margin-top: var(--spacing-24);
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-500);
 }
 
 .badge {
-  display: inline-block;
-  font-size: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  font-size: 1rem;
   font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
+  line-height: 1.25rem;
+  padding: var(--spacing-8) var(--spacing-16);
   border-radius: var(--radius-xs);
   white-space: nowrap;
 }
 
-.request-status {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--spacing-8);
+.badge__icon {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
 }
 
-/* Style.md 3.4 Button Hierarchy (outline) + 8.2 focus ring; radius-xs. */
+/* Status badge, then the ··· menu, on one row. */
+.request-status {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-16);
+}
+
+.row-menu {
+  position: relative;
+}
+
+.menu-trigger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--color-grey-600);
+  cursor: pointer;
+}
+
+.menu-trigger:hover:not(:disabled) {
+  background: var(--color-grey-50);
+  color: var(--color-grey-900);
+}
+
+.menu-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.menu-trigger:focus-visible,
+.menu-item:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.menu-trigger__icon {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + var(--spacing-4));
+  right: 0;
+  z-index: 20;
+  min-width: 10rem;
+  padding: var(--spacing-4);
+  background: var(--color-base-white);
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-card);
+}
+
+.menu-item {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: var(--spacing-8) var(--spacing-12);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--color-error-600);
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: var(--color-grey-50);
+}
+
+@media (max-width: 640px) {
+  .request-row {
+    flex-direction: column;
+    padding: var(--spacing-24);
+  }
+
+  .request-status {
+    align-self: flex-start;
+  }
+}
 
 .status-success {
   background: #e5eee5;

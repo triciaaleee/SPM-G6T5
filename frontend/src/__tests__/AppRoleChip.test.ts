@@ -20,6 +20,10 @@ const router = createRouter({
     { path: "/attendee/events", name: "attendee-events", component: { render: () => h("div") } },
     { path: "/attendee/discover", name: "attendee-discover", component: { render: () => h("div") } },
     { path: "/coordinator", name: "coordinator-workload", component: { render: () => h("div") } },
+    { path: "/all-events", name: "all-events", component: { render: () => h("div") } },
+    { path: "/lead", name: "lead-dashboard", component: { render: () => h("div") } },
+    { path: "/lead/unassigned", name: "lead-unassigned", component: { render: () => h("div") } },
+    { path: "/lead/coordinators/:id", name: "lead-coordinator", component: { render: () => h("div") } },
     { path: "/venue-availability", name: "venue-availability", component: { render: () => h("div") } },
     { path: "/equipment-requests", name: "equipment-requests", component: { render: () => h("div") } },
     {
@@ -114,4 +118,19 @@ describe("notification bell visibility", () => {
       expect(wrapper.find("notification-bell-stub").exists()).toBe(true);
     },
   );
+});
+
+describe("top navigation for the coordinator roles", () => {
+  const tabLabels = (wrapper: Awaited<ReturnType<typeof mountAs>>) =>
+    wrapper.findAll("nav a").map((a) => a.text().trim());
+
+  it("gives a coordinator My events, All events and Venue Availability", async () => {
+    const wrapper = await mountAs("coordinator");
+    expect(tabLabels(wrapper)).toEqual(["My events", "All events", "Venue Availability"]);
+  });
+
+  it("gives the Coordinator Lead a Dashboard and an All events tab", async () => {
+    const wrapper = await mountAs("coordinator_lead");
+    expect(tabLabels(wrapper)).toEqual(["Dashboard", "All events"]);
+  });
 });
