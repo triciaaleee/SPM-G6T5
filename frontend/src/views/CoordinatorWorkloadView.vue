@@ -134,7 +134,7 @@ onMounted(async () => {
     const [eventsData, user] = await Promise.all([fetchMyEvents(), getCurrentUser()]);
     events.value = eventsData;
     userId.value = user.id;
-    role.value = user.role;
+    role.value = user.role ?? "";
   } catch {
     errorMessage.value = "We couldn't load your events. Please try again.";
   } finally {

@@ -1,6 +1,8 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SafetyReviewPanel from "../SafetyReviewPanel.vue";
+import type { EquipmentRequest } from "../../lib/equipmentApi";
+import type { EventVenueBooking } from "../../lib/venuesApi";
 
 const submitForSafetyReview = vi.fn();
 const fetchSafetyReviews = vi.fn();
@@ -17,12 +19,12 @@ vi.mock("../../lib/eventsApi", async (importOriginal) => {
 const { SafetyReviewSubmitError } = await import("../../lib/eventsApi");
 
 /** One approved venue and no equipment: everything settled, so Submit is enabled. */
-const READY = {
+const READY: { venueBookings: EventVenueBooking[]; equipmentRequests: EquipmentRequest[] } = {
   venueBookings: [
     { id: 1, status: "Approved", holdExpiresAt: null, decisionReason: null, createdAt: "2026-10-07T02:00:00Z", venue: null },
   ],
   equipmentRequests: [],
-} as const;
+};
 
 function booking(status: string, id: number) {
   return { id, status, holdExpiresAt: null, decisionReason: null, createdAt: "2026-10-07T02:00:00Z", venue: null };

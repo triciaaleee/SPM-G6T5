@@ -2,7 +2,7 @@ import { mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import VenueRequestsPanel from "../VenueRequestsPanel.vue";
 import * as venuesApi from "../../../lib/venuesApi";
-import type { EventVenueBooking } from "../../../lib/venuesApi";
+import type { BookingSuitability, EventVenueBooking } from "../../../lib/venuesApi";
 
 function makeBooking(overrides: Partial<EventVenueBooking> = {}): EventVenueBooking {
   return {
@@ -22,6 +22,7 @@ function mountPanel(
     loading: boolean;
     loadError: string | null;
     canWithdraw: boolean;
+    suitability: BookingSuitability[];
   }> = {},
   slots: Record<string, string> = {},
 ) {
@@ -335,7 +336,7 @@ describe("VenueRequestsPanel — row design", () => {
   });
 
   it("says '1 person' for a headcount of one", () => {
-    const one = [{ ...(suitability as never[])[0], headcount: 1 }] as never;
+    const one = [{ ...(suitability as Record<string, unknown>[])[0], headcount: 1 }] as never;
     expect(mountPanel({ bookings: [approved()], suitability: one }).get(".request-purpose").text()).toBe(
       "Main programme, 1 person",
     );
@@ -352,7 +353,7 @@ describe("VenueRequestsPanel — row design", () => {
   it("calls out an unsuitable venue but not a suitable one", () => {
     const bad = [
       {
-        ...(suitability as never[])[0],
+        ...(suitability as Record<string, unknown>[])[0],
         suitability: { suitable: false, reasons: [{ kind: "capacity", capacity: 10, headcount: 20 }] },
       },
     ] as never;
