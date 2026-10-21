@@ -3,18 +3,21 @@ import AppButton from "../components/ui/AppButton.vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
-import CalendarPicker, { type DayMarker } from "../components/venues/CalendarPicker.vue";
+import VenueCalendar from "../components/venues/VenueCalendar.vue";
+import VenueRequestRows from "../components/venues/VenueRequestRows.vue";
+import VenueMultiSelect from "../components/venues/VenueMultiSelect.vue";
 import BlockOutPanel from "../components/venues/BlockOutPanel.vue";
-import VenueIcon from "../components/venues/VenueIcon.vue";
 import UnavailabilityCard from "../components/venues/UnavailabilityCard.vue";
 import VenueFormPanel from "../components/venues/VenueFormPanel.vue";
 import BufferOverlapList from "../components/venues/BufferOverlapList.vue";
 import {
   fetchBufferOverlaps,
   fetchMyVenues,
+  fetchPendingRequests,
   fetchStaffVenues,
   fetchVenueBookings,
   type BufferOverlapRecord,
+  type PendingVenueRequest,
   type StaffVenueOption,
   type VenueBooking,
   type VenueRecord,
@@ -49,9 +52,9 @@ Innovation Hub - 30 sep
 type ScheduleTab = "bookings" | "requested" | "held";
 
 const TABS: { key: ScheduleTab; label: string; status: VenueBooking["status"]; noun: string; empty: string }[] = [
-  { key: "bookings", label: "Bookings", status: "Approved", noun: "booking", empty: "No confirmed bookings on this day." },
-  { key: "requested", label: "Requests", status: "Requested", noun: "request", empty: "No booking requests on this day." },
-  { key: "held", label: "On Hold", status: "On Hold", noun: "hold", empty: "No venues held on this day." },
+  { key: "bookings", label: "Bookings", status: "Approved", noun: "booking", empty: "No confirmed bookings." },
+  { key: "requested", label: "Requests", status: "Requested", noun: "request", empty: "No booking requests." },
+  { key: "held", label: "On Hold", status: "On Hold", noun: "hold", empty: "No venues on hold." },
 ];
 
 function toKey(date: Date): string {
@@ -79,20 +82,53 @@ function queryParam(name: string): string | null {
  * (?venue=1&date=2026-09-25&tab=requested), so a refresh or a shared link
  * reopens the same view instead of resetting to the first venue and today.
  */
-const queryDate = queryParam("date");
-const initialDate = queryDate && /^\d{4}-\d{2}-\d{2}$/.test(queryDate) ? fromKey(queryDate) : new Date();
+function queryDay(name: string): string {
+  const value = queryParam(name);
+  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
 const queryTab = queryParam("tab");
 
 const venues = ref<StaffVenueOption[]>([]);
-const venueId = ref<number | null>(null);
-const selectedDate = ref(toKey(initialDate));
-/** The month the calendar is showing; bookings are loaded a month at a time. */
-const visibleMonth = ref({ year: initialDate.getFullYear(), month: initialDate.getMonth() });
+const venueCalendar = ref<InstanceType<typeof VenueCalendar> | null>(null);
+/**
+ * Venues the calendar was filtered to, or null for "all my venues" (the default, so every request that
+ * needs a decision is visible at a glance). Set only when the user changes the calendar's venues.
+ */
+const filterIds = ref<number[] | null>(null);
+const scopeIds = computed(() => filterIds.value ?? venues.value.map((v) => v.id));
+const scopeKey = computed(() => scopeIds.value.join(","));
+/** Where "Block out time" starts: the first venue in scope. */
+const venueId = computed(() => scopeIds.value[0] ?? null);
+const venueName = (id: number) => venues.value.find((v) => v.id === id)?.name ?? "Venue";
+/** The calendar stays empty until the filter names a venue or a date range. */
+const calendarActive = computed(() => filterIds.value !== null || rangeActive.value);
+/** The calendar draws at most four venues; the list below it covers every venue in scope. */
+const CALENDAR_VENUES = 4;
+const calendarVenues = computed(() =>
+  scopeIds.value.slice(0, CALENDAR_VENUES).flatMap((id) => venues.value.filter((v) => v.id === id)),
+);
+/** Optional date range for the lists below; empty means every booking, whenever it is. */
+const rangeFrom = ref(queryDay("from"));
+const rangeTo = ref(queryDay("to"));
+const rangeActive = computed(() => rangeFrom.value !== "" || rangeTo.value !== "");
+const today = toKey(new Date());
+/** Past bookings and block-outs are never listed; the range narrows what is left. */
+const inRange = (start: string, end = start) =>
+  end >= today && (rangeFrom.value === "" || end >= rangeFrom.value) && (rangeTo.value === "" || start <= rangeTo.value);
+
+/** Booking ids whose layout / facility details are open. */
+const expanded = ref<Set<number>>(new Set());
+function toggleDetails(id: number): void {
+  const next = new Set(expanded.value);
+  if (!next.delete(id)) next.add(id);
+  expanded.value = next;
+}
 
 const activeTab = ref<ScheduleTab>(TABS.some((tab) => tab.key === queryTab) ? (queryTab as ScheduleTab) : "requested");
 const activeTabConfig = computed(() => TABS.find((tab) => tab.key === activeTab.value)!);
 
-const bookings = ref<VenueBooking[]>([]);
+type ScheduleBooking = VenueBooking & { venueId: number };
+const bookings = ref<ScheduleBooking[]>([]);
 const loadingVenues = ref(true);
 const loadingBookings = ref(false);
 const venuesError = ref<string | null>(null);
@@ -103,48 +139,110 @@ const bookingsError = ref<string | null>(null);
  * Required by a block-out (E4-3) was approved, so it stays under Bookings
  * (with a badge) rather than disappearing from both tabs.
  */
-function inTab(booking: VenueBooking, tab: (typeof TABS)[number]): boolean {
+function inTab(booking: ScheduleBooking, tab: (typeof TABS)[number]): boolean {
   return booking.status === tab.status || (tab.key === "bookings" && booking.status === "Replacement Required");
 }
 
-/** This month's bookings in the active tab. */
-const tabBookings = computed(() => bookings.value.filter((b) => inTab(b, activeTabConfig.value)));
+/** Approved bookings in the date range, earliest first. Requests and holds come from the decision queue below. */
+const tabBookings = computed(() =>
+  bookings.value
+    .filter((b) => inTab(b, TABS[0]) && inRange(b.date))
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.startTime ?? "").localeCompare(b.startTime ?? "")),
+);
 
-/** Every day this month with a booking or request, for the calendar's dots. */
-const dateMarkers = computed(() => {
-  const markers: Record<string, DayMarker[]> = {};
-  for (const booking of bookings.value) {
-    const kind: DayMarker | null =
-      booking.status === "Approved" || booking.status === "Replacement Required"
-        ? "booking"
-        : booking.status === "Requested"
-          ? "request"
-          : null;
-    if (!kind) continue;
-    const kinds = (markers[booking.date] ??= []);
-    if (!kinds.includes(kind)) kinds.push(kind);
+// ---- E4-10: the decision queue (Requested and On Hold bookings) ---------
+
+const pending = ref<PendingVenueRequest[]>([]);
+const pendingLoading = ref(true);
+const pendingError = ref<string | null>(null);
+
+async function loadPending(): Promise<void> {
+  pendingLoading.value = true;
+  pendingError.value = null;
+  try {
+    pending.value = await fetchPendingRequests();
+  } catch (err) {
+    pending.value = [];
+    pendingError.value = err instanceof Error ? err.message : "Failed to load booking requests";
+  } finally {
+    pendingLoading.value = false;
   }
-  return markers;
-});
+}
 
-const dayBookings = computed(() => tabBookings.value.filter((b) => b.date === selectedDate.value));
+/** The date range alone, without the "not in the past" floor. */
+const inChosenRange = (day: string) =>
+  (rangeFrom.value === "" || day >= rangeFrom.value) && (rangeTo.value === "" || day <= rangeTo.value);
 
-/** Each tab's total for the selected day, shown beside its label. */
-const tabDayCounts = computed(() => {
-  const counts: Record<ScheduleTab, number> = { bookings: 0, requested: 0, held: 0 };
-  for (const booking of bookings.value) {
-    if (booking.date !== selectedDate.value) continue;
-    const tab = TABS.find((t) => inTab(booking, t));
-    if (tab) counts[tab.key] += 1;
-  }
-  return counts;
-});
+/** Requests whose event date has already passed are hidden unless this is ticked, since past bookings aren't listed. */
+const showOverdue = ref(false);
 
-const dayHeading = computed(() => {
-  const date = fromKey(selectedDate.value);
-  const dayMonth = date.toLocaleDateString("en-GB", { day: "numeric", month: "long" });
-  const weekday = date.toLocaleDateString("en-GB", { weekday: "long" });
-  return `${dayMonth}, ${weekday}`;
+/** Waiting requests at the venues in scope, inside the date range; undated ones only while no range is set. */
+const pendingInScope = computed(() =>
+  pending.value.filter((r) => {
+    if (!scopeIds.value.includes(r.venue.id)) return false;
+    if (r.event.date === null) return !rangeActive.value;
+    return showOverdue.value ? inChosenRange(r.event.date) : inRange(r.event.date);
+  }),
+);
+
+/** How many past-dated requests the active tab is leaving out, so an empty tab can say why. */
+const overdueCount = computed(
+  () =>
+    pending.value.filter(
+      (r) =>
+        scopeIds.value.includes(r.venue.id) &&
+        r.status === activeTabConfig.value.status &&
+        r.event.date !== null &&
+        r.event.date < today &&
+        inChosenRange(r.event.date),
+    ).length,
+);
+
+/** E4-10 AC7: soonest event first. */
+const tabPending = computed(() =>
+  pendingInScope.value
+    .filter((r) => r.status === activeTabConfig.value.status)
+    .sort(
+      (a, b) =>
+        (a.event.date ?? "9999-12-31").localeCompare(b.event.date ?? "9999-12-31") ||
+        (a.event.startTime ?? "").localeCompare(b.event.startTime ?? ""),
+    ),
+);
+
+const isDecisionTab = computed(() => activeTab.value !== "bookings");
+
+/** Each tab's total for the venues and date range in view, shown beside its label. */
+const tabCounts = computed<Record<ScheduleTab, number>>(() => ({
+  bookings: tabBookings.value.length,
+  requested: pendingInScope.value.filter((r) => r.status === "Requested").length,
+  held: pendingInScope.value.filter((r) => r.status === "On Hold").length,
+}));
+
+/** A decision landed: it can knock other requests out, so reload everything it touches. */
+function onDecided(message: string): void {
+  notice.value = { text: message, warning: false };
+  void loadPending();
+  void loadBookings();
+  void venueCalendar.value?.refresh();
+}
+
+/** The calendar's "Go to booking requests": open the Requests tab and bring it into view. */
+async function showRequests(): Promise<void> {
+  activeTab.value = "requested";
+  await nextTick();
+  document.getElementById("schedule-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function formatRowDate(key: string): string {
+  return fromKey(key).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+
+const heading = computed(() => {
+  const fmt = (key: string) => formatLongDate(key);
+  if (rangeFrom.value && rangeTo.value) return `${fmt(rangeFrom.value)} – ${fmt(rangeTo.value)}`;
+  if (rangeFrom.value) return `From ${fmt(rangeFrom.value)}`;
+  if (rangeTo.value) return `Up to ${fmt(rangeTo.value)}`;
+  return "Upcoming bookings";
 });
 
 function formatLongDate(key: string): string {
@@ -165,28 +263,27 @@ function formatAttendance(value: number | null): string {
 let requestSeq = 0;
 
 async function loadBookings(): Promise<void> {
-  if (venueId.value === null) return;
-  const { year, month } = visibleMonth.value;
-  const from = toKey(new Date(year, month, 1));
-  const to = toKey(new Date(year, month + 1, 0));
+  if (scopeIds.value.length === 0) return;
 
   const seq = ++requestSeq;
   loadingBookings.value = true;
   bookingsError.value = null;
   try {
-    const result = await fetchVenueBookings(venueId.value, from, to);
+    const perVenue = await Promise.all(
+      scopeIds.value.map(async (id) => (await fetchVenueBookings(id)).map((b) => ({ ...b, venueId: id }))),
+    );
     if (seq !== requestSeq) return;
-    bookings.value = result;
+    bookings.value = perVenue.flat();
   } catch {
     if (seq !== requestSeq) return;
     bookings.value = [];
-    bookingsError.value = "We couldn't load this venue's bookings. Please try again.";
+    bookingsError.value = "We couldn't load the bookings. Please try again.";
   } finally {
     if (seq === requestSeq) loadingBookings.value = false;
   }
 }
 
-watch([venueId, visibleMonth], loadBookings);
+watch(scopeKey, loadBookings);
 
 // ---- E4-3: block-out periods -------------------------------------------
 
@@ -199,54 +296,34 @@ const removingId = ref<number | null>(null);
 /** Outcome of the last block-out change, shown above the day's list. */
 const notice = ref<{ text: string; warning: boolean } | null>(null);
 
-const selectedVenueName = computed(() => venues.value.find((v) => v.id === venueId.value)?.name ?? "");
 
-/** Every visible-month day a period covers, split into all-day and some-hours. */
-const blockedDays = computed(() => {
-  const { year, month } = visibleMonth.value;
-  const first = toKey(new Date(year, month, 1));
-  const last = toKey(new Date(year, month + 1, 0));
-  const full = new Set<string>();
-  const partial = new Set<string>();
-  for (const period of periods.value) {
-    const to = period.endDate < last ? period.endDate : last;
-    for (const day = fromKey(period.startDate > first ? period.startDate : first); toKey(day) <= to; day.setDate(day.getDate() + 1)) {
-      (period.allDay ? full : partial).add(toKey(day));
-    }
-  }
-  return { full: [...full], partial: [...partial].filter((key) => !full.has(key)) };
-});
-
-/** Periods covering the selected day: all-day first, then by start time. */
-const dayPeriods = computed(() =>
+/** Periods in the date range: earliest first, all-day before timed ones. */
+const visiblePeriods = computed(() =>
   periods.value
-    .filter((p) => p.startDate <= selectedDate.value && p.endDate >= selectedDate.value)
-    .sort((a, b) => Number(b.allDay) - Number(a.allDay) || (a.startTime ?? "").localeCompare(b.startTime ?? "")),
+    .filter((p) => inRange(p.startDate, p.endDate))
+    .sort((a, b) => a.startDate.localeCompare(b.startDate) || Number(b.allDay) - Number(a.allDay) || (a.startTime ?? "").localeCompare(b.startTime ?? "")),
 );
 
 let periodsSeq = 0;
 
 async function loadUnavailability(): Promise<void> {
-  if (venueId.value === null) return;
-  const { year, month } = visibleMonth.value;
-  const from = toKey(new Date(year, month, 1));
-  const to = toKey(new Date(year, month + 1, 0));
+  if (scopeIds.value.length === 0) return;
 
   const seq = ++periodsSeq;
   try {
-    const result = await fetchUnavailability(venueId.value, from, to);
+    const result = (await Promise.all(scopeIds.value.map((id) => fetchUnavailability(id)))).flat();
     if (seq !== periodsSeq) return;
     periods.value = result;
     periodsError.value = null;
   } catch {
     if (seq !== periodsSeq) return;
     periods.value = [];
-    periodsError.value = "We couldn't load this venue's unavailable periods.";
+    periodsError.value = "We couldn't load the unavailable periods.";
   }
 }
 
-watch([venueId, visibleMonth], loadUnavailability);
-watch(venueId, () => (notice.value = null));
+watch(scopeKey, loadUnavailability);
+watch(scopeKey, () => (notice.value = null));
 
 // ---- E4-13 AC2/AC3: persisted buffer-overlap review list ----------------
 
@@ -256,9 +333,9 @@ const bufferOverlapsError = ref<string | null>(null);
 
 let overlapsSeq = 0;
 
-/** Venue-scoped, not date-scoped — reloaded whenever the selected venue changes. */
+/** Venue-scoped, not date-scoped — reloaded whenever the venues in scope change. */
 async function loadBufferOverlaps(): Promise<void> {
-  if (venueId.value === null) {
+  if (scopeIds.value.length === 0) {
     bufferOverlaps.value = [];
     return;
   }
@@ -266,19 +343,19 @@ async function loadBufferOverlaps(): Promise<void> {
   bufferOverlapsLoading.value = true;
   bufferOverlapsError.value = null;
   try {
-    const result = await fetchBufferOverlaps(venueId.value);
+    const result = (await Promise.all(scopeIds.value.map((id) => fetchBufferOverlaps(id)))).flat();
     if (seq !== overlapsSeq) return;
     bufferOverlaps.value = result;
   } catch {
     if (seq !== overlapsSeq) return;
     bufferOverlaps.value = [];
-    bufferOverlapsError.value = "We couldn't load this venue's flagged bookings.";
+    bufferOverlapsError.value = "We couldn't load the flagged bookings.";
   } finally {
     if (seq === overlapsSeq) bufferOverlapsLoading.value = false;
   }
 }
 
-watch(venueId, loadBufferOverlaps);
+watch(scopeKey, loadBufferOverlaps);
 
 function openBlockOut(period: UnavailabilityPeriod | null = null): void {
   editingPeriod.value = period;
@@ -307,9 +384,9 @@ function onBlockOutSaved(result: CreatePeriodResult): void {
       : `${result.coordinatorsNotified} coordinator${result.coordinatorsNotified === 1 ? "" : "s"} notified.`;
     notice.value = { text: `${verb} ${parts.join("; ")}; ${notified}`, warning: result.notificationsFailed };
   }
-  selectedDate.value = result.period.startDate;
   void loadUnavailability();
   void loadBookings();
+  void venueCalendar.value?.refresh();
 }
 
 async function removePeriod(period: UnavailabilityPeriod): Promise<void> {
@@ -319,6 +396,7 @@ async function removePeriod(period: UnavailabilityPeriod): Promise<void> {
     await deleteUnavailability(period.id);
     notice.value = { text: "Block-out removed.", warning: false };
     await loadUnavailability();
+    void venueCalendar.value?.refresh();
   } catch {
     notice.value = { text: "We couldn't remove that block-out. Please try again.", warning: true };
   } finally {
@@ -383,9 +461,8 @@ async function afterVenueSaved(id: number, text: string, warning = false): Promi
       })
       .catch(() => undefined),
   ]);
-  // Only Available venues are in the picker; a venue that isn't stays where it was.
-  if (venues.value.some((venue) => venue.id === id)) venueId.value = id;
-  // After the venue switch, which clears the notice.
+  // A new venue joins the "all venues" scope on its own; a filtered view keeps its filter.
+  void id;
   await nextTick();
   notice.value = { text, warning };
 }
@@ -410,30 +487,35 @@ function onVenueUpdated(result: VenueUpdateResult): void {
   void afterVenueSaved(result.venue.id, text, result.notificationsFailed);
   // The schedule's bookings carry layouts/facilities derived from the venue.
   void loadBookings();
-  // E4-13: the save may have changed which pairs overlap; venueId.value may
-  // already equal result.venue.id (editing the currently-selected venue),
-  // in which case the watch() above never fires, so reload explicitly.
+  // E4-13: the save may have changed which pairs overlap, and the scope may not change, so reload explicitly.
   void loadBufferOverlaps();
 }
 
 onMounted(() => {
   void loadMyVenues();
+  void loadPending();
   document.addEventListener("pointerdown", onDocumentPointer);
 });
 
 onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPointer));
 
 // replace, not push: picking a date shouldn't add a history entry.
-watch([venueId, selectedDate, activeTab], ([venue, date, tab]) => {
-  if (venue === null) return;
-  void router.replace({ query: { ...route.query, venue: String(venue), date, tab } });
+watch([filterIds, rangeFrom, rangeTo, activeTab], ([ids, from, to, tab]) => {
+  const { venue: _venue, from: _from, to: _to, date: _date, ...rest } = route.query;
+  void router.replace({
+    query: { ...rest, ...(ids ? { venue: ids.join(",") } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}), tab },
+  });
 });
 
 onMounted(async () => {
   try {
     venues.value = await fetchStaffVenues();
-    const queryVenue = Number(queryParam("venue"));
-    venueId.value = venues.value.find((venue) => venue.id === queryVenue)?.id ?? venues.value[0]?.id ?? null;
+    // ?venue=1,2 reopens a filtered view; no param means all venues.
+    const fromQuery = (queryParam("venue") ?? "")
+      .split(",")
+      .map(Number)
+      .filter((id) => venues.value.some((venue) => venue.id === id));
+    if (fromQuery.length > 0) filterIds.value = fromQuery.slice(0, 4);
   } catch {
     venuesError.value = "We couldn't load the venue list. Please refresh the page.";
   } finally {
@@ -446,13 +528,13 @@ onMounted(async () => {
   <!--
     Column mapping — Venue Schedule
     Desktop (12-col, grid-desktop-margin 80px): header col 1-12 (title left; on the right, "Add new venue" and
-      "Edit venue" side by side above a full-width "Block out time"); sidebar (venue picker above calendar card + key) col 1-4; schedule col 5-12,
+      "Edit venue" and "Block out time" on one line); upcoming bookings col 1-12; calendar col 1-12;
       block-out cards above the tabs.
       The Block out time and Add new venue panels are overlay drawers outside this grid (mappings in
       BlockOutPanel.vue and VenueFormPanel.vue).
       Nested grid: each booking card's detail rows use a local 8-col grid (the schedule's span);
       time and attendance span 4 each, layout and facilities span 8.
-    Tablet (6-col, grid-tablet-margin 32px): header, sidebar and schedule each col 1-6, stacked.
+    Tablet (6-col, grid-tablet-margin 32px): header, calendar and schedule each col 1-6, stacked.
       Card detail grid is 6-col; time/attendance span 3 each, layout/facilities span 6.
     Mobile (4-col, grid-mobile-margin 6px): everything col 1-4, stacked; card detail rows span 4.
   -->
@@ -460,7 +542,7 @@ onMounted(async () => {
     <div class="page-header page-header--with-action">
       <div>
         <h1 class="h2">Venue schedule</h1>
-        <p class="subheading">Select a date and venue to see bookings and requests for that day</p>
+        <p class="subheading">Everything booked into your venues; narrow by venue or date range</p>
       </div>
       <!-- Style.md 3.4: one solid action per view, so "Go to booking requests" is it; the rest are outline. -->
       <div class="header-actions">
@@ -499,8 +581,6 @@ onMounted(async () => {
           <AppButton variant="outline" v-if="venueId !== null" type="button" @click="openBlockOut()">
             Block out time
           </AppButton>
-          <!-- E4-10: decisions are made in the queue, which orders by event date. It is the page's one primary action. -->
-          <AppButton variant="primary" :to="{ name: 'venue-requests' }">Go to booking requests</AppButton>
         </div>
       </div>
     </div>
@@ -513,36 +593,32 @@ onMounted(async () => {
     </div>
 
     <template v-else>
-      <!-- The venue picker scopes both the calendar's dots and the day's bookings. -->
-      <div class="sidebar">
-        <div class="venue-field">
-          <label for="venue-select" class="field-label mb-1">Select Venue</label>
-          <div class="venue-select">
-            <select id="venue-select" v-model="venueId" class="venue-select__input">
-              <option v-for="venue in venues" :key="venue.id" :value="venue.id">{{ venue.name }}</option>
-            </select>
-            <ChevronDownIcon class="venue-select__icon" aria-hidden="true" />
-          </div>
-        </div>
-
-        <section class="calendar-card" aria-label="Choose a date">
-          <CalendarPicker v-model="selectedDate" allow-past roomy :markers="dateMarkers"
-            :blocked-dates="blockedDays.full" :partly-blocked-dates="blockedDays.partial"
-            @month-change="visibleMonth = $event" />
-          <ul class="legend" aria-hidden="true">
-            <li class="legend__item"><span class="legend__dot legend__dot--booking" />Booking</li>
-            <li class="legend__item"><span class="legend__dot legend__dot--request" />Request</li>
-            <li class="legend__item"><span class="legend__lock"><VenueIcon name="lock" :size="10" /></span>Unavailable</li>
-            <li class="legend__item"><span class="legend__bar" />Partly unavailable</li>
-          </ul>
-        </section>
-      </div>
-
       <section class="schedule" aria-live="polite" :aria-busy="loadingBookings">
+        <!-- Two columns: the schedule (about 70%) and a bulletin of unavailable periods (about 30%), starting level with the heading. -->
+        <div class="schedule__body">
+          <div class="schedule__main">
         <div class="schedule__header">
           <h2 class="h5 schedule__day">
-            {{ dayHeading }}
+            {{ heading }}
           </h2>
+          <!-- One filter for the list, the request rows and the calendar: every venue by default. -->
+          <div class="range-filter" role="group" aria-label="Filter by venue and date range">
+            <div class="range-filter__field">
+              <span class="field-label">Venue</span>
+              <VenueMultiSelect v-model="filterIds" :venues="venues" />
+            </div>
+            <label class="range-filter__field">
+              <span class="field-label">From</span>
+              <input v-model="rangeFrom" type="date" class="range-filter__input" :min="today" :max="rangeTo || undefined" />
+            </label>
+            <label class="range-filter__field">
+              <span class="field-label">To</span>
+              <input v-model="rangeTo" type="date" class="range-filter__input" :min="rangeFrom || today" />
+            </label>
+            <button v-if="rangeActive" type="button" class="link-button" @click="rangeFrom = ''; rangeTo = ''">
+              Clear dates
+            </button>
+          </div>
         </div>
 
         <p v-if="notice" class="notice" :class="{ 'notice--warning': notice.warning }" role="status">
@@ -550,51 +626,63 @@ onMounted(async () => {
         </p>
         <p v-if="periodsError" class="body-default error-text">{{ periodsError }}</p>
 
-        <!-- E4-3 AC1: block-outs sit above the tabs so an unavailable day is obvious whichever tab is open. -->
-        <ul v-if="dayPeriods.length > 0" class="booking-list block-list">
-          <li v-for="period in dayPeriods" :key="period.id">
-            <UnavailabilityCard :period="period" :removing="removingId === period.id" @edit="openBlockOut(period)"
-              @remove="removePeriod(period)" />
-          </li>
-        </ul>
-
         <div class="tabs" role="tablist" aria-label="Booking status">
           <button v-for="tab in TABS" :id="`tab-${tab.key}`" :key="tab.key" type="button" role="tab" class="tab"
             :class="{ 'tab--active': activeTab === tab.key }" :aria-selected="activeTab === tab.key"
             aria-controls="schedule-panel" :tabindex="activeTab === tab.key ? 0 : -1" @click="activeTab = tab.key">
-            {{ tab.label }} ({{ tabDayCounts[tab.key] }})
+            {{ tab.label }} ({{ tabCounts[tab.key] }})
           </button>
         </div>
 
-        <div id="schedule-panel" role="tabpanel" :aria-labelledby="`tab-${activeTab}`">
-        <p v-if="bookingsError" class="body-default error-text">{{ bookingsError }}</p>
-        <p v-else-if="loadingBookings && bookings.length === 0" class="body-default muted">Loading bookings…</p>
+        <!-- Long lists scroll inside this area instead of paging. -->
+        <div id="schedule-panel" class="schedule__scroll" role="tabpanel" :aria-labelledby="`tab-${activeTab}`" tabindex="0">
+          <!-- Requests and On Hold: the decision queue (hold, approve, reject), venue- and date-filtered. -->
+          <template v-if="isDecisionTab">
+            <label v-if="overdueCount > 0 || showOverdue" class="overdue-toggle">
+              <input v-model="showOverdue" type="checkbox" />
+              Include requests for dates that have passed<template v-if="!showOverdue"> ({{ overdueCount }})</template>
+            </label>
+            <p v-if="pendingError" class="body-default error-text" role="alert">{{ pendingError }}</p>
+            <p v-else-if="pendingLoading" class="body-default muted">Loading booking requests…</p>
+            <div v-else-if="tabPending.length === 0" class="empty-state">
+              <p class="empty-state__title">Nothing here</p>
+              <p class="body-default muted">{{ activeTabConfig.empty }}</p>
+            </div>
+            <VenueRequestRows v-else :requests="tabPending" @decided="onDecided" />
+          </template>
 
-        <div v-else-if="dayBookings.length === 0" class="empty-state" :class="{ 'is-stale': loadingBookings }">
-          <p class="empty-state__title">Nothing here</p>
-          <p class="body-default muted">{{ activeTabConfig.empty }}</p>
-        </div>
-
-        <ul v-else class="booking-list" :class="{ 'is-stale': loadingBookings }">
-          <li v-for="booking in dayBookings" :key="booking.id" class="booking-card">
-              <span v-if="booking.status === 'Replacement Required'" class="replacement-badge">
-                Replacement Required
-              </span>
-              <p class="card-title">{{ booking.event.name || "Untitled event" }}</p>
-              <p class="body-small muted booking-card__date">{{ formatLongDate(booking.date) }}</p>
-
-              <dl class="details">
-                <div class="detail detail--half">
-                  <dt class="detail__label">Start – end time</dt>
-                  <dd class="detail__value">{{ formatTimeRange(booking.startTime, booking.endTime) }}</dd>
-                </div>
+          <!-- Bookings: approved bookings, read-only. -->
+          <template v-else>
+            <p v-if="bookingsError" class="body-default error-text">{{ bookingsError }}</p>
+            <p v-else-if="loadingBookings && bookings.length === 0" class="body-default muted">Loading bookings…</p>
+            <div v-else-if="tabBookings.length === 0" class="empty-state" :class="{ 'is-stale': loadingBookings }">
+              <p class="empty-state__title">Nothing here</p>
+              <p class="body-default muted">{{ activeTabConfig.empty }}</p>
+            </div>
+            <ul v-else class="rows" :class="{ 'is-stale': loadingBookings }">
+            <li class="rows__head" aria-hidden="true">
+              <span>Date</span><span>Time</span><span>Event</span><span>Attendance</span><span />
+            </li>
+            <li v-for="booking in tabBookings" :key="`${booking.venueId}-${booking.id}`" class="row">
+              <div class="row__main">
+                <span class="row__date">{{ formatRowDate(booking.date) }}</span>
+                <span class="row__time">{{ formatTimeRange(booking.startTime, booking.endTime) }}</span>
+                <span class="row__event">
+                  <span class="row__name">{{ booking.event.name || "Untitled event" }}</span>
+                  <span class="row__venue">{{ venueName(booking.venueId) }}</span>
+                  <span v-if="booking.status === 'Replacement Required'" class="replacement-badge">Replacement Required</span>
+                </span>
                 <!-- E4-17: set up for this booking's own session, not the whole event. -->
-                <div class="detail detail--half">
-                  <dt class="detail__label">{{ booking.setup ? `${booking.setup.purpose} · headcount` : "Expected attendance" }}</dt>
-                  <dd class="detail__value">
-                    {{ formatAttendance(booking.setup ? booking.setup.headcount : booking.event.expectedAttendance) }}
-                  </dd>
-                </div>
+                <span class="row__people">
+                  {{ formatAttendance(booking.setup ? booking.setup.headcount : booking.event.expectedAttendance) }}
+                  <span v-if="booking.setup" class="row__purpose">{{ booking.setup.purpose }}</span>
+                </span>
+                <button type="button" class="link-button row__toggle" :aria-expanded="expanded.has(booking.id)"
+                  :aria-controls="`details-${booking.venueId}-${booking.id}`" @click="toggleDetails(booking.id)">
+                  {{ expanded.has(booking.id) ? "Hide details" : "Details" }}
+                </button>
+              </div>
+              <dl v-if="expanded.has(booking.id)" :id="`details-${booking.venueId}-${booking.id}`" class="row__details">
                 <div class="detail">
                   <dt class="detail__label">Layout</dt>
                   <dd v-if="(booking.setup ?? booking.event).layouts.length > 0" class="detail__value">
@@ -612,9 +700,34 @@ onMounted(async () => {
                   <dd v-else class="body-small muted">None specified</dd>
                 </div>
               </dl>
-          </li>
-        </ul>
+            </li>
+          </ul>
+          </template>
+
         </div>
+          </div>
+
+          <!-- E4-3 AC1: block-outs, so an unavailable day is obvious whichever tab is open. -->
+          <aside class="schedule__aside" aria-label="Unavailable periods">
+            <h3 class="aside__title">Unavailable <span class="muted">({{ visiblePeriods.length }})</span></h3>
+            <ul v-if="visiblePeriods.length > 0" class="booking-list block-list">
+              <li v-for="period in visiblePeriods" :key="period.id">
+                <UnavailabilityCard compact :period="period" :venue-name="venueName(period.venueId)"
+                  :removing="removingId === period.id" @edit="openBlockOut(period)" @remove="removePeriod(period)" />
+              </li>
+            </ul>
+            <p v-else class="body-default muted">{{ filterIds === null ? "All your venues are available." : "All the selected venues are available." }}</p>
+          </aside>
+        </div>
+      </section>
+
+      <!-- E1-5: everything booked into the staff member's venues, up to four at once. Its venue filter also narrows the lists below. -->
+      <section class="full-row" aria-label="Venue calendar">
+        <!-- Until a venue or a date range is chosen the list above covers everything and the calendar stays empty. -->
+        <VenueCalendar ref="venueCalendar" :venues="calendarActive ? calendarVenues : []" :total="scopeIds.length"
+          :day="rangeFrom || undefined" :from="rangeFrom || undefined" :to="rangeTo || undefined"
+          :prompt="calendarActive ? undefined : 'Choose a venue or a date range above to see it on the calendar.'"
+          @show-requests="showRequests" />
       </section>
 
       <!-- E4-13 AC2/AC3: persistent, self-reconciling — distinct from VenueFormPanel's one-shot edit warning. -->
@@ -624,7 +737,7 @@ onMounted(async () => {
     </template>
 
     <BlockOutPanel v-if="panelOpen && venueId !== null" :key="editingPeriod?.id ?? 'new'" :venue-id="venueId"
-      :venue-name="selectedVenueName" :initial-date="selectedDate" :period="editingPeriod"
+      :venues="venues" :initial-date="today" :period="editingPeriod"
       @close="closeBlockOut" @saved="onBlockOutSaved" />
 
     <VenueFormPanel v-if="venueFormOpen" :key="editingVenue?.id ?? 'new'" :venue="editingVenue"
@@ -647,56 +760,8 @@ onMounted(async () => {
   margin-bottom:8px;
 }
 
-.sidebar {
-  grid-column: 1 / 5;
-  align-self: start;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-16);
-  min-width: 0;
-}
-
-.calendar-card {
-  padding: var(--spacing-24);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-sm);
-}
-
-/* Explains the calendar's dot colours (same colours as CalendarPicker's dots). */
-.legend {
-  display: flex;
-  justify-content: center;
-  gap: var(--spacing-16);
-  margin: var(--spacing-16) 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.legend__item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-6);
-  font-size: 0.75rem;
-  line-height: 1rem;
-  color: var(--color-grey-500);
-}
-
-.legend__dot {
-  width: var(--spacing-6);
-  height: var(--spacing-6);
-  border-radius: var(--radius-full);
-}
-
-.legend__dot--booking {
-  background: var(--color-purple-600);
-}
-
-.legend__dot--request {
-  background: var(--color-blue-500);
-}
-
 .schedule {
-  grid-column: 5 / 13;
+  grid-column: 1 / 13;
   min-width: 0;
 }
 
@@ -714,7 +779,6 @@ onMounted(async () => {
 
   .page-header,
   .full-row,
-  .sidebar,
   .schedule,
   .overlap-review-row {
     grid-column: 1 / 7;
@@ -730,7 +794,6 @@ onMounted(async () => {
 
   .page-header,
   .full-row,
-  .sidebar,
   .schedule,
   .overlap-review-row {
     grid-column: 1 / 5;
@@ -780,6 +843,11 @@ onMounted(async () => {
 }
 
 .schedule__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--spacing-16);
   margin-bottom: var(--spacing-16);
 }
 
@@ -826,57 +894,152 @@ onMounted(async () => {
   font-weight: 400;
 }
 
-.venue-field {
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-sm);
+  background: var(--color-base-white);
+}
+
+.rows__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-base-white);
+}
+
+.rows__head,
+.row__main {
+  display: grid;
+  grid-template-columns: 7rem 7.5rem minmax(0, 1fr) 11rem 6rem;
+  align-items: center;
+  gap: var(--spacing-16);
+  padding: var(--spacing-12) var(--spacing-16);
+}
+
+.rows__head {
+  border-bottom: 1px solid var(--color-grey-100);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-grey-500);
+}
+
+.row + .row {
+  border-top: 1px solid var(--color-grey-100);
+}
+
+.row__main {
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-900);
+}
+
+.row__date {
+  font-weight: 700;
+}
+
+.row__event {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.row__name {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row__venue,
+.row__purpose {
+  color: var(--color-grey-500);
+  font-size: 0.75rem;
+}
+
+.row__people {
   display: flex;
   flex-direction: column;
 }
 
-/* Form label: Small Text 700, Style.md 3.2 label colour (Grey/600). */
-.field-label {
-  font-size: 1rem;
-  font-weight: 700;
-  line-height: 1.25rem;
-  color: var(--color-grey-900);
+.row__toggle {
+  justify-self: end;
 }
 
-.venue-select {
-  position: relative;
+.row__details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-16);
+  margin: 0;
+  padding: var(--spacing-12) var(--spacing-16) var(--spacing-16);
+  background: var(--color-grey-25);
+}
+
+@media (max-width: 640px) {
+  .rows__head {
+    display: none;
+  }
+
+  .row__main {
+    grid-template-columns: 1fr auto;
+  }
+
+  .row__event {
+    grid-column: 1 / 3;
+  }
+
+  .row__details {
+    grid-template-columns: 1fr;
+  }
+}
+
+.range-filter {
   display: flex;
-  align-items: center;
-  width: 100%;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: var(--spacing-12);
 }
 
-.venue-select__input {
-  appearance: none;
-  width: 100%;
-  height: var(--spacing-48);
-  padding: 0 var(--spacing-48) 0 var(--spacing-16);
+.range-filter__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.range-filter__input {
+  height: 40px;
+  padding: 0 var(--spacing-12);
   border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   background: var(--color-base-white);
   color: var(--color-grey-900);
   font-family: var(--font-family-lato);
-  font-size: 1rem;
-  line-height: 1.25rem;
+  font-size: 0.875rem;
+}
+
+.range-filter__input:focus {
+  outline: none;
+  border-color: var(--ring-brand);
+  box-shadow: 0 0 0 4px var(--ring-light);
+}
+
+.link-button {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-purple-600);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
   cursor: pointer;
-  margin-top:4px;
 }
 
-.venue-select__input[selected]{
-  font-weight:700;
-}
-
-.venue-select__input:hover {
-  border-color: var(--color-grey-300);
-}
-
-.venue-select__icon {
-  position: absolute;
-  width: var(--spacing-20);
-  height: var(--spacing-20);
-  right: var(--spacing-16);
-  color: var(--color-grey-700);
-  pointer-events: none;
+.link-button:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
 }
 
 .is-stale {
@@ -893,69 +1056,9 @@ onMounted(async () => {
   padding: 0;
 }
 
-.booking-card {
-  padding: var(--spacing-24);
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-sm);
-}
-
-.card-title {
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.75rem;
-  color: var(--color-grey-900);
-  margin: 0;
-}
-
-.booking-card__date {
-  margin: var(--spacing-4) 0 0;
-}
-
-/* Nested grid: 8 cols = the schedule's span on desktop (Style.md 0.3). */
-.details {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: var(--spacing-16) var(--grid-desktop-gutter);
-  align-content: start;
-  margin: var(--spacing-16) 0 0;
-  padding-top: var(--spacing-16);
-  border-top: 1px solid var(--color-grey-100);
-}
-
+/* Expanded row details sit in a local 2-col grid (.row__details); mobile collapses it to 1 col. */
 .detail {
-  grid-column: span 8;
   min-width: 0;
-}
-
-.detail--half {
-  grid-column: span 4;
-}
-
-@media (max-width: 1024px) {
-  .details {
-    grid-template-columns: repeat(6, 1fr);
-  }
-
-  .detail {
-    grid-column: span 6;
-  }
-
-  .detail--half {
-    grid-column: span 3;
-  }
-}
-
-@media (max-width: 640px) {
-  .details {
-    grid-template-columns: repeat(4, 1fr);
-    column-gap: var(--grid-mobile-gutter);
-  }
-
-  .detail,
-  .detail--half {
-    grid-column: span 4;
-  }
 }
 
 .detail__label {
@@ -1024,18 +1127,19 @@ onMounted(async () => {
   gap: var(--spacing-16);
 }
 
-/* "Add new venue" and "Edit venue" side by side, with "Block out time" and "Go to booking requests" beneath them. */
 .header-actions {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
   gap: var(--spacing-8);
 }
 
+/* Add new venue, Edit venue and Block out time sit on one line (they wrap only when the screen is too narrow). */
 .venue-actions,
 .main-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-8);
 }
 
@@ -1049,7 +1153,6 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   gap: var(--spacing-4);
-  width: 100%;
 }
 
 .edit-menu__chevron {
@@ -1140,31 +1243,6 @@ onMounted(async () => {
   color: var(--color-grey-500);
 }
 
-/* Four keys no longer fit on one line in the sidebar. */
-.legend {
-  flex-wrap: wrap;
-  row-gap: var(--spacing-8);
-}
-
-/* Style.md 3.5: the calendar's unavailable markers (lock chip, orange bar), as legend keys. */
-.legend__lock {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--spacing-20);
-  height: var(--spacing-20);
-  border-radius: var(--radius-full);
-  background: var(--color-grey-100);
-  color: var(--color-grey-600);
-}
-
-.legend__bar {
-  width: var(--spacing-16);
-  height: var(--spacing-2);
-  border-radius: var(--radius-xs);
-  background: var(--color-warning-800);
-}
-
 .notice {
   margin: 0 0 var(--spacing-16);
   padding: var(--spacing-12) var(--spacing-16);
@@ -1182,8 +1260,60 @@ onMounted(async () => {
   color: var(--color-warning-900);
 }
 
+.schedule__body {
+  display: grid;
+  /* About 70/30: the bulletin gets room for its notes, the schedule keeps most of the width. */
+  grid-template-columns: minmax(0, 7fr) minmax(18rem, 3fr);
+  gap: var(--spacing-24);
+  align-items: start;
+}
+
+.schedule__main {
+  min-width: 0;
+}
+
+.overdue-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  margin-bottom: var(--spacing-8);
+  font-size: 0.875rem;
+  color: var(--color-grey-700);
+  cursor: pointer;
+}
+
+.overdue-toggle input {
+  accent-color: var(--color-purple-600);
+}
+
+/* Both columns scroll at the same height, so the bulletin and the list stay level. */
+.schedule__scroll,
 .block-list {
-  margin-bottom: var(--spacing-16);
+  max-height: 34rem;
+  overflow-y: auto;
+}
+
+/* The bulletin keeps its own height so a long list of block-outs scrolls instead of pushing the page. */
+.schedule__aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-12);
+  min-width: 0;
+}
+
+.aside__title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 2rem;
+  color: var(--color-grey-900);
+}
+
+@media (max-width: 1024px) {
+  .schedule__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
 }
 
 /* Style.md 3.5: Replacement Required badge. */

@@ -237,6 +237,21 @@ describe("GET /api/venues/unavailability (AC1)", () => {
     expect(periodsQuery.gte).toHaveBeenCalledWith("end_date", "2026-10-01");
   });
 
+  it("returns every period at the venue when no range is given", async () => {
+    const { app, periodsQuery } = buildApp({
+      periods: [
+        { id: 1, venue_id: 6, start_date: "2025-01-02", end_date: "2025-01-03", all_day: true, start_time: null, end_time: null, reason: "Old" },
+      ],
+    });
+
+    const res = await request(app).get("/api/venues/unavailability?venueId=6");
+
+    expect(res.status).toBe(200);
+    expect(res.body.periods).toHaveLength(1);
+    expect(periodsQuery.lte).not.toHaveBeenCalled();
+    expect(periodsQuery.gte).not.toHaveBeenCalled();
+  });
+
   it("returns 400 for a missing venue or a range over six weeks", async () => {
     const { app } = buildApp();
 

@@ -174,6 +174,23 @@ describe("GET /api/venues/staff/:venueId/bookings", () => {
     );
   });
 
+  it("returns every booking, whatever its date, when no range is given", async () => {
+    const { app } = buildApp({ bookings: [eventBooking], events: [eventInfo] });
+
+    const res = await getBookings(app, "");
+
+    expect(res.status).toBe(200);
+    expect(res.body.bookings.map((b: { id: number }) => b.id)).toEqual([1]);
+  });
+
+  it("returns 400 when only one end of the range is given", async () => {
+    const { app } = buildApp({ bookings: [eventBooking], events: [eventInfo] });
+
+    const res = await getBookings(app, "?from=2026-09-01");
+
+    expect(res.status).toBe(400);
+  });
+
   it("never passes the organiser's free text or other event fields to the browser", async () => {
     const leaky = { ...eventInfo, purpose: "Internal planning notes", description: "Roster attached" };
     const { app } = buildApp({ bookings: [eventBooking], events: [leaky] });
