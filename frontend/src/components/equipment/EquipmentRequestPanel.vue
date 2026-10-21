@@ -17,6 +17,8 @@
  * at by parsing it.
  */
 import AppButton from "../ui/AppButton.vue";
+import DataTable from "../ui/DataTable.vue";
+import { PlusIcon } from "@heroicons/vue/20/solid";
 import { computed, onMounted, reactive, ref } from "vue";
 import {
   CANCELLED_REQUEST_STATUS,
@@ -72,6 +74,17 @@ const sortedRequests = computed(() => [
   ...requests.value.filter((r) => r.status !== CANCELLED_REQUEST_STATUS),
   ...requests.value.filter((r) => r.status === CANCELLED_REQUEST_STATUS),
 ]);
+
+/**
+ * One table per request: the equipment component, how many were asked for and how many Technical Support have
+ * reserved. The request has a single status, shown once in its header rather than as a column.
+ */
+const ITEM_COLUMNS = [
+  { key: "equipment", label: "Equipment" },
+  { key: "quantity", label: "Quantity" },
+  { key: "reserved", label: "Reserved" },
+];
+const ITEM_COLUMN_WIDTHS = "minmax(0, 3fr) minmax(0, 1fr) minmax(0, 1fr)";
 
 function isCancelled(r: EquipmentRequest): boolean {
   return r.status === CANCELLED_REQUEST_STATUS;
@@ -333,17 +346,30 @@ function statusBadgeClass(status: string): string {
           <p v-if="r.fulfillmentNote && !isCancelled(r)" class="body-small muted eq-outstanding">Outstanding: {{ r.fulfillmentNote }}</p>
 
           <template v-if="amendingId !== r.id">
-            <ul class="eq-items">
-              <li v-for="item in r.items" :key="item.id" class="body-small">
-                <strong>{{ item.quantity }}&times; {{ item.equipmentType }}</strong>
-                <span v-if="item.quantityFulfilled > 0 && !isCancelled(r)" class="muted">
-                  · {{ item.quantityFulfilled }} reserved</span>
-                <!-- E5-5 / E5-6 AC3: the reservation no longer holds (e.g. a reserved unit is now unusable). -->
-                <p v-if="item.reservationFlag?.flagged && !isCancelled(r)" class="eq-flag" data-testid="reservation-flag" role="alert">
-                  {{ item.reservationFlag.reason }}
-                </p>
-              </li>
-            </ul>
+            <div class="eq-items">
+              <DataTable
+                :columns="ITEM_COLUMNS"
+                :column-widths="ITEM_COLUMN_WIDTHS"
+                :rows="r.items"
+                :row-key="(item) => item.id"
+              >
+                <template #cell-equipment="{ row }">
+                  <span class="eq-equipment">
+                    <strong class="eq-equipment__name">{{ row.equipmentType }}</strong>
+                    <!-- E5-5 / E5-6 AC3: the reservation no longer holds (e.g. a reserved unit is now unusable). -->
+                    <span v-if="row.reservationFlag?.flagged && !isCancelled(r)" class="eq-flag" data-testid="reservation-flag"
+                      role="alert">
+                      {{ row.reservationFlag.reason }}
+                    </span>
+                  </span>
+                </template>
+                <template #cell-quantity="{ row }">{{ row.quantity }}</template>
+                <template #cell-reserved="{ row }">
+                  <template v-if="isCancelled(r)">&mdash;</template>
+                  <template v-else>{{ row.quantityFulfilled }} of {{ row.quantity }}</template>
+                </template>
+              </DataTable>
+            </div>
 
             <div v-if="canAmend(r) || canCancel(r)" class="eq-request__actions">
               <AppButton v-if="canAmend(r)" variant="outline" size="sm" type="button" data-testid="amend-request" @click="startAmend(r)">
@@ -417,8 +443,10 @@ function statusBadgeClass(status: string): string {
       </p>
 
       <div v-if="canSubmit" class="eq-action">
-        <AppButton variant="outline" v-if="!formOpen" type="button" @click="openForm">
-          Record equipment requirements
+        <AppButton v-if="!formOpen" variant="ghost" type="button" class="eq-new-request" data-testid="request-new-equipment"
+          @click="openForm">
+          <PlusIcon class="eq-new-request__plus" aria-hidden="true" />
+          Add Equipment Request
         </AppButton>
 
         <div v-else class="eq-form">
@@ -551,6 +579,7 @@ function statusBadgeClass(status: string): string {
 .eq-request--cancelled .eq-items,
 .eq-request--cancelled .eq-items strong {
   color: var(--color-grey-500);
+  opacity: 0.8;
 }
 
 .eq-request__header {
@@ -620,18 +649,45 @@ function statusBadgeClass(status: string): string {
   color: var(--color-warning-900);
 }
 
+/* The request's table (shared DataTable); the flag message sits under the item's name in its cell. */
 .eq-items {
-  margin: 0;
-  padding-left: var(--spacing-16);
+  margin-top: var(--spacing-8);
+}
+
+.eq-equipment {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.eq-equipment__name {
+  font-weight: 700;
 }
 
 .eq-action {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-8);
+}
+
+/* Same ghost button as "Request another venue": + icon, no horizontal padding, 5px in from the card edge, and only the text darkens on hover. */
+.eq-action .eq-new-request {
+  align-self: flex-start;
+  padding-left: 0;
+  padding-right: 0;
+  margin-left: 5px;
+}
+
+.eq-action .eq-new-request:hover:not(:disabled):not(.btn--disabled) {
+  background: transparent;
+  color: var(--color-purple-700);
+}
+
+.eq-new-request__plus {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
 }
 
 .eq-form {

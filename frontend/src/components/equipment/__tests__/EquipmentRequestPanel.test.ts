@@ -79,7 +79,9 @@ describe("EquipmentRequestPanel — cancelled requests (E5-2)", () => {
     expect(cancelled.find(".badge").text()).toBe("Cancelled");
     expect(cancelled.find(".badge").classes()).toContain("status-cancelled");
     expect(cancelled.findAll("button")).toHaveLength(0);
-    expect(cancelled.text()).not.toContain("reserved");
+    // Nothing is reserved against a cancelled request, so the Reserved column shows a dash.
+    expect(cancelled.findAll(".row-item .cell:nth-child(3)").every((cell) => cell.text() === "—")).toBe(true);
+    expect(cancelled.text()).not.toMatch(/\d+ of \d+/);
   });
 
   it("pushes cancelled requests below the active ones, keeping each group's own order", async () => {
@@ -219,7 +221,8 @@ describe("EquipmentRequestPanel — amend (E5-2 AC1, AC2)", () => {
     ]);
     expect(wrapper.emitted("changed")).toHaveLength(1);
     expect(wrapper.find("[data-testid='amend-form']").exists()).toBe(false);
-    expect(wrapper.find(".eq-items").text()).toContain("2× Projector");
+    expect(wrapper.find(".eq-items .row-item").text()).toContain("Projector");
+    expect(wrapper.find(".eq-items .row-item").text()).toContain("2");
     expect(wrapper.find("[role='status']").text()).toBe(
       "Equipment request amended. Technical Support has been notified of what changed. 1 reserved item was released back to inventory.",
     );
@@ -373,3 +376,87 @@ describe("EquipmentRequestPanel — cancel (E5-2 AC3)", () => {
     expect(card(wrapper, 55).find(".badge").text()).toBe("Partially Fulfilled");
   });
 });
+
+describe("EquipmentRequestPanel — one table per request", () => {
+  const items = [
+    { id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 1, reservationFlag: NO_FLAG },
+    { id: 2, equipmentCatalogId: 2, equipmentType: "Screen", quantity: 1, quantityFulfilled: 1, reservationFlag: NO_FLAG },
+  ];
+  const rowCells = (row: { findAll: (s: string) => { text: () => string }[] }) => row.findAll(".cell").map((c) => c.text());
+
+  it("lists each component with its quantity and how much is reserved, one table for the request", async () => {
+    const wrapper = await mountPanel([equipmentRequest({ status: "Partially Fulfilled", items })]);
+
+    const table = card(wrapper, 55).get(".eq-items");
+    expect(table.findAll(".cell-header").map((h) => h.text())).toEqual(["Equipment", "Quantity", "Reserved"]);
+    const rows = table.findAll(".row-item");
+    expect(rows.map(rowCells)).toEqual([
+      ["Projector", "2", "1 of 2"],
+      ["Screen", "1", "1 of 1"],
+    ]);
+  });
+
+  it("gives every request its own table and shows its single status once, in the header", async () => {
+    const wrapper = await mountPanel([
+      equipmentRequest({ id: 55, status: "Partially Fulfilled", items }),
+      equipmentRequest({ id: 56, status: "Arranged", fulfillmentNote: null, items: [items[1]] }),
+    ]);
+
+    expect(wrapper.findAll(".eq-items")).toHaveLength(2);
+    for (const [id, status] of [[55, "Partially Fulfilled"], [56, "Arranged"]] as const) {
+      const request = card(wrapper, id);
+      expect(request.findAll(".badge")).toHaveLength(1);
+      expect(request.get(".badge").text()).toBe(status);
+      // The status is not a column of the table.
+      expect(request.get(".eq-items").text()).not.toContain(status);
+    }
+  });
+
+  it("puts a reservation warning inside the flagged item's row, under its name", async () => {
+    const flagged = [
+      { ...items[0], reservationFlag: { flagged: true, reason: "A reserved unit is unavailable." } },
+      items[1],
+    ];
+    const wrapper = await mountPanel([equipmentRequest({ items: flagged })]);
+
+    const [first, second] = wrapper.findAll(".eq-items .row-item");
+    expect(first.get("[data-testid='reservation-flag']").text()).toBe("A reserved unit is unavailable.");
+    expect(second.find("[data-testid='reservation-flag']").exists()).toBe(false);
+  });
+
+  it("replaces the table with the form while a request is being amended", async () => {
+    const wrapper = await mountPanel([equipmentRequest({ items })]);
+    await wrapper.get("[data-testid='amend-request']").trigger("click");
+
+    expect(wrapper.find(".eq-items").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='amend-form']").exists()).toBe(true);
+  });
+});
+
+describe("EquipmentRequestPanel — Add Equipment Request button", () => {
+  it("is a ghost button with a plus icon, labelled Add Equipment Request, like the Add Venue Request button", async () => {
+    const wrapper = await mountPanel([equipmentRequest()]);
+    const button = wrapper.get("[data-testid='request-new-equipment']");
+
+    expect(button.text()).toBe("Add Equipment Request");
+    expect(button.classes()).toContain("btn--ghost");
+    expect(button.element.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+    expect(button.get("svg").classes()).toContain("eq-new-request__plus");
+    expect(wrapper.text()).not.toContain("Record equipment requirements");
+  });
+
+  it("opens the request form when clicked, and hides itself while the form is open", async () => {
+    const wrapper = await mountPanel([equipmentRequest()]);
+
+    await wrapper.get("[data-testid='request-new-equipment']").trigger("click");
+
+    expect(wrapper.find("[data-testid='request-new-equipment']").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Submit request");
+  });
+
+  it("is only offered to someone who may submit requests", async () => {
+    const wrapper = await mountPanel([equipmentRequest()], false);
+    expect(wrapper.find("[data-testid='request-new-equipment']").exists()).toBe(false);
+  });
+});
+

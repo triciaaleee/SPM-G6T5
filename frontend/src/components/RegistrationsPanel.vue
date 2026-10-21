@@ -2,18 +2,19 @@
 /**
  * E3-5 AC3 / E6-5: the event's registrations, read-only, for the owning
  * organiser and coordinators — so a Completed event's attendee list stays
- * viewable. The top shows the registered count against capacity and a
- * Registered / Withdrawn breakdown (a Cancelled registration means the
- * organiser cancelled the event, which they already know, so it isn't
- * counted). The roster lists everyone, those still attending first;
- * withdrawn and cancelled ones stay as part of the record.
+ * viewable. A title and the registered count against capacity (with the places
+ * left), then two tables behind a tab switch: Registered (the default) and
+ * Withdrawn. A Cancelled registration means the organiser cancelled the whole
+ * event, which they already know, so it isn't counted as registered; it is
+ * listed under Withdrawn, with its own badge, so the record stays complete.
  *
- * Column mapping: its own card in the event detail page's main column (the
- * 2fr of its 2fr/1fr desktop grid, full width once that collapses), like
- * the Venue Requests card. The list inside is a single column at every
- * breakpoint.
+ * Column mapping: the content of the event detail page's Registrations tab,
+ * full width (col 1-12 desktop, 1-6 tablet, 1-4 mobile), with no card behind it.
+ * The tables are the shared DataTable; narrow screens drop the "Registered on"
+ * column.
  */
 import { computed, onMounted, ref } from "vue";
+import DataTable from "./ui/DataTable.vue";
 import { fetchEventRegistrations, type EventRegistration } from "../lib/registrationApi";
 import { registrationBadgeClass } from "../lib/registrationStatus";
 
@@ -23,26 +24,46 @@ const props = defineProps<{
   capacity?: number | null;
 }>();
 
+/** Tells the event page how many are registered, for the tab label. */
+const emit = defineEmits<{ loaded: [registeredCount: number] }>();
+
+const COLUMNS = [
+  { key: "name", label: "Name" },
+  { key: "registeredOn", label: "Registered on", hideOnNarrow: true },
+  { key: "status", label: "Status" },
+];
+const COLUMN_WIDTHS = "minmax(0, 3fr) minmax(0, 2fr) 8rem";
+
+type RosterTab = "registered" | "withdrawn";
+const activeTab = ref<RosterTab>("registered");
+
 const registrations = ref<EventRegistration[]>([]);
 const loading = ref(true);
 const loadError = ref<string | null>(null);
 
-const registeredCount = computed(() => registrations.value.filter((r) => r.status === "Registered").length);
-const withdrawnCount = computed(() => registrations.value.filter((r) => r.status === "Withdrawn").length);
+const registered = computed(() => registrations.value.filter((r) => r.status === "Registered"));
+// Withdrawn first, then cancelled; oldest first within each (the sort is stable).
+const withdrawn = computed(() =>
+  registrations.value
+    .filter((r) => r.status !== "Registered")
+    .sort((a, b) => Number(a.status === "Cancelled") - Number(b.status === "Cancelled")),
+);
+const registeredCount = computed(() => registered.value.length);
+
+const tabs = computed(() => [
+  { key: "registered" as const, label: `Registered (${registered.value.length})` },
+  { key: "withdrawn" as const, label: `Withdrawn (${withdrawn.value.length})` },
+]);
+
+const rows = computed(() => (activeTab.value === "registered" ? registered.value : withdrawn.value));
+const emptyMessage = computed(() =>
+  activeTab.value === "registered" ? "No one is registered yet." : "No one has withdrawn.",
+);
 
 const cap = computed(() =>
   typeof props.capacity === "number" && Number.isInteger(props.capacity) && props.capacity > 0 ? props.capacity : null,
 );
 const placesLeft = computed(() => (cap.value === null ? null : Math.max(0, cap.value - registeredCount.value)));
-const fillPercent = computed(() =>
-  cap.value === null ? 0 : Math.min(100, Math.round((registeredCount.value / cap.value) * 100)),
-);
-
-// Still attending first, then withdrawn, then cancelled; oldest first within each (the sort is stable).
-const STATUS_ORDER: Record<string, number> = { Registered: 0, Withdrawn: 1, Cancelled: 2 };
-const roster = computed(() =>
-  [...registrations.value].sort((a, b) => (STATUS_ORDER[a.status] ?? 3) - (STATUS_ORDER[b.status] ?? 3)),
-);
 
 function formatMoment(value: string): string {
   const at = new Date(value);
@@ -53,6 +74,7 @@ function formatMoment(value: string): string {
 onMounted(async () => {
   try {
     registrations.value = await fetchEventRegistrations(props.eventId);
+    emit("loaded", registeredCount.value);
   } catch {
     loadError.value = "We couldn't load the registrations for this event.";
   } finally {
@@ -62,59 +84,69 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="details-card registrations">
-    <h2 class="section-title">Registrations</h2>
+  <section class="registrations">
+    <div class="registrations__header">
+      <h2 class="section-title">Registrations</h2>
+      <div v-if="!loading && !loadError" class="view-toggle" role="group" aria-label="Show registrations">
+        <button v-for="tab in tabs" :key="tab.key" type="button" class="toggle-btn"
+          :class="{ 'toggle-btn--active': activeTab === tab.key }" :aria-pressed="activeTab === tab.key"
+          @click="activeTab = tab.key">
+          {{ tab.label }}
+        </button>
+      </div>
+    </div>
     <p v-if="loading" class="body-default muted">Loading registrations…</p>
     <p v-else-if="loadError" class="body-default error-text">{{ loadError }}</p>
-    <p v-else-if="registrations.length === 0" class="body-default muted">No one has registered for this event.</p>
     <template v-else>
       <div class="summary">
         <p class="summary__count" data-testid="registered-count">
           <template v-if="cap !== null">{{ registeredCount }} of {{ cap }} registered</template>
           <template v-else>{{ registeredCount }} registered</template>
         </p>
-        <template v-if="cap !== null">
-          <div class="meter" role="progressbar" aria-label="Registered places" :aria-valuenow="registeredCount"
-            aria-valuemin="0" :aria-valuemax="cap">
-            <div class="meter__fill" :style="{ width: `${fillPercent}%` }" />
-          </div>
-          <p class="body-small muted" data-testid="places-left">
-            {{ placesLeft === 0 ? "Full" : `${placesLeft} ${placesLeft === 1 ? "place" : "places"} left` }}
-          </p>
-        </template>
-        <div class="breakdown" aria-label="Breakdown by status" data-testid="breakdown">
-          <span class="badge status-success">Registered {{ registeredCount }}</span>
-          <span class="badge status-warning">Withdrawn {{ withdrawnCount }}</span>
-        </div>
+        <p v-if="cap !== null" class="body-small muted" data-testid="places-left">
+          {{ placesLeft === 0 ? "Full" : `${placesLeft} ${placesLeft === 1 ? "place" : "places"} left` }}
+        </p>
       </div>
-      <ul class="registration-list">
-        <li v-for="registration in roster" :key="registration.registrationId" class="registration-row"
-          :class="{ 'registration-row--inactive': registration.status !== 'Registered' }">
-          <div>
-            <p class="body-default registration-name">{{ registration.name ?? registration.userId }}</p>
-            <p class="body-small muted">Registered {{ formatMoment(registration.createdAt) }}</p>
-          </div>
-          <span class="badge" :class="registrationBadgeClass(registration.status)">{{ registration.status }}</span>
-        </li>
-      </ul>
+
+      <p v-if="rows.length === 0" class="body-default muted empty">{{ emptyMessage }}</p>
+      <DataTable
+        v-else
+        :columns="COLUMNS"
+        :column-widths="COLUMN_WIDTHS"
+        :rows="rows"
+        :row-key="(registration) => registration.registrationId"
+      >
+        <template #cell-name="{ row }">
+          <span class="registration-name" :class="{ 'registration-name--inactive': row.status !== 'Registered' }">
+            {{ row.name ?? row.userId }}
+          </span>
+        </template>
+        <template #cell-registeredOn="{ row }">{{ formatMoment(row.createdAt) }}</template>
+        <template #cell-status="{ row }">
+          <span class="badge" :class="registrationBadgeClass(row.status)">{{ row.status }}</span>
+        </template>
+      </DataTable>
     </template>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-/* Same card as VenueRequestsPanel.vue. Style.md 3.3 surfaces, 7 radius, 6.1 spacing. */
-.registrations {
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-32);
+/* Title on the left, the Registered / Withdrawn toggle at the end of the same row. */
+.registrations__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--spacing-16);
+  margin-bottom: var(--spacing-16);
 }
 
 .section-title {
-  font-size: 1.125rem;
+  font-size: 24px;
   font-weight: 700;
+  line-height: 1.75rem;
   color: var(--color-grey-900);
-  margin-bottom: var(--spacing-16);
+  margin: 0;
 }
 
 .body-default {
@@ -123,7 +155,7 @@ onMounted(async () => {
 }
 
 .body-small {
-  font-size: 0.75rem;
+  font-size: 14px;
 }
 
 .muted {
@@ -134,19 +166,22 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
+.empty {
+  margin: 0;
+}
+
 .summary {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-8);
-  margin-bottom: var(--spacing-16);
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-24);
 }
 
 /* Subheading, bold */
 .summary__count {
   margin: 0;
-  font-size: 1.125rem;
-  line-height: 1.375rem;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 400;
   color: var(--color-grey-900);
 }
 
@@ -154,57 +189,55 @@ onMounted(async () => {
   margin: 0;
 }
 
-/* Purple Primary fill on a Grey/100 track. */
-.meter {
-  height: var(--spacing-8);
-  background: var(--color-grey-100);
-  border-radius: var(--radius-full);
+/* Segmented toggle, as on the coordinator page before it was split — in Secondary Blue (Style.md 2.8). */
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-xs);
   overflow: hidden;
 }
 
-.meter__fill {
-  height: 100%;
-  background: var(--color-purple-600);
-  border-radius: var(--radius-full);
-}
-
-.breakdown {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-8);
-}
-
-/* Withdrawn and cancelled rows read as no longer attending. */
-.registration-row--inactive {
-  background: var(--color-grey-25);
-}
-
-.registration-row--inactive .registration-name {
-  color: var(--color-grey-500);
-}
-
-.registration-list {
-  display: grid;
-  gap: var(--spacing-12);
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.registration-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--spacing-16);
+.toggle-btn {
+  appearance: none;
   background: var(--color-base-white);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-16);
+  border: none;
+  border-right: 1px solid var(--color-grey-200);
+  cursor: pointer;
+  padding: var(--spacing-8) var(--spacing-16);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-grey-600);
+  transition: background 0.1s, color 0.1s;
 }
 
+.toggle-btn:last-child {
+  border-right: none;
+}
+
+.toggle-btn:hover:not(.toggle-btn--active) {
+  background: var(--color-grey-50);
+  color: var(--color-grey-900);
+}
+
+.toggle-btn:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: -2px;
+}
+
+.toggle-btn--active {
+  background: var(--color-blue-600);
+  color: var(--color-base-white);
+}
+
+/* Withdrawn and cancelled people read as no longer attending. */
 .registration-name {
   font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+.registration-name--inactive {
+  color: var(--color-grey-500);
 }
 
 /* Registration badge colours, as in AttendeeEventsView.vue (Style.md 2.6/2.7). */

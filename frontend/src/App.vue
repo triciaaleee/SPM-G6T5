@@ -28,8 +28,18 @@ const NAV_TABS: Record<string, { name: string; label: string; alsoActiveOn?: str
     { name: "attendee-discover", label: "Discover events" },
   ],
   coordinator: [
-    { name: "coordinator-workload", label: "Events" },
+    { name: "coordinator-workload", label: "My events" },
+    { name: "all-events", label: "All events" },
     { name: "venue-availability", label: "Venue Availability" },
+  ],
+  coordinator_lead: [
+    // The Lead's other screens (unassigned queue, one coordinator's events) belong to the dashboard.
+    {
+      name: "lead-dashboard",
+      label: "Dashboard",
+      alsoActiveOn: ["lead-unassigned", "lead-coordinator"],
+    },
+    { name: "all-events", label: "All events" },
   ],
   technical_support: [
     // A request's detail page belongs to Requests, so that link stays current while it is open.

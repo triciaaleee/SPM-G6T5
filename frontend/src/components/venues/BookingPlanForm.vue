@@ -136,8 +136,8 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
     </div>
 
     <div v-else class="field">
-      <span class="field__label" id="plan-purpose-label">Purpose</span>
-      <p class="field__hint">Another venue for part of the event — size it for its own session.</p>
+      <span class="field__label" id="plan-purpose-label">What is this venue for?</span>
+      <p class="field__hint">Another venue for part of the event. Size it for its own session.</p>
       <div class="chips" role="group" aria-labelledby="plan-purpose-label">
         <button v-for="purpose in SESSION_PURPOSES" :key="purpose" type="button" class="chip"
           :class="{ 'chip--selected': form.purpose === purpose }" :aria-pressed="form.purpose === purpose"
@@ -157,7 +157,7 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
       <span class="field__label">Headcount</span>
       <span class="headcount">
         <input v-model="form.headcount" type="text" inputmode="numeric" class="input headcount__input"
-          :placeholder="attendance ? `1–${attendance}` : 'e.g. 40'"
+          :placeholder="attendance ? `1 to ${attendance}` : 'e.g. 40'"
           :aria-invalid="touched.headcount && Boolean(errors.headcount)" @blur="touched.headcount = true" />
         <span v-if="attendance !== null" class="body-small muted">of {{ attendance }} expected</span>
       </span>
@@ -198,9 +198,9 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
 .plan {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-12);
-  padding-bottom: var(--spacing-16);
-  margin-bottom: var(--spacing-16);
+  gap: var(--spacing-24);
+  padding-bottom: var(--spacing-24);
+  margin-bottom: var(--spacing-24);
   border-bottom: 1px solid var(--color-grey-100);
 }
 
@@ -241,7 +241,7 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
 .field {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-6);
+  gap: var(--spacing-8);
   min-width: 0;
 }
 
@@ -265,7 +265,7 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
 }
 
 .input {
-  height: 40px;
+  height: 44px;
   padding: 0 var(--spacing-12);
   border: 1px solid var(--color-grey-200);
   border-radius: var(--radius-xs);
@@ -297,30 +297,35 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
 }
 
 .headcount__input {
-  width: 96px;
+  width: 120px;
 }
 
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-6);
+  gap: var(--spacing-8);
 }
 
+/* Same corner radius as the app's buttons (--radius-xs), at a comfortable touch size. */
 .chip {
-  padding: var(--spacing-4) var(--spacing-12);
+  min-height: 40px;
+  padding: 0 var(--spacing-16);
   border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs);
   background: var(--color-base-white);
   color: var(--color-grey-700);
   font-family: var(--font-family-lato);
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   font-weight: 700;
-  line-height: 1rem;
+  line-height: 1.125rem;
   cursor: pointer;
 }
 
 .chip--small {
+  min-height: 0;
   padding: var(--spacing-2) var(--spacing-8);
+  font-size: 0.75rem;
+  line-height: 1rem;
 }
 
 .chip:hover {
@@ -349,7 +354,7 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
 .needs__group {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
+  gap: var(--spacing-8);
 }
 
 /* Ghost purple, Style.md 3.4 — lowest-emphasis action. */
