@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { chatRouter } from "../routes/chatMessages.js";
 import { validateMessageBody } from "../lib/validateChatMessage.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
   return {
@@ -49,7 +50,7 @@ function buildApp(
     insertError?: boolean;
     eventsListStatus?: number;
     eventsList?: Record<string, unknown>[];
-    notificationsStatus?: number;
+    notificationsFail?: boolean;
   } = {},
 ) {
   const messagesSelect = query({ data: options.messages ?? [], error: null });
@@ -94,10 +95,6 @@ function buildApp(
       if (!(status < 300)) return { ok: false, status, json: async () => ({}) };
       return { ok: true, status, json: async () => ({ events: options.eventsList ?? [] }) };
     }
-    if (url.includes("/api/notifications")) {
-      const status = options.notificationsStatus ?? 201;
-      return { ok: status < 300, status, json: async () => ({}) };
-    }
     return { ok: false, status: 404, json: async () => ({}) };
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -105,10 +102,13 @@ function buildApp(
   (globalThis as any).__mockSupabase = supabase;
   (globalThis as any).__mockUser = options.user ?? organiser;
 
+  const publish = vi.fn().mockResolvedValue(!options.notificationsFail);
+  setPublisherForTest({ publish });
+
   const app = express();
   app.use(express.json());
   app.use("/api/chat", chatRouter);
-  return { app, supabase, messagesInsert, messagesUpdate, fetchMock };
+  return { app, supabase, messagesInsert, messagesUpdate, fetchMock, publish };
 }
 
 afterEach(() => {
@@ -240,7 +240,7 @@ describe("POST /api/chat/:eventId/messages", () => {
   });
 
   it("records the message and notifies the assigned coordinator when the organiser sends", async () => {
-    const { app, messagesInsert, fetchMock } = buildApp();
+    const { app, messagesInsert, publish } = buildApp();
     const res = await request(app)
       .post("/api/chat/7/messages")
       .set("Authorization", "Bearer token123")
@@ -256,24 +256,28 @@ describe("POST /api/chat/:eventId/messages", () => {
     expect(res.body.message).toMatchObject({ senderId: "ORG-0001", senderRole: "organiser", mine: true });
     expect(res.body.notified).toBe(true);
 
-    const notifyCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/notifications"));
-    expect(notifyCall).toBeDefined();
-    const sentBody = JSON.parse((notifyCall![1] as RequestInit).body as string);
-    expect(sentBody.notifications[0]).toMatchObject({ recipientId: "COORD-0001", type: "chat_message" });
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message.sent",
+        eventId: 7,
+        actorId: "ORG-0001",
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+      }),
+    );
   });
 
   it("notifies the organiser when the coordinator sends", async () => {
-    const { app, fetchMock } = buildApp({ user: coordinator, insertedMessage: { id: 901, event_id: 7, sender_id: "COORD-0001", sender_role: "coordinator", body: "Setup is at 9am", read_at: null, created_at: "2026-01-01T00:00:00Z" } });
+    const { app, publish } = buildApp({ user: coordinator, insertedMessage: { id: 901, event_id: 7, sender_id: "COORD-0001", sender_role: "coordinator", body: "Setup is at 9am", read_at: null, created_at: "2026-01-01T00:00:00Z" } });
     const res = await request(app).post("/api/chat/7/messages").send({ body: "Setup is at 9am" });
 
     expect(res.status).toBe(201);
-    const notifyCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/notifications"));
-    const sentBody = JSON.parse((notifyCall![1] as RequestInit).body as string);
-    expect(sentBody.notifications[0]).toMatchObject({ recipientId: "ORG-0001", type: "chat_message" });
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ recipients: { userIds: ["ORG-0001"], roles: [] } }),
+    );
   });
 
   it("reports notified:false when notification-service fails, without failing the send", async () => {
-    const { app } = buildApp({ notificationsStatus: 500 });
+    const { app } = buildApp({ notificationsFail: true });
     const res = await request(app).post("/api/chat/7/messages").send({ body: "Hello" });
     expect(res.status).toBe(201);
     expect(res.body.notified).toBe(false);
