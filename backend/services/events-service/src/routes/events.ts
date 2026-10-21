@@ -9,6 +9,7 @@ import { diffSubmittedDetails, diffSubmittedDetailsStructured } from "../lib/dif
 import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
 import { committedFieldValue, validateChangeRequestFields, withHeldValues } from "../lib/changeRequestFields.js";
 import { AUTO_APPLIED_REASON_PREFIX, CHANGE_REQUEST_STATUS } from "../lib/changeRequestStatus.js";
+import { publishDurably } from "../lib/outbox.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
 import {
@@ -1233,7 +1234,10 @@ eventsRouter.post("/:id/cancel", async (req: AuthedRequest, res) => {
   // RabbitMQ.md #14: the organiser's own confirmation, and whoever is
   // notified with the reason — the assigned coordinator, or every Lead if
   // nobody is assigned yet.
-  const published = await getPublisher().publish({
+  // Other services act on this message (they release the event's bookings,
+  // reservations and registrations), so it goes through the outbox and is
+  // retried until the broker confirms it.
+  const published = await publishDurably(supabase, {
     type: "event.cancelled",
     eventId: existing.id,
     actorId: user.id,

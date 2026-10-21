@@ -29,6 +29,7 @@ function buildApp(
     updateConflict?: boolean;
     historyError?: boolean;
     notificationsFail?: boolean;
+    outboxError?: boolean;
   } = {},
 ) {
   const event =
@@ -73,11 +74,28 @@ function buildApp(
     .mockResolvedValue(options.historyError ? { error: { message: "boom" } } : { error: null });
   const denialInsert = vi.fn().mockResolvedValue({ error: null });
 
+  // The outbox echoes back what was inserted, plus the id and message_id the database would add.
+  const outboxInsert = vi.fn((row: Record<string, unknown>) => ({
+    select: () => ({
+      single: vi.fn().mockResolvedValue(
+        options.outboxError
+          ? { data: null, error: { message: "boom" } }
+          : {
+              data: { id: 1, message_id: "11111111-1111-1111-1111-111111111111", occurred_at: "2026-01-01T00:00:00Z", ...row },
+              error: null,
+            },
+      ),
+    }),
+  }));
+  const outboxMarkPublished = vi.fn().mockResolvedValue({ error: null });
+  const outboxUpdate = vi.fn(() => ({ eq: outboxMarkPublished }));
+
   (globalThis as any).__mockSupabase = {
     from: vi.fn((table: string) => {
       if (table === "events") return { select: eventsSelect, update };
       if (table === "event_history") return { insert: historyInsert };
       if (table === "access_denials") return { insert: denialInsert };
+      if (table === "event_outbox") return { insert: outboxInsert, update: outboxUpdate };
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -89,7 +107,7 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/events", eventsRouter);
-  return { app, update, updateEqId, updateEqStatus, historyInsert, denialInsert, publish };
+  return { app, update, updateEqId, updateEqStatus, historyInsert, denialInsert, publish, outboxInsert, outboxUpdate, outboxMarkPublished };
 }
 
 function cancel(app: express.Express, id: number | string = 7, body: unknown = { reason: "Venue flooded" }) {
@@ -199,11 +217,52 @@ describe("POST /api/events/:id/cancel (E3-6)", () => {
     expect((await cancel(app)).status).toBe(409);
   });
 
-  it("still returns the cancelled event when notifications fail", async () => {
-    const { app } = buildApp({ notificationsFail: true });
+  it("stores event.cancelled in the outbox, publishes it with the stored message id, then marks it published", async () => {
+    const { app, outboxInsert, publish, outboxUpdate, outboxMarkPublished } = buildApp();
     const res = await cancel(app);
+
+    expect(res.status).toBe(200);
+    expect(outboxInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "event.cancelled",
+        event_id: 7,
+        actor_id: "ORG-0001",
+        recipients: { userIds: ["ORG-0001", "COORD-0001"], roles: [] },
+        data: { eventName: "Spring Gala", reason: "Venue flooded" },
+      }),
+    );
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "event.cancelled", messageId: "11111111-1111-1111-1111-111111111111" }),
+    );
+    expect(outboxUpdate).toHaveBeenCalledWith(expect.objectContaining({ published_at: expect.any(String) }));
+    expect(outboxMarkPublished).toHaveBeenCalledWith("id", 1);
+    expect(res.body.notificationsFailed).toBe(false);
+  });
+
+  it("keeps the message in the outbox for the relay when the broker is down, and doesn't report a failure", async () => {
+    const { app, outboxUpdate } = buildApp({ notificationsFail: true });
+    const res = await cancel(app);
+
     expect(res.status).toBe(200);
     expect(res.body.event.status).toBe("Cancelled");
+    expect(outboxUpdate).not.toHaveBeenCalled();
+    expect(res.body.notificationsFailed).toBe(false);
+  });
+
+  it("falls back to publishing directly when the outbox can't be written", async () => {
+    const { app, publish } = buildApp({ outboxError: true });
+    const res = await cancel(app);
+
+    expect(res.status).toBe(200);
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: "event.cancelled" }));
+    expect(res.body.notificationsFailed).toBe(false);
+  });
+
+  it("reports notificationsFailed only when the outbox is unwritable and the direct publish fails too", async () => {
+    const { app } = buildApp({ outboxError: true, notificationsFail: true });
+    const res = await cancel(app);
+
+    expect(res.status).toBe(200);
     expect(res.body.notificationsFailed).toBe(true);
   });
 });

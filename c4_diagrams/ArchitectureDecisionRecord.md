@@ -18,16 +18,9 @@ Records the significant decisions behind `c1-system-context.dsl`, `c2-containers
 
 The diagrams show the target. Each item below is a gap between the diagrams and the repo, with the work needed to close it.
 
-### 1.1 Notifications go over REST, not through the broker
+### 1.1 Notifications go over REST, not through the broker (closed)
 
-C2 shows every notification trigger published to RabbitMQ (D6). Today venue-service and equipment-service call `POST /api/notifications` directly (`lib/notificationsClient.ts`), and events-service sends none. Closing this means:
-
-- running RabbitMQ locally (`RabbitMQ.md` section 6);
-- adding `RABBITMQ_URL` to `backend/.env.example` and `backend/README.md`;
-- an `amqplib` publisher in each publishing service and a consumer in each consuming service, following section 4;
-- a `message_id` column on notifications so a redelivered message does not create a second feed entry (rule M5).
-
-`POST /api/notifications` can stay while triggers move over one at a time.
+Every service now publishes its notification triggers to RabbitMQ (D6) and notification-service consumes them. The REST route `POST /api/notifications` and each service's `lib/notificationsClient.ts` have been removed; `GET /api/notifications` and the read endpoints remain, because the frontend reads its feed through them.
 
 ### 1.2 The API gateway does not exist yet
 

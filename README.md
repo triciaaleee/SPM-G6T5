@@ -9,7 +9,7 @@ Express/TypeScript microservices:
 - **`services/events-service`** (port 4001) — event CRUD, scoped by role
 - **`services/user-service`** (port 4002) — signup/login, JWT issuance, user records
 - **`services/venue-service`** (port 4003) — venue search/filters and venue recommendations for an event (reads events via events-service's API), venue staff schedule and block-out periods (E4-3)
-- **`services/notification-service`** (port 4004) — in-app notifications: each user's feed, plus a REST endpoint other services call to notify someone (e.g. venue-service telling coordinators a booked venue was blocked out)
+- **`services/notification-service`** (port 4004) — in-app notifications: each user's feed, filled by consuming RabbitMQ messages from the other services (there is no REST endpoint for creating them)
 - **`services/equipment-service`** (port 4005) — equipment requests (E5-1/E5-3/E5-4) and the equipment inventory. Technical Support open one event's requests with `GET /api/equipment-requests/event/:eventId` (the event's name, date, time and venue and the organiser's technical requirements only; 403 when the event has no request), and view and update stock with `GET`/`POST`/`PATCH /api/equipment-catalog`
 - **`services/registration-service`** (port 4007) — attendee registration (E6): register for / withdraw from an event, an attendee's own registrations, an event's roster (organiser/coordinator only), and the attendee-facing event view. Reads event, venue and user data through those services' REST APIs
 
@@ -43,8 +43,6 @@ REGISTRATION_SERVICE_PORT=4007
 
 # Where venue-service reaches events-service (defaults to localhost:EVENTS_SERVICE_PORT)
 EVENTS_SERVICE_URL=http://localhost:4001
-# Where venue-service and events-service reach notification-service (defaults to localhost:NOTIFICATION_SERVICE_PORT)
-NOTIFICATION_SERVICE_URL=http://localhost:4004
 # Where events-service and registration-service reach user-service (defaults to localhost:USER_SERVICE_PORT)
 USER_SERVICE_URL=http://localhost:4002
 # Where registration-service reaches venue-service (defaults to localhost:VENUE_SERVICE_PORT)
@@ -55,7 +53,7 @@ Apply the SQL migrations in `supabase/migrations/` (in numeric order) against yo
 
 ## RabbitMQ (required)
 
-events-service, registration-service, venue-service and equipment-service publish notifications to RabbitMQ (`connectsphere.events` topic exchange), and notification-service consumes them — this is how most in-app notifications are delivered now. **Without it running, those notifications are silently never sent** — the services don't fail, they just log that the broker isn't configured and keep going.
+events-service, registration-service, venue-service, equipment-service and chat-service publish notifications to RabbitMQ (`connectsphere.events` topic exchange), and notification-service consumes them — this is how most in-app notifications are delivered now. **Without it running, those notifications are silently never sent** — the services don't fail, they just log that the broker isn't configured and keep going.
 
 Start it with Docker before running the backend:
 
@@ -77,7 +75,10 @@ Who publishes what:
 - **events-service**: `request.submitted`, `request.edited`, `coordinator.assigned`, `coordinator.reassigned`, `clarification.requested`, `clarification.answered`, `request.decided`, `safety.submitted`/`safety.decided` — migrated off direct REST calls to notification-service's API.
 - **registration-service**: `registration.confirmed`/`registration.withdrawn` — its first notification integration ever, built straight onto the broker (there was no REST path to migrate off).
 - **venue-service**: `booking.requested`, `booking.decided` (on hold/approve/reject/auto-reject), `booking.replacement_required`/`booking.unavailability_clash` (venue marked unavailable), `booking.setup_conflict` (also notifies the venue staff member, not just the affected coordinators), `venue.capacity_reduced`, `hold.expired` and `hold.expiring` — migrated off direct REST. `hold.expiring` is new: a scheduled sweep (`setInterval` in `venue-service/src/index.ts`, every 15 minutes) warns a coordinator `HOLD_EXPIRY_WARNING_HOURS` (12h, `lib/bookingStatus.ts`) before a hold lapses, deduped via `venue_bookings.expiry_warning_sent_at` (migration `0033`). It has no end-user token to forward, so it reads events-service's `venue-booking-info` with an internal token instead (see below).
+- **chat-service**: `chat.message_sent` — notifies the other party on an event's chat thread; migrated off direct REST, and the response's `notified` flag now reports whether the broker publish succeeded.
 - **equipment-service**: `equipment.requested` and `equipment.status_changed` — its first notification integration, migrated straight onto the broker. `equipment.requested` also fixed a boundary violation: it used to query user-service's `users` table directly to find every Technical Support Staff member; now `recipients.roles: ["technical_support"]` lets notification-service resolve that itself.
+
+**Action messages are retried.** `event.cancelled` (which venue, equipment and registration services act on) is stored in events-service's `event_outbox` table (migration `0045`) and republished every 10 seconds until RabbitMQ confirms it, so a broker outage doesn't leave a cancelled event with its bookings still held. Apply the migration before starting events-service. Every other message is still best effort.
 
 ### Service-to-service auth
 

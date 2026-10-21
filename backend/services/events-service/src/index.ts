@@ -3,6 +3,8 @@ import cors from "cors";
 import express from "express";
 import { eventsRouter } from "./routes/events.js";
 import { publicEventsRouter } from "./routes/publicEvents.js";
+import { startOutboxRelay } from "./lib/outbox.js";
+import { supabaseAdmin } from "./lib/supabaseAdmin.js";
 
 /**
  * Fail loudly at boot instead of at the first login. A missing JWT_SECRET
@@ -37,3 +39,6 @@ const port = Number(process.env.EVENTS_SERVICE_PORT ?? 4001);
 app.listen(port, () => {
   console.log(`events-service listening on :${port}`);
 });
+
+// Retries any action message (e.g. event.cancelled) the broker hasn't confirmed yet.
+startOutboxRelay(supabaseAdmin);

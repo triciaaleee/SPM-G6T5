@@ -3,7 +3,6 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
-import { sendNotifications } from "../lib/notificationsClient.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 vi.mock("../middleware/auth.js", async () => {
@@ -21,8 +20,6 @@ vi.mock("../middleware/auth.js", async () => {
   };
   return { requireAuth: applyMock, requireAuthOrInternal: applyMock };
 });
-
-vi.mock("../lib/notificationsClient.js", () => ({ sendNotifications: vi.fn() }));
 
 const publish = vi.fn().mockResolvedValue(true);
 
@@ -347,10 +344,6 @@ function buildSubmitSupabase(options: {
 }
 
 describe("POST /api/events", () => {
-  beforeEach(() => {
-    vi.mocked(sendNotifications).mockReset().mockResolvedValue(true);
-  });
-
   it("creates the request Unassigned with no coordinator (E2-14)", async () => {
     const { from, insert } = buildSubmitSupabase({
       insertedEvent: {
@@ -1342,10 +1335,6 @@ describe("PATCH /api/events/:id (submitting a draft)", () => {
 
     return { from, update };
   }
-
-  beforeEach(() => {
-    vi.mocked(sendNotifications).mockReset().mockResolvedValue(true);
-  });
 
   it("still enforces E2-1 validation when submitting a draft (AC3)", async () => {
     const { from } = buildDraftSubmitSupabase({

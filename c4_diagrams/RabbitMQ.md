@@ -163,6 +163,12 @@ An event with no bookings, equipment or registrations produces only `event.cance
 | `event.cancelled` | registration-service | Cancels registrations, then publishes #35 |
 | `change.decided` | equipment-service | Re-checks reservations when the date, time or duration changed (E5-6 AC3); a reservation that no longer holds is published as `equipment.status_changed` |
 
+### Reliable delivery for `event.cancelled`
+
+The messages above are best effort: if the broker is down when a service publishes, the message is logged and dropped. That is fine for a notification. It is not fine for `event.cancelled`, which three services act on, so events-service stores it in its own `event_outbox` table (migration `0045`) right after the cancellation, publishes it, and retries from a relay (every 10 seconds) until the broker confirms it. The publisher uses a confirm channel, so "published" means the broker accepted the message.
+
+Delivery is at-least-once: a retry reuses the stored `messageId`, so every consumer of `event.cancelled` must be safe to run twice. Today they are (each only matches rows still active). The store is not in the same transaction as the cancellation, so a crash between the two can still lose the message; the window is far smaller than a broker outage.
+
 ## 5. Backlog alignment
 
 Every message above traces to an acceptance criterion or an E7-2 matrix row. The last gaps were closed on 2026-10-10: E7-2 (#62) gained rows for booking withdrawals, cancelled equipment requests, attendee withdrawals and pending bookings hit by unavailability, and E6-4 (#57) gained the withdrawal notification criterion.

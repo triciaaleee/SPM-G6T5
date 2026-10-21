@@ -6,6 +6,10 @@ import { randomUUID } from "node:crypto";
  * (c4_diagrams/RabbitMQ.md section 2).
  */
 export interface OutboundMessage {
+  /** Set by the outbox so a retry reuses the same id and consumers can skip a repeat; otherwise generated. */
+  messageId?: string;
+  /** Likewise kept stable across retries. */
+  occurredAt?: string;
   type: string;
   eventId: number | null;
   actorId: string | null;
@@ -14,21 +18,21 @@ export interface OutboundMessage {
 }
 
 export interface EventPublisher {
-  /** Resolves true on success, false on failure — never rejects (M6: best effort, logged). */
+  /** Resolves true once the broker has confirmed the message, false on failure — never rejects (M6: best effort, logged). */
   publish(msg: OutboundMessage): Promise<boolean>;
 }
 
 const EXCHANGE = "connectsphere.events";
 
 type Connection = Awaited<ReturnType<typeof amqp.connect>>;
-type Channel = Awaited<ReturnType<Connection["createChannel"]>>;
+type Channel = Awaited<ReturnType<Connection["createConfirmChannel"]>>;
 
 /**
  * Lazily connects on the first publish and reuses the channel after that.
- * M3: callers publish only after their own DB write has committed. M6:
- * this is a notification-only message, so a failed publish is logged and
- * swallowed — best effort, the same tolerance the REST path already had
- * (`notificationsFailed` in the response).
+ * M3: callers publish only after their own DB write has committed. M6: a
+ * failed publish is logged and swallowed — best effort, which suits a
+ * notification. A message another service must act on goes through
+ * `lib/outbox.ts` instead, which retries until this resolves true.
  */
 function createRealPublisher(url: string): EventPublisher {
   let channelPromise: Promise<Channel> | undefined;
@@ -37,7 +41,7 @@ function createRealPublisher(url: string): EventPublisher {
     if (!channelPromise) {
       channelPromise = (async () => {
         const connection = await amqp.connect(url);
-        const channel = await connection.createChannel();
+        const channel = await connection.createConfirmChannel();
         await channel.assertExchange(EXCHANGE, "topic", { durable: true });
         return channel;
       })();
@@ -50,16 +54,22 @@ function createRealPublisher(url: string): EventPublisher {
       try {
         const channel = await getChannel();
         const envelope = {
-          messageId: randomUUID(),
+          messageId: msg.messageId ?? randomUUID(),
           type: msg.type,
-          occurredAt: new Date().toISOString(),
+          occurredAt: msg.occurredAt ?? new Date().toISOString(),
           publisher: "events-service",
           actorId: msg.actorId,
           eventId: msg.eventId,
           recipients: msg.recipients,
           data: msg.data,
         };
-        channel.publish(EXCHANGE, msg.type, Buffer.from(JSON.stringify(envelope)), { persistent: true });
+        // A confirm channel: the callback fires once the broker has the message,
+        // so `true` below means it was accepted, not just handed to the client.
+        await new Promise<void>((resolve, reject) => {
+          channel.publish(EXCHANGE, msg.type, Buffer.from(JSON.stringify(envelope)), { persistent: true }, (err) =>
+            err ? reject(err) : resolve(),
+          );
+        });
         console.log(`events-service: published "${msg.type}" to RabbitMQ (messageId=${envelope.messageId})`);
         return true;
       } catch (err) {
