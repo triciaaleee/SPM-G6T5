@@ -89,8 +89,7 @@ interface LoginResponse {
   user: { id: string; name: string; email: string; role: string };
 }
 
-async function sessionFromLogin(email: string, password: string): Promise<Session> {
-  const { token, user } = await call<LoginResponse>("POST", `${AUTH_URL}/login`, null, { email, password });
+function toSession({ token, user }: LoginResponse, password: string): Session {
   return {
     id: user.id,
     name: user.name,
@@ -103,6 +102,10 @@ async function sessionFromLogin(email: string, password: string): Promise<Sessio
   };
 }
 
+async function sessionFromLogin(email: string, password: string): Promise<Session> {
+  return toSession(await call<LoginResponse>("POST", `${AUTH_URL}/login`, null, { email, password }), password);
+}
+
 /**
  * Only "attendee" and "organiser" can self-register (the backend rejects
  * every other role at signup) — this is how every test gets a fresh
@@ -111,22 +114,13 @@ async function sessionFromLogin(email: string, password: string): Promise<Sessio
 export async function registerSelfServiceUser(label: string, role: "attendee" | "organiser"): Promise<Session> {
   const name = uniqueName(label);
   const email = uniqueEmail(label);
-  const { token, user } = await call<LoginResponse>("POST", `${AUTH_URL}/signup`, null, {
+  const res = await call<LoginResponse>("POST", `${AUTH_URL}/signup`, null, {
     name,
     email,
     password: SEEDED_PASSWORD,
     role,
   });
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    password: SEEDED_PASSWORD,
-    role: user.role,
-    token,
-    user,
-    landingPath: LANDING_PATH_BY_ROLE[user.role] ?? "/",
-  };
+  return toSession(res, SEEDED_PASSWORD);
 }
 
 export const registerOrganiser = (label: string) => registerSelfServiceUser(label, "organiser");
