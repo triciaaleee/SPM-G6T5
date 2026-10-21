@@ -274,11 +274,13 @@ unavailabilityRouter.get("/", async (req: AuthedRequest, res) => {
   const from = typeof req.query.from === "string" ? req.query.from : "";
   const to = typeof req.query.to === "string" ? req.query.to : "";
 
+  // No range at all means every period, whenever it is (the venue schedule's default list).
+  const allTime = from === "" && to === "";
   const fields: Record<string, string> = {};
   if (venueId === null) fields.venueId = "Pick a venue.";
-  if (!isRealDate(from)) fields.from = "Enter a valid date (YYYY-MM-DD).";
-  if (!isRealDate(to)) fields.to = "Enter a valid date (YYYY-MM-DD).";
-  if (!fields.from && !fields.to) {
+  if (!allTime && !isRealDate(from)) fields.from = "Enter a valid date (YYYY-MM-DD).";
+  if (!allTime && !isRealDate(to)) fields.to = "Enter a valid date (YYYY-MM-DD).";
+  if (!allTime && !fields.from && !fields.to) {
     const days = (Date.parse(to) - Date.parse(from)) / DAY_MS;
     if (days < 0) fields.to = "The end date must not be before the start date.";
     else if (days >= MAX_RANGE_DAYS) fields.to = `The range can cover at most ${MAX_RANGE_DAYS} days.`;
@@ -288,12 +290,9 @@ unavailabilityRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const { data, error } = await req
-    .supabase!.from("venue_unavailability")
-    .select(PERIOD_COLUMNS)
-    .eq("venue_id", venueId!)
-    .lte("start_date", to)
-    .gte("end_date", from)
+  let query = req.supabase!.from("venue_unavailability").select(PERIOD_COLUMNS).eq("venue_id", venueId!);
+  if (!allTime) query = query.lte("start_date", to).gte("end_date", from);
+  const { data, error } = await query
     .order("start_date")
     .order("start_time", { nullsFirst: true });
 

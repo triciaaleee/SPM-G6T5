@@ -308,11 +308,11 @@ chatRouter.post("/:eventId/messages", async (req: AuthedRequest, res) => {
   const preview = bodyResult.value!.length > 140 ? `${bodyResult.value!.slice(0, 140)}…` : bodyResult.value!;
 
   const notified = await getPublisher().publish({
-    type: "chat.message_sent",
+    type: "message.sent",
     eventId,
     actorId: user.id,
     recipients: { userIds: [recipientId], roles: [] },
-    data: { eventName, preview },
+    data: { eventName, preview, senderRole: user.role },
   });
 
   res.status(201).json({ message: toMessage(row as MessageRow, user.id), notified });

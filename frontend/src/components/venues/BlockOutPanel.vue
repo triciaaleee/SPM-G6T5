@@ -23,7 +23,7 @@ import {
  */
 const props = defineProps<{
   venueId: number;
-  venueName: string;
+  venues: { id: number; name: string }[];
   initialDate: string;
   period?: UnavailabilityPeriod | null;
 }>();
@@ -46,6 +46,7 @@ const start = props.initialDate < today ? today : props.initialDate;
 const minDate = props.period && props.period.startDate < today ? props.period.startDate : today;
 
 const form = reactive({
+  venueId: props.venueId,
   startDate: props.period?.startDate ?? start,
   endDate: props.period?.endDate ?? start,
   allDay: props.period?.allDay ?? true,
@@ -88,7 +89,7 @@ const fieldErrors = computed(() => ({ ...(attempted.value ? clientFields.value :
 const periodValid = computed(() => Object.keys(clientFields.value).every((key) => key === "reason"));
 
 const draft = computed<PeriodDraft>(() => ({
-  venueId: props.venueId,
+  venueId: form.venueId,
   startDate: form.startDate,
   endDate: form.endDate,
   allDay: form.allDay,
@@ -136,7 +137,7 @@ let previewTimer: number | undefined;
 let previewAbort: AbortController | null = null;
 
 watch(
-  () => [form.startDate, form.endDate, form.allDay, form.startTime, form.endTime],
+  () => [form.venueId, form.startDate, form.endDate, form.allDay, form.startTime, form.endTime],
   () => {
     serverFields.value = {};
     window.clearTimeout(previewTimer);
@@ -248,7 +249,6 @@ onBeforeUnmount(() => {
       <header class="panel__header">
         <div>
           <h2 id="block-out-title" class="h6">{{ editing ? "Edit block-out" : "Block out time" }}</h2>
-          <p class="body-small muted panel__venue">{{ venueName }}</p>
         </div>
         <button type="button" class="icon-button" aria-label="Close" :disabled="saving" @click="emit('close')">
           <XMarkIcon class="icon-button__icon" aria-hidden="true" />
@@ -256,6 +256,15 @@ onBeforeUnmount(() => {
       </header>
 
       <form class="form" novalidate @submit.prevent="submit">
+        <label class="field field--full">
+          <span class="field__label">Venue</span>
+          <select v-model="form.venueId" class="input" :disabled="editing || saving || venues.length < 2">
+            <option v-for="venue in venues" :key="venue.id" :value="venue.id">{{ venue.name }}</option>
+          </select>
+          <span v-if="editing" class="field__hint">A block-out stays with its venue. Remove it and add a new one to move it.</span>
+          <span v-if="fieldErrors.venueId" class="field__error">{{ fieldErrors.venueId }}</span>
+        </label>
+
         <label class="field">
           <span class="field__label">From</span>
           <input ref="firstField" v-model="form.startDate" type="date" class="input" :min="minDate"

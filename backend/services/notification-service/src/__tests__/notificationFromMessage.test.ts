@@ -109,6 +109,30 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders message.sent for the other party, same text either direction", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+
+    await handleInboundMessage(
+      buildMsg({
+        type: "message.sent",
+        eventId: 7,
+        actorId: "ORG-0001",
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: { eventName: "Alumni Gala", preview: "What time does setup start?", senderRole: "organiser" },
+      }),
+      { supabase, resolveRoleUserIds },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "New message about Alumni Gala",
+        body: "What time does setup start?",
+      }),
+    ]);
+  });
+
   it("renders the leads' notification for request.submitted", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();
