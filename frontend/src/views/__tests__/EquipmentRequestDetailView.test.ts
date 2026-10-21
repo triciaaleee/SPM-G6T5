@@ -88,7 +88,6 @@ beforeEach(() => {
     type: "Projector",
     requestedQuantity: 2,
     totalUnits: 5,
-    catalogAvailableStock: 5,
     unusableCount: 0,
     reservedElsewhereCount: 0,
     availableCount: 5,

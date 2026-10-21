@@ -11,31 +11,25 @@ export interface HandleEventCancelledDeps {
  * RabbitMQ.md section 4: `event.cancelled` -> releases every reservation
  * for the event (E5-6 AC4), then publishes `equipment.released`
  * (section 3.4, #34) to Technical Support. Naturally idempotent on
- * redelivery: release_equipment_for_event only moves stock for items that
- * still have `quantity_fulfilled > 0`, so a message processed twice moves
- * nothing the second time — but it would still re-notify, so this skips
- * the publish entirely when nothing was actually released.
+ * redelivery: release_equipment_for_event frees the event's units (their
+ * booking rows go; the requests and items stay as history), so a
+ * message processed twice releases nothing the second time — but it would
+ * still re-notify, so this skips the publish entirely when the event held
+ * no bookings.
  */
 export async function handleEventCancelled(msg: InboundMessage, deps: HandleEventCancelledDeps): Promise<void> {
   if (msg.eventId === null) return;
 
-  const { data: requests, error: requestsError } = await deps.supabase
-    .from("equipment_requests")
+  // The units reserved for the event are its equipment_booking rows. Releasing
+  // the event frees them, so a redelivered message finds none and notifies nobody.
+  const { data: bookings, error: bookingsError } = await deps.supabase
+    .from("equipment_booking")
     .select("id")
-    .eq("event_id", msg.eventId);
-  if (requestsError) throw requestsError;
-  const requestIds = (requests ?? []).map((row) => row.id as number);
-
-  let hadReservations = false;
-  if (requestIds.length > 0) {
-    const { data: items, error: itemsError } = await deps.supabase
-      .from("equipment_request_items")
-      .select("id")
-      .in("request_id", requestIds)
-      .gt("quantity_fulfilled", 0);
-    if (itemsError) throw itemsError;
-    hadReservations = (items ?? []).length > 0;
-  }
+    .eq("event_id", msg.eventId)
+    .eq("status", "Reserved")
+    .limit(1);
+  if (bookingsError) throw bookingsError;
+  const hadReservations = (bookings ?? []).length > 0;
 
   await releaseEquipmentForEvent(deps.supabase, msg.eventId);
   if (!hadReservations) return;

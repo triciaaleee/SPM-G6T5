@@ -18,32 +18,27 @@ function buildMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
 }
 
 function buildSupabase(options: {
-  requests?: { id: number }[];
-  itemsWithStock?: { id: number }[];
+  bookings?: { id: number }[];
   rpcError?: { message: string } | null;
 } = {}) {
-  const requests = options.requests ?? [{ id: 55 }];
-  const itemsWithStock = options.itemsWithStock ?? [{ id: 1 }];
+  const bookings = options.bookings ?? [{ id: 1 }];
 
-  const requestsEq = vi.fn().mockResolvedValue({ data: requests, error: null });
-  const requestsSelect = vi.fn().mockReturnValue({ eq: requestsEq });
-
-  const itemsGt = vi.fn().mockResolvedValue({ data: itemsWithStock, error: null });
-  const itemsIn = vi.fn().mockReturnValue({ gt: itemsGt });
-  const itemsSelect = vi.fn().mockReturnValue({ in: itemsIn });
+  const bookingsLimit = vi.fn().mockResolvedValue({ data: bookings, error: null });
+  const bookingsStatusEq = vi.fn().mockReturnValue({ limit: bookingsLimit });
+  const bookingsEq = vi.fn().mockReturnValue({ eq: bookingsStatusEq });
+  const bookingsSelect = vi.fn().mockReturnValue({ eq: bookingsEq });
 
   const rpc = vi.fn().mockResolvedValue({ data: null, error: options.rpcError ?? null });
 
   const supabase = {
     from: vi.fn((table: string) => {
-      if (table === "equipment_requests") return { select: requestsSelect };
-      if (table === "equipment_request_items") return { select: itemsSelect };
+      if (table === "equipment_booking") return { select: bookingsSelect };
       throw new Error(`unexpected table ${table}`);
     }),
     rpc,
   };
 
-  return { supabase: supabase as any, rpc, requestsEq, itemsIn, itemsGt };
+  return { supabase: supabase as any, rpc, bookingsEq, bookingsStatusEq };
 }
 
 describe("handleEventCancelled (E3-6 / E5-6 AC4)", () => {
@@ -67,7 +62,7 @@ describe("handleEventCancelled (E3-6 / E5-6 AC4)", () => {
   });
 
   it("still releases (idempotent no-op) but skips the notification when there was nothing reserved", async () => {
-    const { supabase, rpc } = buildSupabase({ itemsWithStock: [] });
+    const { supabase, rpc } = buildSupabase({ bookings: [] });
     const publish = vi.fn().mockResolvedValue(true);
     setPublisherForTest({ publish });
 
@@ -78,16 +73,15 @@ describe("handleEventCancelled (E3-6 / E5-6 AC4)", () => {
     setPublisherForTest(undefined);
   });
 
-  it("skips the quantity check (and the notification) when the event has no equipment requests at all", async () => {
-    const { supabase, rpc, itemsIn } = buildSupabase({ requests: [] });
-    const publish = vi.fn().mockResolvedValue(true);
-    setPublisherForTest({ publish });
+  it("looks only at this event's Reserved bookings to decide whether anything was reserved", async () => {
+    const { supabase, bookingsEq, bookingsStatusEq } = buildSupabase();
+    setPublisherForTest({ publish: vi.fn().mockResolvedValue(true) });
 
     await handleEventCancelled(buildMsg(), { supabase });
 
-    expect(itemsIn).not.toHaveBeenCalled();
-    expect(rpc).toHaveBeenCalledWith("release_equipment_for_event", { p_event_id: 7 });
-    expect(publish).not.toHaveBeenCalled();
+    expect(bookingsEq).toHaveBeenCalledWith("event_id", 7);
+    // A Released booking (migration 0052) is history, not a reservation.
+    expect(bookingsStatusEq).toHaveBeenCalledWith("status", "Reserved");
     setPublisherForTest(undefined);
   });
 

@@ -90,8 +90,6 @@ export interface EquipmentAvailability {
   type: string;
   requestedQuantity: number;
   totalUnits: number;
-  /** equipment_catalog.available_stock for this type — null if it isn't in the catalog. */
-  catalogAvailableStock: number | null;
   /** AC2: damaged/under-maintenance units. */
   unusableCount: number;
   /** AC1: usable units already booked to another, overlapping event. */

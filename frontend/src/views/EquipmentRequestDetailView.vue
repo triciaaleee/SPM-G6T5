@@ -130,7 +130,7 @@ async function checkAllAvailability(targets: EquipmentRequest[]): Promise<void> 
   await Promise.all(requested.flatMap((r) => r.items.map((item) => checkAvailability(r, item))));
 }
 
-/** Fulfilled = however much is free right now (equipment_catalog.available_stock), capped at what was requested. */
+/** Fulfilled = however much is free right now (the catalog's availableStock), capped at what was requested. */
 function fulfilledQuantityFor(item: EquipmentItem): number {
   const available = catalog.value.find((c) => c.name === item.equipmentType)?.availableStock ?? 0;
   return Math.min(item.quantity, Math.max(0, available));

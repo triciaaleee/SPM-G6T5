@@ -44,6 +44,7 @@ export async function computeReservationFlags(
   const { data: ownBookingRows, error: ownError } = await supabase
     .from("equipment_booking")
     .select("equipment_id, request_item_id")
+    .eq("status", "Reserved")
     .in("request_item_id", itemIds);
   if (ownError) return flags;
 
@@ -54,6 +55,7 @@ export async function computeReservationFlags(
   const { data: allBookingRows, error: allError } = await supabase
     .from("equipment_booking")
     .select("equipment_id, event_id, request_item_id")
+    .eq("status", "Reserved")
     .in("equipment_id", equipmentIds);
   if (allError) return flags;
 

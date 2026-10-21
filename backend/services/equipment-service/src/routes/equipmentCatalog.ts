@@ -3,7 +3,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validateNewCatalogItem } from "../lib/validateCatalogItem.js";
 import { validateStockChange } from "../lib/validateStockChange.js";
-import { effectiveAvailable, unusableNowByType } from "../lib/effectiveStock.js";
+import { catalogStockNow, stockOf, type CatalogStock } from "../lib/catalogStock.js";
 
 /**
  * E5-1/E5-3 stock tracking (migration 0022): the fixed equipment list
@@ -21,25 +21,23 @@ equipmentCatalogRouter.use(requireAuth);
 interface CatalogRow {
   id: number;
   name: string;
-  total_stock: number;
-  available_stock: number;
 }
 
-const COLUMNS = "id, name, total_stock, available_stock";
+const COLUMNS = "id, name";
 
 /**
- * `availableStock` is the stored counter (stock not held by requests) minus the
- * units out of use today (E5-5, lib/effectiveStock.ts), so a unit marked
- * damaged or under maintenance drops out of it and returns when its period ends.
- * `unusableNow` is how many units that took off, so the number can be explained.
+ * Stock is worked out from the unit rows when read (lib/catalogStock.ts,
+ * migration 0051): `totalStock` is the units, `availableStock` the usable
+ * units not booked today, and `unusableNow` how many are out of use today
+ * (E5-5), so the number can be explained.
  */
-function toItem(row: CatalogRow, unusableNow = 0) {
+function toItem(row: CatalogRow, stock: CatalogStock) {
   return {
     id: row.id,
     name: row.name,
-    totalStock: row.total_stock,
-    availableStock: effectiveAvailable(row.available_stock, unusableNow),
-    unusableNow,
+    totalStock: stock.total,
+    availableStock: stock.available,
+    unusableNow: stock.unusableNow,
   };
 }
 
@@ -63,15 +61,15 @@ equipmentCatalogRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  let unusable: Map<string, number>;
+  let stock: Map<number, CatalogStock>;
   try {
-    unusable = await unusableNowByType(supabase);
+    stock = await catalogStockNow(supabase);
   } catch {
     res.status(500).json({ error: "Failed to load the equipment catalog" });
     return;
   }
 
-  res.json({ equipmentCatalog: (data as CatalogRow[]).map((row) => toItem(row, unusable.get(row.name) ?? 0)) });
+  res.json({ equipmentCatalog: (data as CatalogRow[]).map((row) => toItem(row, stockOf(stock, row.id))) });
 });
 
 /** Add an item to the inventory. New stock starts fully available. */
@@ -95,7 +93,7 @@ equipmentCatalogRouter.post("/", async (req: AuthedRequest, res) => {
   const { name, totalStock } = result.value;
   const { data, error } = await supabase
     .from("equipment_catalog")
-    .insert({ name, total_stock: totalStock, available_stock: totalStock })
+    .insert({ name })
     .select(COLUMNS)
     .single();
 
@@ -118,6 +116,7 @@ equipmentCatalogRouter.post("/", async (req: AuthedRequest, res) => {
     const batch = Array.from({ length: Math.min(UNIT_INSERT_BATCH, totalStock - created) }, () => ({
       type: name,
       status: "Available",
+      equipment_catalog_id: (data as CatalogRow).id,
     }));
     const { data: units, error: unitsError } = await supabase.from("equipment").insert(batch).select("id");
     if (unitsError) {
@@ -130,14 +129,13 @@ equipmentCatalogRouter.post("/", async (req: AuthedRequest, res) => {
     if (Array.isArray(units)) createdUnitIds.push(...units.map((unit) => unit.id as number));
   }
 
-  res.status(201).json({ equipment: toItem(data as CatalogRow) });
+  res.status(201).json({ equipment: toItem(data as CatalogRow, { total: totalStock, unusableNow: 0, available: totalStock }) });
 });
 
 /**
  * Add or remove stock of an item, always with a reason. The database function
  * (change_equipment_stock, migration 0044) creates or deletes the matching unit
- * rows, moves total and available stock together, and records the change — all
- * in one step. Removing only takes units that are free (not reserved, not out
+ * rows and records the change — all in one step. Removing only takes units that are free (not reserved, not out
  * of use), so it can never pull equipment from under an event; if fewer than
  * asked qualify, nothing changes and the answer says how many can go.
  */
@@ -195,22 +193,14 @@ equipmentCatalogRouter.post("/:id/stock", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const row = data as { id: number; name: string; totalStock: number; availableStock: number };
-  let unusableNow = 0;
+  const row = data as { id: number; name: string; totalStock: number };
+  let stock: CatalogStock = { total: row.totalStock, unusableNow: 0, available: row.totalStock };
   try {
-    unusableNow = (await unusableNowByType(supabase)).get(row.name) ?? 0;
+    stock = stockOf(await catalogStockNow(supabase), row.id);
   } catch {
-    // The change is saved; the count shown just won't take out-of-use units off until the page is reloaded.
+    // The change is saved; the numbers shown just won't be today's until the page is reloaded.
   }
-  res.json({
-    equipment: {
-      id: row.id,
-      name: row.name,
-      totalStock: row.totalStock,
-      availableStock: effectiveAvailable(row.availableStock, unusableNow),
-      unusableNow,
-    },
-  });
+  res.json({ equipment: toItem({ id: row.id, name: row.name }, stock) });
 });
 
 interface StockChangeRow {

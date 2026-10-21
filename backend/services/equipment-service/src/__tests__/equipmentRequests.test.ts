@@ -143,9 +143,9 @@ const defaultBookingInfoEvents = [
 ];
 
 const defaultEquipmentRows = [
-  { id: 201, type: "Projector", status: "Available" },
-  { id: 202, type: "Projector", status: "Available" },
-  { id: 203, type: "Projector", status: "Available" },
+  { id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1 },
+  { id: 202, type: "Projector", status: "Available", equipment_catalog_id: 1 },
+  { id: 203, type: "Projector", status: "Available", equipment_catalog_id: 1 },
 ];
 
 function buildApp(
@@ -212,7 +212,8 @@ function buildApp(
   const requestsTable = recordTable(requestsSeed);
   const itemsTable = recordTable(options.items ?? []);
   const equipmentTable = recordTable(options.equipmentRows ?? defaultEquipmentRows);
-  const equipmentBookingTable = recordTable(options.equipmentBookingRows ?? []);
+  // A booking holds its unit unless it was Released (migration 0052), so fixtures default to Reserved.
+  const equipmentBookingTable = recordTable((options.equipmentBookingRows ?? []).map((row) => ({ status: "Reserved", ...row })));
   const unavailabilityTable = recordTable(options.unavailabilityRows ?? []);
 
   const rpcMock = vi.fn(async (fn: string, _args?: Record<string, unknown>) => {
@@ -249,7 +250,17 @@ function buildApp(
         return { select: equipmentTable.select };
       }
       if (table === "equipment_booking") {
-        return { select: equipmentBookingTable.select, insert: equipmentBookingTable.insert, delete: equipmentBookingTable.delete };
+        return {
+          select: equipmentBookingTable.select,
+          insert: equipmentBookingTable.insert,
+          delete: equipmentBookingTable.delete,
+          update: vi.fn(() => {
+            const chain: Record<string, any> = {};
+            chain.eq = vi.fn(() => chain);
+            chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ error: null }).then(resolve);
+            return chain;
+          }),
+        };
       }
       if (table === "equipment_unavailability") {
         return { select: unavailabilityTable.select };
@@ -467,6 +478,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
           equipment_type: "Projector",
           quantity: 2,
           quantity_fulfilled: 0,
+          equipment_catalog_id: 1,
         },
       ],
     });
@@ -479,7 +491,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Requested",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentCatalogId: null, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
+        items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
       },
     ]);
   });
@@ -490,7 +502,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
     const { app } = buildApp({
       user: { id: "ORG-0001", role: "organiser" },
       requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
-      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2 }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2, equipment_catalog_id: 1 }],
     });
     const res = await request(app).get("/api/equipment-requests?eventId=7");
     expect(res.status).toBe(200);
@@ -501,7 +513,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Arranged",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentCatalogId: null, equipmentType: "Projector", quantity: 2, quantityFulfilled: 2, reservationFlag: NO_FLAG }],
+        items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 2, reservationFlag: NO_FLAG }],
       },
     ]);
   });
@@ -518,7 +530,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
     const { app } = buildApp({
       user: { id: "SAF-0001", role: "safety_officer" },
       requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
-      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2 }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2, equipment_catalog_id: 1 }],
     });
     const res = await request(app).get("/api/equipment-requests?eventId=7");
     expect(res.status).toBe(200);
@@ -541,7 +553,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
       user: technicalSupport,
       requests: [{ id: 55, event_id: 7, status: "Requested", created_at: "2026-01-01T00:00:00Z" }],
       items: [
-        { id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0 },
+        { id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0, equipment_catalog_id: 1 },
       ],
       bookingInfoEvents: [
         {
@@ -569,7 +581,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Requested",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentCatalogId: null, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
+        items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
         event: {
           id: 7,
           name: "Alumni Gala",
@@ -589,7 +601,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
     const { app } = buildApp({
       user: technicalSupport,
       requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
-      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1 }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1, equipment_catalog_id: 1 }],
       equipmentBookingRows: [
         { id: 900, equipment_id: 201, event_id: 7, request_item_id: 1 },
         { id: 901, equipment_id: 201, event_id: 20, request_item_id: null },
@@ -608,7 +620,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
     const { app } = buildApp({
       user: technicalSupport,
       requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
-      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1 }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1, equipment_catalog_id: 1 }],
       equipmentBookingRows: [
         { id: 900, equipment_id: 201, event_id: 7, request_item_id: 1 },
         { id: 901, equipment_id: 201, event_id: 20, request_item_id: null },
@@ -639,7 +651,7 @@ describe("GET /api/equipment-requests/event/:eventId (E5-1 AC1, AC2)", () => {
     accessibility: "Step-free entry",
   };
   const requestRow = { id: 55, event_id: 7, status: "Requested", created_at: "2026-01-01T00:00:00Z" };
-  const itemRow = { id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0 };
+  const itemRow = { id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0, equipment_catalog_id: 1 };
 
   it("shows the equipment, quantities, technical requirements and only the event's name, date, time and venue", async () => {
     const { app } = buildApp({
@@ -668,7 +680,7 @@ describe("GET /api/equipment-requests/event/:eventId (E5-1 AC1, AC2)", () => {
           status: "Requested",
           fulfillmentNote: null,
           createdAt: "2026-01-01T00:00:00Z",
-          items: [{ id: 1, equipmentCatalogId: null, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
+          items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
         },
       ],
     });
@@ -785,8 +797,16 @@ describe("validateStatusUpdate", () => {
   });
 });
 
+/** The arguments of the one reserve_equipment_request call a PATCH makes (migration 0049); undefined if it made none. */
+function reserveArgs(rpcMock: { mock: { calls: unknown[][] } }) {
+  const call = rpcMock.mock.calls.find(([fn]) => fn === "reserve_equipment_request");
+  return call?.[1] as
+    | { p_request_id: number; p_status: string; p_note: string | null; p_fulfillments: unknown[]; p_claims: { itemId: number; unitIds: number[] }[] }
+    | undefined;
+}
+
 describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
-  const oneItem = [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0 }];
+  const oneItem = [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0, equipment_catalog_id: 1 }];
 
   it("rejects a non-technical-support caller", async () => {
     const { app } = buildApp({ user: coordinator });
@@ -836,11 +856,14 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
       .send({ status: "Arranged" });
 
     expect(res.status).toBe(200);
-    expect(rpcMock).toHaveBeenCalledWith("apply_equipment_request_status", {
+    expect(rpcMock).toHaveBeenCalledWith("reserve_equipment_request", {
       p_request_id: 55,
       p_status: "Arranged",
       p_note: null,
       p_fulfillments: [],
+      p_claims: [{ itemId: 1, unitIds: [201, 202] }],
+      p_window_start_ms: expect.any(Number),
+      p_window_end_ms: expect.any(Number),
     });
     expect(res.body.equipmentRequest).toMatchObject({ id: 55, status: "Arranged", fulfillmentNote: null });
     expect(res.body.notified).toBe(true);
@@ -906,11 +929,14 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
       .send({ status: "Partially Fulfilled", note: "1 of 2 projectors arrived", fulfillments: [{ itemId: 1, fulfilledQuantity: 1 }] });
 
     expect(res.status).toBe(200);
-    expect(rpcMock).toHaveBeenCalledWith("apply_equipment_request_status", {
+    expect(rpcMock).toHaveBeenCalledWith("reserve_equipment_request", {
       p_request_id: 55,
       p_status: "Partially Fulfilled",
       p_note: "1 of 2 projectors arrived",
       p_fulfillments: [{ itemId: 1, fulfilledQuantity: 1 }],
+      p_claims: [{ itemId: 1, unitIds: [201] }],
+      p_window_start_ms: expect.any(Number),
+      p_window_end_ms: expect.any(Number),
     });
     expect(res.body.equipmentRequest.fulfillmentNote).toBe("1 of 2 projectors arrived");
   });
@@ -930,6 +956,31 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
     expect(res.status).toBe(409);
   });
 
+  // Picked by the application, then marked unusable (or taken for this event) before the database function ran.
+  it.each(["Unit 201 is no longer available", "Unit 201 is already reserved for this event", "Unit 201 is not the requested equipment type",
+    "Unit 201 is already booked for overlapping dates",
+    "Unit 201 is unavailable during these dates",
+  ])(
+    "maps a unit that changed since it was picked to a 409 (%s)",
+    async (message) => {
+      const { app } = buildApp({ user: technicalSupport, items: oneItem, applyError: { message } });
+
+      const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/taken or changed/);
+    },
+  );
+
+  it("500s on any other failure of the reservation, without a second corrective call", async () => {
+    const { app, rpcMock } = buildApp({ user: technicalSupport, items: oneItem, applyError: { message: "connection reset" } });
+
+    const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+
+    expect(res.status).toBe(500);
+    expect(rpcMock.mock.calls.filter(([fn]) => fn === "reserve_equipment_request")).toHaveLength(1);
+  });
+
   it("reports notified:false when notification-service fails, without failing the update", async () => {
     const { app } = buildApp({ user: technicalSupport, items: oneItem, notificationsStatus: 500 });
     const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
@@ -939,21 +990,22 @@ describe("PATCH /api/equipment-requests/:id (E5-3)", () => {
 });
 
 describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
-  const oneItem = [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0 }];
+  const oneItem = [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0, equipment_catalog_id: 1 }];
 
   // AC1: saving the reservation deducts that quantity from availability for
   // the period and ties it to the event — specific physical units get claimed.
   it("claims specific units when an item is marked Arranged", async () => {
-    const { app, equipmentBookingTable } = buildApp({ user: technicalSupport, items: oneItem });
+    const { app, rpcMock } = buildApp({ user: technicalSupport, items: oneItem });
 
     const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
 
     expect(res.status).toBe(200);
-    expect(equipmentBookingTable.rows).toHaveLength(2);
-    for (const row of equipmentBookingTable.rows) {
-      expect(row).toMatchObject({ event_id: 7, request_item_id: 1 });
-      expect([201, 202, 203]).toContain(row.equipment_id);
-    }
+    // The booking rows themselves are written by reserve_equipment_request (checked in supabase/scripts/test_equipment_stock.sql).
+    const claims = reserveArgs(rpcMock)!.p_claims;
+    expect(claims).toHaveLength(1);
+    expect(claims[0].itemId).toBe(1);
+    expect(claims[0].unitIds).toHaveLength(2);
+    for (const id of claims[0].unitIds) expect([201, 202, 203]).toContain(id);
     expect(res.body.equipmentRequest.items[0].reservationFlag).toEqual(NO_FLAG);
   });
 
@@ -966,21 +1018,22 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
     const during = buildApp({ user: technicalSupport, items: oneItem, unavailabilityRows: unavailable("2026-09-21") });
     const res = await request(during.app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
     expect(res.status).toBe(200);
-    expect(during.equipmentBookingTable.rows.map((r) => r.equipment_id).sort()).toEqual([202, 203]);
+    expect([...reserveArgs(during.rpcMock)!.p_claims[0].unitIds].sort()).toEqual([202, 203]);
 
     const after = buildApp({ user: technicalSupport, items: oneItem, unavailabilityRows: unavailable("2026-09-10") });
     await request(after.app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
-    expect(after.equipmentBookingTable.rows).toHaveLength(2);
-    expect(after.equipmentBookingTable.rows.map((r) => r.equipment_id)).toContain(201);
+    const afterUnits = reserveArgs(after.rpcMock)!.p_claims[0].unitIds;
+    expect(afterUnits).toHaveLength(2);
+    expect(afterUnits).toContain(201);
   });
 
   it("rejects with the shortfall when the only free units are out for the event's date", async () => {
-    const { app, equipmentBookingTable } = buildApp({
+    const { app, equipmentBookingTable, rpcMock } = buildApp({
       user: technicalSupport,
       items: oneItem,
       equipmentRows: [
-        { id: 201, type: "Projector", status: "Available" },
-        { id: 202, type: "Projector", status: "Available" },
+        { id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1 },
+        { id: 202, type: "Projector", status: "Available", equipment_catalog_id: 1 },
       ],
       unavailabilityRows: [{ id: 1, equipment_id: 202, reason: "Under Maintenance", start_date: "2026-09-01", end_date: null, note: null }],
     });
@@ -990,6 +1043,7 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
     expect(res.status).toBe(409);
     expect(res.body.shortfalls["1"]).toMatchObject({ availableCount: 1, shortfall: 1 });
     expect(equipmentBookingTable.rows).toHaveLength(0);
+    expect(reserveArgs(rpcMock)).toBeUndefined();
   });
 
   // E5-5: a reserved unit that is unusable during its event is flagged for re-arrangement.
@@ -997,7 +1051,7 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
     const { app } = buildApp({
       user: coordinator,
       requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
-      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1 }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1, equipment_catalog_id: 1 }],
       equipmentBookingRows: [{ id: 1, equipment_id: 201, event_id: 7, request_item_id: 1 }],
       unavailabilityRows: [{ id: 1, equipment_id: 201, reason: "Damaged", start_date: "2026-09-19", end_date: null, note: null }],
     });
@@ -1014,7 +1068,7 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
     const { app } = buildApp({
       user: coordinator,
       requests: [{ id: 55, event_id: 7, status: "Arranged", created_at: "2026-01-01T00:00:00Z" }],
-      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1 }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1, equipment_catalog_id: 1 }],
       equipmentBookingRows: [{ id: 1, equipment_id: 201, event_id: 7, request_item_id: 1 }],
       unavailabilityRows: [{ id: 1, equipment_id: 201, reason: "Damaged", start_date: "2026-10-01", end_date: "2026-10-05", note: null }],
     });
@@ -1030,7 +1084,7 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
     const { app, rpcMock, equipmentBookingTable } = buildApp({
       user: technicalSupport,
       items: oneItem,
-      equipmentRows: [{ id: 201, type: "Projector", status: "Available" }],
+      equipmentRows: [{ id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1 }],
     });
 
     const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
@@ -1045,13 +1099,13 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
   // can't be handed to this item too — one unit can't serve two claims.
   it("does not let a second item of the same event reuse a unit the event already holds", async () => {
     const twoItems = [
-      { id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1 },
-      { id: 2, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 0 },
+      { id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 1, equipment_catalog_id: 1 },
+      { id: 2, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 0, equipment_catalog_id: 1 },
     ];
     const { app } = buildApp({
       user: technicalSupport,
       items: twoItems,
-      equipmentRows: [{ id: 201, type: "Projector", status: "Available" }],
+      equipmentRows: [{ id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1 }],
       equipmentBookingRows: [{ id: 900, equipment_id: 201, event_id: 7, request_item_id: 1 }],
     });
 
@@ -1063,37 +1117,58 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
 
   // Two items of the same request both newly claiming the same equipment
   // type in one PATCH call must get DIFFERENT physical units — nothing is
-  // written to equipment_booking until after the RPC, so without tracking
+  // written to equipment_booking until the RPC runs, so without tracking
   // what's provisionally claimed within this one call, both items could
   // independently pick the same still-free-looking unit.
   it("gives two items claiming the same type in one call distinct physical units", async () => {
     const twoNewItems = [
-      { id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 0 },
-      { id: 2, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 0 },
+      { id: 1, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 0, equipment_catalog_id: 1 },
+      { id: 2, request_id: 55, equipment_type: "Projector", quantity: 1, quantity_fulfilled: 0, equipment_catalog_id: 1 },
     ];
-    const { app, equipmentBookingTable } = buildApp({
+    const { app, rpcMock } = buildApp({
       user: technicalSupport,
       items: twoNewItems,
-      equipmentRows: [{ id: 201, type: "Projector", status: "Available" }, { id: 202, type: "Projector", status: "Available" }],
+      equipmentRows: [{ id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1 }, { id: 202, type: "Projector", status: "Available", equipment_catalog_id: 1 }],
     });
 
     const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
 
     expect(res.status).toBe(200);
-    expect(equipmentBookingTable.rows).toHaveLength(2);
-    const claimedUnitIds = equipmentBookingTable.rows.map((r: any) => r.equipment_id);
+    const claims = reserveArgs(rpcMock)!.p_claims;
+    expect(claims.map((c) => c.itemId)).toEqual([1, 2]);
+    const claimedUnitIds = claims.flatMap((c) => c.unitIds);
+    expect(claimedUnitIds).toHaveLength(2);
     expect(new Set(claimedUnitIds).size).toBe(2);
+  });
+
+  // Released bookings stay as history (migration 0052) but no longer hold the unit.
+  it("claims a unit whose only booking for an overlapping event was Released", async () => {
+    const { app, rpcMock } = buildApp({
+      user: technicalSupport,
+      items: [{ ...oneItem[0], quantity: 1 }],
+      equipmentRows: [{ id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1 }],
+      equipmentBookingRows: [{ id: 900, equipment_id: 201, event_id: 20, request_item_id: null, status: "Released" }],
+      bookingInfoEvents: [
+        { id: 7, name: "Alumni Gala", proposedDate: "2026-09-20", startTime: "09:00", endTime: "12:00" },
+        { id: 20, name: "Design Showcase", proposedDate: "2026-09-20", startTime: "10:00", endTime: "13:00" },
+      ],
+    });
+
+    const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
+
+    expect(res.status).toBe(200);
+    expect(reserveArgs(rpcMock)!.p_claims[0].unitIds).toEqual([201]);
   });
 
   // A unit already claimed by a DIFFERENT, non-overlapping event is free to
   // reuse (date-aware, unlike the flat catalog counter).
   it("claims a unit already booked to a non-overlapping event", async () => {
-    const { app, equipmentBookingTable } = buildApp({
+    const { app, rpcMock } = buildApp({
       user: technicalSupport,
       items: oneItem,
       equipmentRows: [
-        { id: 201, type: "Projector", status: "Available" },
-        { id: 202, type: "Projector", status: "Available" },
+        { id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1 },
+        { id: 202, type: "Projector", status: "Available", equipment_catalog_id: 1 },
       ],
       equipmentBookingRows: [{ id: 900, equipment_id: 201, event_id: 20, request_item_id: null }],
       bookingInfoEvents: [
@@ -1105,8 +1180,9 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
     const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Arranged" });
 
     expect(res.status).toBe(200);
-    // The pre-existing booking (to event 20) plus 2 newly claimed for event 7.
-    expect(equipmentBookingTable.rows).toHaveLength(3);
+    // Unit 201 is booked to event 20 on another day, so it is still offered for event 7.
+    const unitIds = reserveArgs(rpcMock)!.p_claims[0].unitIds;
+    expect([...unitIds].sort()).toEqual([201, 202]);
   });
 
   // 409 when there's no date to check against yet.
@@ -1122,9 +1198,9 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
   });
 
   // Reverting a status only releases claimed units — no date check needed.
-  it("releases claimed units when a status is reverted", async () => {
-    const twoFulfilled = [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2 }];
-    const { app, equipmentBookingTable } = buildApp({
+  it("claims nothing when a status is reverted, leaving the release to the database function", async () => {
+    const twoFulfilled = [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2, equipment_catalog_id: 1 }];
+    const { app, rpcMock } = buildApp({
       user: technicalSupport,
       items: twoFulfilled,
       equipmentBookingRows: [
@@ -1144,13 +1220,14 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
     const res = await request(app).patch("/api/equipment-requests/55").send({ status: "Requested" });
 
     expect(res.status).toBe(200);
-    expect(equipmentBookingTable.rows).toHaveLength(0);
+    // Releasing the bookings is done inside reserve_equipment_request (checked in supabase/scripts/test_equipment_stock.sql).
+    expect(reserveArgs(rpcMock)).toMatchObject({ p_status: "Requested", p_claims: [] });
   });
 
   // Partially Fulfilled lowering the fulfilled quantity releases only the difference.
-  it("releases only the difference when a partial fulfilment is lowered", async () => {
-    const twoFulfilled = [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2 }];
-    const { app, equipmentBookingTable } = buildApp({
+  it("claims nothing when a partial fulfilment is lowered, sending the lower quantity", async () => {
+    const twoFulfilled = [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 2, equipment_catalog_id: 1 }];
+    const { app, rpcMock } = buildApp({
       user: technicalSupport,
       items: twoFulfilled,
       equipmentBookingRows: [
@@ -1172,7 +1249,11 @@ describe("PATCH /api/equipment-requests/:id (E5-6 reservation)", () => {
       .send({ status: "Partially Fulfilled", note: "note", fulfillments: [{ itemId: 1, fulfilledQuantity: 1 }] });
 
     expect(res.status).toBe(200);
-    expect(equipmentBookingTable.rows).toHaveLength(1);
+    expect(reserveArgs(rpcMock)).toMatchObject({
+      p_status: "Partially Fulfilled",
+      p_fulfillments: [{ itemId: 1, fulfilledQuantity: 1 }],
+      p_claims: [],
+    });
   });
 });
 

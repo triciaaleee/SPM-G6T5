@@ -97,9 +97,9 @@ function table(seed: Record<string, unknown>[], options: { insertError?: boolean
 }
 
 const projectorUnits = [
-  { id: 12, type: "Projector", status: "Available", label: null },
-  { id: 13, type: "Projector", status: "Damaged", label: "A-013" },
-  { id: 14, type: "Projector", status: "Available", label: null },
+  { id: 12, type: "Projector", status: "Available", label: null, equipment_catalog_id: 1 },
+  { id: 13, type: "Projector", status: "Damaged", label: "A-013", equipment_catalog_id: 1 },
+  { id: 14, type: "Projector", status: "Available", label: null, equipment_catalog_id: 1 },
 ];
 
 function event(id: number, overrides: Record<string, unknown> = {}) {
@@ -130,11 +130,18 @@ function buildApp(
 ) {
   const equipment = table(options.units ?? projectorUnits);
   const unavailability = table(options.periods ?? [], { insertError: options.insertError });
-  const bookings = table(options.bookings ?? [], { selectError: options.bookingsError });
+  // A booking holds its unit unless it was Released (migration 0052), so fixtures default to Reserved.
+  const bookings = table((options.bookings ?? []).map((row) => ({ status: "Reserved", ...row })), { selectError: options.bookingsError });
+  // Units belong to a catalog item by id (migration 0048); the API still names it.
+  const catalog = table([
+    { id: 1, name: "Projector" },
+    { id: 2, name: "Screen" },
+  ]);
 
   (globalThis as any).__mockSupabase = {
     from: vi.fn((name: string) => {
       if (name === "equipment") return equipment;
+      if (name === "equipment_catalog") return catalog;
       if (name === "equipment_unavailability") return unavailability;
       if (name === "equipment_booking") return bookings;
       throw new Error(`unexpected table ${name}`);
@@ -259,7 +266,7 @@ describe("GET /api/equipment-units (E5-5)", () => {
   });
 
   it("narrows to one type", async () => {
-    const { app } = buildApp({ units: [...projectorUnits, { id: 20, type: "Screen", status: "Available", label: null }] });
+    const { app } = buildApp({ units: [...projectorUnits, { id: 20, type: "Screen", status: "Available", label: null, equipment_catalog_id: 2 }] });
     const res = await request(app).get("/api/equipment-units?type=Screen");
     expect(res.body.units.map((u: { id: number }) => u.id)).toEqual([20]);
   });
@@ -281,10 +288,10 @@ describe("GET /api/equipment-units/impact (preview before marking)", () => {
   it("shows each unit as free, reserved (with its events) or already out of use", async () => {
     const { app } = buildApp({
       units: [
-        { id: 12, type: "Projector", status: "Available", label: "A-012" },
-        { id: 13, type: "Projector", status: "Damaged", label: null },
-        { id: 14, type: "Projector", status: "Available", label: null },
-        { id: 15, type: "Projector", status: "Available", label: null },
+        { id: 12, type: "Projector", status: "Available", label: "A-012", equipment_catalog_id: 1 },
+        { id: 13, type: "Projector", status: "Damaged", label: null, equipment_catalog_id: 1 },
+        { id: 14, type: "Projector", status: "Available", label: null, equipment_catalog_id: 1 },
+        { id: 15, type: "Projector", status: "Available", label: null, equipment_catalog_id: 1 },
       ],
       periods: [{ id: 1, equipment_id: 15, reason: "Under Maintenance", start_date: "2099-06-05", end_date: "2099-06-06", note: null }],
       bookings: [{ id: 1, equipment_id: 14, event_id: 1, request_item_id: 100 }],
@@ -313,9 +320,9 @@ describe("GET /api/equipment-units/impact (preview before marking)", () => {
   it("answers the all-reserved case: with quantity, suggests the units whose events are furthest away", async () => {
     const { app } = buildApp({
       units: [
-        { id: 1, type: "Projector", status: "Available", label: null },
-        { id: 2, type: "Projector", status: "Available", label: null },
-        { id: 3, type: "Projector", status: "Available", label: null },
+        { id: 1, type: "Projector", status: "Available", label: null, equipment_catalog_id: 1 },
+        { id: 2, type: "Projector", status: "Available", label: null, equipment_catalog_id: 1 },
+        { id: 3, type: "Projector", status: "Available", label: null, equipment_catalog_id: 1 },
       ],
       bookings: [
         { id: 1, equipment_id: 1, event_id: 1, request_item_id: 100 },
@@ -334,8 +341,8 @@ describe("GET /api/equipment-units/impact (preview before marking)", () => {
   it("ignores reservations outside the period and events that are over", async () => {
     const { app } = buildApp({
       units: [
-        { id: 1, type: "Projector", status: "Available", label: null },
-        { id: 2, type: "Projector", status: "Available", label: null },
+        { id: 1, type: "Projector", status: "Available", label: null, equipment_catalog_id: 1 },
+        { id: 2, type: "Projector", status: "Available", label: null, equipment_catalog_id: 1 },
       ],
       bookings: [
         { id: 1, equipment_id: 1, event_id: 1, request_item_id: 100 },

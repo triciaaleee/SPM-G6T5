@@ -263,31 +263,27 @@ insert into venue_bookings (venue_id, event_id, status) values
 -- equipment_catalog (0022): the fixed list Coordinators pick from on an
 -- equipment request, and Technical Support's current-stock table. Names
 -- overlap with venues.facilities above where the item is the same thing
--- (e.g. "PA system") — total_stock is a starting assumption for local
--- testing, not a real inventory count. available_stock starts equal to
--- total_stock; it only drops once Technical Support arrange or partially
--- fulfil a request (migration 0022).
-insert into equipment_catalog (name, total_stock, available_stock) values
-  ('Projector', 20, 20),
-  ('Screen', 15, 15),
-  ('PA system', 10, 10),
-  ('Microphones', 40, 40),
-  ('Livestream equipment', 8, 8),
-  ('Video conferencing', 6, 6),
-  ('Stage', 4, 4),
-  ('Lighting rig', 6, 6),
-  ('Folding table', 100, 100),
-  ('Round table', 50, 50),
-  ('Chairs', 300, 300),
-  ('Gazebo tent', 25, 25),
-  ('Registration desk', 10, 10),
-  ('Name badge printer', 5, 5),
-  ('Extension cords', 50, 50)
--- do update (not do nothing): re-running this file refreshes total_stock
--- for a seeded catalog, but never touches available_stock — that's live
--- state Technical Support have already changed, not seed data to reset.
-on conflict (name) do update set
-  total_stock = excluded.total_stock;
+-- (e.g. "PA system"). The catalog row holds only the name; the stock is the
+-- unit rows created below, and total_stock follows them by trigger (0053).
+-- The quantities are a starting assumption for local testing, not a real
+-- inventory count.
+insert into equipment_catalog (name) values
+  ('Projector'),
+  ('Screen'),
+  ('PA system'),
+  ('Microphones'),
+  ('Livestream equipment'),
+  ('Video conferencing'),
+  ('Stage'),
+  ('Lighting rig'),
+  ('Folding table'),
+  ('Round table'),
+  ('Chairs'),
+  ('Gazebo tent'),
+  ('Registration desk'),
+  ('Name badge printer'),
+  ('Extension cords')
+on conflict (name) do nothing;
 
 -- registrations (0023): attendees signed up for the seed events above. Only
 -- events 1 (Freshman Orientation Fair), 2 (Career Networking Night) and 7 (AI
@@ -317,8 +313,7 @@ on conflict (event_id, user_id) do update set
   status = excluded.status,
   additional_info = excluded.additional_info;
 
--- equipment (0025): one row per physical unit, mirroring equipment_catalog's
--- total_stock above — the same vocabulary coordinators already pick from
+-- equipment (0025): one row per physical unit, one per item in stock — the same vocabulary coordinators already pick from
 -- in equipment_requests, not a separate inventory. Re-running this file
 -- reseeds every unit; deleting and recreating them loses nothing meaningful
 -- since nothing here is a real E5-6 reservation (those are tied to a real
@@ -327,10 +322,27 @@ on conflict (event_id, user_id) do update set
 delete from equipment_booking where equipment_id in (select id from equipment where type in (select name from equipment_catalog));
 delete from equipment where type in (select name from equipment_catalog);
 
-insert into equipment (type, status)
-select ec.name, 'Available'
-from equipment_catalog ec
-cross join generate_series(1, ec.total_stock);
+insert into equipment (type, status, equipment_catalog_id)
+select ec.name, 'Available', ec.id
+from (values
+  ('Projector', 20),
+  ('Screen', 15),
+  ('PA system', 10),
+  ('Microphones', 40),
+  ('Livestream equipment', 8),
+  ('Video conferencing', 6),
+  ('Stage', 4),
+  ('Lighting rig', 6),
+  ('Folding table', 100),
+  ('Round table', 50),
+  ('Chairs', 300),
+  ('Gazebo tent', 25),
+  ('Registration desk', 10),
+  ('Name badge printer', 5),
+  ('Extension cords', 50)
+) as stock (name, quantity)
+join equipment_catalog ec on ec.name = stock.name
+cross join generate_series(1, stock.quantity);
 
 -- A couple of units out of service, so AC2 (excluded from usable
 -- inventory) has something real to exclude.

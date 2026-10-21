@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEventBookingInfo } from "../lib/eventsClient.js";
-import { fetchUnitsByType, unitsBlocked } from "../lib/equipmentConflicts.js";
+import { fetchUnitsByCatalogId, unitsBlocked } from "../lib/equipmentConflicts.js";
 import { unusableUnitsInWindow } from "../lib/unitUnavailability.js";
 import { occupiedWindow } from "../lib/scheduleWindow.js";
 import { validateAvailabilityQuery } from "../lib/validateAvailabilityQuery.js";
@@ -14,12 +14,11 @@ import { validateAvailabilityQuery } from "../lib/validateAvailabilityQuery.js";
  * PATCH), which is also what actually writes to equipment_booking (claiming
  * specific units when an item is marked Arranged/Partially Fulfilled).
  *
- * equipment_catalog.available_stock (migration 0022) is still the baseline
- * here — it's the one number guaranteed to reflect every arrangement E5-3
- * has made, including requests from before E5-6 existed. The per-unit
- * tables (shared with E5-6 via lib/equipmentConflicts.ts) layer AC2's
- * damaged/maintenance exclusion and AC1's overlapping-booking exclusion on
- * top of that baseline.
+ * Availability is counted from the units themselves (shared with E5-6 via
+ * lib/equipmentConflicts.ts): the units of the item, minus those out of use
+ * for the event's dates (AC2), minus those booked for an overlapping event
+ * (AC1). There is no stored stock counter in the sum (migration 0051), so a
+ * unit reserved for another day still counts as free here.
  */
 export const equipmentAvailabilityRouter = Router();
 
@@ -67,19 +66,18 @@ equipmentAvailabilityRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  let catalogRow: { available_stock: number } | null;
+  let catalogRow: { id: number } | null;
   let equipmentRows: { id: number; status: string }[];
   try {
-    const [catalogResult, units] = await Promise.all([
-      supabase.from("equipment_catalog").select("available_stock").eq("name", type).maybeSingle(),
-      fetchUnitsByType(supabase, type),
-    ]);
+    const catalogResult = await supabase.from("equipment_catalog").select("id").eq("name", type).maybeSingle();
     if (catalogResult.error) {
       res.status(500).json({ error: "Failed to load the equipment catalog" });
       return;
     }
     catalogRow = catalogResult.data;
-    equipmentRows = units;
+    // Units belong to a catalog item by id (migration 0048), so a type that
+    // isn't in the catalog has none.
+    equipmentRows = catalogRow ? await fetchUnitsByCatalogId(supabase, catalogRow.id) : [];
   } catch {
     res.status(500).json({ error: "Failed to load equipment" });
     return;
@@ -113,17 +111,7 @@ equipmentAvailabilityRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  // The catalog's own count if this type is in it (the real, live-updated
-  // number — see the file comment). It doesn't know about damaged/under-
-  // maintenance units at all, so those are still subtracted on top.
-  // Falling back to the raw unit count (no catalog entry for this type)
-  // needs no such subtraction — `usableIds` is already filtered to
-  // Available, so subtracting unusableCount again would double-count it.
-  const catalogAvailableStock = catalogRow?.available_stock ?? null;
-  const availableCount =
-    catalogAvailableStock !== null
-      ? Math.max(0, catalogAvailableStock - unusableCount - reservedElsewhereCount)
-      : Math.max(0, usableIds.length - reservedElsewhereCount);
+  const availableCount = Math.max(0, usableIds.length - reservedElsewhereCount);
   const shortfall = Math.max(0, quantity - availableCount);
 
   res.json({
@@ -131,7 +119,6 @@ equipmentAvailabilityRouter.get("/", async (req: AuthedRequest, res) => {
     type,
     requestedQuantity: quantity,
     totalUnits,
-    catalogAvailableStock,
     unusableCount,
     reservedElsewhereCount,
     availableCount,
