@@ -136,6 +136,16 @@ const TEMPLATES: Record<string, Template> = {
     };
   },
 
+  /** #36 in RabbitMQ.md section 3.7 (E2-15) — chat-service's first RabbitMQ trigger. Always the other party, so one rendering for everyone. */
+  "message.sent": (msg) => {
+    const eventName = String(msg.data.eventName ?? "an event");
+    return {
+      title: `New message about ${eventName}`,
+      body: String(msg.data.preview ?? ""),
+      link: eventLink(msg),
+    };
+  },
+
   /**
    * #104 (E7-2a): first trigger migrated off direct REST (ARD section
    * 1.1) — events-service's `POST /:id/assign` now publishes this instead
@@ -583,13 +593,6 @@ const TEMPLATES: Record<string, Template> = {
       link: eventLink(msg),
     };
   },
-
-  /** #36 in RabbitMQ.md section 3.7 (E2-15) — to the other party on the event's chat thread. */
-  "chat.message_sent": (msg) => ({
-    title: `New message about ${msg.data.eventName ?? "your event"}`,
-    body: String(msg.data.preview ?? ""),
-    link: eventLink(msg),
-  }),
 };
 
 /** `null` for a type with no template yet — the caller logs and skips it. */

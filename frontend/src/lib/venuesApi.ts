@@ -363,8 +363,9 @@ export async function fetchBufferOverlaps(venueId: number): Promise<BufferOverla
 }
 
 /** Bookings at one venue between two local dates, inclusive (at most 42 days). */
-export async function fetchVenueBookings(venueId: number, from: string, to: string): Promise<VenueBooking[]> {
-  const params = new URLSearchParams({ from, to });
+/** With no range, every booking at the venue. */
+export async function fetchVenueBookings(venueId: number, from?: string, to?: string): Promise<VenueBooking[]> {
+  const params = new URLSearchParams(from && to ? { from, to } : {});
   const res = await fetch(`${apiBase}/staff/${venueId}/bookings?${params}`, { headers: authHeader() });
   await redirectIfUnauthenticated(res);
   const body = await res.json();

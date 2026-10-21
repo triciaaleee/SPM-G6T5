@@ -28,7 +28,7 @@ type Channel = Awaited<ReturnType<Connection["createChannel"]>>;
  * M3: callers publish only after their own DB write has committed. M6:
  * this is a notification-only message, so a failed publish is logged and
  * swallowed — best effort, the same tolerance the REST path already had
- * (`notificationsFailed` in the response).
+ * (`notified` in the response).
  */
 function createRealPublisher(url: string): EventPublisher {
   let channelPromise: Promise<Channel> | undefined;

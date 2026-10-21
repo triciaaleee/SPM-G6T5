@@ -151,9 +151,7 @@ An event with no bookings, equipment or registrations produces only `event.cance
 
 | # | Trigger | Message | Recipients | Source |
 |---|---|---|---|---|
-| 36 | Organiser or coordinator sends a chat message | `chat.message_sent` | The other party on the event's thread | E2-15 AC1 |
-
-`data` carries `eventName` and a `preview` (the message cut to 140 characters).
+| 36 | New chat message | `message.sent` | The other party (coordinator if the organiser sent it, organiser if the coordinator sent it) | E2-15 |
 
 ## 4. Messages consumed for something other than notifications
 
