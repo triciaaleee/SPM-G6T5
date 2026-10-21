@@ -364,7 +364,7 @@ const TEMPLATES: Record<string, Template> = {
     const venueName = String(msg.data.venueName ?? "The venue");
     return {
       title: `Alternative venue needed for ${eventName}`,
-      body: `${venueName} is unavailable ${msg.data.period ?? ""}: ${msg.data.reason ?? ""}. ${eventName} on ${msg.data.date ?? ""} needs a replacement venue.`,
+      body: `${venueName} is unavailable ${msg.data.period ?? ""}: ${msg.data.reason ?? ""}. Your booking was cancelled, and ${eventName} on ${msg.data.date ?? ""} needs a replacement venue.`,
       link: eventLink(msg),
     };
   },

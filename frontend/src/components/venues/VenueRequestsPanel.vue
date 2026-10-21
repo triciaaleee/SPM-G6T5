@@ -28,7 +28,7 @@ import {
   type BookingSuitability,
   type EventVenueBooking,
 } from "../../lib/venuesApi";
-import { bookingStatusBadgeClass, bookingStatusLabel } from "../../lib/bookingStatus";
+import { bookingStatusBadgeClass, bookingStatusLabel, isActiveBooking } from "../../lib/bookingStatus";
 
 /**
  * The bookings are owned by the event page rather than fetched here: the
@@ -60,6 +60,18 @@ function purposeAndHeadcount(booking: BookingSuitability): string {
 }
 
 const emit = defineEmits<{ changed: [] }>();
+
+/**
+ * "Find replacement" is offered on a booking that needs a new venue: one
+ * flagged Replacement Required, or one the system Cancelled because its venue
+ * became unavailable. A Cancelled booking only offers it while the event has
+ * no other live booking, so it doesn't linger once a replacement is requested.
+ */
+function offersReplacement(booking: EventVenueBooking): boolean {
+  if (booking.status === "Replacement Required") return true;
+  if (booking.status !== "Cancelled") return false;
+  return !(props.bookings ?? []).some((other) => other.id !== booking.id && isActiveBooking(other.status));
+}
 
 const bookings = computed(() => props.bookings ?? []);
 
@@ -183,8 +195,12 @@ async function confirmAction(): Promise<void> {
           </p>
           <!-- E4-10 AC4: Venue Staff must record why they refused, and the
                coordinator is told it. -->
-          <p v-if="booking.status === 'Rejected' && booking.decisionReason" class="body-small reason">
+          <p v-if="(booking.status === 'Rejected' || booking.status === 'Cancelled') && booking.decisionReason"
+            class="body-small reason">
             Reason: {{ booking.decisionReason }}
+          </p>
+          <p v-if="booking.status === 'Cancelled' && offersReplacement(booking)" class="body-small reason">
+            This booking was cancelled automatically. Find a replacement venue for the event.
           </p>
           <p v-if="booking.status === 'Replacement Required'" class="body-small reason">
             This venue is no longer available. Find a replacement, then release this booking.
@@ -197,7 +213,7 @@ async function confirmAction(): Promise<void> {
           <span class="badge" :class="bookingStatusBadgeClass(booking.status)">
             {{ bookingStatusLabel(booking.status) }}
           </span>
-          <AppButton v-if="canWithdraw && findReplacementTo && booking.status === 'Replacement Required'"
+          <AppButton v-if="canWithdraw && findReplacementTo && offersReplacement(booking)"
             variant="primary" size="sm" class="action-btn" :to="findReplacementTo">
             Find replacement
           </AppButton>

@@ -73,6 +73,27 @@ describe("VenueRequestsPanel", () => {
     expect(JSON.parse(link.attributes("data-to")!)).toEqual({ name: "venue-search", query: { eventId: "7" } });
   });
 
+  it("offers Find replacement on a Cancelled booking only while the event has no other live booking", () => {
+    const stub = { RouterLink: { props: ["to"], template: '<a class="stub-link"><slot /></a>' } };
+    const props = { loading: false, loadError: null, canWithdraw: true, findReplacementTo: { name: "venue-search" } };
+
+    const lone = mount(VenueRequestsPanel, {
+      props: { ...props, bookings: [makeBooking({ status: "Cancelled", decisionReason: "Great Lawn became unavailable: Floor works" })] },
+      global: { stubs: stub },
+    });
+    expect(lone.find(".stub-link").text()).toBe("Find replacement");
+    expect(lone.find(".badge").text()).toBe("Cancelled");
+    expect(lone.find(".badge").classes()).toContain("status-error");
+    expect(lone.text()).toContain("Reason: Great Lawn became unavailable: Floor works");
+    expect(lone.text()).toContain("cancelled automatically");
+
+    const replaced = mount(VenueRequestsPanel, {
+      props: { ...props, bookings: [makeBooking({ status: "Cancelled" }), makeBooking({ id: 901, status: "Requested" })] },
+      global: { stubs: stub },
+    });
+    expect(replaced.find(".stub-link").exists()).toBe(false);
+  });
+
   it("hides Find replacement for other statuses and for non-coordinators", () => {
     const approved = mount(VenueRequestsPanel, {
       props: { bookings: [makeBooking({ status: "Approved" })], loading: false, loadError: null, canWithdraw: true, findReplacementTo: { name: "venue-search" } },

@@ -58,11 +58,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /**
  * Bookings a block-out can still affect: pending (Requested, On Hold) as
  * well as approved — none can be honoured once the venue is blocked.
- * Rejected, Expired, Withdrawn and already-flagged bookings are left alone.
+ * Rejected, Expired, Withdrawn, Cancelled and already-flagged bookings are left alone.
  */
 const LIVE_BOOKING_STATUSES = [BOOKING_STATUS.requested, BOOKING_STATUS.onHold, BOOKING_STATUS.approved];
 
-/** Only an Approved booking may move to Replacement Required (AGENTS.md §3a). */
+/** Only an Approved booking is cancelled by a block-out (AGENTS.md §3a); pending ones keep their status. */
 function needsReplacement(booking: { status: string }): boolean {
   return booking.status === BOOKING_STATUS.approved;
 }
@@ -215,21 +215,24 @@ async function flagAndNotify(
   if (toFlag.length > 0) {
     const { error } = await supabase
       .from("venue_bookings")
-      .update({ status: BOOKING_STATUS.replacementRequired })
+      .update({
+        status: BOOKING_STATUS.cancelled,
+        decision_reason: `${venue.name} became unavailable: ${period.reason}`,
+        decided_at: new Date().toISOString(),
+      })
       .in("id", toFlag)
       .eq("status", BOOKING_STATUS.approved);
     if (error) return { flagged: false, coordinatorsNotified: 0, notificationsFailed: false };
 
-    // E4-13 AC3: an Approved booking just flagged Replacement Required
-    // leaves UNAVAILABLE_BOOKING_STATUSES, which can resolve an overlap it
-    // was part of. Best-effort and after the write above has committed; no
+    // E4-13 AC3: an Approved booking just Cancelled leaves
+    // UNAVAILABLE_BOOKING_STATUSES, which can resolve an overlap it was part of. Best-effort and after the write above has committed; no
     // extra notification here since `buildMessage` below already tells
     // this booking's coordinator about the block-out itself.
     await reconcileBufferOverlapsSafely(supabase, venue.id, authorization);
 
     // The event was approved on this venue: tell events-service so a
     // Confirmed event moves to Needs Review and the coordinator can request
-    // a replacement. Best-effort; the booking is already flagged.
+    // a replacement. Best-effort; the booking is already cancelled.
     const flaggedEvents = new Map(affected.filter(needsReplacement).map((b) => [b.eventId, b]));
     await Promise.all(
       [...flaggedEvents.keys()].map((eventId) =>

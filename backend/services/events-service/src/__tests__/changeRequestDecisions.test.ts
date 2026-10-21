@@ -62,6 +62,8 @@ interface Options {
   flagBookingOk?: boolean;
   flagEquipmentOk?: boolean;
   flaggedRequestIds?: number[];
+  /** The event row comes back from the update without the approved values (the write did not take). */
+  storeIgnoresUpdate?: boolean;
   /** The event's status when the decision is made; left out, the fixture has none. */
   eventStatus?: string;
   /** Other Pending requests left on the event after a rejection (Needs Review only). */
@@ -101,10 +103,17 @@ function buildApp(options: Options = {}) {
   // Only the Needs Review -> Confirmed update awaits the chain directly.
   eventsUpdateChain.then = (resolve: (v: unknown) => unknown) =>
     Promise.resolve({ data: options.revertMatches === false ? [] : [{ id: 163 }], error: null }).then(resolve);
-  eventsUpdateChain.single = resolved(
-    options.eventUpdateError ? null : reloadedEvent,
-    options.eventUpdateError ? { message: "boom" } : null,
-  );
+  // Returns the row as the update left it, so the route's read-back check sees what was written.
+  let lastPatch: Record<string, unknown> = {};
+  eventsUpdateChain.single = vi.fn(async () => ({
+    data: options.eventUpdateError
+      ? null
+      : {
+          ...reloadedEvent,
+          submitted_details: options.storeIgnoresUpdate ? submittedDetails : (lastPatch.submitted_details ?? submittedDetails),
+        },
+    error: options.eventUpdateError ? { message: "boom" } : null,
+  }));
 
   const changeRequestSelectChain: any = {};
   changeRequestSelectChain.eq = () => changeRequestSelectChain;
@@ -144,7 +153,10 @@ function buildApp(options: Options = {}) {
   fieldsUpdateChain.eq = () => fieldsUpdateChain;
   fieldsUpdateChain.in = resolved(null, options.fieldsApplyError ? { message: "boom" } : null);
 
-  const eventsUpdateSpy = vi.fn(() => eventsUpdateChain);
+  const eventsUpdateSpy = vi.fn((patch: Record<string, unknown>) => {
+    lastPatch = patch;
+    return eventsUpdateChain;
+  });
   const changeRequestUpdateSpy = vi.fn(() => changeRequestUpdateChain);
 
   const supabase = {
@@ -425,6 +437,46 @@ describe("POST /api/events/:id/change-requests/:requestId/approve", () => {
       expect(res.body.remainingFields).toEqual([]);
       expect(changeRequestUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ status: "Approved" }));
     });
+  });
+});
+
+describe("a field is only applied once the change is confirmed", () => {
+  it("rolls the event back and stamps nothing when the stored event doesn't hold the approved value", async () => {
+    const { app, eventsUpdateSpy, changeRequestUpdateSpy } = buildApp({ eventStatus: "Confirmed", storeIgnoresUpdate: true });
+    const res = await request(app).post("/api/events/163/change-requests/5/approve");
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/expectedAttendance/);
+    // second call is the rollback to the pre-approval details and status
+    expect(eventsUpdateSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ submitted_details: submittedDetails, status: "Confirmed", safety_approval_stale: false }),
+    );
+    // never reached the point of marking the request Approved
+    expect(changeRequestUpdateSpy).not.toHaveBeenCalled();
+  });
+
+  it("rolls the event back when the field can't be stamped applied", async () => {
+    const { app, eventsUpdateSpy } = buildApp({ eventStatus: "Confirmed", fieldsApplyError: true });
+    const res = await request(app).post("/api/events/163/change-requests/5/approve");
+
+    expect(res.status).toBe(500);
+    expect(eventsUpdateSpy).toHaveBeenLastCalledWith(expect.objectContaining({ submitted_details: submittedDetails, status: "Confirmed" }));
+  });
+
+  it("rolls the event back when the request can't be closed out", async () => {
+    const { app, eventsUpdateSpy } = buildApp({ eventStatus: "Confirmed", decideError: true });
+    const res = await request(app).post("/api/events/163/change-requests/5/approve");
+
+    expect(res.status).toBe(500);
+    expect(eventsUpdateSpy).toHaveBeenLastCalledWith(expect.objectContaining({ submitted_details: submittedDetails, status: "Confirmed" }));
+  });
+
+  it("doesn't roll back a successful approval", async () => {
+    const { app, eventsUpdateSpy } = buildApp({ eventStatus: "Confirmed" });
+    const res = await request(app).post("/api/events/163/change-requests/5/approve");
+
+    expect(res.status).toBe(200);
+    expect(eventsUpdateSpy).toHaveBeenCalledTimes(1);
   });
 });
 

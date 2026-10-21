@@ -674,6 +674,12 @@ async function refreshAfterChangeDecision(updatedEvent: EventSummary): Promise<v
   fieldApprovalSelection.value = {};
   changeDecisionReason.value = "";
   await loadChangeRequests();
+  // The decision can change the attendance, schedule, venue or accessibility the
+  // venue plan and recommendations are built from, and it can flag bookings or
+  // equipment (and move the event to Needs Review), so reload what depends on them.
+  if (isCoordinator.value) {
+    await Promise.all([loadVenueBookings(), loadEquipmentRequests()]);
+  }
 }
 
 async function handleApproveChangeRequest(): Promise<void> {
@@ -2061,7 +2067,7 @@ onMounted(async () => {
   <h2 class="section-title">Venue Recommendations</h2>
   <!-- E4-17: what the next booking is for; recommendations and Find venues follow it. Re-keyed after
        each request so the next booking starts from the right defaults. -->
-  <BookingPlanForm v-if="canPlanBooking && suitability" :key="`${suitability.defaults.hasMainProgramme}-${suitability.defaults.liveBookingCount}`"
+  <BookingPlanForm v-if="canPlanBooking && suitability" :key="`${suitability.defaults.hasMainProgramme}-${suitability.defaults.liveBookingCount}-${JSON.stringify(suitability.defaults)}`"
     :defaults="suitability.defaults" :options="venueOptions" @update:plan="bookingPlan = $event" />
   <VenueRecommendations :event-id="event.id" :details="event.submitted_details"
     :can-request="canPlanBooking" :plan="recommendationPlan"

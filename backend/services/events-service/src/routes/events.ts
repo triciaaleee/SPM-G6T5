@@ -1863,10 +1863,11 @@ function fieldOutcome(
   alreadyApplied: boolean,
 ): "pending" | "applied" | "rejected" | "withdrawn" {
   if (!isCritical || alreadyApplied) return "applied";
-  if (requestStatus === CHANGE_REQUEST_STATUS.Pending) return "pending";
   if (requestStatus === CHANGE_REQUEST_STATUS.AutoWithdrawn) return "withdrawn";
   if (requestStatus === CHANGE_REQUEST_STATUS.Rejected) return "rejected";
-  return "applied";
+  // Pending, or Approved without the field ever being stamped applied: it
+  // has not been confirmed as applied, so don't say it was.
+  return "pending";
 }
 
 /**
@@ -1930,7 +1931,13 @@ async function loadEventForDecision(
   req: AuthedRequest,
   res: Response,
   eventId: string,
-): Promise<{ id: number; status: string; coordinator_id: string | null; submitted_details: Record<string, unknown> } | null> {
+): Promise<{
+  id: number;
+  status: string;
+  safety_approval_stale?: boolean;
+  coordinator_id: string | null;
+  submitted_details: Record<string, unknown>;
+} | null> {
   const { supabase, user } = req;
   if (!supabase || !user) {
     res.status(401).json({ error: "Unauthenticated" });
@@ -1943,7 +1950,7 @@ async function loadEventForDecision(
 
   const { data: event, error: eventError } = await supabase
     .from("events")
-    .select("id, status, coordinator_id, submitted_details")
+    .select("id, status, safety_approval_stale, coordinator_id, submitted_details")
     .eq("id", Number(eventId))
     .maybeSingle();
   if (eventError) {
@@ -1959,7 +1966,13 @@ async function loadEventForDecision(
     return null;
   }
 
-  return event as { id: number; status: string; coordinator_id: string | null; submitted_details: Record<string, unknown> };
+  return event as {
+    id: number;
+    status: string;
+    safety_approval_stale?: boolean;
+    coordinator_id: string | null;
+    submitted_details: Record<string, unknown>;
+  };
 }
 
 /**
@@ -2040,6 +2053,44 @@ eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedR
     return;
   }
 
+  // Undo the event write if a later step fails, so a field is never left
+  // changed on the event but not recorded as applied (or the reverse).
+  const rollback = async (): Promise<void> => {
+    await supabase
+      .from("events")
+      .update({
+        submitted_details: current,
+        status: event.status,
+        safety_approval_stale: event.safety_approval_stale ?? false,
+      })
+      .eq("id", event.id);
+    if (criticalFields.length > 0) {
+      await supabase
+        .from("change_request_fields")
+        .update({ applied_at: null })
+        .eq("request_id", changeRequest.id)
+        .in(
+          "field",
+          criticalFields.map((f) => f.field),
+        );
+    }
+  };
+
+  // A field only counts as applied once the stored event actually holds the
+  // approved value: read it back from the row the update returned.
+  const stored = ((updatedEvent as { submitted_details?: Record<string, unknown> } | null)?.submitted_details ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const notStored = criticalFields.filter((f) => String(stored[f.field] ?? "") !== String(updatedDetails[f.field] ?? ""));
+  if (notStored.length > 0) {
+    await rollback();
+    res.status(500).json({
+      error: `Couldn't apply the change to ${notStored.map((f) => f.field).join(", ")}. Nothing was changed; please try again.`,
+    });
+    return;
+  }
+
   // The approved fields are resolved — stamp them applied (migration 0041)
   // so they stop showing as held but the row (and its old/new value) stays
   // for the request's own history, instead of being deleted. Whatever's
@@ -2055,6 +2106,7 @@ eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedR
         criticalFields.map((f) => f.field),
       );
     if (applyError) {
+      await rollback();
       res.status(500).json({ error: "Failed to record the decision" });
       return;
     }
@@ -2066,6 +2118,7 @@ eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedR
       .update({ status: CHANGE_REQUEST_STATUS.Approved, decided_by: user.id, decided_at: new Date().toISOString() })
       .eq("id", changeRequest.id);
     if (decideError) {
+      await rollback();
       res.status(500).json({ error: "Failed to record the decision" });
       return;
     }
