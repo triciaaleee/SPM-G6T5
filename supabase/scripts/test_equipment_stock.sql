@@ -6,7 +6,7 @@
 --
 -- It creates its own catalog items ("ZZ Test ...") and requests, runs the
 -- functions that reserve and release equipment, and ROLLS BACK at the end, so
--- nothing is kept. Needs migrations 0048-0053 and at least one event and one
+-- nothing is kept. Needs migrations 0048-0054 and at least one event and one
 -- coordinator user (the normal seed has both).
 --
 -- Every check is logged, and the script ends by raising the log as an error
@@ -160,6 +160,16 @@ begin
   perform change_equipment_stock(cat, -1, 'Sold', null);
   perform pg_temp.assert_eq('removing a free unit lowers total_stock', pg_temp.total(cat), '9');
   perform pg_temp.assert_eq('removing a free unit deletes its row', pg_temp.units(cat), '9');
+
+  -- quantity_fulfilled follows the bookings by trigger (0054) -----------------------
+  -- Changing bookings directly, bypassing every function, must still keep the count right.
+  perform pg_temp.assert_eq('8 Reserved bookings mean fulfilled 8 (before the manual change)', pg_temp.fulfilled(i2), '8');
+  update equipment_booking set status = 'Released', released_at = now(), release_reason = 'manual test'
+    where id = (select min(id) from equipment_booking where request_item_id = i2 and status = 'Reserved');
+  perform pg_temp.assert_eq('releasing a booking by hand lowers quantity_fulfilled', pg_temp.fulfilled(i2), '7');
+  delete from equipment_booking
+    where id = (select min(id) from equipment_booking where request_item_id = i2 and status = 'Reserved');
+  perform pg_temp.assert_eq('deleting a booking by hand lowers quantity_fulfilled', pg_temp.fulfilled(i2), '6');
 
   raise notice 'ALL PASSED';
 end

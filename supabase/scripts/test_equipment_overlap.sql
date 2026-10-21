@@ -3,7 +3,7 @@
 -- non-overlapping one. Paste into the Supabase SQL editor and run. It ends by
 -- raising an error on purpose so everything rolls back; the message is the
 -- report, so a red "ERROR: RESULTS" box is the expected outcome.
--- Needs migrations 0048-0053, plus at least two events and one coordinator.
+-- Needs migrations 0048-0054, plus at least two events and one coordinator.
 
 do $$
 declare
