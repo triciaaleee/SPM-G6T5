@@ -340,12 +340,24 @@ const registrationDateValue = computed({
   },
 });
 
+/** Once a date is saved the card shows it, and the input comes back only after "Edit registration open date". */
+const editingRegistrationDate = ref(false);
+const showRegistrationDateInput = computed(
+  () => editingRegistrationDate.value || !event.value?.registration_open_date,
+);
+
+function cancelEditingRegistrationDate(): void {
+  registrationDateDirty.value = false;
+  editingRegistrationDate.value = false;
+}
+
 async function runRegistrationAction(action: () => Promise<EventSummary>): Promise<void> {
   isReviewing.value = true;
   actionError.value = null;
   try {
     event.value = await action();
     registrationDateDirty.value = false;
+    editingRegistrationDate.value = false;
     await loadHistory();
   } catch (err) {
     actionError.value = err instanceof ReviewActionError ? err.message : "We couldn't complete that action. Please try again.";
@@ -425,8 +437,6 @@ const editForm = reactive<EventRequestPayload>({
   technicalSupport: "",
   registrationNeeded: false,
 });
-/** The coordinator's registration open date, edited alongside the other details (YYYY-MM-DD, "" = not set). */
-const editRegistrationDate = ref("");
 const editFieldErrors = ref<Record<string, string>>({});
 const editGeneralError = ref<string | null>(null);
 const submittingEdit = ref(false);
@@ -450,7 +460,6 @@ function startEditingDetails(): void {
   editForm.equipment = details.equipment ?? "";
   editForm.technicalSupport = details.technicalSupport ?? "";
   editForm.registrationNeeded = details.registrationNeeded ?? false;
-  editRegistrationDate.value = event.value.registration_open_date ?? "";
 
   // E3-9: a field already held in a Pending request is pre-filled with
   // its *requested* value, not the committed one — otherwise simply
@@ -496,15 +505,6 @@ async function submitEditedDetails(): Promise<void> {
       return;
     }
     event.value = await updateEventDetails(event.value.id, editForm);
-    // The coordinator's registration open date is saved by its own route, after the details.
-    if (
-      canCoordinatorEdit.value &&
-      editForm.registrationNeeded &&
-      editRegistrationDate.value &&
-      editRegistrationDate.value !== (event.value.registration_open_date ?? "")
-    ) {
-      event.value = await setRegistrationOpenDate(event.value.id, editRegistrationDate.value);
-    }
     isEditingDetails.value = false;
     await Promise.all([clarificationPanelRef.value?.refresh(), loadHistory()]);
   } catch (err) {
@@ -1266,25 +1266,26 @@ onMounted(async () => {
               <div class="details-card">
                 <div class="section-header">
                   <h2 class="section-title">Event Details</h2>
-                  <button
+                  <AppButton
                     v-if="(canRespondToClarification || canEditDirectly || canCoordinatorEdit || canRequestChange) && !isEditingDetails"
-                    type="button" class="btn-icon"
+                    variant="outline" type="button" class="edit-details-btn"
                     :title="canRespondToClarification ? 'Edit & respond' : canRequestChange ? 'Request a change' : 'Edit request'"
                     :aria-label="canRespondToClarification ? 'Edit & respond' : canRequestChange ? 'Request a change' : 'Edit request'"
                     @click="startEditingDetails">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-                      stroke="currentColor" class="btn-icon__svg">
+                      stroke="currentColor" class="edit-details-btn__icon" aria-hidden="true">
                       <path stroke-linecap="round" stroke-linejoin="round"
-                        d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                        d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L6.832 19.82a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487Zm0 0L19.5 7.125" />
                     </svg>
-                  </button>
+                    Edit details
+                  </AppButton>
                 </div>
                 <p v-if="editBlockedMessage && !isEditingDetails" class="body-small muted edit-blocked-note">
                   {{ editBlockedMessage }}
                 </p>
                 <p v-if="canRequestChange && !isEditingDetails && !changeRequestResult"
                   class="body-small muted edit-blocked-note">
-                  This event is Confirmed. Use the edit icon to request a change — non-critical fields apply
+                  This event is Confirmed. Use Edit details to request a change — non-critical fields apply
                   immediately, critical fields (date/time, attendance, venue, equipment, accessibility) are held for
                   your coordinator to review.
                 </p>
@@ -1323,17 +1324,17 @@ onMounted(async () => {
                 <template v-if="isEditingDetails">
                   <div class="field-row field-row-3">
                     <div class="field">
-                      <label for="edit-name" class="body-small muted mb-1">Title</label>
+                      <label for="edit-name" class="edit-label">Title</label>
                       <input id="edit-name" v-model="editForm.name" type="text" class="edit-input" />
                       <p v-if="editFieldErrors.name" class="body-small error-text">{{ editFieldErrors.name }}</p>
                     </div>
                     <div class="field">
-                      <label for="edit-purpose" class="body-small muted mb-1">Purpose</label>
+                      <label for="edit-purpose" class="edit-label">Purpose</label>
                       <input id="edit-purpose" v-model="editForm.purpose" type="text" class="edit-input" />
                       <p v-if="editFieldErrors.purpose" class="body-small error-text">{{ editFieldErrors.purpose }}</p>
                     </div>
                     <div class="field">
-                      <label for="edit-expectedAttendance" class="body-small muted mb-1">Expected attendance</label>
+                      <label for="edit-expectedAttendance" class="edit-label">Expected attendance</label>
                       <input id="edit-expectedAttendance" v-model="editForm.expectedAttendance" type="number" min="1"
                         class="edit-input" />
                       <p v-if="editFieldErrors.expectedAttendance" class="body-small error-text">
@@ -1343,25 +1344,25 @@ onMounted(async () => {
                   </div>
                   <div class="field-row field-row-3">
                     <div class="field">
-                      <label for="edit-proposedDate" class="body-small muted mb-1">Proposed date</label>
+                      <label for="edit-proposedDate" class="edit-label">Proposed date</label>
                       <input id="edit-proposedDate" v-model="editForm.proposedDate" type="date" class="edit-input" />
                       <p v-if="editFieldErrors.proposedDate" class="body-small error-text">{{
                         editFieldErrors.proposedDate }}</p>
                     </div>
                     <div class="field">
-                      <label for="edit-startTime" class="body-small muted mb-1">Start time</label>
+                      <label for="edit-startTime" class="edit-label">Start time</label>
                       <input id="edit-startTime" v-model="editForm.startTime" type="time" class="edit-input" />
                       <p v-if="editFieldErrors.startTime" class="body-small error-text">{{ editFieldErrors.startTime }}
                       </p>
                     </div>
                     <div class="field">
-                      <label for="edit-endTime" class="body-small muted mb-1">End time</label>
+                      <label for="edit-endTime" class="edit-label">End time</label>
                       <input id="edit-endTime" v-model="editForm.endTime" type="time" class="edit-input" />
                       <p v-if="editFieldErrors.endTime" class="body-small error-text">{{ editFieldErrors.endTime }}</p>
                     </div>
                   </div>
                   <div class="field">
-                    <label for="edit-description" class="body-small muted mb-1">Description</label>
+                    <label for="edit-description" class="edit-label">Description</label>
                     <textarea id="edit-description" v-model="editForm.description" rows="3" class="edit-input" />
                     <p v-if="editFieldErrors.description" class="body-small error-text">{{ editFieldErrors.description
                     }}</p>
@@ -1413,12 +1414,12 @@ onMounted(async () => {
                 <template v-if="isEditingDetails">
                   <div class="field-row">
                     <div class="field">
-                      <label for="edit-venue" class="body-small muted mb-1">Venue Requirements</label>
+                      <label for="edit-venue" class="edit-label">Venue Requirements</label>
                       <textarea id="edit-venue" v-model="editForm.venue" rows="2" class="edit-input" />
                       <p v-if="editFieldErrors.venue" class="body-small error-text">{{ editFieldErrors.venue }}</p>
                     </div>
                     <div class="field">
-                      <label for="edit-equipment" class="body-small muted mb-1">Equipment Requirements</label>
+                      <label for="edit-equipment" class="edit-label">Equipment Requirements</label>
                       <textarea id="edit-equipment" v-model="editForm.equipment" rows="2" class="edit-input" />
                       <p v-if="editFieldErrors.equipment" class="body-small error-text">{{ editFieldErrors.equipment }}
                       </p>
@@ -1426,13 +1427,13 @@ onMounted(async () => {
                   </div>
                   <div class="field-row">
                     <div class="field">
-                      <label for="edit-accessibility" class="body-small muted mb-1">Accessibility Needs</label>
+                      <label for="edit-accessibility" class="edit-label">Accessibility Needs</label>
                       <textarea id="edit-accessibility" v-model="editForm.accessibility" rows="2" class="edit-input" />
                       <p v-if="editFieldErrors.accessibility" class="body-small error-text">{{
                         editFieldErrors.accessibility }}</p>
                     </div>
                     <div class="field">
-                      <label for="edit-technicalSupport" class="body-small muted mb-1">Technical Support</label>
+                      <label for="edit-technicalSupport" class="edit-label">Technical Support</label>
                       <textarea id="edit-technicalSupport" v-model="editForm.technicalSupport" rows="2"
                         class="edit-input" />
                       <p v-if="editFieldErrors.technicalSupport" class="body-small error-text">{{
@@ -1440,25 +1441,15 @@ onMounted(async () => {
                     </div>
                   </div>
                   <div class="field">
-                    <label class="body-small muted mb-1">Registration Needs (Where relevant)</label>
-                    <div class="flex gap-2" role="group" aria-label="Registration needed">
-                      <AppButton :variant="editForm.registrationNeeded ? 'primary' : 'outline'"
-                        :aria-pressed="editForm.registrationNeeded" @click="editForm.registrationNeeded = true">
-                        Yes
-                      </AppButton>
-                      <AppButton :variant="!editForm.registrationNeeded ? 'primary' : 'outline'"
-                        :aria-pressed="!editForm.registrationNeeded" @click="editForm.registrationNeeded = false">
-                        No
-                      </AppButton>
+                    <span id="edit-registration-label" class="edit-label">Registration needed</span>
+                    <div class="switch-row">
+                      <button type="button" role="switch" class="switch" :class="{ 'switch--on': editForm.registrationNeeded }"
+                        :aria-checked="editForm.registrationNeeded" aria-labelledby="edit-registration-label"
+                        data-testid="registration-needed-switch" @click="editForm.registrationNeeded = !editForm.registrationNeeded">
+                        <span class="switch__thumb" />
+                      </button>
+                      <span class="body-default">{{ editForm.registrationNeeded ? "Yes" : "No" }}</span>
                     </div>
-                  </div>
-                  <div v-if="canCoordinatorEdit && editForm.registrationNeeded" class="field">
-                    <label for="edit-registration-open-date" class="body-small muted mb-1">Registration open
-                      date</label>
-                    <input id="edit-registration-open-date" v-model="editRegistrationDate" type="date"
-                      class="edit-input" />
-                    <p class="body-small muted">Registration closes automatically 5 days before the event, or when it is
-                      full.</p>
                   </div>
                   <div class="edit-actions">
                     <AppButton variant="primary" type="button" :disabled="submittingEdit" @click="submitEditedDetails">
@@ -1494,17 +1485,6 @@ onMounted(async () => {
                       <p class="body-small muted mb-1">Registration Needs (Where relevant)</p>
                       <p class="body-default field-value">
                         {{ asSubmittedDetails(event.submitted_details).registrationNeeded ? "Yes" : "No" }}
-                      </p>
-                    </div>
-                    <div v-if="asSubmittedDetails(event.submitted_details).registrationNeeded" class="field"
-                      data-testid="registration-open-date">
-                      <p class="body-small muted mb-1">Registration open date</p>
-                      <p class="body-default field-value">
-                        {{ event.registration_open_date ? formatEventDate(event.registration_open_date) : "Not set" }}
-                        <span v-if="event.registration_override && event.registration_override !== 'NONE'"
-                          class="body-small muted">
-                          (manually {{ event.registration_override === "FORCE_OPEN" ? "opened" : "closed" }})
-                        </span>
                       </p>
                     </div>
                   </div>
@@ -1954,7 +1934,7 @@ onMounted(async () => {
 
           <div class="detail-grid-col">
             <div class="coordinator-card">
-              <h2 class="section-title">Coordinator</h2>
+              <h2 class="section-title !mb-5">Coordinator</h2>
               <div class="coordinator-person">
                 <span class="coordinator-avatar" :class="{ 'coordinator-avatar--empty': !event.coordinator?.name }"
                   aria-hidden="true">{{ event.coordinator?.name?.charAt(0).toUpperCase() ?? "–" }}</span>
@@ -2128,48 +2108,70 @@ onMounted(async () => {
                   <p v-else class="body-small muted">
                     No coordinator actions are available for this request's current status ({{ event.status }}).
                   </p>
-
-                  <!-- Registration period: when it opens, and the manual open/close -->
-                  <div v-if="showRegistrationControls" class="review-actions__form" data-testid="registration-controls">
-                    <h4 class="text-base font-semibold text-[--color-grey-900]">Registration</h4>
-                    <p class="body-small muted">
-                      Status: <strong data-testid="registration-state">{{ registrationStateLabel }}</strong>.
-                      Registration closes automatically 5 days before the event, or when it is full, and always stops
-                      when the event
-                      starts.
-                    </p>
-                    <p v-if="actionError && event.status !== 'Confirmed'" class="body-default error-text">{{ actionError
-                      }}</p>
-                    <label for="registration-open-date" class="body-small muted">Registration opens on</label>
-                    <div class="review-actions__buttons">
-                      <input id="registration-open-date" v-model="registrationDateValue" type="date"
-                        class="review-actions__textarea" />
-                      <AppButton variant="outline" type="button" :disabled="isReviewing || !registrationDateValue"
-                        @click="saveRegistrationDate">
-                        Save open date
-                      </AppButton>
-                    </div>
-                    <div v-if="event.status === 'Confirmed'" class="review-actions__buttons">
-                      <AppButton variant="primary" type="button"
-                        :disabled="isReviewing || event.registration_override === 'FORCE_OPEN'"
-                        @click="runRegistrationAction(() => openRegistration(event!.id))">
-                        Open registration
-                      </AppButton>
-                      <AppButton variant="danger" type="button"
-                        :disabled="isReviewing || event.registration_override === 'FORCE_CLOSED'"
-                        @click="runRegistrationAction(() => closeRegistration(event!.id))">
-                        Close registration
-                      </AppButton>
-                      <AppButton v-if="event.registration_override && event.registration_override !== 'NONE'"
-                        variant="outline" type="button" :disabled="isReviewing"
-                        @click="runRegistrationAction(() => followRegistrationSchedule(event!.id))">
-                        Use automatic schedule
-                      </AppButton>
-                    </div>
-                  </div>
                 </div>
               </div>
 
+            </div>
+
+            <!-- Registration period: when it opens, and the manual open/close. Its own card, apart from the
+                 coordinator review actions. -->
+            <div v-if="showRegistrationControls" class="details-card review-actions__form" data-testid="registration-controls">
+              <h2 class="section-title">Registration</h2>
+              <p class="body-small muted">
+                Status: <strong data-testid="registration-state">{{ registrationStateLabel }}</strong>.
+                Registration closes automatically 5 days before the event, or when it is full, and always stops
+                when the event
+                starts.
+              </p>
+              <p v-if="actionError && event.status !== 'Confirmed'" class="body-default error-text">{{ actionError
+                }}</p>
+              <template v-if="showRegistrationDateInput">
+                <label for="registration-open-date" class="body-small muted">Registration opens on</label>
+                <div class="review-actions__buttons">
+                  <input id="registration-open-date" v-model="registrationDateValue" type="date"
+                    class="review-actions__textarea" />
+                  <AppButton variant="outline" type="button" :disabled="isReviewing || !registrationDateValue"
+                    @click="saveRegistrationDate">
+                    Save open date
+                  </AppButton>
+                  <AppButton v-if="editingRegistrationDate" variant="ghost" type="button" :disabled="isReviewing"
+                    @click="cancelEditingRegistrationDate">
+                    Cancel
+                  </AppButton>
+                </div>
+              </template>
+              <template v-else>
+                <p class="body-small muted" data-testid="registration-open-date">
+                  Registration opens on
+                  <strong>{{ formatEventDate(event.registration_open_date!) }}</strong>
+                  <span v-if="event.registration_override && event.registration_override !== 'NONE'">
+                    (manually {{ event.registration_override === "FORCE_OPEN" ? "opened" : "closed" }})
+                  </span>
+                </p>
+                <div class="review-actions__buttons">
+                  <AppButton variant="outline" type="button" :disabled="isReviewing"
+                    @click="editingRegistrationDate = true">
+                    Edit registration open date
+                  </AppButton>
+                </div>
+              </template>
+              <div v-if="event.status === 'Confirmed'" class="review-actions__buttons">
+                <AppButton variant="primary" type="button"
+                  :disabled="isReviewing || event.registration_override === 'FORCE_OPEN'"
+                  @click="runRegistrationAction(() => openRegistration(event!.id))">
+                  Open registration
+                </AppButton>
+                <AppButton variant="danger" type="button"
+                  :disabled="isReviewing || event.registration_override === 'FORCE_CLOSED'"
+                  @click="runRegistrationAction(() => closeRegistration(event!.id))">
+                  Close registration
+                </AppButton>
+                <AppButton v-if="event.registration_override && event.registration_override !== 'NONE'"
+                  variant="outline" type="button" :disabled="isReviewing"
+                  @click="runRegistrationAction(() => followRegistrationSchedule(event!.id))">
+                  Use automatic schedule
+                </AppButton>
+              </div>
             </div>
 
             <!-- E3-1 AC3 / E3-4: what is still to settle before safety review (venues, equipment). Only the assigned
@@ -2336,9 +2338,7 @@ onMounted(async () => {
 }
 
 .body-default {
-  font-size: 16px;
-  line-height: 1.25rem;
-  letter-spacing:0.2px;
+  font-size: 18px;
 }
 
 .body-small {
@@ -2601,7 +2601,7 @@ onMounted(async () => {
   font-weight: 700;
   line-height: 1.75rem;
   color: var(--color-grey-900);
-  margin-bottom: var(--spacing-24)!important;
+  margin-bottom: var(--spacing-12);
 }
 
 .section-header {
@@ -2609,6 +2609,7 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-12);
+  margin-bottom: var(--spacing-32);
 }
 
 .section-header .section-title {
@@ -3339,6 +3340,69 @@ onMounted(async () => {
   background: var(--color-base-white);
   color: var(--color-purple-600);
   cursor: pointer;
+}
+
+/* Edit form labels: larger than the read-only captions, with room above the input. */
+.edit-label {
+  display: block;
+  margin-bottom: var(--spacing-12);
+  font-size: 1rem;
+  line-height: 1.25rem;
+  color: var(--color-grey-500);
+}
+
+/* "Edit details": outlined purple button with a pencil, top-right of the Event Details card. */
+.edit-details-btn {
+  gap: var(--spacing-8);
+}
+
+.edit-details-btn__icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* On/off switch (Registration needed). */
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+}
+
+.switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-grey-300);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.switch--on {
+  background: var(--color-purple-600);
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--color-purple-300);
+  outline-offset: 2px;
+}
+
+.switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-base-white);
+  transition: transform 0.15s ease;
+}
+
+.switch--on .switch__thumb {
+  transform: translateX(20px);
 }
 
 .btn-icon:hover {

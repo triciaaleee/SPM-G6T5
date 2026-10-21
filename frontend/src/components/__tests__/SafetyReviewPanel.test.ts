@@ -213,8 +213,26 @@ describe("SafetyReviewPanel — readiness checklist", () => {
     await flushPromises();
 
     expect(wrapper.get("button").attributes("disabled")).toBeDefined();
-    expect(wrapper.get('[data-testid="submit-note"]').text()).toContain("Available once all venues are approved.");
-    expect(wrapper.get('[data-testid="submit-note"]').text()).toContain("can't be edited while it is under review");
+    expect(wrapper.get('[data-testid="submit-note"]').text()).toBe("Available once all venues are approved.");
+  });
+
+  it("shows Needs action, and what to resolve, when a reserved item is unavailable", async () => {
+    const flagged = {
+      ...equipmentRequest([{ quantity: 1, quantityFulfilled: 1 }]).items[0],
+      equipmentType: "Chair",
+      reservationFlag: { flagged: true, reason: "Damaged" },
+    };
+    const wrapper = mountWith({
+      venueBookings: [booking("Approved", 1)],
+      equipmentRequests: [{ ...equipmentRequest([]), items: [flagged] }],
+    });
+    await flushPromises();
+
+    const equipment = wrapper.get('[data-testid="check-equipment"]');
+    expect(equipment.text()).toContain("Needs action");
+    expect(equipment.text()).toContain("A reserved chair is unavailable.");
+    expect(wrapper.get("button").attributes("disabled")).toBeDefined();
+    expect(wrapper.get('[data-testid="submit-note"]').text()).toBe("Resolve the equipment issue to submit.");
   });
 
   it("disables Submit, and says why, while equipment is still to be reserved", async () => {
@@ -233,7 +251,7 @@ describe("SafetyReviewPanel — readiness checklist", () => {
     await flushPromises();
 
     expect(wrapper.get("button").attributes("disabled")).toBeUndefined();
-    expect(wrapper.get('[data-testid="submit-note"]').text()).toContain("Ready to submit.");
+    expect(wrapper.get('[data-testid="submit-note"]').text()).toBe("The event can't be edited while it is under review.");
     await wrapper.get("button").trigger("click");
     expect(wrapper.find("form").exists()).toBe(true);
   });
