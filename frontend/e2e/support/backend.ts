@@ -458,24 +458,27 @@ export async function editEvent(
   return event;
 }
 
-export interface ConfirmedEvent {
+export interface ClimbedEvent {
   event: EventRow;
   organiser: Session;
   coordinator: Session;
+  lead: Session;
   venueStaff: Session;
+  safetyOfficer: Session;
+  venue: VenueRow;
   booking: VenueBookingRow;
 }
 
 /**
- * Drives a fresh event all the way to Confirmed through the real APIs:
- * submit, assign, approve, book and approve a venue, submit for and pass
- * safety review. For tests whose subject is what happens to a Confirmed
- * event, not the climb itself (event-lifecycle.e2e.ts covers that).
+ * Drives a fresh event to Safety Review through the real APIs: submit,
+ * assign, approve, book and approve a venue, submit for safety review. For
+ * tests whose subject is what happens next, not the climb itself
+ * (event-lifecycle.e2e.ts covers that).
  */
-export async function climbToConfirmed(
+export async function climbToSafetyReview(
   label: string,
   overrides: Partial<Record<string, unknown>> = {},
-): Promise<ConfirmedEvent> {
+): Promise<ClimbedEvent> {
   const organiser = await registerOrganiser(`${label}-organiser`);
   const [coordinator, lead, venueStaff, safetyOfficer] = await Promise.all([
     signInAsCoordinator(),
@@ -483,10 +486,7 @@ export async function climbToConfirmed(
     signInAsVenueStaff(),
     signInAsSafetyOfficer(),
   ]);
-  const event = await submitEvent(organiser, {
-    proposedDate: uniqueFutureDate(),
-    ...overrides,
-  });
+  const event = await submitEvent(organiser, { proposedDate: uniqueFutureDate(), ...overrides });
   await assignCoordinator(lead, event.id, coordinator.id);
   await approveRequest(coordinator, event.id);
   // Any of this staff member's venues, picked at random so parallel tests
@@ -495,9 +495,134 @@ export async function climbToConfirmed(
   const venue = venues[Math.floor(Math.random() * venues.length)];
   const requested = await requestVenueBooking(coordinator, event.id, venue.id);
   const booking = await approveVenueBooking(venueStaff, requested.id);
-  await submitForSafetyReview(coordinator, event.id);
-  const confirmed = await approveSafetyReview(safetyOfficer, event.id);
-  return { event: confirmed, organiser, coordinator, venueStaff, booking };
+  const inReview = await submitForSafetyReview(coordinator, event.id);
+  return { event: inReview, organiser, coordinator, lead, venueStaff, safetyOfficer, venue, booking };
+}
+
+/** climbToSafetyReview, then the Safety Officer approves: the event is Confirmed. */
+export async function climbToConfirmed(
+  label: string,
+  overrides: Partial<Record<string, unknown>> = {},
+): Promise<ClimbedEvent> {
+  const climbed = await climbToSafetyReview(label, overrides);
+  const confirmed = await approveSafetyReview(climbed.safetyOfficer, climbed.event.id);
+  return { ...climbed, event: confirmed };
+}
+
+/** Lead moves an event to a different active coordinator (E2-12); its status doesn't change. */
+export async function reassignCoordinator(lead: Session, eventId: number, coordinatorId: string): Promise<EventRow> {
+  const { event } = await call<{ event: EventRow }>("POST", `${EVENTS_URL}/${eventId}/reassign`, lead.token, {
+    coordinatorId,
+  });
+  return event;
+}
+
+export interface HistoryRow {
+  field: string;
+  old_value: string | null;
+  new_value: string | null;
+  changed_by: string;
+}
+
+/** The event's change history (field, old value, new value, who), newest first. */
+export async function fetchEventHistory(session: Session, eventId: number): Promise<HistoryRow[]> {
+  const { history } = await call<{ history: HistoryRow[] }>("GET", `${EVENTS_URL}/${eventId}/history`, session.token);
+  return history;
+}
+
+// ---- safety review outcomes ----------------------------------------------------
+
+export interface SafetyArrangement {
+  type: "venue_booking" | "equipment_item";
+  id: number;
+  note: string;
+}
+
+/** Safety Officer asks for specific arrangements to change — Safety Review -> Planning (E3-14). */
+export async function requestSafetyChanges(
+  safetyOfficer: Session,
+  eventId: number,
+  arrangements: SafetyArrangement[],
+  generalNote?: string,
+): Promise<EventRow> {
+  const { event } = await call<{ event: EventRow }>(
+    "POST",
+    `${EVENTS_URL}/${eventId}/safety-review/request-changes`,
+    safetyOfficer.token,
+    { arrangements, generalNote },
+  );
+  return event;
+}
+
+export interface SafetyChanges {
+  reason: string;
+  generalNote: string | null;
+  flags: { type: string; id: number; note: string; clearedAt: string | null }[];
+}
+
+/** The open "changes requested" outcome and its flags, or null when there's none. */
+export async function fetchSafetyChanges(session: Session, eventId: number): Promise<SafetyChanges | null> {
+  const { changeRequest } = await call<{ changeRequest: SafetyChanges | null }>(
+    "GET",
+    `${EVENTS_URL}/${eventId}/safety-changes`,
+    session.token,
+  );
+  return changeRequest;
+}
+
+// ---- change requests on a Confirmed event --------------------------------------
+
+export interface ChangeRequestResult {
+  changeRequestId: number;
+  applied: string[];
+  held: string[];
+}
+
+/** Organiser asks to change fields of a Confirmed / Needs Review event (E3-9). Only the fields sent are changed. */
+export async function raiseChangeRequest(
+  organiser: Session,
+  eventId: number,
+  fields: Record<string, unknown>,
+): Promise<ChangeRequestResult> {
+  return call<ChangeRequestResult>("POST", `${EVENTS_URL}/${eventId}/change-requests`, organiser.token, fields);
+}
+
+/** Assigned coordinator approves every held field of a change request (E3-11). */
+export async function approveChangeRequest(coordinator: Session, eventId: number, requestId: number): Promise<void> {
+  await call("POST", `${EVENTS_URL}/${eventId}/change-requests/${requestId}/approve`, coordinator.token, {});
+}
+
+/** Assigned coordinator rejects a whole change request, with a reason. */
+export async function rejectChangeRequest(
+  coordinator: Session,
+  eventId: number,
+  requestId: number,
+  reason: string,
+): Promise<void> {
+  await call("POST", `${EVENTS_URL}/${eventId}/change-requests/${requestId}/reject`, coordinator.token, { reason });
+}
+
+// ---- venue availability ----------------------------------------------------------
+
+/** Venue Staff block a venue out for whole days (E4-3), flagging and notifying any booking it hits. */
+export async function blockOutVenue(
+  venueStaff: Session,
+  venueId: number,
+  date: string,
+  reason: string,
+): Promise<void> {
+  await call("POST", `${VENUES_URL}/unavailability`, venueStaff.token, {
+    venueId,
+    startDate: date,
+    endDate: date,
+    allDay: true,
+    reason,
+  });
+}
+
+/** Coordinator releases a confirmed (or replaced) booking (E4-9, E4-15). */
+export async function releaseVenueBooking(coordinator: Session, bookingId: number): Promise<void> {
+  await call("POST", `${VENUES_URL}/bookings/${bookingId}/release`, coordinator.token, {});
 }
 
 // ---- reading other services' side of a flow ----------------------------------

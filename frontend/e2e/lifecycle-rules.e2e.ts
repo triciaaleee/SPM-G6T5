@@ -8,8 +8,11 @@ import {
   editEvent,
   eventDetails,
   expectRefused,
+  fetchEventHistory,
+  fetchMyNotifications,
   getEvent,
   registerOrganiser,
+  reassignCoordinator,
   rejectRequest,
   rejectSafetyReview,
   requestClarification,
@@ -205,5 +208,56 @@ test.describe("who may edit an event's details, and when", () => {
     await expectRefused(editEvent(organiser, event.id, details), 409);
     await expectRefused(editEvent(coordinator, event.id, details), 409);
     expect((await getEvent(organiser, event.id)).submitted_details).not.toMatchObject({ purpose: details.purpose });
+  });
+});
+
+test.describe("the Lead reassigning a coordinator (E2-12)", () => {
+  test("moves the event to the new coordinator without changing its status, and records who it was", async () => {
+    const organiser = await registerOrganiser("rules-reassign");
+    const [first, lead] = await Promise.all([signInAsCoordinator(), signInAsCoordinatorLead()]);
+    const second = await signInAsSeeded(SEEDED_ACCOUNTS.coordinatorTwo);
+    const event = await submitEvent(organiser);
+    await assignCoordinator(lead, event.id, first.id);
+
+    // Reassigning to whoever already has it isn't a reassignment.
+    await expectRefused(reassignCoordinator(lead, event.id, first.id), 400);
+
+    const moved = await reassignCoordinator(lead, event.id, second.id);
+    expect(moved.status).toBe("Requested");
+    expect(moved.coordinator_id).toBe(second.id);
+
+    const history = await fetchEventHistory(lead, event.id);
+    expect(history).toContainEqual(
+      expect.objectContaining({ field: "Coordinator", old_value: first.name, new_value: second.name }),
+    );
+
+    // The previous coordinator has lost it; the new one can act.
+    await expectRefused(approveRequest(first, event.id), 403);
+    expect((await approveRequest(second, event.id)).status).toBe("Planning");
+
+    // The previous coordinator is told it was taken off them.
+    await expect
+      .poll(
+        async () =>
+          (await fetchMyNotifications(first, 50)).some(
+            (n) => n.eventId === event.id && n.type === "coordinator.reassigned",
+          ),
+        {
+          message: "waiting for the previous coordinator's reassignment notification",
+          timeout: 10_000,
+        },
+      )
+      .toBe(true);
+  });
+
+  test("closed events can't be reassigned", async () => {
+    const organiser = await registerOrganiser("rules-reassign-closed");
+    const [first, lead] = await Promise.all([signInAsCoordinator(), signInAsCoordinatorLead()]);
+    const second = await signInAsSeeded(SEEDED_ACCOUNTS.coordinatorTwo);
+    const event = await submitEvent(organiser);
+    await assignCoordinator(lead, event.id, first.id);
+    await rejectRequest(first, event.id, "Not this term.");
+
+    await expectRefused(reassignCoordinator(lead, event.id, second.id), 409);
   });
 });
