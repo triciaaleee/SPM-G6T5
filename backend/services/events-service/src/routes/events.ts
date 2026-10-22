@@ -11,6 +11,7 @@ import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
 import { committedFieldValue, validateChangeRequestFields, withHeldValues } from "../lib/changeRequestFields.js";
 import { AUTO_APPLIED_REASON_PREFIX, CHANGE_REQUEST_STATUS } from "../lib/changeRequestStatus.js";
 import { publishDurably } from "../lib/outbox.js";
+import { announceReschedule, scheduleChanged, SCHEDULE_FIELDS } from "../lib/reschedule.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
 import {
@@ -963,6 +964,16 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
       user.id,
     );
 
+    if (scheduleChanged(oldDetails, result.value as unknown as Record<string, unknown>)) {
+      await announceReschedule(supabase, {
+        id: existing.id,
+        actorId: user.id,
+        eventName: eventDisplayName(data as unknown as AssignmentEventRow),
+        coordinatorId: existing.coordinator_id ?? null,
+        details: result.value as unknown as Record<string, unknown>,
+      });
+    }
+
     res.json({ event: data });
     return;
   }
@@ -1045,6 +1056,17 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     diffSubmittedDetailsStructured(oldDetails, result.value!),
     user.id,
   );
+
+  // Equipment can only be reserved from Planning on, so an earlier edit has nothing to move.
+  if (!isDraftSubmit && !PRE_PLANNING_STATUSES.has(existing.status) && scheduleChanged(oldDetails, result.value as unknown as Record<string, unknown>)) {
+    await announceReschedule(supabase, {
+      id: existing.id,
+      actorId: user.id,
+      eventName: eventDisplayName(data as unknown as AssignmentEventRow),
+      coordinatorId: existing.coordinator_id ?? null,
+      details: result.value as unknown as Record<string, unknown>,
+    });
+  }
 
   if (isClarificationResponse) {
     const diff = diffSubmittedDetails(oldDetails, result.value!);
@@ -2161,6 +2183,9 @@ eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedR
   }
 
   const eventName = eventDisplayName(updatedEvent as unknown as AssignmentEventRow);
+  if (criticalFields.some((f) => (SCHEDULE_FIELDS as readonly string[]).includes(f.field))) {
+    await announceReschedule(supabase, { id: event.id, actorId: user.id, eventName, coordinatorId: event.coordinator_id, details: stored });
+  }
   const published = await getPublisher().publish({
     type: "change.decided",
     eventId: event.id,
@@ -2333,6 +2358,9 @@ eventsRouter.get("/:id/safety-reviews", async (req: AuthedRequest, res) => {
  * while the request waits in the unassigned queue, waits on its
  * coordinator's review, or is in Planning.
  */
+/** Before Planning nothing is reserved yet, so a reschedule has no equipment to move. */
+const PRE_PLANNING_STATUSES = new Set<string>([EVENT_STATUS.Draft, EVENT_STATUS.Unassigned, EVENT_STATUS.Requested]);
+
 const ORGANISER_DIRECT_EDIT_STATUSES = new Set<string>([
   EVENT_STATUS.Unassigned,
   EVENT_STATUS.Requested,

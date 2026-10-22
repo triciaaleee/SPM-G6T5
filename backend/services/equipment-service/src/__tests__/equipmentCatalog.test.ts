@@ -125,7 +125,7 @@ describe("GET /api/equipment-catalog", () => {
     const res = await request(listApp({ user: coordinator }).app).get("/api/equipment-catalog");
 
     expect(res.status).toBe(200);
-    expect(res.body.equipmentCatalog).toEqual([{ id: 1, name: "Projector", totalStock: 10, availableStock: 6, unusableNow: 0 }]);
+    expect(res.body.equipmentCatalog).toEqual([{ id: 1, name: "Projector", totalStock: 10, availableStock: 6, unusableNow: 0, bookedCount: 4 }]);
   });
 
   // The numbers are worked out in SQL from the units, their unusable periods and
@@ -140,14 +140,43 @@ describe("GET /api/equipment-catalog", () => {
     const res = await request(app).get("/api/equipment-catalog");
 
     expect(res.body.equipmentCatalog).toEqual([
-      { id: 1, name: "Projector", totalStock: 3, availableStock: 0, unusableNow: 1 },
-      { id: 2, name: "Screen", totalStock: 4, availableStock: 4, unusableNow: 0 },
+      { id: 1, name: "Projector", totalStock: 3, availableStock: 0, unusableNow: 1, bookedCount: 2 },
+      { id: 2, name: "Screen", totalStock: 4, availableStock: 4, unusableNow: 0, bookedCount: 0 },
     ]);
     expect(rpc).toHaveBeenCalledWith("catalog_stock_now", {
       p_day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       p_start_ms: expect.any(Number),
       p_end_ms: expect.any(Number),
     });
+  });
+
+  it("shows the stock for the day asked for, so events on that day are what holds units", async () => {
+    const { app, rpc } = listApp({ stock: [stockRow(1, 10, 1, 4)] });
+
+    const res = await request(app).get("/api/equipment-catalog?date=2026-11-12");
+
+    expect(res.status).toBe(200);
+    expect(res.body.date).toBe("2026-11-12");
+    expect(res.body.equipmentCatalog[0]).toMatchObject({ totalStock: 10, availableStock: 4, unusableNow: 1, bookedCount: 5 });
+    expect(rpc).toHaveBeenCalledWith("catalog_stock_now", {
+      p_day: "2026-11-12",
+      p_start_ms: Date.UTC(2026, 10, 12),
+      p_end_ms: Date.UTC(2026, 10, 13),
+    });
+  });
+
+  it("defaults to today when no date is given", async () => {
+    const res = await request(listApp({}).app).get("/api/equipment-catalog");
+    expect(res.body.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it.each(["2026-02-30", "tomorrow", "12/11/2026"])("rejects the date %s", async (date) => {
+    const { app, rpc } = listApp({});
+    const res = await request(app).get(`/api/equipment-catalog?date=${encodeURIComponent(date)}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields.date).toBeTruthy();
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it("shows zero for an item the function returns nothing for", async () => {
@@ -170,7 +199,7 @@ describe("POST /api/equipment-catalog (E5-1 AC3)", () => {
 
     expect(res.status).toBe(201);
     expect(insertFn).toHaveBeenCalledWith({ name: "Lectern" });
-    expect(res.body.equipment).toEqual({ id: 2, name: "Lectern", totalStock: 4, availableStock: 4, unusableNow: 0 });
+    expect(res.body.equipment).toEqual({ id: 2, name: "Lectern", totalStock: 4, availableStock: 4, unusableNow: 0, bookedCount: 0 });
   });
 
   // E5-5: stock is also tracked per physical unit, so each can be marked damaged or under maintenance.
@@ -291,7 +320,7 @@ describe("POST /api/equipment-catalog/:id/stock (stock changes need a reason)", 
       p_reason: "New delivery",
       p_user: "TS-0001",
     });
-    expect(res.body.equipment).toEqual({ id: 1, name: "Projector", totalStock: 12, availableStock: 8, unusableNow: 0 });
+    expect(res.body.equipment).toEqual({ id: 1, name: "Projector", totalStock: 12, availableStock: 8, unusableNow: 0, bookedCount: 4 });
   });
 
   it("returns available stock with the units out of use taken off, like the list does", async () => {
@@ -299,7 +328,7 @@ describe("POST /api/equipment-catalog/:id/stock (stock changes need a reason)", 
 
     const res = await request(app).post("/api/equipment-catalog/1/stock").send({ direction: "add", quantity: 2, reason: "New delivery" });
 
-    expect(res.body.equipment).toEqual({ id: 1, name: "Projector", totalStock: 12, availableStock: 7, unusableNow: 1 });
+    expect(res.body.equipment).toEqual({ id: 1, name: "Projector", totalStock: 12, availableStock: 7, unusableNow: 1, bookedCount: 4 });
   });
 
   it("removes stock as a negative change", async () => {

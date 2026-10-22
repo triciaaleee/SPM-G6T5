@@ -26,6 +26,20 @@ export const CANCELLED_REQUEST_STATUS = "Cancelled";
 export const EQUIPMENT_REQUEST_STATUSES = ["Requested", "Arranged", "Partially Fulfilled"] as const;
 export type EquipmentRequestStatus = (typeof EQUIPMENT_REQUEST_STATUSES)[number];
 
+/** What one item amounts to, from its numbers alone: none, some or all of it arranged. */
+export function itemFulfilmentState(fulfilled: number, quantity: number): "Not arranged" | "Partially fulfilled" | "Arranged" {
+  if (fulfilled <= 0) return "Not arranged";
+  return fulfilled >= quantity ? "Arranged" : "Partially fulfilled";
+}
+
+/** Same colour convention as the request badge: Arranged reads as resolved, partial as a warning. */
+export function itemFulfilmentBadgeClass(fulfilled: number, quantity: number, notArrangedClass = "status-open"): string {
+  const state = itemFulfilmentState(fulfilled, quantity);
+  if (state === "Arranged") return "status-success";
+  if (state === "Partially fulfilled") return "status-warning";
+  return notArrangedClass;
+}
+
 export interface EquipmentRequest {
   id: number;
   eventId: number;
@@ -69,8 +83,10 @@ export interface EquipmentCatalogItem {
   totalStock: number;
   /** Stock not held by requests, minus the units out of use today (they return when their period ends). */
   availableStock: number;
-  /** How many units are out of use today and so already taken off `availableStock`; absent from older responses. */
+  /** How many units are out of use on the day shown and so already taken off `availableStock`; absent from older responses. */
   unusableNow?: number;
+  /** How many usable units events hold on the day shown, so total = available + booked + out of use; absent from older responses. */
+  bookedCount?: number;
 }
 
 export interface EquipmentItemInput {
@@ -137,9 +153,12 @@ export class EquipmentReservationShortfallError extends Error {
   }
 }
 
-/** The equipment catalog, for the request form's dropdown and Technical Support's stock table. */
-export async function fetchEquipmentCatalog(): Promise<EquipmentCatalogItem[]> {
-  const res = await fetch(catalogApiBase, { headers: authHeader() });
+/**
+ * The equipment catalog, for the request form's dropdown and Technical Support's stock table.
+ * `date` (YYYY-MM-DD) shows the stock for that day instead of today.
+ */
+export async function fetchEquipmentCatalog(date?: string): Promise<EquipmentCatalogItem[]> {
+  const res = await fetch(date ? `${catalogApiBase}?date=${encodeURIComponent(date)}` : catalogApiBase, { headers: authHeader() });
   await redirectIfUnauthenticated(res);
   if (!res.ok) throw new Error("Failed to load the equipment catalog");
   const body = await res.json();

@@ -310,11 +310,13 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  // E5-2: a cancelled request is no longer Technical Support's to act on.
+  // E5-2: a cancelled request is no longer Technical Support's to act on (the status
+  // update refuses it), but it stays in the list so they can look back at it: the
+  // queue's Cancelled / Past tab shows those, whether the coordinator cancelled the
+  // request or the event was cancelled.
   const { data: requests, error: requestsError } = await supabase
     .from("equipment_requests")
     .select("id, event_id, status, fulfillment_note, created_at")
-    .neq("status", CANCELLED)
     .order("created_at", { ascending: false });
 
   if (requestsError || !requests) {
@@ -394,7 +396,6 @@ equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) =
     .from("equipment_requests")
     .select("id, event_id, status, fulfillment_note, created_at")
     .eq("event_id", eventId)
-    .neq("status", CANCELLED)
     .order("created_at", { ascending: true });
 
   if (requestsError || !requests) {
@@ -523,7 +524,7 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     return;
   }
   if (existingRequest.status === CANCELLED) {
-    res.status(409).json({ error: "This request was cancelled by the coordinator." });
+    res.status(409).json({ error: "This request was cancelled, so its status can't be updated." });
     return;
   }
 

@@ -20,7 +20,7 @@ One durable queue per consuming service, bound only to the routing keys it acts 
 | `notification-service` | `#` (everything) | Every message names people to notify |
 | `events-service` | `booking.replacement_required` | Moves a `Confirmed` event to `Needs Review`, or a `Safety Review` event to `Planning` (AGENTS.md section 3). Today venue-service reports it over REST (`POST /api/events/:id/arrangements-changed`, internal token) after the booking write commits |
 | `venue-service` | `event.cancelled` | Withdraws every active booking of the event (E3-6) |
-| `equipment-service` | `event.cancelled`, `change.decided` | Releases reservations (E3-6) or re-checks them after a date, time or duration change (E5-6 AC3) |
+| `equipment-service` | `event.cancelled`, `event.rescheduled` | Releases reservations (E3-6), or moves each reserved unit's stored booking window when the event's date, start time or end time changes and re-checks the reservations against it (E5-6 AC3) |
 | `registration-service` | `event.cancelled` | Closes registration and cancels every place (E3-6) |
 
 ## 2. Message envelope
@@ -89,6 +89,7 @@ Every message has the same outer shape, so notification-service can route any of
 | 12 | Organiser raises a change request | `change.requested` | Assigned coordinator | Wk4 A20 "important event changes"; E3-9 AC1 |
 | 13 | Coordinator decides a change request | `change.decided` | Organiser; venue staff of affected bookings and Technical Support if venue or equipment is affected | E3-11 AC1 to AC4 |
 | 14 | Organiser cancels the event | `event.cancelled` (with reason) | Organiser (confirmation); assigned coordinator with the reason (leads if `Unassigned`) | Wk4 A20 "cancellation"; E3-6 AC1 |
+| 14a | An event's date, start time or end time changes (an edit in `Planning`, or an approved change request) | `event.rescheduled` (`proposedDate`, `startTime`, `endTime`, `coordinatorId`) | None. Consumed by equipment-service only (section 4); notification-service skips it without a warning | Keeps equipment booking windows in step with the event (E5-6) |
 
 ### 3.3 Venue bookings (venue-service)
 
@@ -114,6 +115,7 @@ Every message has the same outer shape, so notification-service can route any of
 | 27 | Coordinator amends types or quantities | `equipment.amended` (what changed) | Technical Support | E5-2 AC1 (Team; not in Wk4 or Wk7) |
 | 28 | Technical Support changes the request's status, including reserving or partly fulfilling it | `equipment.status_changed` | Assigned coordinator | E5-3 AC1, AC2 |
 | 29 | Item marked unusable while reserved | `equipment.unusable` | Assigned coordinator | E5-5 AC2 |
+| 29a | An event was rescheduled and units reserved for it now clash with another event's booking or an out-of-use period | `equipment.reservation_clash` (`units`) | Assigned coordinator; Technical Support | E5-6 AC3 |
 | 30 | Coordinator cancels an equipment request | `equipment.released` (`reason: coordinator_cancelled`) | Technical Support | E5-2 AC3 (Team; not in Wk4 or Wk7) |
 
 ### 3.5 Registration (registration-service)
@@ -161,11 +163,11 @@ An event with no bookings, equipment or registrations produces only `event.cance
 | `event.cancelled` | venue-service | Withdraws every active booking, then publishes #33 |
 | `event.cancelled` | equipment-service | Releases reservations, then publishes #34 |
 | `event.cancelled` | registration-service | Cancels registrations, then publishes #35 |
-| `change.decided` | equipment-service | Re-checks reservations when the date, time or duration changed (E5-6 AC3); a reservation that no longer holds is published as `equipment.status_changed` |
+| `event.rescheduled` | equipment-service | Sets the stored window (`window_start_ms`, `window_end_ms`) on every `Reserved` booking of the event to the new date and time, then checks them for clashes. If any unit now clashes, tells events-service the arrangements changed (a `Confirmed` event moves to `Needs Review`, one in `Planning` is left as it is) and publishes #29a. Safe to process twice: the notification keeps one `messageId` |
 
-### Reliable delivery for `event.cancelled`
+### Reliable delivery for `event.cancelled` and `event.rescheduled`
 
-The messages above are best effort: if the broker is down when a service publishes, the message is logged and dropped. That is fine for a notification. It is not fine for `event.cancelled`, which three services act on, so events-service stores it in its own `event_outbox` table (migration `0045`) right after the cancellation, publishes it, and retries from a relay (every 10 seconds) until the broker confirms it. The publisher uses a confirm channel, so "published" means the broker accepted the message.
+The messages above are best effort: if the broker is down when a service publishes, the message is logged and dropped. That is fine for a notification. It is not fine for `event.cancelled`, which three services act on, so events-service stores it (and `event.rescheduled`, which equipment-service must also act on) in its own `event_outbox` table (migration `0045`) right after the cancellation, publishes it, and retries from a relay (every 10 seconds) until the broker confirms it. The publisher uses a confirm channel, so "published" means the broker accepted the message.
 
 Delivery is at-least-once: a retry reuses the stored `messageId`, so every consumer of `event.cancelled` must be safe to run twice. Today they are (each only matches rows still active). The store is not in the same transaction as the cancellation, so a crash between the two can still lose the message; the window is far smaller than a broker outage.
 

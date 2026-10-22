@@ -167,6 +167,21 @@ function buildApp(options: Options = {}) {
       }
       if (table === "change_request_fields") return { select: () => fieldsSelectChain, update: () => fieldsUpdateChain };
       if (table === "event_history") return { insert: resolved(null, options.historyError ? { message: "boom" } : null) };
+      // The outbox stores a message before publishing it; echo the stored row back.
+      if (table === "event_outbox") {
+        return {
+          insert: (payload: Record<string, unknown>) => ({
+            select: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: { id: 1, message_id: "00000000-0000-0000-0000-000000000001", occurred_at: "2099-01-01T00:00:00Z", ...payload },
+                  error: null,
+                }),
+            }),
+          }),
+          update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        };
+      }
       throw new Error(`unexpected table ${table}`);
     }),
   };
@@ -340,6 +355,27 @@ describe("POST /api/events/:id/change-requests/:requestId/approve", () => {
       );
       // Nothing left held — the request closes out as Approved.
       expect(changeRequestUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ status: "Approved" }));
+    });
+
+    it("tells equipment-service the event was rescheduled when an approved field is a date or time", async () => {
+      const { app } = buildApp({ fields: twoHeldFields, bookings: [] });
+      await request(app).post("/api/events/163/change-requests/5/approve").send({ fields: ["startTime"] });
+
+      const rescheduled = publish.mock.calls.map((c) => c[0]).filter((m) => m.type === "event.rescheduled");
+      expect(rescheduled).toEqual([
+        expect.objectContaining({
+          eventId: 163,
+          recipients: { userIds: [], roles: [] },
+          data: expect.objectContaining({ startTime: "19:00" }),
+        }),
+      ]);
+    });
+
+    it("does not announce a reschedule when the approved field is not a date or time", async () => {
+      const { app } = buildApp({ fields: twoHeldFields, bookings: [] });
+      await request(app).post("/api/events/163/change-requests/5/approve").send({ fields: ["expectedAttendance"] });
+
+      expect(publish.mock.calls.map((c) => c[0].type)).not.toContain("event.rescheduled");
     });
 
     it("approves only the named fields and leaves the rest held, not rejected", async () => {

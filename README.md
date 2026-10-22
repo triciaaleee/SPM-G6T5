@@ -80,6 +80,8 @@ Who publishes what:
 
 **Action messages are retried.** `event.cancelled` (which venue, equipment and registration services act on) is stored in events-service's `event_outbox` table (migration `0045`) and republished every 10 seconds until RabbitMQ confirms it, so a broker outage doesn't leave a cancelled event with its bookings still held. Apply the migration before starting events-service. Every other message is still best effort.
 
+**Restart equipment-service after pulling.** It binds its queue to `event.cancelled` and `event.rescheduled` when it starts, so a service that was already running keeps the old bindings and will not see reschedules (stored equipment booking windows then stay at the old dates until the next claim).
+
 ### Service-to-service auth
 
 `INTERNAL_SERVICE_SECRET` signs short-lived internal tokens for calls that have no end-user bearer token to forward. Two cases today:

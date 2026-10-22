@@ -738,6 +738,29 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders equipment.reservation_clash with the event page for the coordinator and the request for Technical Support", async () => {
+    const { supabase, insert } = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.reservation_clash",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: ["technical_support"] },
+        data: { eventName: "Alumni Gala", coordinatorId: "COORD-0001", units: 2 },
+      }),
+      { supabase, resolveRoleUserIds: vi.fn().mockResolvedValue(["TS-0001"]) },
+    );
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "Reserved equipment clashes after a reschedule",
+        body: "Alumni Gala was rescheduled. 2 reserved equipment units now clash with another event's booking or an out-of-use period. Technical Support will need to arrange a replacement.",
+        link: "/events/7",
+      }),
+      expect.objectContaining({ recipient_id: "TS-0001", link: "/equipment-requests/event/7" }),
+    ]);
+  });
+
   it("renders equipment.unusable for the coordinator, with and without an end date (E5-5 AC2)", async () => {
     const dated = buildSupabase();
     await handleInboundMessage(
@@ -999,6 +1022,23 @@ describe("handleInboundMessage", () => {
     expect(insert).toHaveBeenCalledWith([
       expect.objectContaining({ recipient_id: "COORD-0001", body: expect.stringContaining("2 projectors short") }),
     ]);
+  });
+
+  it("skips event.rescheduled quietly: other services act on it, nobody is notified", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleInboundMessage(buildMsg({ type: "event.rescheduled", recipients: { userIds: ["ORG-0001"], roles: ["coordinator_lead"] } }), {
+      supabase,
+      resolveRoleUserIds,
+    });
+
+    expect(supabase.from).not.toHaveBeenCalled();
+    expect(resolveRoleUserIds).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("throws when the insert fails, so the caller nacks", async () => {

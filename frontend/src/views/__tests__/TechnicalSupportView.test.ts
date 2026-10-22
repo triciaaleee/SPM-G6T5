@@ -172,7 +172,7 @@ describe("TechnicalSupportView", () => {
     ]);
 
     const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
-    expect(tabs).toEqual(["Requested 2", "Arranged 1", "Partially Fulfilled 0"]);
+    expect(tabs).toEqual(["Requested 2", "Arranged 1", "Partially Fulfilled 0", "Cancelled / Past 0"]);
     expect(dataRows(wrapper)).toHaveLength(2);
 
     await wrapper.findAll("[role='tab']")[1].trigger("click");
@@ -303,5 +303,64 @@ describe("TechnicalSupportView", () => {
     await flushPromises();
 
     expect(wrapper.find("[role='alert']").text()).toContain("couldn't load equipment requests");
+  });
+  describe("Cancelled / Past tab", () => {
+    const tabNames = (wrapper: Awaited<ReturnType<typeof mountView>>) =>
+      wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " ").replace(/\d+$/, "").trim());
+    const openHistory = async (wrapper: Awaited<ReturnType<typeof mountView>>) => {
+      await wrapper.findAll("[role='tab']")[3].trigger("click");
+    };
+
+    it("adds a last tab after the three statuses", async () => {
+      const wrapper = await mountView([makeRequest()]);
+      expect(tabNames(wrapper)).toEqual(["Requested", "Arranged", "Partially Fulfilled", "Cancelled / Past"]);
+    });
+
+    it("holds cancelled requests, and arranged or partly arranged ones whose event has passed, and keeps them out of the other tabs", async () => {
+      const wrapper = await mountView([
+        makeRequest({ id: 1, name: "Upcoming", offset: 5 }),
+        makeRequest({ id: 2, name: "Cancelled Gala", offset: 5, status: "Cancelled" }),
+        makeRequest({ id: 3, name: "Done Last Week", offset: -7, status: "Arranged", items: [{ type: "Projector", quantity: 2, fulfilled: 2 }] }),
+        makeRequest({ id: 4, name: "Partly Last Week", offset: -3, status: "Partially Fulfilled", items: [{ type: "Projector", quantity: 4, fulfilled: 1 }] }),
+        makeRequest({ id: 5, name: "Arranged Next Week", offset: 7, status: "Arranged", items: [{ type: "Projector", quantity: 2, fulfilled: 2 }] }),
+      ]);
+
+      // Requested has only the upcoming one; Arranged only the one still to come.
+      expect(groupTitles(wrapper)).toEqual(["Upcoming"]);
+      await wrapper.findAll("[role='tab']")[1].trigger("click");
+      expect(groupTitles(wrapper)).toEqual(["Arranged Next Week"]);
+
+      await openHistory(wrapper);
+      // Newest event first.
+      expect(groupTitles(wrapper)).toEqual(["Cancelled Gala", "Partly Last Week", "Done Last Week"]);
+      expect(wrapper.findAll("[data-testid='history-label']").map((l) => l.text())).toEqual(["Cancelled", "Past event", "Past event"]);
+      expect(wrapper.findAll("[role='tab']")[3].text()).toContain("3");
+    });
+
+    it("leaves an unarranged request for a past event under Requested, as overdue", async () => {
+      const wrapper = await mountView([makeRequest({ id: 1, name: "Missed", offset: -2 })]);
+
+      expect(groupTitles(wrapper)).toEqual(["Missed"]);
+      await openHistory(wrapper);
+      expect(groupTitles(wrapper)).toEqual([]);
+    });
+
+    it("shows everything in it whatever date range is chosen, and still filters by equipment", async () => {
+      const wrapper = await mountView([
+        makeRequest({ id: 1, name: "Far Cancelled", offset: 200, status: "Cancelled" }),
+        makeRequest({ id: 2, name: "Mics Cancelled", offset: 3, status: "Cancelled", items: [{ type: "Microphones", quantity: 1 }] }),
+      ]);
+      await openHistory(wrapper);
+      expect(groupTitles(wrapper)).toEqual(["Far Cancelled", "Mics Cancelled"]);
+
+      await wrapper.find("select[aria-label='Equipment']").setValue("Microphones");
+      expect(groupTitles(wrapper)).toEqual(["Mics Cancelled"]);
+    });
+
+    it("says so when there is nothing in it", async () => {
+      const wrapper = await mountView([makeRequest()]);
+      await openHistory(wrapper);
+      expect(wrapper.find(".empty-state").text()).toContain("No cancelled or past requests.");
+    });
   });
 });

@@ -1,9 +1,10 @@
 -- DEV ONLY. Checks reserve_equipment_request (0050, 0051) refuses a unit
 -- that is booked for overlapping dates or unavailable for them, and allows a
--- non-overlapping one. Paste into the Supabase SQL editor and run. It ends by
+-- non-overlapping one, and (case 5) that equipment_reschedule_clashes (0055)
+-- reports a booking that a reschedule made clash. Paste into the Supabase SQL editor and run. It ends by
 -- raising an error on purpose so everything rolls back; the message is the
 -- report, so a red "ERROR: RESULTS" box is the expected outcome.
--- Needs migrations 0048-0054, plus at least two events and one coordinator.
+-- Needs migrations 0048-0056, plus at least two events and one coordinator.
 
 do $$
 declare
@@ -13,6 +14,7 @@ declare
   day bigint := 86400000;
   t0 bigint := 1900000000000;  -- an arbitrary instant; only differences matter
   res text := '';
+  kinds text;
   err text;
   r record;
 begin
@@ -78,6 +80,38 @@ begin
       jsonb_build_array(jsonb_build_object('itemId', i1, 'unitIds', jsonb_build_array(u1))), t0, t0 + day);
   exception when others then err := sqlerrm; end;
   res := res || E'\n4 unavailable period: ' || coalesce(err, 'NOT REFUSED (bug)');
+
+  -- 5. equipment_reschedule_clashes (0055): the unit is held by event 1 on day 0 and event 2 on day 2.
+  delete from equipment_unavailability where equipment_id = u1;  -- test cleanup only
+  delete from equipment_booking where equipment_id = u1;
+  insert into equipment_booking (equipment_id, event_id, request_item_id, window_start_ms, window_end_ms)
+    values (u1, ev1, i1, t0, t0 + day), (u1, ev2, i2, t0 + 2 * day, t0 + 3 * day);
+  select coalesce(string_agg(kind, ','), 'none') into kinds from equipment_reschedule_clashes(ev1);
+  res := res || E'\n5 different days, clashes for event 1: ' || kinds || ' (expect none)';
+
+  -- 5b. Event 1 is rescheduled onto event 2's day: that booking now clashes.
+  update equipment_booking set window_start_ms = t0 + 2 * day, window_end_ms = t0 + 3 * day
+    where event_id = ev1 and equipment_id = u1;
+  select coalesce(string_agg(kind, ','), 'none') into kinds from equipment_reschedule_clashes(ev1);
+  res := res || E'\n5b rescheduled onto the other event\'s day: ' || kinds || ' (expect booking)';
+
+  -- 5c. Adjacent windows (one ends as the other starts) don't clash.
+  update equipment_booking set window_start_ms = t0 + 3 * day, window_end_ms = t0 + 4 * day
+    where event_id = ev1 and equipment_id = u1;
+  select coalesce(string_agg(kind, ','), 'none') into kinds from equipment_reschedule_clashes(ev1);
+  res := res || E'\n5c back-to-back windows: ' || kinds || ' (expect none)';
+
+  -- 5d. Rescheduled into an out-of-use period: reported as unavailable.
+  insert into equipment_unavailability (equipment_id, reason, start_date, end_date)
+    values (u1, 'Under Maintenance', (to_timestamp((t0 + 3 * day) / 1000.0) at time zone 'UTC')::date, null);
+  select coalesce(string_agg(kind, ','), 'none') into kinds from equipment_reschedule_clashes(ev1);
+  res := res || E'\n5d inside an out-of-use period: ' || kinds || ' (expect unavailable)';
+
+  -- 5e. Released bookings and the other event are not reported.
+  update equipment_booking set status = 'Released', released_at = now(), release_reason = 'test'
+    where event_id = ev1 and equipment_id = u1;
+  select coalesce(string_agg(kind, ','), 'none') into kinds from equipment_reschedule_clashes(ev1);
+  res := res || E'\n5e after releasing event 1: ' || kinds || ' (expect none)';
 
   raise exception 'RESULTS%', res;
 end

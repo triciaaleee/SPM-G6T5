@@ -1,10 +1,12 @@
 <script setup lang="ts">
 /**
  * The equipment inventory. Technical Support see every item with its total and
- * available stock and can add a new item.
+ * available stock and can add a new item. The date above the table shows the
+ * stock on any day: how many units events hold that day, how many are out of
+ * use and how many are left, so they can see what each day's events leave free.
  *
- * Available stock is calculated — request statuses move it as equipment is
- * reserved and released — so it is read-only here. Total stock changes only
+ * Available stock is calculated — from the units, their bookings and their
+ * out-of-use periods — so it is read-only here. Total stock changes only
  * through "Add stock" and "Remove stock", each with a quantity and a required
  * reason and a confirmation; the unit rows are created or removed to match, and
  * only free units (not reserved, not out of use) can be removed. Every change is
@@ -27,7 +29,16 @@ import {
   type StockChange,
 } from "../lib/equipmentApi";
 
+/** Today's calendar date in Singapore (UTC+8), YYYY-MM-DD — the same reading events use. */
+function todaySingapore(): string {
+  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 const items = ref<EquipmentCatalogItem[]>([]);
+const selectedDate = ref(todaySingapore());
+const dateLoading = ref(false);
+const dateError = ref<string | null>(null);
+const isToday = computed(() => selectedDate.value === todaySingapore());
 const loading = ref(true);
 const errorMessage = ref<string | null>(null);
 const notice = ref<string | null>(null);
@@ -38,10 +49,38 @@ const notice = ref<string | null>(null);
  */
 async function refreshCatalog(): Promise<void> {
   try {
-    items.value = await fetchEquipmentCatalog();
+    items.value = await fetchEquipmentCatalog(selectedDate.value);
   } catch {
     // The numbers are only stale until the next load.
   }
+}
+
+/** Shows the stock for the chosen day. If it can't be read the table keeps the day it had. */
+async function showDate(date: string): Promise<void> {
+  if (!date) return;
+  const previous = selectedDate.value;
+  selectedDate.value = date;
+  dateLoading.value = true;
+  dateError.value = null;
+  try {
+    items.value = await fetchEquipmentCatalog(date);
+  } catch {
+    selectedDate.value = previous;
+    dateError.value = "We couldn't load the stock for that day. Please try again.";
+  } finally {
+    dateLoading.value = false;
+  }
+}
+
+function showToday(): Promise<void> {
+  return showDate(todaySingapore());
+}
+
+function formatDay(value: string): string {
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 }
 
 // Change stock -----------------------------------------------------------------
@@ -103,6 +142,8 @@ async function applyChange(): Promise<void> {
     const updated = await changeStock(item.id, { direction: change.direction, quantity, reason: change.reason.trim() });
     const verb = change.direction === "add" ? "Added" : "Removed";
     Object.assign(item, updated);
+    // The reply is worked out for today; on another day only the total carries over, so re-read the rest.
+    if (!isToday.value) await refreshCatalog();
     notice.value = `${verb} ${quantity} ${item.name}. Total stock is now ${updated.totalStock}.`;
     change.itemId = null;
     change.confirming = false;
@@ -245,6 +286,22 @@ onMounted(async () => {
       <section class="card" aria-labelledby="stock-title">
         <h2 id="stock-title" class="h4">Items</h2>
 
+        <div class="day-picker">
+          <div class="field">
+            <label for="stock-date" class="field-label">Stock on</label>
+            <input id="stock-date" type="date" class="input" :value="selectedDate" :disabled="dateLoading"
+              data-testid="stock-date" @change="showDate(($event.target as HTMLInputElement).value)" />
+          </div>
+          <AppButton variant="outline" size="sm" type="button" :disabled="dateLoading || isToday" data-testid="stock-today"
+            @click="showToday">
+            Today
+          </AppButton>
+          <p class="body-small muted day-note" data-testid="stock-day">
+            {{ dateLoading ? "Loading…" : `Showing ${formatDay(selectedDate)}` }}
+          </p>
+        </div>
+        <p v-if="dateError" class="field-error" role="alert" data-testid="stock-date-error">{{ dateError }}</p>
+
         <p v-if="items.length === 0" class="body-default muted">No equipment has been added yet.</p>
 
         <p v-if="notice" class="body-small notice" role="status" data-testid="stock-notice">{{ notice }}</p>
@@ -256,8 +313,16 @@ onMounted(async () => {
                 <th scope="col">Equipment</th>
                 <th scope="col">Total stock</th>
                 <th scope="col">
+                  Booked by events
+                  <span class="th-note">units reserved for an event at any time on this day</span>
+                </th>
+                <th scope="col">
+                  Out of use
+                  <span class="th-note">damaged or under maintenance on this day</span>
+                </th>
+                <th scope="col">
                   Available
-                  <span class="th-note">calculated: not held by requests, minus units out of use today</span>
+                  <span class="th-note">calculated: usable and not booked on this day</span>
                 </th>
                 <th scope="col"><span class="visually-hidden">Actions</span></th>
               </tr>
@@ -267,11 +332,10 @@ onMounted(async () => {
                 <tr :data-testid="`item-${item.id}`">
                   <th scope="row" class="item-name">{{ item.name }}</th>
                   <td class="count" data-testid="total">{{ item.totalStock }}</td>
+                  <td class="count" data-testid="booked">{{ item.bookedCount ?? 0 }}</td>
+                  <td class="count" data-testid="out-of-use">{{ item.unusableNow ?? 0 }}</td>
                   <td class="count" :class="{ 'count--low': item.availableStock === 0 }" data-testid="available">
                     {{ item.availableStock }}
-                    <span v-if="item.unusableNow" class="count-note" data-testid="out-of-use">
-                      {{ item.unusableNow }} out of use
-                    </span>
                   </td>
                   <td class="row-actions">
                     <AppButton variant="outline" size="sm" type="button" :aria-label="`Add stock of ${item.name}`"
@@ -290,7 +354,7 @@ onMounted(async () => {
                 </tr>
 
                 <tr v-if="change.itemId === item.id" class="detail-row">
-                  <td colspan="4">
+                  <td colspan="6">
                     <form class="change-form" data-testid="change-form" @submit.prevent="reviewChange">
                       <p class="body-small"><strong>{{ change.direction === "add" ? "Add stock" : "Remove stock" }}</strong> — {{ item.name }}</p>
                       <p v-if="change.direction === 'remove'" class="body-small muted">
@@ -320,7 +384,7 @@ onMounted(async () => {
                 </tr>
 
                 <tr v-if="openHistory.has(item.id)" class="detail-row">
-                  <td colspan="4">
+                  <td colspan="6">
                     <p v-if="histories[item.id]?.status === 'loading'" class="body-small muted">Loading the history…</p>
                     <p v-else-if="histories[item.id]?.status === 'error'" class="body-small error-text" role="alert">
                       We couldn't load the history. Please try again.
@@ -535,15 +599,6 @@ onMounted(async () => {
   color: var(--color-grey-400);
 }
 
-/* Why the number is lower than the stock held by requests: units out of use today. */
-.count-note {
-  display: block;
-  font-size: 0.75rem;
-  line-height: 1rem;
-  font-weight: 400;
-  color: var(--color-warning-900);
-}
-
 .body-small {
   font-size: 0.875rem;
   line-height: 1.125rem;
@@ -654,6 +709,21 @@ onMounted(async () => {
 
 .table-wrap {
   overflow-x: auto;
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-xs);
+}
+
+/* Which day the stock table is for. */
+.day-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--spacing-16);
+  margin-bottom: var(--spacing-16);
+}
+
+.day-note {
+  align-self: center;
 }
 
 .stock-table {
@@ -675,6 +745,11 @@ onMounted(async () => {
   line-height: 1rem;
   color: var(--color-grey-500);
   border-bottom-color: var(--color-grey-200);
+}
+
+.stock-table tbody tr:last-child th,
+.stock-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .item-name {

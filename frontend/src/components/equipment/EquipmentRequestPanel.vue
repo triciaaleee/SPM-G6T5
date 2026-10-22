@@ -28,6 +28,8 @@ import {
   cancelEquipmentRequest,
   fetchEquipmentCatalog,
   fetchEquipmentRequestsForEvent,
+  itemFulfilmentBadgeClass,
+  itemFulfilmentState,
   submitEquipmentRequest,
   type EquipmentCatalogItem,
   type EquipmentItemInput,
@@ -366,7 +368,15 @@ function statusBadgeClass(status: string): string {
                 <template #cell-quantity="{ row }">{{ row.quantity }}</template>
                 <template #cell-reserved="{ row }">
                   <template v-if="isCancelled(r)">&mdash;</template>
-                  <template v-else>{{ row.quantityFulfilled }} of {{ row.quantity }}</template>
+                  <template v-else>
+                    {{ row.quantityFulfilled }} of {{ row.quantity }}
+                    <span
+                      v-if="r.status !== 'Requested'"
+                      class="eq-item-state"
+                      :class="itemFulfilmentBadgeClass(row.quantityFulfilled, row.quantity, 'status-neutral')"
+                      data-testid="item-status"
+                    >{{ itemFulfilmentState(row.quantityFulfilled, row.quantity) }}</span>
+                  </template>
                 </template>
               </DataTable>
             </div>
@@ -603,6 +613,17 @@ function statusBadgeClass(status: string): string {
 
 .badge {
   display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+  padding: var(--spacing-4) var(--spacing-8);
+  border-radius: var(--radius-xs);
+}
+
+/* One item's own progress inside the table; the request's single status stays the header .badge. */
+.eq-item-state {
+  display: inline-block;
+  margin-left: var(--spacing-8);
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;

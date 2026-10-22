@@ -23,6 +23,8 @@ import {
   checkEquipmentAvailability,
   fetchEquipmentCatalog,
   fetchEquipmentRequestsForSupport,
+  itemFulfilmentBadgeClass,
+  itemFulfilmentState,
   updateEquipmentRequestStatus,
   type EquipmentAvailability,
   type EquipmentCatalogItem,
@@ -55,7 +57,10 @@ const requests = computed<EquipmentRequest[]>(() => view.value?.equipmentRequest
 
 interface EditState {
   expanded: boolean;
-  status: EquipmentRequestStatus;
+  /** What Technical Support pick for each item (by item id). The request's own status follows from these. */
+  states: Record<number, EquipmentRequestStatus>;
+  /** Partially Fulfilled items only: how many of the item are arranged. */
+  quantities: Record<number, number>;
   saving: boolean;
   error: string | null;
   notice: { text: string; warning: boolean } | null;
@@ -67,7 +72,8 @@ function editFor(r: EquipmentRequest): EditState {
   if (!edits[r.id]) {
     edits[r.id] = {
       expanded: false,
-      status: (r.status as EquipmentRequestStatus) || "Requested",
+      states: {},
+      quantities: {},
       saving: false,
       error: null,
       notice: null,
@@ -79,7 +85,16 @@ function editFor(r: EquipmentRequest): EditState {
 /** Opens the editor, resynced to the request's current status — discards any stale pick from last time. */
 function openEditor(r: EquipmentRequest): void {
   const edit = editFor(r);
-  edit.status = (r.status as EquipmentRequestStatus) || "Requested";
+  // Each item starts at what it already has; the number for a partial item starts at what is free now.
+  edit.states = Object.fromEntries(
+    r.items.map((item) => [
+      item.id,
+      item.quantityFulfilled <= 0 ? "Requested" : item.quantityFulfilled >= item.quantity ? "Arranged" : "Partially Fulfilled",
+    ]),
+  );
+  edit.quantities = Object.fromEntries(
+    r.items.map((item) => [item.id, item.quantityFulfilled > 0 ? item.quantityFulfilled : fulfilledQuantityFor(item)]),
+  );
   edit.error = null;
   edit.expanded = true;
 }
@@ -136,10 +151,28 @@ function fulfilledQuantityFor(item: EquipmentItem): number {
   return Math.min(item.quantity, Math.max(0, available));
 }
 
+/** How many of an item the pick amounts to: none, all, or the number typed (a whole number up to what was requested). */
+function chosenQuantity(r: EquipmentRequest, item: EquipmentItem): number {
+  const edit = editFor(r);
+  const state = edit.states[item.id] ?? "Requested";
+  if (state === "Requested") return 0;
+  if (state === "Arranged") return item.quantity;
+  const value = Math.floor(Number(edit.quantities[item.id]));
+  return Number.isFinite(value) ? Math.min(item.quantity, Math.max(0, value)) : 0;
+}
+
+/** The request's status follows its items: everything in is Arranged, nothing in is Requested, else Partially Fulfilled. */
+function derivedStatus(r: EquipmentRequest): EquipmentRequestStatus {
+  const chosen = r.items.map((item) => chosenQuantity(r, item));
+  if (chosen.every((n, i) => n >= r.items[i].quantity)) return "Arranged";
+  if (chosen.every((n) => n === 0)) return "Requested";
+  return "Partially Fulfilled";
+}
+
 function outstandingSummary(r: EquipmentRequest): string {
   const parts = r.items
     .map((item) => {
-      const remaining = item.quantity - fulfilledQuantityFor(item);
+      const remaining = item.quantity - chosenQuantity(r, item);
       return remaining > 0 ? `${remaining} ${item.equipmentType}` : null;
     })
     .filter((part): part is string => part !== null);
@@ -152,12 +185,13 @@ async function saveStatus(r: EquipmentRequest): Promise<void> {
   edit.error = null;
   edit.notice = null;
   try {
+    const status = derivedStatus(r);
     const fulfillments =
-      edit.status === "Partially Fulfilled"
-        ? r.items.map((item) => ({ itemId: item.id, fulfilledQuantity: fulfilledQuantityFor(item) }))
+      status === "Partially Fulfilled"
+        ? r.items.map((item) => ({ itemId: item.id, fulfilledQuantity: chosenQuantity(r, item) }))
         : undefined;
-    const note = edit.status === "Partially Fulfilled" ? outstandingSummary(r) : undefined;
-    const { equipmentRequest, notified } = await updateEquipmentRequestStatus(r.id, edit.status, note, fulfillments);
+    const note = status === "Partially Fulfilled" ? outstandingSummary(r) : undefined;
+    const { equipmentRequest, notified } = await updateEquipmentRequestStatus(r.id, status, note, fulfillments);
     Object.assign(r, equipmentRequest);
     edit.expanded = false;
     edit.notice = notified
@@ -192,6 +226,7 @@ async function saveStatus(r: EquipmentRequest): Promise<void> {
 function statusBadgeClass(status: string): string {
   if (status === "Arranged") return "status-success";
   if (status === "Partially Fulfilled") return "status-warning";
+  if (status === "Cancelled") return "status-cancelled";
   return "status-open"; // Requested
 }
 
@@ -312,75 +347,118 @@ onMounted(async () => {
         <ul class="request-list">
           <li v-for="r in requests" :key="r.id" class="request-card">
             <div class="request-card__header">
+              <div class="request-card__heading">
+                <h3 class="h4">Equipment request</h3>
+                <p class="body-small muted">Submitted {{ formatSubmitted(r.createdAt) }}</p>
+              </div>
               <span class="badge" :class="statusBadgeClass(r.status)">{{ r.status }}</span>
-              <p class="body-small muted">Submitted {{ formatSubmitted(r.createdAt) }}</p>
             </div>
 
-            <ul class="item-list">
-              <li v-for="item in r.items" :key="item.id" class="body-default item-row">
-                <strong>
-                  <template v-if="r.status === 'Partially Fulfilled'">{{ item.quantityFulfilled }} of {{ item.quantity }}</template>
-                  <template v-else>{{ item.quantity }}&times;</template>
-                  {{ item.equipmentType }}
-                </strong>
+            <div class="table-wrap">
+              <table class="item-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Item &middot; requested quantity</th>
+                    <th scope="col">Fulfilment status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in r.items" :key="item.id" class="item-row">
+                    <td class="item-cell">
+                      <strong class="item-name">
+                        <template v-if="r.status === 'Partially Fulfilled' && !editFor(r).expanded">{{ item.quantityFulfilled }} of {{ item.quantity }}</template>
+                        <template v-else>{{ item.quantity }}&times;</template>
+                        {{ item.equipmentType }}
+                      </strong>
 
-                <!-- E5-5 / E5-6 AC3: a reserved unit that is now unusable for the event needs re-arranging. -->
-                <p v-if="item.reservationFlag?.flagged" class="body-small flag-note" data-testid="reservation-flag" role="alert">
-                  {{ item.reservationFlag.reason }}
-                </p>
+                      <!-- E5-5 / E5-6 AC3: a reserved unit that is now unusable for the event needs re-arranging. -->
+                      <p v-if="item.reservationFlag?.flagged" class="body-small flag-note" data-testid="reservation-flag" role="alert">
+                        {{ item.reservationFlag.reason }}
+                      </p>
 
-                <!-- E5-4: checked automatically against the event's own date and time. -->
-                <template v-if="r.status === 'Requested'">
-                  <p v-if="availabilityFor(item).loading" class="body-small muted">Checking availability…</p>
-                  <p v-else-if="availabilityFor(item).error" class="body-small error-text">{{ availabilityFor(item).error }}</p>
-                  <p v-else-if="availabilityFor(item).result" class="body-small availability-result"
-                    :class="{ 'availability-result--short': availabilityFor(item).result!.shortfall > 0 }">
-                    <template v-if="availabilityFor(item).result!.shortfall > 0">
-                      Unavailable — need {{ availabilityFor(item).result!.shortfall }} more
-                    </template>
-                    <template v-else>Available</template>
-                  </p>
-                </template>
-              </li>
-            </ul>
+                      <!-- E5-4: checked automatically against the event's own date and time. -->
+                      <template v-if="r.status === 'Requested'">
+                        <p v-if="availabilityFor(item).loading" class="body-small muted">Checking availability…</p>
+                        <p v-else-if="availabilityFor(item).error" class="body-small error-text">{{ availabilityFor(item).error }}</p>
+                        <p v-else-if="availabilityFor(item).result" class="body-small availability-result"
+                          :class="{ 'availability-result--short': availabilityFor(item).result!.shortfall > 0 }">
+                          <template v-if="availabilityFor(item).result!.shortfall > 0">
+                            Unavailable — need {{ availabilityFor(item).result!.shortfall }} more
+                          </template>
+                          <template v-else>Available</template>
+                        </p>
+                      </template>
+                    </td>
 
-            <p v-if="r.fulfillmentNote" class="body-small request-card__note">Outstanding: {{ r.fulfillmentNote }}</p>
+                    <td class="status-cell">
+                      <!-- E5-3: each item is marked on its own; the request's status follows from them. -->
+                      <div v-if="editFor(r).expanded" class="item-editor">
+                        <div class="status-pills" role="radiogroup" :aria-label="`${item.equipmentType} status`">
+                          <button
+                            v-for="option in EQUIPMENT_REQUEST_STATUSES"
+                            :key="option"
+                            type="button"
+                            role="radio"
+                            :aria-checked="editFor(r).states[item.id] === option"
+                            class="status-pill"
+                            :class="{ 'status-pill--active': editFor(r).states[item.id] === option }"
+                            @click="editFor(r).states[item.id] = option"
+                          >
+                            {{ option }}
+                          </button>
+                        </div>
+                        <label v-if="editFor(r).states[item.id] === 'Partially Fulfilled'" class="body-small item-quantity">
+                          <span>Arranged</span>
+                          <input
+                            v-model.number="editFor(r).quantities[item.id]"
+                            type="number"
+                            min="0"
+                            :max="item.quantity"
+                            step="1"
+                            :aria-label="`${item.equipmentType} arranged`"
+                          />
+                          <span class="muted">of {{ item.quantity }}</span>
+                        </label>
+                      </div>
+                      <span v-else-if="r.status === 'Cancelled'" class="body-small muted" data-testid="item-cancelled">&mdash;</span>
+                      <span
+                        v-else
+                        class="badge"
+                        :class="itemFulfilmentBadgeClass(item.quantityFulfilled, item.quantity)"
+                        data-testid="item-status"
+                      >{{ itemFulfilmentState(item.quantityFulfilled, item.quantity) }}</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
 
-            <!-- E5-3: update this request's status as arrangements are made. -->
-            <div class="status-editor">
-              <AppButton variant="outline" v-if="!editFor(r).expanded" type="button" @click="openEditor(r)">
-                Update status
-              </AppButton>
+            <div class="request-card__footer">
+              <p v-if="r.fulfillmentNote && !editFor(r).expanded" class="body-small request-card__note">Outstanding: {{ r.fulfillmentNote }}</p>
 
-              <div v-else class="status-form">
-                <div class="status-pills" role="radiogroup" aria-label="Status">
-                  <button
-                    v-for="option in EQUIPMENT_REQUEST_STATUSES"
-                    :key="option"
-                    type="button"
-                    role="radio"
-                    :aria-checked="editFor(r).status === option"
-                    class="status-pill"
-                    :class="{ 'status-pill--active': editFor(r).status === option }"
-                    @click="editFor(r).status = option"
-                  >
-                    {{ option }}
-                  </button>
-                </div>
+              <div v-if="editFor(r).expanded && derivedStatus(r) === 'Partially Fulfilled'" class="outstanding-box">
+                <p class="body-small muted">Outstanding</p>
+                <p class="body-small outstanding-preview">{{ outstandingSummary(r) }}</p>
+              </div>
 
-                <div v-if="editFor(r).status === 'Partially Fulfilled'" class="outstanding-box">
-                  <p class="body-small muted">Outstanding</p>
-                  <p class="body-small outstanding-preview">{{ outstandingSummary(r) }}</p>
-                </div>
+              <p v-if="editFor(r).error" class="body-small error-text" role="alert">{{ editFor(r).error }}</p>
 
-                <p v-if="editFor(r).error" class="body-small error-text" role="alert">{{ editFor(r).error }}</p>
+              <p v-if="r.status === 'Cancelled'" class="body-small muted" data-testid="cancelled-note">
+                This request was cancelled, either by its coordinator or because the event was cancelled. It is kept here to look back at.
+              </p>
 
-                <div class="status-form-actions">
-                  <AppButton variant="primary" type="button" :disabled="editFor(r).saving" @click="saveStatus(r)">
-                    {{ editFor(r).saving ? "Saving…" : "Save" }}
-                  </AppButton>
+              <!-- E5-3: update this request's status as arrangements are made. -->
+              <div v-if="r.status !== 'Cancelled'" class="status-editor">
+                <AppButton variant="outline" v-if="!editFor(r).expanded" type="button" @click="openEditor(r)">
+                  Update status
+                </AppButton>
+
+                <div v-else class="status-form-actions">
                   <AppButton variant="outline" type="button" :disabled="editFor(r).saving" @click="cancelEdit(r)">
                     Cancel
+                  </AppButton>
+                  <AppButton variant="primary" type="button" :disabled="editFor(r).saving" @click="saveStatus(r)">
+                    {{ editFor(r).saving ? "Saving…" : "Save" }}
                   </AppButton>
                 </div>
               </div>
@@ -536,8 +614,7 @@ onMounted(async () => {
 
 /* "When and where": the one card of event information Technical Support get. */
 .details,
-.requirements,
-.request-card {
+.requirements {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-16);
@@ -600,11 +677,78 @@ onMounted(async () => {
   padding: 0;
 }
 
+.request-card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--color-base-white);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-lg);
+}
+
 .request-card__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--spacing-12);
+  padding: var(--spacing-24) var(--spacing-24) var(--spacing-16);
+}
+
+.request-card__heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.request-card .table-wrap {
+  padding: 0 var(--spacing-24);
+  overflow-x: auto;
+}
+
+.item-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.item-table th,
+.item-table td {
+  padding: var(--spacing-16) var(--spacing-8) var(--spacing-16) 0;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-grey-100);
+}
+
+.item-table thead th {
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.125rem;
+  color: var(--color-grey-500);
+}
+
+.item-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.item-name {
+  display: block;
+  font-size: 1.125rem;
+  line-height: 1.5rem;
+  color: var(--color-grey-900);
+}
+
+.status-cell {
+  white-space: nowrap;
+}
+
+/* The grey strip under the table that holds the actions (and what is outstanding). */
+.request-card__footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-12);
+  padding: var(--spacing-16) var(--spacing-24);
+  background: var(--color-grey-50);
+  border-top: 1px solid var(--color-grey-100);
 }
 
 .badge {
@@ -633,14 +777,10 @@ onMounted(async () => {
   color: var(--color-warning-900);
 }
 
-.item-list {
-  margin: 0;
-  padding: var(--spacing-12) 0 0;
-  border-top: 1px solid var(--color-grey-100);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-8);
-  list-style: none;
+/* Cancelled: neutral grey, like a finished event's badge. */
+.status-cancelled {
+  background: var(--color-grey-100);
+  color: var(--color-grey-700);
 }
 
 .item-row {
@@ -648,8 +788,20 @@ onMounted(async () => {
 }
 
 .availability-result {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
   margin: var(--spacing-4) 0 0;
   color: var(--color-success-700);
+}
+
+/* A coloured dot before the availability, in the same colour as the text. */
+.availability-result::before {
+  content: "";
+  width: var(--spacing-8);
+  height: var(--spacing-8);
+  border-radius: var(--radius-full);
+  background: currentColor;
 }
 
 .availability-result--short {
@@ -674,18 +826,7 @@ onMounted(async () => {
 
 .status-editor {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-8);
-  padding-top: var(--spacing-12);
-  border-top: 1px solid var(--color-grey-100);
-}
-
-.status-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-12);
-  width: 100%;
+  justify-content: flex-end;
 }
 
 .status-pills {
@@ -722,6 +863,22 @@ onMounted(async () => {
   outline-offset: 2px;
 }
 
+.item-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+}
+
+.item-quantity {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+}
+
+.item-quantity input {
+  width: var(--spacing-80);
+}
+
 .outstanding-box {
   display: flex;
   flex-direction: column;
@@ -738,6 +895,7 @@ onMounted(async () => {
 
 .status-form-actions {
   display: flex;
+  justify-content: flex-end;
   gap: var(--spacing-8);
 }
 

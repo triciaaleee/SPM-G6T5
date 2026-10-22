@@ -4,7 +4,11 @@
  * event. Each event is a section (with its date, time and venue, and a link
  * to its full request) listing the equipment types it still needs, soonest
  * event first. The tabs split the queue by status; the two filters narrow it
- * by date range and by equipment. Opening a section's link (E5-1 AC1/AC2)
+ * by date range and by equipment. A last tab, Cancelled / Past, keeps what is no
+ * longer to arrange so it can be looked back at: requests that were cancelled
+ * (by the coordinator, or because the event was cancelled) and arranged or
+ * partly arranged requests whose event date has passed, newest first. An
+ * unarranged request for a past event stays under Requested, as overdue. Opening a section's link (E5-1 AC1/AC2)
  * shows the full request, which is also where the status is updated (E5-3).
  */
 import { computed, onMounted, ref } from "vue";
@@ -25,11 +29,19 @@ const TABLE_COLUMNS = [
   { key: "stock", label: "In stock" },
 ];
 
+/** A request's status as the queue sees it: the three working statuses, or Cancelled. */
+type RowStatus = EquipmentRequestStatus | "Cancelled";
+
+/** The last tab: cancelled requests and finished arrangements for events that have passed. */
+const HISTORY_TAB = "Cancelled / Past";
+type TabKey = EquipmentRequestStatus | typeof HISTORY_TAB;
+const TABS: TabKey[] = [...EQUIPMENT_REQUEST_STATUSES, HISTORY_TAB];
+
 /** One line of the queue: a single item of a request, with its event's timing. */
 interface QueueRow {
   key: string;
   eventId: number;
-  status: EquipmentRequestStatus;
+  status: RowStatus;
   date: string | null;
   startTime: string | null;
   endTime: string | null;
@@ -59,11 +71,12 @@ const catalog = ref<EquipmentCatalogItem[]>([]);
 const loading = ref(true);
 const errorMessage = ref<string | null>(null);
 
-const activeTab = ref<EquipmentRequestStatus>("Requested");
+const activeTab = ref<TabKey>("Requested");
 const range = ref<RangeKey>("30");
 const equipment = ref<string>(ALL_EQUIPMENT);
 
-function statusOf(r: EquipmentRequestWithEvent): EquipmentRequestStatus {
+function statusOf(r: EquipmentRequestWithEvent): RowStatus {
+  if (r.status === "Cancelled") return "Cancelled";
   return (EQUIPMENT_REQUEST_STATUSES as readonly string[]).includes(r.status)
     ? (r.status as EquipmentRequestStatus)
     : "Requested";
@@ -124,15 +137,25 @@ function inRange(row: QueueRow): boolean {
 
 // Filtering and grouping --------------------------------------------------------
 
+/** Which tab a row belongs to. An unarranged request for a past event is overdue, so it stays under Requested. */
+function tabOf(row: QueueRow): TabKey {
+  if (row.status === "Cancelled") return HISTORY_TAB;
+  if (row.status !== "Requested" && row.date && daysUntil(row.date) < 0) return HISTORY_TAB;
+  return row.status;
+}
+
+/** The date range looks ahead, so it does not apply to the history tab, which shows everything. */
 const filteredRows = computed(() =>
   rows.value.filter(
-    (row) => inRange(row) && (equipment.value === ALL_EQUIPMENT || row.equipmentType === equipment.value),
+    (row) =>
+      (tabOf(row) === HISTORY_TAB || inRange(row)) &&
+      (equipment.value === ALL_EQUIPMENT || row.equipmentType === equipment.value),
   ),
 );
 
 const rowsByTab = computed(() => {
-  const groups: Record<EquipmentRequestStatus, QueueRow[]> = { Requested: [], Arranged: [], "Partially Fulfilled": [] };
-  for (const row of filteredRows.value) groups[row.status].push(row);
+  const groups: Record<TabKey, QueueRow[]> = { Requested: [], Arranged: [], "Partially Fulfilled": [], [HISTORY_TAB]: [] };
+  for (const row of filteredRows.value) groups[tabOf(row)].push(row);
   return groups;
 });
 
@@ -182,8 +205,13 @@ const groups = computed<Group[]>(() => {
         total: groupTotal(sorted),
       };
     })
-    .sort(compareRows);
+    .sort((a, b) => (activeTab.value === HISTORY_TAB ? compareRows(b, a) : compareRows(a, b)));
 });
+
+/** In the history tab a section says why it is there: cancelled, or an event that has passed. */
+function historyLabel(group: Group): string {
+  return group.rows.every((row) => row.status === "Cancelled") ? "Cancelled" : "Past event";
+}
 
 const badgeLabel = computed(() => {
   if (activeTab.value === "Arranged") return "arranged";
@@ -206,6 +234,7 @@ function urgencyLabel(row: QueueRow): string | null {
 }
 
 const emptyMessage = computed(() => {
+  if (activeTab.value === HISTORY_TAB) return "No cancelled or past requests.";
   const what = activeTab.value === "Requested" ? "to arrange" : activeTab.value.toLowerCase();
   const suffix = RANGES.find((r) => r.key === range.value)?.empty ?? "";
   return `Nothing ${what}${suffix ? ` ${suffix}` : ""}.`;
@@ -250,7 +279,7 @@ onMounted(async () => {
     <template v-else>
       <div class="toolbar">
         <div class="tabs" role="tablist" aria-label="Request status">
-          <button v-for="tabStatus in EQUIPMENT_REQUEST_STATUSES" :id="`tab-${tabStatus}`" :key="tabStatus"
+          <button v-for="tabStatus in TABS" :id="`tab-${tabStatus}`" :key="tabStatus"
             type="button" role="tab" :aria-selected="activeTab === tabStatus" aria-controls="requests-panel" class="tab"
             :class="{ 'tab--active': activeTab === tabStatus }" @click="activeTab = tabStatus">
             {{ tabStatus }}
@@ -316,7 +345,8 @@ onMounted(async () => {
                 </span>
               </div>
               <div class="group-header__badges">
-                <span class="count-badge">{{ group.total }} {{ badgeLabel }}</span>
+                <span v-if="activeTab === HISTORY_TAB" class="count-badge" data-testid="history-label">{{ historyLabel(group) }}</span>
+                <span v-else class="count-badge">{{ group.total }} {{ badgeLabel }}</span>
                 <span v-if="urgencyLabel(group.rows[0])" class="urgency">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

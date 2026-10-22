@@ -3,7 +3,8 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validateNewCatalogItem } from "../lib/validateCatalogItem.js";
 import { validateStockChange } from "../lib/validateStockChange.js";
-import { catalogStockNow, stockOf, type CatalogStock } from "../lib/catalogStock.js";
+import { catalogStockNow, stockOf, todaySingapore, type CatalogStock } from "../lib/catalogStock.js";
+import { isRealDate } from "../lib/validateUnavailability.js";
 
 /**
  * E5-1/E5-3 stock tracking (migration 0022): the fixed equipment list
@@ -28,8 +29,9 @@ const COLUMNS = "id, name";
 /**
  * Stock is worked out from the unit rows when read (lib/catalogStock.ts,
  * migration 0051): `totalStock` is the units, `availableStock` the usable
- * units not booked today, and `unusableNow` how many are out of use today
- * (E5-5), so the number can be explained.
+ * units not booked that day, `unusableNow` how many are out of use that day
+ * (E5-5) and `bookedCount` how many usable units events hold that day, so the
+ * numbers add up: total = available + booked + out of use.
  */
 function toItem(row: CatalogRow, stock: CatalogStock) {
   return {
@@ -38,6 +40,7 @@ function toItem(row: CatalogRow, stock: CatalogStock) {
     totalStock: stock.total,
     availableStock: stock.available,
     unusableNow: stock.unusableNow,
+    bookedCount: Math.max(0, stock.total - stock.unusableNow - stock.available),
   };
 }
 
@@ -47,12 +50,23 @@ const UNIQUE_VIOLATION = "23505";
 /** Units are created in batches so a large stock count isn't one enormous insert. */
 const UNIT_INSERT_BATCH = 1000;
 
+/**
+ * The stock table. `?date=YYYY-MM-DD` shows the numbers for that day instead
+ * of today: what events hold on it and what is out of use on it.
+ */
 equipmentCatalogRouter.get("/", async (req: AuthedRequest, res) => {
   const { supabase } = req;
   if (!supabase) {
     res.status(401).json({ error: "Unauthenticated" });
     return;
   }
+
+  const rawDate = typeof req.query.date === "string" ? req.query.date.trim() : "";
+  if (rawDate !== "" && !isRealDate(rawDate)) {
+    res.status(400).json({ error: "Enter a valid date.", fields: { date: "Enter a valid date." } });
+    return;
+  }
+  const date = rawDate === "" ? todaySingapore() : rawDate;
 
   const { data, error } = await supabase.from("equipment_catalog").select(COLUMNS).order("name");
 
@@ -63,13 +77,13 @@ equipmentCatalogRouter.get("/", async (req: AuthedRequest, res) => {
 
   let stock: Map<number, CatalogStock>;
   try {
-    stock = await catalogStockNow(supabase);
+    stock = await catalogStockNow(supabase, date);
   } catch {
     res.status(500).json({ error: "Failed to load the equipment catalog" });
     return;
   }
 
-  res.json({ equipmentCatalog: (data as CatalogRow[]).map((row) => toItem(row, stockOf(stock, row.id))) });
+  res.json({ date, equipmentCatalog: (data as CatalogRow[]).map((row) => toItem(row, stockOf(stock, row.id))) });
 });
 
 /** Add an item to the inventory. New stock starts fully available. */

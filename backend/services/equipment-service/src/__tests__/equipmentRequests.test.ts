@@ -1605,15 +1605,18 @@ describe("POST /api/equipment-requests/:id/cancel (E5-2 AC3)", () => {
   });
 });
 
-describe("cancelled requests stay out of Technical Support's way (E5-2)", () => {
+describe("cancelled requests are read-only for Technical Support (E5-2)", () => {
   const cancelled = { ...editableRequest, id: 56, status: "Cancelled", fulfillment_note: null };
   const cancelledItem = { id: 9, request_id: 56, equipment_type: "Screen", quantity: 1, quantity_fulfilled: 0, equipment_catalog_id: 2 };
 
-  it("leaves them out of Technical Support's queue but still shows them to the coordinator", async () => {
+  it("lists them for Technical Support with their status, so the queue can show them under Cancelled / Past, and for the coordinator", async () => {
     const tableOptions = { requests: [editableRequest, cancelled], items: [...editableItems, cancelledItem] };
 
     const support = await request(buildApp({ ...tableOptions, user: technicalSupport }).app).get("/api/equipment-requests");
-    expect(support.body.equipmentRequests.map((r: { id: number }) => r.id)).toEqual([55]);
+    expect(support.body.equipmentRequests.map((r: { id: number; status: string }) => [r.id, r.status])).toEqual([
+      [55, "Partially Fulfilled"],
+      [56, "Cancelled"],
+    ]);
 
     const coord = await request(buildApp(tableOptions).app).get("/api/equipment-requests?eventId=7");
     expect(coord.body.equipmentRequests.map((r: { id: number; status: string }) => [r.id, r.status])).toEqual([
@@ -1622,9 +1625,11 @@ describe("cancelled requests stay out of Technical Support's way (E5-2)", () => 
     ]);
   });
 
-  it("gives Technical Support nothing to open for an event whose only request was cancelled", async () => {
+  it("lets Technical Support open an event whose only request was cancelled, to look back at it", async () => {
     const { app } = buildApp({ user: technicalSupport, requests: [cancelled], items: [cancelledItem] });
-    expect((await request(app).get("/api/equipment-requests/event/7")).status).toBe(403);
+    const res = await request(app).get("/api/equipment-requests/event/7");
+    expect(res.status).toBe(200);
+    expect(res.body.equipmentRequests.map((r: { id: number; status: string }) => [r.id, r.status])).toEqual([[56, "Cancelled"]]);
   });
 
   it("refuses a status update on a cancelled request", async () => {

@@ -27,7 +27,7 @@ const mockedCreate = vi.mocked(createCatalogItem);
 const mockedChange = vi.mocked(changeStock);
 const mockedHistory = vi.mocked(fetchStockHistory);
 
-type CatalogItem = { id: number; name: string; totalStock: number; availableStock: number; unusableNow?: number };
+type CatalogItem = { id: number; name: string; totalStock: number; availableStock: number; unusableNow?: number; bookedCount?: number };
 const projector: CatalogItem = { id: 1, name: "Projector", totalStock: 10, availableStock: 6 };
 const microphones: CatalogItem = { id: 2, name: "Microphones", totalStock: 4, availableStock: 0 };
 
@@ -84,16 +84,20 @@ describe("EquipmentInventoryView — stock table", () => {
 });
 
 describe("EquipmentInventoryView — units out of use come off the available number (E5-5)", () => {
-  it("says how many units are out of use and already taken off, and says nothing when none are", async () => {
+  it("shows how many units are booked by events, out of use and available, in their own columns", async () => {
     const wrapper = await mountView([
-      { ...projector, availableStock: 4, unusableNow: 2 },
+      { ...projector, availableStock: 4, unusableNow: 2, bookedCount: 4 },
       { ...microphones, unusableNow: 0 },
     ]);
 
-    expect(row(wrapper, 1).find("[data-testid='available']").text()).toContain("4");
-    expect(row(wrapper, 1).find("[data-testid='out-of-use']").text()).toBe("2 out of use");
-    expect(row(wrapper, 2).find("[data-testid='out-of-use']").exists()).toBe(false);
-    expect(wrapper.find("thead").text()).toContain("minus units out of use today");
+    expect(wrapper.find("thead").text()).toContain("Booked by events");
+    expect(wrapper.find("thead").text()).toContain("Out of use");
+    expect(row(wrapper, 1).find("[data-testid='booked']").text()).toBe("4");
+    expect(row(wrapper, 1).find("[data-testid='out-of-use']").text()).toBe("2");
+    expect(row(wrapper, 1).find("[data-testid='available']").text()).toBe("4");
+    // An older response without the counts reads as none.
+    expect(row(wrapper, 2).find("[data-testid='booked']").text()).toBe("0");
+    expect(row(wrapper, 2).find("[data-testid='out-of-use']").text()).toBe("0");
   });
 
   it("re-reads the numbers as soon as units are marked or cleared, so the change shows at once", async () => {
@@ -106,7 +110,7 @@ describe("EquipmentInventoryView — units out of use come off the available num
 
     expect(mockedCatalog).toHaveBeenCalledTimes(2);
     expect(row(wrapper, 1).find("[data-testid='available']").text()).toContain("4");
-    expect(row(wrapper, 1).find("[data-testid='out-of-use']").text()).toBe("2 out of use");
+    expect(row(wrapper, 1).find("[data-testid='out-of-use']").text()).toBe("2");
   });
 
   it("keeps the numbers it has if the re-read fails", async () => {
@@ -118,6 +122,71 @@ describe("EquipmentInventoryView — units out of use come off the available num
 
     expect(row(wrapper, 1).find("[data-testid='available']").text()).toContain("6");
     expect(wrapper.text()).not.toContain("couldn't load");
+  });
+});
+
+describe("EquipmentInventoryView — stock on a chosen day", () => {
+  it("starts on today and asks for today's stock", async () => {
+    const wrapper = await mountView();
+
+    expect(mockedCatalog).toHaveBeenCalledTimes(1);
+    expect((wrapper.find("[data-testid='stock-date']").element as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(wrapper.find("[data-testid='stock-today']").attributes("disabled")).toBeDefined();
+  });
+
+  it("reloads the table for the day picked and names the day", async () => {
+    const wrapper = await mountView();
+    mockedCatalog.mockResolvedValue([{ ...projector, availableStock: 1, bookedCount: 9 }, { ...microphones }]);
+
+    await wrapper.find("[data-testid='stock-date']").setValue("2026-11-12");
+    await flushPromises();
+
+    expect(mockedCatalog).toHaveBeenLastCalledWith("2026-11-12");
+    expect(row(wrapper, 1).find("[data-testid='booked']").text()).toBe("9");
+    expect(row(wrapper, 1).find("[data-testid='available']").text()).toBe("1");
+    expect(wrapper.find("[data-testid='stock-day']").text()).toContain("12 November 2026");
+    expect(wrapper.find("[data-testid='stock-today']").attributes("disabled")).toBeUndefined();
+  });
+
+  it("goes back to today's numbers with the Today button", async () => {
+    const wrapper = await mountView();
+    await wrapper.find("[data-testid='stock-date']").setValue("2026-11-12");
+    await flushPromises();
+
+    await wrapper.find("[data-testid='stock-today']").trigger("click");
+    await flushPromises();
+
+    const today = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    expect(mockedCatalog).toHaveBeenLastCalledWith(today);
+  });
+
+  it("keeps the day and numbers it had, and says so, when the new day can't be loaded", async () => {
+    const wrapper = await mountView();
+    const before = (wrapper.find("[data-testid='stock-date']").element as HTMLInputElement).value;
+    mockedCatalog.mockRejectedValue(new Error("down"));
+
+    await wrapper.find("[data-testid='stock-date']").setValue("2026-11-12");
+    await flushPromises();
+
+    expect(wrapper.find("[data-testid='stock-date-error']").text()).toContain("couldn't load the stock for that day");
+    expect(row(wrapper, 1).find("[data-testid='available']").text()).toBe("6");
+    expect((wrapper.find("[data-testid='stock-date']").element as HTMLInputElement).value).toBe(before);
+  });
+
+  it("re-reads the chosen day, not today, after a stock change", async () => {
+    mockedChange.mockResolvedValue({ ...projector, totalStock: 12, availableStock: 99 });
+    const wrapper = await mountView();
+    await wrapper.find("[data-testid='stock-date']").setValue("2026-11-12");
+    await flushPromises();
+    mockedCatalog.mockResolvedValue([{ ...projector, totalStock: 12, availableStock: 7 }, { ...microphones }]);
+
+    await fillChange(wrapper, 1, "add-stock", "2", "New delivery");
+    await wrapper.find("[data-testid='change-form']").trigger("submit");
+    await wrapper.find("[data-testid='confirm-change']").trigger("click");
+    await flushPromises();
+
+    expect(mockedCatalog).toHaveBeenLastCalledWith("2026-11-12");
+    expect(row(wrapper, 1).find("[data-testid='available']").text()).toBe("7");
   });
 });
 

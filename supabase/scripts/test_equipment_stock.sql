@@ -6,7 +6,7 @@
 --
 -- It creates its own catalog items ("ZZ Test ...") and requests, runs the
 -- functions that reserve and release equipment, and ROLLS BACK at the end, so
--- nothing is kept. Needs migrations 0048-0054 and at least one event and one
+-- nothing is kept. Needs migrations 0048-0056 and at least one event and one
 -- coordinator user (the normal seed has both).
 --
 -- Every check is logged, and the script ends by raising the log as an error
@@ -124,6 +124,9 @@ begin
   perform pg_temp.assert_eq('releasing the event zeroes the fulfilment', pg_temp.fulfilled(i1), '0');
   perform pg_temp.assert_eq('releasing the event leaves nothing Reserved', pg_temp.reserved(i1), '0');
   perform pg_temp.assert_eq('releasing the event records why', pg_temp.released(v_event, 'Event cancelled'), '3');
+  perform pg_temp.assert_eq('releasing the event cancels its requests', pg_temp.req_status(r1), 'Cancelled');
+  -- Test only: reopen the request so the steps below can reuse it.
+  update equipment_requests set status = 'Requested' where id = r1;
 
   -- amend_equipment_request: lowering the quantity below what is reserved -----------
   -- (a request can only be amended while Requested or Partially Fulfilled)

@@ -480,6 +480,7 @@ const TEMPLATES: Record<string, Template> = {
     return {
       title: "Equipment reservations released",
       body: `${eventName} was cancelled, so its equipment reservations were released back to inventory.`,
+      // The event's requests are cancelled with it; Technical Support can still open them, under Cancelled / Past.
       link: supportEventLink(msg),
     };
   },
@@ -512,6 +513,24 @@ const TEMPLATES: Record<string, Template> = {
       title: "Reserved equipment unavailable",
       body: `${subject} ${reason} ${period}. Technical Support will need to arrange a replacement.`,
       link: eventLink(msg),
+    };
+  },
+
+  /**
+   * #28a in RabbitMQ.md section 3.4 — an event was rescheduled and the units
+   * reserved for it now clash with another event's booking or an out-of-use
+   * period. To the event's coordinator (`data.coordinatorId`, who opens the event
+   * page) and to Technical Support (who open the request). `data.units` is how
+   * many reserved units clash (1 if absent).
+   */
+  "equipment.reservation_clash": (msg, recipientId) => {
+    const eventName = String(msg.data.eventName ?? "An event");
+    const units = Math.max(1, Number(msg.data.units ?? 1));
+    const subject = units > 1 ? `${units} reserved equipment units now clash` : "A reserved equipment unit now clashes";
+    return {
+      title: "Reserved equipment clashes after a reschedule",
+      body: `${eventName} was rescheduled. ${subject} with another event's booking or an out-of-use period. Technical Support will need to arrange a replacement.`,
+      link: recipientId === msg.data.coordinatorId ? eventLink(msg) : supportEventLink(msg),
     };
   },
 
