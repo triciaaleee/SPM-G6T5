@@ -8,6 +8,13 @@ export interface HandleInboundMessageDeps {
 }
 
 /**
+ * Messages other services act on that nobody is notified about. They reach this
+ * queue because it binds every routing key, and are skipped without a warning.
+ * `event.rescheduled` moves equipment-service's stored booking windows.
+ */
+const NO_NOTIFICATION_TYPES = new Set(["event.rescheduled"]);
+
+/**
  * Maps one broker message to notification row(s) and inserts them.
  * Bypasses the REST route's input validation (TYPE_PATTERN etc.) by
  * writing through supabaseAdmin directly — that regex is a validator on
@@ -16,6 +23,8 @@ export interface HandleInboundMessageDeps {
  */
 export async function handleInboundMessage(msg: InboundMessage, deps: HandleInboundMessageDeps): Promise<void> {
   const { supabase, resolveRoleUserIds } = deps;
+
+  if (NO_NOTIFICATION_TYPES.has(msg.type)) return;
 
   // M5: a redelivered message is a no-op if already recorded.
   const existing = await supabase.from("notifications").select("id").eq("message_id", msg.messageId).limit(1);

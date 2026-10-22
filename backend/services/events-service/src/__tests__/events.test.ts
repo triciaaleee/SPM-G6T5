@@ -1138,15 +1138,27 @@ function buildPatchSupabase(options: {
   const clarificationInsert = vi.fn().mockResolvedValue({ error: null });
   const denialInsert = vi.fn().mockResolvedValue({ error: null });
   const historyInsert = vi.fn().mockResolvedValue({ error: null });
+  // The outbox (migration 0045) stores a message before it is published; echo the stored row back.
+  const outboxInsert = vi.fn().mockImplementation((payload: Record<string, unknown>) => ({
+    select: () => ({
+      single: () =>
+        Promise.resolve({
+          data: { id: 1, message_id: "00000000-0000-0000-0000-000000000001", occurred_at: "2099-01-01T00:00:00Z", ...payload },
+          error: null,
+        }),
+    }),
+  }));
+  const outboxUpdate = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) });
 
   const from = vi.fn().mockImplementation((table: string) => {
     if (table === "event_clarifications") return { select: openQuestionSelect, insert: clarificationInsert };
     if (table === "access_denials") return { insert: denialInsert };
     if (table === "event_history") return { insert: historyInsert };
+    if (table === "event_outbox") return { insert: outboxInsert, update: outboxUpdate };
     return { select: lookupSelect, update };
   });
 
-  return { from, update, clarificationInsert, historyInsert, denialInsert };
+  return { from, update, clarificationInsert, historyInsert, denialInsert, outboxInsert };
 }
 
 describe("POST /api/events/draft", () => {
@@ -1474,6 +1486,54 @@ describe("PATCH /api/events/:id", () => {
       submitted_details: expect.objectContaining({ venue: validPayload.venue }),
     });
     expect(historyInsert).toHaveBeenCalled();
+  });
+
+  describe("announcing a reschedule to equipment-service", () => {
+    const rescheduled = () => publish.mock.calls.map((c) => c[0]).filter((m) => m.type === "event.rescheduled");
+
+    it("publishes event.rescheduled, with no recipients, when a Planning edit moves the date or time", async () => {
+      const { from } = buildPatchSupabase({
+        event: { id: 1, status: "Planning", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, owner);
+
+      const res = await request(app).patch("/api/events/1").send({ ...validPayload, proposedDate: "2099-02-02", startTime: "13:00", endTime: "15:00" });
+
+      expect(res.status).toBe(200);
+      expect(rescheduled()).toEqual([
+        expect.objectContaining({
+          type: "event.rescheduled",
+          eventId: 1,
+          recipients: { userIds: [], roles: [] },
+          data: expect.objectContaining({ coordinatorId: coordinator.id, proposedDate: "2099-02-02", startTime: "13:00", endTime: "15:00" }),
+        }),
+      ]);
+    });
+
+    it("does not publish it when the edit leaves the date and time alone", async () => {
+      const { from } = buildPatchSupabase({
+        event: { id: 1, status: "Planning", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, owner);
+
+      await request(app).patch("/api/events/1").send({ ...validPayload, venue: "Another Hall" });
+
+      expect(rescheduled()).toHaveLength(0);
+    });
+
+    it("does not publish it before Planning, when nothing can be reserved yet", async () => {
+      const { from } = buildPatchSupabase({
+        event: { id: 1, status: "Requested", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Requested" },
+      });
+      const app = buildApp({ from }, owner);
+
+      await request(app).patch("/api/events/1").send({ ...validPayload, startTime: "13:00", endTime: "15:00" });
+
+      expect(rescheduled()).toHaveLength(0);
+    });
   });
 
   it("validates the payload like a fresh submission", async () => {

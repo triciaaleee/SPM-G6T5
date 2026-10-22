@@ -295,10 +295,11 @@ All frontend work **must** follow [`Style.md`](Style.md). Read it before creatin
 - **Config:** all env lives in the single `backend/.env`. Don't create per-service `.env` files.
 - **Auth:** `user-service` issues JWTs. Every other service only **verifies** them with the shared `JWT_SECRET`.
 - **Database:** Supabase Postgres. Schema changes go in a new migration `supabase/migrations/NNNN_description.sql` (next number, re-runnable/guarded where possible). **Until the first production deploy, migrations may be edited in place** (the scripts only ever run against a fresh prod DB, and any change to an existing dev database is applied by hand to match). After the first production deploy, never edit an applied migration — add a new one.
-- **Enum types:** four columns are backed by Postgres enums, not free text — the database rejects any value outside the list, so a new status/role must be added to the enum (a migration, e.g. `alter type ... add value ...`) before any code can write it:
+- **Enum types:** five columns are backed by Postgres enums, not free text — the database rejects any value outside the list, so a new status/role must be added to the enum (a migration, e.g. `alter type ... add value ...`) before any code can write it:
   - `users.role` → `app_role` (migration `0004`): `attendee`, `organiser`, `coordinator`, `venue_staff`, `technical_support`.
   - `events.status` → `event_status` (migration `0014`): the 11 values in §3's table above (`Needs Review` added in `0046`).
   - `venue_bookings.status` → `venue_booking_status` (migration `0014`): the 8 values in §3a's table above (`Cancelled` added in `0047`). It backs a **booking-approval** workflow (a specific booking request gets approved/rejected, not the venue itself). The status strings, the transitions and the rules are all in `venue-service/src/lib/bookingStatus.ts` — **see §3a, which is the single description of this lifecycle**; don't duplicate it here.
   - `registrations.status` → `registration_status` (migrations `0023`, `0041`): `Registered`, `Withdrawn`, `Cancelled` — see §3b.
+  - `equipment_booking.status` → `equipment_booking_status` (migration `0052`): `Reserved` (the unit is held for the event) and `Released` (freed, kept as history with `released_at` and `release_reason`). Only `Reserved` rows count as booked.
 - **Tests:** add or update tests for any backend route or lifecycle change. Run `npm test` in each service you touched before finishing.
 - **Docs:** when you add a service, port, env var or script, update `backend/README.md` in the same change.

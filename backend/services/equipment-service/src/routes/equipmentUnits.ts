@@ -1,10 +1,11 @@
+import { findCatalogIdByName } from "../lib/catalogLookup.js";
 import { Router } from "express";
 import type { Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { reportArrangementsChanged } from "../lib/eventsClient.js";
-import { todaySingapore } from "../lib/effectiveStock.js";
+import { todaySingapore } from "../lib/catalogStock.js";
 import { dateRangeWindow } from "../lib/scheduleWindow.js";
 import { impactForUnits, suggestUnits, type ImpactUnit, type UnitRecord } from "../lib/unitImpact.js";
 import { UNAVAILABILITY_COLUMNS, fetchUnavailability, type UnavailabilityRow } from "../lib/unitUnavailability.js";
@@ -66,8 +67,21 @@ equipmentUnitsRouter.get("/", async (req: AuthedRequest, res) => {
   const supabase = req.supabase!;
 
   const type = typeof req.query.type === "string" && req.query.type.trim() !== "" ? req.query.type.trim() : null;
+  let catalogId: number | null = null;
+  if (type) {
+    try {
+      catalogId = await findCatalogIdByName(supabase, type);
+    } catch {
+      res.status(500).json({ error: "Failed to load equipment units" });
+      return;
+    }
+    if (catalogId === null) {
+      res.json({ units: [] });
+      return;
+    }
+  }
   let unitsQuery = supabase.from("equipment").select("id, type, status, label").order("type").order("id");
-  if (type) unitsQuery = unitsQuery.eq("type", type);
+  if (catalogId !== null) unitsQuery = unitsQuery.eq("equipment_catalog_id", catalogId);
   const { data: unitRows, error: unitsError } = await unitsQuery;
   if (unitsError || !unitRows) {
     res.status(500).json({ error: "Failed to load equipment units" });
@@ -127,7 +141,18 @@ equipmentUnitsRouter.get("/impact", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const { data: unitRows, error: unitsError } = await supabase.from("equipment").select("id, type, status, label").eq("type", type).order("id");
+  let catalogId: number | null;
+  try {
+    catalogId = await findCatalogIdByName(supabase, type);
+  } catch {
+    res.status(500).json({ error: "Failed to load equipment units" });
+    return;
+  }
+  // A type that isn't in the catalog has no units.
+  const { data: unitRows, error: unitsError } =
+    catalogId === null
+      ? { data: [], error: null }
+      : await supabase.from("equipment").select("id, type, status, label").eq("equipment_catalog_id", catalogId).order("id");
   if (unitsError || !unitRows) {
     res.status(500).json({ error: "Failed to load equipment units" });
     return;
@@ -199,12 +224,22 @@ equipmentUnitsRouter.post("/mark", async (req: AuthedRequest, res) => {
   }
   const { reason, startDate, endDate, note } = validation.value!;
 
-  const { data: unitRows, error: unitsError } = await supabase.from("equipment").select("id, type, status, label").in("id", unitIds);
+  let catalogId: number | null;
+  try {
+    catalogId = await findCatalogIdByName(supabase, type);
+  } catch {
+    res.status(500).json({ error: "Failed to load the equipment units" });
+    return;
+  }
+  const { data: unitRows, error: unitsError } = await supabase
+    .from("equipment")
+    .select("id, type, status, label, equipment_catalog_id")
+    .in("id", unitIds);
   if (unitsError) {
     res.status(500).json({ error: "Failed to load the equipment units" });
     return;
   }
-  const units = ((unitRows ?? []) as UnitRecord[]).filter((unit) => unit.type === type);
+  const units = ((unitRows ?? []) as UnitRecord[]).filter((unit) => catalogId !== null && unit.equipment_catalog_id === catalogId);
   if (units.length !== unitIds.length) {
     res.status(404).json({ error: "One or more of those equipment units wasn't found" });
     return;

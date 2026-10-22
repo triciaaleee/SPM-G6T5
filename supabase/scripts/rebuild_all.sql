@@ -1777,6 +1777,103 @@ alter table equipment_requests
   add column if not exists flag_reason text,
   add column if not exists flagged_at timestamptz;
 
+-- ===== 0039_registration_period.sql =====
+-- Registration period (coordinator sets when registration opens, and can step
+-- in manually). Only intent is stored; whether registration is open right now
+-- is worked out on every read (events-service lib/registrationPeriod.ts), so
+-- opening, closing 5 days before the event, and reopening after a withdrawal
+-- need no scheduled job.
+--
+--   registration_open_date  the day registration opens (Singapore local date).
+--                           There is no closing date: by default it closes
+--                           5 days before the event starts, or when the event
+--                           is full. It always stops when the event starts.
+--   registration_override   the coordinator's manual say. NONE follows the
+--                           dates; FORCE_OPEN opens it now (even inside the
+--                           5-day window); FORCE_CLOSED closes it. Neither
+--                           beats the stop at the event start.
+alter table public.events
+  add column if not exists registration_open_date date,
+  add column if not exists registration_override text not null default 'NONE';
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'events_registration_override_check'
+  ) then
+    alter table public.events
+      add constraint events_registration_override_check
+      check (registration_override in ('NONE', 'FORCE_OPEN', 'FORCE_CLOSED'));
+  end if;
+end $$;
+
+-- ===== 0039_venue_buffer_overlaps.sql =====
+-- E4-13: "Identify bookings invalidated by setup/turnaround rules".
+--
+-- AC1 (detection — findBufferOverlaps/findAllBufferOverlaps in
+-- venue-service lib/venueChanges.ts) already identifies pairs of bookings
+-- whose padded occupied windows now overlap. This table is what AC2/AC3
+-- add: a durable, queryable review list so Venue Staff can revisit flagged
+-- pairs later, that reconciles itself — a row exists if and only if the
+-- pair currently overlaps under the venue's current setup/turnaround and
+-- both bookings still block the venue. There is no "dismissed" state and no
+-- dismiss action: reconciliation (lib/bufferOverlapReview.ts) is the only
+-- thing that inserts or deletes rows here, run from every write path that
+-- could change the overlap set (venue edits, withdrawals, booking
+-- decisions, event cancellation, venue-unavailability flagging).
+--
+-- booking_id_a is always the lower of the pair's two booking ids —
+-- enforced by the check constraint below and by normalizePair() in
+-- lib/venueChanges.ts, which every write path uses before upserting, so the
+-- same pair is never stored twice in swapped order.
+--
+-- window_a/window_b cache formatWindow()'s human-readable description of
+-- each side's occupied window at detection time (e.g.
+-- "2026-10-12 09:30–12:45"), so GET /venues/:venueId/buffer-overlaps can
+-- render the review list without calling events-service on every read.
+-- They are deliberately just the display string, not the raw timestamps:
+-- nothing here recomputes or re-sorts by them, and the booking's event
+-- dates/times (the source of truth) still live in events-service, never
+-- in venue-service (AGENTS.md §3a).
+--
+-- on delete cascade on both FKs: a deleted venue or booking can never leave
+-- a dangling flagged row. Neither venues nor venue_bookings rows appear to
+-- be hard-deleted by any current code path (bookings move to a terminal
+-- status like Withdrawn/Rejected instead), but cascade is the safer
+-- default if that ever changes, and it costs nothing while it doesn't.
+--
+-- Guarded so this is safe to re-run (AGENTS.md: migrations may be edited in
+-- place until the first production deploy).
+
+create table if not exists venue_buffer_overlaps (
+  id bigserial primary key,
+  venue_id integer not null references venues (id) on delete cascade,
+  booking_id_a bigint not null references venue_bookings (id) on delete cascade,
+  booking_id_b bigint not null references venue_bookings (id) on delete cascade,
+  -- Always insert with the lower booking id as booking_id_a (see
+  -- normalizePair() in lib/venueChanges.ts) so one unordered pair can never
+  -- be stored as two rows.
+  constraint venue_buffer_overlaps_ordered check (booking_id_a < booking_id_b),
+  -- formatWindow() output for each side at detection time, cached so the
+  -- review list doesn't need an events-service round trip to render.
+  window_a text not null,
+  window_b text not null,
+  detected_at timestamptz not null default now(),
+  -- Lets reconciliation upsert idempotently: a pair already flagged is left
+  -- untouched rather than deleted and re-inserted (AC3: a still-overlapping
+  -- pair must not flicker out of the list and back in).
+  constraint venue_buffer_overlaps_unique_pair unique (venue_id, booking_id_a, booking_id_b)
+);
+
+create index if not exists venue_buffer_overlaps_venue_idx on venue_buffer_overlaps (venue_id);
+create index if not exists venue_buffer_overlaps_booking_a_idx on venue_buffer_overlaps (booking_id_a);
+create index if not exists venue_buffer_overlaps_booking_b_idx on venue_buffer_overlaps (booking_id_b);
+
+-- Same stance as venues/venue_bookings (0011) and venue_unavailability
+-- (0016): RLS on with no policies, so only the backend's service-role key
+-- can reach this table.
+alter table venue_buffer_overlaps enable row level security;
+
 -- ===== 0040_change_request_partial_approval.sql =====
 -- E3-11: the coordinator can approve some held critical fields and reject
 -- the rest in the same decision (clarified AC — previously all-or-nothing).
@@ -1792,6 +1889,65 @@ alter table equipment_requests
 -- on a partial approval.
 
 alter table change_requests add column if not exists rejected_fields text[];
+
+-- ===== 0040_register_for_event.sql =====
+-- E6: race-safe registration. Two attendees going for the last place used to
+-- both pass the count check (the count and the write were separate steps).
+-- This function does count + write as one unit, serialised per event with a
+-- transaction-level advisory lock keyed on the event id. (An advisory lock,
+-- not a lock on the events row, because registration-service owns only the
+-- registrations table and never touches events.)
+--
+-- p_capacity is null for an uncapped event. Returns:
+--   'registered'          a new row, or a Withdrawn row back to Registered
+--   'already_registered'  the attendee already holds a place
+--   'full'                no place left
+-- p_set_info = false keeps a returning attendee's earlier additional_info.
+create or replace function public.register_for_event(
+  p_event_id integer,
+  p_user_id text,
+  p_capacity integer,
+  p_additional_info jsonb,
+  p_set_info boolean
+) returns text
+language plpgsql
+as $$
+declare
+  v_existing_status registration_status;
+  v_count integer;
+begin
+  perform pg_advisory_xact_lock(p_event_id);
+
+  select status into v_existing_status
+  from registrations
+  where event_id = p_event_id and user_id = p_user_id;
+
+  if v_existing_status = 'Registered' then
+    return 'already_registered';
+  end if;
+
+  if p_capacity is not null then
+    select count(*) into v_count
+    from registrations
+    where event_id = p_event_id and status = 'Registered';
+    if v_count >= p_capacity then
+      return 'full';
+    end if;
+  end if;
+
+  if v_existing_status is null then
+    insert into registrations (event_id, user_id, status, additional_info)
+    values (p_event_id, p_user_id, 'Registered', p_additional_info);
+  else
+    update registrations
+    set status = 'Registered',
+        additional_info = case when p_set_info then p_additional_info else additional_info end
+    where event_id = p_event_id and user_id = p_user_id;
+  end if;
+
+  return 'registered';
+end;
+$$;
 
 -- ===== 0041_change_request_field_applied_at.sql =====
 -- E3-11: the coordinator can approve held critical fields one subset at a
@@ -1812,3 +1968,2263 @@ alter table change_requests add column if not exists rejected_fields text[];
 -- migrations for an unused nullable column.
 
 alter table change_request_fields add column if not exists applied_at timestamptz;
+
+-- ===== 0041_registration_cancelled.sql =====
+-- E6-4: a registration whose event the organiser cancelled (E3-6) is now
+-- 'Cancelled', not 'Withdrawn'. 'Withdrawn' means only that the attendee
+-- gave up their own place; 'Cancelled' means the whole event was called off.
+-- registration-service's event.cancelled handler writes it.
+--
+-- `add value if not exists` makes this safe to re-run.
+
+alter type registration_status add value if not exists 'Cancelled';
+
+-- ===== 0042_equipment_amend_cancel.sql =====
+-- E5-2: the Event Coordinator amends or cancels an equipment request.
+--
+-- Both changes move stock and per-unit reservations (equipment_booking), so
+-- each is one database function: a request's items, the stock it holds and
+-- its reservations can't drift apart half way through. They run in the
+-- caller's transaction (PostgREST wraps each request in one), so any
+-- exception rolls everything back.
+--
+-- A request's status stays plain text (migration 0020); this adds a fourth
+-- value, 'Cancelled' — the coordinator withdrew the whole request. The row
+-- and its items stay as history; nothing is reserved against it any more.
+-- Technical Support never sees a Cancelled request in their queue.
+--
+-- Guarded (create or replace) so this is safe to re-run.
+
+-- Amends a request in place. p_items is the request's full new item list, a
+-- jsonb array of {"itemId": <existing item id, absent for a new item>,
+-- "equipmentCatalogId": ..., "equipmentType": <catalog name>, "quantity": ...}.
+-- Existing items missing from the list are removed.
+--
+--   * quantity lowered below what is reserved -> the surplus is released:
+--     stock returns to equipment_catalog and that many equipment_booking
+--     rows are deleted (AC2).
+--   * type changed -> everything reserved of the old type is released and
+--     the item starts unreserved as the new type.
+--   * item removed -> everything reserved against it is released.
+--   * quantity raised, or a new item -> nothing is reserved automatically;
+--     Technical Support arrange it.
+--
+-- Only a 'Requested' or 'Partially Fulfilled' request can be amended. The
+-- status is then recomputed from what is still reserved (nothing -> Requested,
+-- everything -> Arranged, otherwise Partially Fulfilled), so an amended
+-- request never claims more than it holds.
+--
+-- Returns {"status": ..., "changes": [...]} where each change is
+-- {"kind": "quantity"|"type"|"added"|"removed", "equipmentType", "fromType"?,
+--  "from"?, "to"?, "quantity"?, "released"}.
+create or replace function amend_equipment_request(p_request_id bigint, p_items jsonb)
+returns jsonb
+language plpgsql
+as $$
+declare
+  req_status text;
+  item record;
+  spec jsonb;
+  new_qty integer;
+  new_catalog bigint;
+  new_type text;
+  surplus integer;
+  total_fulfilled integer;
+  all_met boolean;
+  new_status text;
+  changes jsonb := '[]'::jsonb;
+begin
+  select status into req_status from equipment_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+  if req_status not in ('Requested', 'Partially Fulfilled') then
+    raise exception 'Equipment request cannot be amended: %', req_status;
+  end if;
+  if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'At least one item is required';
+  end if;
+
+  if exists (
+    select 1 from jsonb_array_elements(p_items) as e(v)
+    where e.v->>'itemId' is not null
+      and not exists (
+        select 1 from equipment_request_items i
+        where i.id = (e.v->>'itemId')::bigint and i.request_id = p_request_id
+      )
+  ) then
+    raise exception 'Unknown item in amendment';
+  end if;
+
+  for item in
+    select id, equipment_type, quantity, quantity_fulfilled, equipment_catalog_id
+    from equipment_request_items
+    where request_id = p_request_id
+    order by equipment_catalog_id, id
+  loop
+    select e.v into spec
+    from jsonb_array_elements(p_items) as e(v)
+    where (e.v->>'itemId')::bigint = item.id
+    limit 1;
+
+    if spec is null then
+      -- Removed: give back everything it held. Its equipment_booking rows go
+      -- with it (on delete cascade, migration 0027).
+      if item.quantity_fulfilled > 0 and item.equipment_catalog_id is not null then
+        update equipment_catalog
+          set available_stock = available_stock + item.quantity_fulfilled
+          where id = item.equipment_catalog_id;
+      end if;
+      delete from equipment_request_items where id = item.id;
+      changes := changes || jsonb_build_object(
+        'kind', 'removed',
+        'equipmentType', item.equipment_type,
+        'quantity', item.quantity,
+        'released', item.quantity_fulfilled
+      );
+      continue;
+    end if;
+
+    new_qty := (spec->>'quantity')::integer;
+    new_catalog := (spec->>'equipmentCatalogId')::bigint;
+    new_type := spec->>'equipmentType';
+
+    if new_catalog is distinct from item.equipment_catalog_id then
+      if item.quantity_fulfilled > 0 and item.equipment_catalog_id is not null then
+        update equipment_catalog
+          set available_stock = available_stock + item.quantity_fulfilled
+          where id = item.equipment_catalog_id;
+      end if;
+      delete from equipment_booking where request_item_id = item.id;
+      update equipment_request_items
+        set equipment_catalog_id = new_catalog,
+            equipment_type = new_type,
+            quantity = new_qty,
+            quantity_fulfilled = 0
+        where id = item.id;
+      changes := changes || jsonb_build_object(
+        'kind', 'type',
+        'fromType', item.equipment_type,
+        'equipmentType', new_type,
+        'from', item.quantity,
+        'to', new_qty,
+        'released', item.quantity_fulfilled
+      );
+    elsif new_qty <> item.quantity then
+      surplus := greatest(0, item.quantity_fulfilled - new_qty);
+      if surplus > 0 then
+        if item.equipment_catalog_id is not null then
+          update equipment_catalog
+            set available_stock = available_stock + surplus
+            where id = item.equipment_catalog_id;
+        end if;
+        delete from equipment_booking
+          where id in (
+            select id from equipment_booking
+            where request_item_id = item.id
+            order by id
+            limit surplus
+          );
+      end if;
+      update equipment_request_items
+        set quantity = new_qty,
+            quantity_fulfilled = least(item.quantity_fulfilled, new_qty)
+        where id = item.id;
+      changes := changes || jsonb_build_object(
+        'kind', 'quantity',
+        'equipmentType', item.equipment_type,
+        'from', item.quantity,
+        'to', new_qty,
+        'released', surplus
+      );
+    end if;
+  end loop;
+
+  for spec in
+    select e.v from jsonb_array_elements(p_items) as e(v) where e.v->>'itemId' is null
+  loop
+    insert into equipment_request_items (request_id, equipment_catalog_id, equipment_type, quantity)
+    values (
+      p_request_id,
+      (spec->>'equipmentCatalogId')::bigint,
+      spec->>'equipmentType',
+      (spec->>'quantity')::integer
+    );
+    changes := changes || jsonb_build_object(
+      'kind', 'added',
+      'equipmentType', spec->>'equipmentType',
+      'quantity', (spec->>'quantity')::integer,
+      'released', 0
+    );
+  end loop;
+
+  select coalesce(sum(quantity_fulfilled), 0), coalesce(bool_and(quantity_fulfilled >= quantity), false)
+    into total_fulfilled, all_met
+    from equipment_request_items
+    where request_id = p_request_id;
+
+  if total_fulfilled = 0 then
+    new_status := 'Requested';
+  elsif all_met then
+    new_status := 'Arranged';
+  else
+    new_status := 'Partially Fulfilled';
+  end if;
+
+  update equipment_requests
+    set status = new_status,
+        fulfillment_note = case when new_status = 'Partially Fulfilled' then fulfillment_note else null end
+    where id = p_request_id;
+
+  return jsonb_build_object('status', new_status, 'changes', changes);
+end;
+$$;
+
+-- Cancels a request entirely (AC3): releases everything reserved against it
+-- (stock back to equipment_catalog, its equipment_booking rows deleted) and
+-- marks it 'Cancelled'. The items stay, unreserved, as history. Mirrors
+-- release_equipment_for_event (migration 0027), but for one request.
+--
+-- Returns {"released": [{"equipmentType": ..., "quantity": ...}]} — only the
+-- items that actually held something.
+create or replace function release_equipment_for_request(p_request_id bigint)
+returns jsonb
+language plpgsql
+as $$
+declare
+  req_status text;
+  item record;
+  released jsonb := '[]'::jsonb;
+begin
+  select status into req_status from equipment_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+  if req_status = 'Cancelled' then
+    raise exception 'Equipment request already cancelled: %', p_request_id;
+  end if;
+
+  for item in
+    select id, equipment_type, quantity_fulfilled, equipment_catalog_id
+    from equipment_request_items
+    where request_id = p_request_id
+    order by equipment_catalog_id, id
+  loop
+    if item.quantity_fulfilled > 0 then
+      if item.equipment_catalog_id is not null then
+        update equipment_catalog
+          set available_stock = available_stock + item.quantity_fulfilled
+          where id = item.equipment_catalog_id;
+      end if;
+      released := released || jsonb_build_object(
+        'equipmentType', item.equipment_type,
+        'quantity', item.quantity_fulfilled
+      );
+      update equipment_request_items set quantity_fulfilled = 0 where id = item.id;
+    end if;
+    delete from equipment_booking where request_item_id = item.id;
+  end loop;
+
+  update equipment_requests
+    set status = 'Cancelled', fulfillment_note = null
+    where id = p_request_id;
+
+  return jsonb_build_object('released', released);
+end;
+$$;
+
+-- ===== 0043_equipment_unavailability.sql =====
+-- E5-5: Technical Support mark a physical equipment unit damaged or under
+-- maintenance for a period, so it stops being offered to events.
+--
+-- equipment.status (migration 0025) says only whether a unit is usable right
+-- now, with no dates, and nothing in the app could change it. A period lets
+-- Technical Support say "out from 3 Nov to 7 Nov", or "out from 3 Nov until
+-- it's repaired" (no end date). Availability checks (E5-4) and reservations
+-- (E5-6) skip a unit whenever one of its periods overlaps the event's date.
+-- equipment.status keeps its old meaning — unusable indefinitely — so units
+-- already set to Damaged or Under Maintenance stay excluded.
+--
+-- start_date and end_date are inclusive local calendar dates, like venue
+-- block-outs (migration 0016). A null end_date means "until marked usable
+-- again", which deletes the row.
+--
+-- Guarded so this is safe to re-run.
+
+create table if not exists equipment_unavailability (
+  id bigint generated by default as identity primary key,
+  equipment_id bigint not null references equipment (id) on delete cascade,
+  reason text not null check (reason in ('Damaged', 'Under Maintenance')),
+  start_date date not null,
+  end_date date,
+  note text,
+  marked_by text references users (id),
+  created_at timestamptz not null default now(),
+  constraint equipment_unavailability_dates_check check (end_date is null or end_date >= start_date)
+);
+
+create index if not exists equipment_unavailability_equipment_idx on equipment_unavailability (equipment_id);
+
+-- Same stance as every other table since migration 0004: RLS on with no
+-- policies, so only the backend's service-role key can reach this.
+alter table equipment_unavailability enable row level security;
+
+-- ===== 0044_equipment_stock_changes.sql =====
+-- E5-5 follow-up: equipment stock is changed deliberately, with a reason.
+--
+-- Until now Technical Support could overwrite an item's total and available
+-- stock directly (E5-1). Available stock is derived — request statuses move it
+-- as equipment is reserved and released — and the total no longer matched the
+-- per-unit rows in `equipment` once units could be marked unusable (migration
+-- 0043). Now:
+--   * available stock is never edited by hand;
+--   * the total changes only through change_equipment_stock(), which adds or
+--     removes the matching unit rows in the same step, needs a reason, and
+--     records the change in equipment_stock_changes.
+--
+-- equipment.label is an optional tag for a physical unit (e.g. the sticker
+-- number on it), so "Projector #12" can be matched to the real item.
+--
+-- Guarded so this is safe to re-run.
+
+alter table equipment add column if not exists label text;
+
+create table if not exists equipment_stock_changes (
+  id bigint generated by default as identity primary key,
+  equipment_catalog_id bigint not null references equipment_catalog (id) on delete cascade,
+  change_type text not null check (change_type in ('Added', 'Removed')),
+  quantity integer not null check (quantity > 0),
+  total_before integer not null,
+  total_after integer not null,
+  reason text not null,
+  changed_by text references users (id),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists equipment_stock_changes_item_idx
+  on equipment_stock_changes (equipment_catalog_id, created_at desc);
+
+-- Same stance as every other table since migration 0004: RLS on with no
+-- policies, so only the backend's service-role key can reach this.
+alter table equipment_stock_changes enable row level security;
+
+-- Adds (p_delta > 0) or removes (p_delta < 0) stock of one catalog item.
+--
+--   * Adding creates p_delta Available unit rows and raises both total and
+--     available stock by that many.
+--   * Removing deletes p_delta unit rows and lowers both counters. It only ever
+--     removes units that are Available, hold no reservation and have no running
+--     or upcoming unusable period, so it can never pull equipment out from under
+--     an event; and it can't take more than the catalog's available stock. If
+--     fewer than p_delta units qualify it raises 'Cannot remove N: only M can be
+--     removed' and changes nothing.
+--
+-- p_reason is required. Runs in the caller's transaction (PostgREST wraps each
+-- request in one), so any exception rolls the whole change back.
+create or replace function change_equipment_stock(
+  p_catalog_id bigint,
+  p_delta integer,
+  p_reason text,
+  p_user text
+)
+returns jsonb
+language plpgsql
+as $$
+declare
+  cat record;
+  free_ids bigint[];
+  removable integer;
+  wanted integer;
+  new_total integer;
+  new_available integer;
+begin
+  if p_delta is null or p_delta = 0 then
+    raise exception 'Quantity must be at least 1';
+  end if;
+  if p_reason is null or btrim(p_reason) = '' then
+    raise exception 'A reason is required';
+  end if;
+
+  select id, name, total_stock, available_stock into cat
+    from equipment_catalog where id = p_catalog_id for update;
+  if not found then
+    raise exception 'Equipment item not found: %', p_catalog_id;
+  end if;
+
+  if p_delta > 0 then
+    insert into equipment (type, status)
+      select cat.name, 'Available' from generate_series(1, p_delta);
+  else
+    wanted := -p_delta;
+    select coalesce(array_agg(s.id), '{}') into free_ids from (
+      select e.id
+      from equipment e
+      where e.type = cat.name
+        and e.status = 'Available'
+        and not exists (select 1 from equipment_booking b where b.equipment_id = e.id)
+        and not exists (
+          select 1 from equipment_unavailability u
+          where u.equipment_id = e.id and (u.end_date is null or u.end_date >= current_date)
+        )
+      order by e.id desc
+      limit wanted
+    ) s;
+
+    removable := least(coalesce(array_length(free_ids, 1), 0), cat.available_stock);
+    if removable < wanted then
+      raise exception 'Cannot remove %: only % can be removed', wanted, removable;
+    end if;
+
+    delete from equipment where id = any(free_ids);
+  end if;
+
+  new_total := cat.total_stock + p_delta;
+  new_available := cat.available_stock + p_delta;
+  update equipment_catalog
+    set total_stock = new_total, available_stock = new_available
+    where id = cat.id;
+
+  insert into equipment_stock_changes
+    (equipment_catalog_id, change_type, quantity, total_before, total_after, reason, changed_by)
+  values
+    (cat.id, case when p_delta > 0 then 'Added' else 'Removed' end, abs(p_delta),
+     cat.total_stock, new_total, btrim(p_reason), p_user);
+
+  return jsonb_build_object(
+    'id', cat.id,
+    'name', cat.name,
+    'totalStock', new_total,
+    'availableStock', new_available
+  );
+end;
+$$;
+
+-- ===== 0045_event_outbox.sql =====
+-- Reliable publishing of action messages (events-service).
+--
+-- A message another service must act on (today: event.cancelled, which
+-- venue-, equipment- and registration-service react to) is stored here in
+-- the same request that changes the event, then published to RabbitMQ.
+-- If the broker is down or the service restarts first, a relay in
+-- events-service keeps retrying the rows with published_at still null, in
+-- id order, until the broker confirms them. Delivery is at-least-once:
+-- message_id is stable across retries, so a consumer that has already
+-- handled it can skip the repeat.
+--
+-- Owned by events-service only (AGENTS.md section 1). Guarded so this is
+-- safe to re-run.
+
+create table if not exists event_outbox (
+  id bigint generated by default as identity primary key,
+  message_id uuid not null unique default gen_random_uuid(),
+  type text not null,
+  event_id bigint,
+  actor_id text,
+  recipients jsonb not null default '{"userIds": [], "roles": []}'::jsonb,
+  data jsonb not null default '{}'::jsonb,
+  occurred_at timestamptz not null default now(),
+  published_at timestamptz,
+  attempts integer not null default 0,
+  last_error text,
+  created_at timestamptz not null default now()
+);
+
+-- The relay only ever looks at what is still unpublished.
+create index if not exists event_outbox_pending_idx on event_outbox (id) where published_at is null;
+
+alter table event_outbox enable row level security;
+
+-- ===== 0046_needs_review_status.sql =====
+-- "Needs Review": the status a Confirmed event moves to when something it
+-- relied on changes after safety approval — a venue booking becomes
+-- Replacement Required, a reserved equipment unit becomes unusable, or the
+-- Organiser raises a change request holding critical fields. Owned by
+-- events-service. See AGENTS.md section 3.
+--
+-- Why a status and not Planning: Planning is where an event is built before
+-- it has been safety-approved. A Confirmed event that loses its venue is
+-- already approved, so the coordinator needs somewhere to re-arrange it
+-- without the event reading as "back to the start" (and without the venue,
+-- equipment and change-request routes being gated on Planning alone).
+--
+-- safety_approval_stale: true once anything the Safety Officer approved has
+-- changed (an arrangement was lost, or a change request was approved). While
+-- false, Needs Review is only waiting on a change-request decision, so a
+-- rejected request can return the event straight to Confirmed. While true,
+-- the event must pass Safety Review again. Cleared on every submission.
+--
+-- Guarded so this is safe to re-run. The new value is only referenced as a
+-- string inside the function body, which Postgres does not resolve until it
+-- runs, so this works in one script.
+
+alter type event_status add value if not exists 'Needs Review' after 'Confirmed';
+
+alter table events add column if not exists safety_approval_stale boolean not null default false;
+
+-- Same as 0026, but a coordinator may also submit from Needs Review.
+create or replace function submit_event_for_safety_review(
+  p_event_id integer,
+  p_submitted_by text,
+  p_equipment_placement text,
+  p_crowd_movement text,
+  p_emergency_access text,
+  p_venue_restrictions text
+) returns bigint
+language plpgsql
+as $$
+declare
+  v_submission_id bigint;
+begin
+  update events
+     set status = 'Safety Review',
+         safety_approval_stale = false
+   where id = p_event_id
+     and status::text in ('Planning', 'Needs Review')
+     and coordinator_id = p_submitted_by;
+  if not found then
+    return null;
+  end if;
+
+  insert into event_safety_submissions (
+    event_id, submitted_by, equipment_placement, crowd_movement, emergency_access, venue_restrictions
+  ) values (
+    p_event_id, p_submitted_by, p_equipment_placement, p_crowd_movement, p_emergency_access, p_venue_restrictions
+  )
+  returning id into v_submission_id;
+
+  return v_submission_id;
+end;
+$$;
+
+-- ===== 0047_booking_cancelled_status.sql =====
+-- "Cancelled": a venue booking the system cancelled because its venue became
+-- unavailable (Venue Staff added a block-out period over an Approved booking,
+-- Week 7 change 2). Owned by venue-service. See AGENTS.md section 3a.
+--
+-- Not the same as the other end states: Rejected is Venue Staff refusing a
+-- request, Withdrawn is the coordinator giving a booking up, Expired is a hold
+-- that lapsed. Cancelled is nobody's choice, so decided_by stays null and
+-- decision_reason holds why (the venue and the block-out reason). The event is
+-- not cancelled; its coordinator searches for a replacement venue.
+--
+-- Guarded so this is safe to re-run.
+
+alter type venue_booking_status add value if not exists 'Cancelled';
+
+-- ===== 0048_equipment_unit_catalog_link.sql =====
+-- Links every equipment unit to its catalog item by id, not by matching names.
+--
+-- Until now an `equipment` row belonged to a catalog item only because its
+-- `type` text happened to equal `equipment_catalog.name`, and a request item's
+-- `equipment_catalog_id` was optional. Nothing stopped the two drifting apart,
+-- and anything computed per catalog item (stock, availability) had to join on
+-- text. Now:
+--   * equipment.equipment_catalog_id points at the catalog item;
+--   * request items must have one too;
+--   * change_equipment_stock() finds and creates units by that id.
+-- `equipment.type` stays for now (still written, no longer used to look units up),
+-- so the API's `type` field keeps working unchanged.
+--
+-- Guarded so this is safe to re-run. NOT NULL is only applied when every
+-- existing row could be linked; otherwise it raises a notice and leaves the
+-- column nullable so the rows can be fixed by hand first.
+
+alter table equipment
+  add column if not exists equipment_catalog_id bigint references equipment_catalog (id);
+
+update equipment e
+set equipment_catalog_id = c.id
+from equipment_catalog c
+where e.equipment_catalog_id is null and c.name = e.type;
+
+update equipment_request_items i
+set equipment_catalog_id = c.id
+from equipment_catalog c
+where i.equipment_catalog_id is null and c.name = i.equipment_type;
+
+create index if not exists equipment_catalog_status_idx on equipment (equipment_catalog_id, status);
+
+do $$
+begin
+  if exists (select 1 from equipment where equipment_catalog_id is null) then
+    raise notice 'equipment: some units match no catalog item; equipment_catalog_id left nullable. Fix: select id, type from equipment where equipment_catalog_id is null;';
+  else
+    alter table equipment alter column equipment_catalog_id set not null;
+  end if;
+
+  if exists (select 1 from equipment_request_items where equipment_catalog_id is null) then
+    raise notice 'equipment_request_items: some items match no catalog item; equipment_catalog_id left nullable. Fix: select id, equipment_type from equipment_request_items where equipment_catalog_id is null;';
+  else
+    alter table equipment_request_items alter column equipment_catalog_id set not null;
+  end if;
+end
+$$;
+
+-- change_equipment_stock (0044), now finding and creating units by catalog id.
+create or replace function change_equipment_stock(
+  p_catalog_id bigint,
+  p_delta integer,
+  p_reason text,
+  p_user text
+)
+returns jsonb
+language plpgsql
+as $$
+declare
+  cat record;
+  free_ids bigint[];
+  removable integer;
+  wanted integer;
+  new_total integer;
+  new_available integer;
+begin
+  if p_delta is null or p_delta = 0 then
+    raise exception 'Quantity must be at least 1';
+  end if;
+  if p_reason is null or btrim(p_reason) = '' then
+    raise exception 'A reason is required';
+  end if;
+
+  select id, name, total_stock, available_stock into cat
+    from equipment_catalog where id = p_catalog_id for update;
+  if not found then
+    raise exception 'Equipment item not found: %', p_catalog_id;
+  end if;
+
+  if p_delta > 0 then
+    insert into equipment (type, status, equipment_catalog_id)
+      select cat.name, 'Available', cat.id from generate_series(1, p_delta);
+  else
+    wanted := -p_delta;
+    select coalesce(array_agg(s.id), '{}') into free_ids from (
+      select e.id
+      from equipment e
+      where e.equipment_catalog_id = cat.id
+        and e.status = 'Available'
+        and not exists (select 1 from equipment_booking b where b.equipment_id = e.id)
+        and not exists (
+          select 1 from equipment_unavailability u
+          where u.equipment_id = e.id and (u.end_date is null or u.end_date >= current_date)
+        )
+      order by e.id desc
+      limit wanted
+    ) s;
+
+    removable := least(coalesce(array_length(free_ids, 1), 0), cat.available_stock);
+    if removable < wanted then
+      raise exception 'Cannot remove %: only % can be removed', wanted, removable;
+    end if;
+
+    delete from equipment where id = any(free_ids);
+  end if;
+
+  new_total := cat.total_stock + p_delta;
+  new_available := cat.available_stock + p_delta;
+  update equipment_catalog
+    set total_stock = new_total, available_stock = new_available
+    where id = cat.id;
+
+  insert into equipment_stock_changes
+    (equipment_catalog_id, change_type, quantity, total_before, total_after, reason, changed_by)
+  values
+    (cat.id, case when p_delta > 0 then 'Added' else 'Removed' end, abs(p_delta),
+     cat.total_stock, new_total, btrim(p_reason), p_user);
+
+  return jsonb_build_object(
+    'id', cat.id,
+    'name', cat.name,
+    'totalStock', new_total,
+    'availableStock', new_available
+  );
+end;
+$$;
+
+-- ===== 0049_reserve_equipment_request.sql =====
+-- Reserving equipment as one step.
+--
+-- Moving a request to Arranged / Partially Fulfilled (E5-3, E5-6) used to be
+-- three separate database calls from the application: pick free units, move
+-- the stock counters (apply_equipment_request_status, 0022), then write the
+-- equipment_booking rows. If the last step failed, the counters had already
+-- moved and the code tried to undo them with a second call. This function does
+-- all of it in one transaction, so a failure anywhere leaves nothing changed.
+--
+-- Which units are free for the event's dates is still decided by the
+-- application, because event times live in events-service and the database
+-- holds no dates. The application passes the units it chose in p_claims
+-- ([{"itemId": 1, "unitIds": [201, 202]}], one entry per item whose reserved
+-- quantity grows). What this function can check, and does, is what the
+-- database knows: each unit exists, is the right equipment item, is still
+-- 'Available', and is not already reserved for this same event. It does NOT
+-- refuse a unit that is reserved for another event, since the same unit may be
+-- used on different days. A shrinking item releases its oldest bookings.
+--
+-- Raises (and so rolls everything back):
+--   'Not enough stock ...'                  from apply_equipment_request_status
+--   'Unit N is no longer available'         the unit was marked unusable meanwhile
+--   'Unit N is already reserved for this event'
+--   'Unit N is not the requested equipment type'
+--   'Item N needs X units but Y were chosen' / 'No units were chosen for item N'
+--
+-- Guarded so this is safe to re-run.
+
+create or replace function reserve_equipment_request(
+  p_request_id bigint,
+  p_status text,
+  p_note text,
+  p_fulfillments jsonb default '[]'::jsonb,
+  p_claims jsonb default '[]'::jsonb
+)
+returns void
+language plpgsql
+as $$
+declare
+  req record;
+  before_fulfilled jsonb;
+  item record;
+  claim jsonb;
+  claimed bigint[];
+  delta integer;
+  unit record;
+  found_units integer;
+begin
+  select id, event_id into req from equipment_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+
+  -- What each item held before, to tell how many units to claim or release.
+  select coalesce(jsonb_object_agg(id::text, quantity_fulfilled), '{}'::jsonb)
+    into before_fulfilled
+    from equipment_request_items
+    where request_id = p_request_id;
+
+  -- The stock counters and the request status (0022). Raises if there is not enough stock.
+  perform apply_equipment_request_status(p_request_id, p_status, p_note, p_fulfillments);
+
+  for item in
+    select id, equipment_catalog_id, quantity_fulfilled
+    from equipment_request_items
+    where request_id = p_request_id
+    order by id
+  loop
+    delta := item.quantity_fulfilled - coalesce((before_fulfilled ->> item.id::text)::integer, 0);
+
+    if delta < 0 then
+      delete from equipment_booking
+      where id in (
+        select id from equipment_booking where request_item_id = item.id order by id limit -delta
+      );
+
+    elsif delta > 0 then
+      select e.c into claim
+        from jsonb_array_elements(p_claims) as e(c)
+        where (e.c ->> 'itemId')::bigint = item.id
+        limit 1;
+      if claim is null then
+        raise exception 'No units were chosen for item %', item.id;
+      end if;
+
+      select coalesce(array_agg(t.value::bigint), '{}') into claimed
+        from jsonb_array_elements_text(claim -> 'unitIds') as t(value);
+      if (select count(distinct x) from unnest(claimed) as x) <> delta
+         or coalesce(array_length(claimed, 1), 0) <> delta then
+        raise exception 'Item % needs % units but % were chosen', item.id, delta, coalesce(array_length(claimed, 1), 0);
+      end if;
+
+      -- Lock the units so two reservations of the same unit run one after the other.
+      found_units := 0;
+      for unit in
+        select id, equipment_catalog_id, status
+        from equipment
+        where id = any(claimed)
+        order by id
+        for update
+      loop
+        found_units := found_units + 1;
+        if unit.equipment_catalog_id is distinct from item.equipment_catalog_id then
+          raise exception 'Unit % is not the requested equipment type', unit.id;
+        end if;
+        if unit.status <> 'Available' then
+          raise exception 'Unit % is no longer available', unit.id;
+        end if;
+        if exists (
+          select 1 from equipment_booking b where b.equipment_id = unit.id and b.event_id = req.event_id
+        ) then
+          raise exception 'Unit % is already reserved for this event', unit.id;
+        end if;
+      end loop;
+      if found_units <> delta then
+        raise exception 'Unknown equipment unit in the claim for item %', item.id;
+      end if;
+
+      insert into equipment_booking (equipment_id, event_id, request_item_id)
+        select u, req.event_id, item.id from unnest(claimed) as u;
+    end if;
+  end loop;
+end;
+$$;
+
+-- ===== 0050_equipment_booking_windows.sql =====
+-- Reserving equipment: the database now refuses overlapping dates.
+--
+-- 0049 made a reservation one transaction, but it could not tell whether a unit
+-- was already booked for ANOTHER event on overlapping dates, because
+-- equipment_booking stored no dates (they live in events-service). So two
+-- coordinators picking the last unit for overlapping events at the same moment
+-- could both succeed. It also did not check equipment_unavailability, so a unit
+-- marked damaged for those dates between "chosen" and "reserved" still booked.
+--
+-- Now every booking stores the window it holds, as epoch milliseconds in the
+-- same wall-clock-read-as-UTC form as the application's occupiedWindow()
+-- (equipment-service lib/scheduleWindow.ts), so the two always compare equal.
+-- reserve_equipment_request takes the event's window from the application,
+-- locks the units, and then refuses:
+--   'Unit N is already booked for overlapping dates'
+--   'Unit N is unavailable during these dates'      (an equipment_unavailability period)
+-- Both run after the row lock, so of two simultaneous reservations the second
+-- waits, then sees the first's booking and is refused.
+--
+-- Bookings made before this migration have no stored window (NULL). The
+-- database cannot invent one, so it skips them; the application still checks
+-- them against events-service, and writes each window back as it resolves it
+-- (lib/equipmentConflicts.ts), so they fill in over time. The window is also
+-- refreshed there when an event is rescheduled, so a stored window can lag a
+-- reschedule only until the unit is next checked.
+--
+-- Guarded so this is safe to re-run.
+
+alter table equipment_booking add column if not exists window_start_ms bigint;
+alter table equipment_booking add column if not exists window_end_ms bigint;
+
+create index if not exists equipment_booking_window_idx on equipment_booking (equipment_id, window_start_ms, window_end_ms);
+
+-- The signature changes, so the 0049 version must go or both would exist.
+drop function if exists reserve_equipment_request(bigint, text, text, jsonb, jsonb);
+
+create or replace function reserve_equipment_request(
+  p_request_id bigint,
+  p_status text,
+  p_note text,
+  p_fulfillments jsonb default '[]'::jsonb,
+  p_claims jsonb default '[]'::jsonb,
+  p_window_start_ms bigint default null,
+  p_window_end_ms bigint default null
+)
+returns void
+language plpgsql
+as $$
+declare
+  req record;
+  before_fulfilled jsonb;
+  item record;
+  claim jsonb;
+  claimed bigint[];
+  delta integer;
+  unit record;
+  found_units integer;
+  first_day date;
+  last_day date;
+begin
+  select id, event_id into req from equipment_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+
+  -- What each item held before, to tell how many units to claim or release.
+  select coalesce(jsonb_object_agg(id::text, quantity_fulfilled), '{}'::jsonb)
+    into before_fulfilled
+    from equipment_request_items
+    where request_id = p_request_id;
+
+  -- The stock counters and the request status (0022). Raises if there is not enough stock.
+  perform apply_equipment_request_status(p_request_id, p_status, p_note, p_fulfillments);
+
+  for item in
+    select id, equipment_catalog_id, quantity_fulfilled
+    from equipment_request_items
+    where request_id = p_request_id
+    order by id
+  loop
+    delta := item.quantity_fulfilled - coalesce((before_fulfilled ->> item.id::text)::integer, 0);
+
+    if delta < 0 then
+      delete from equipment_booking
+      where id in (
+        select id from equipment_booking where request_item_id = item.id order by id limit -delta
+      );
+
+    elsif delta > 0 then
+      select e.c into claim
+        from jsonb_array_elements(p_claims) as e(c)
+        where (e.c ->> 'itemId')::bigint = item.id
+        limit 1;
+      if claim is null then
+        raise exception 'No units were chosen for item %', item.id;
+      end if;
+
+      if p_window_start_ms is null or p_window_end_ms is null or p_window_end_ms <= p_window_start_ms then
+        raise exception 'The event window is required to reserve item %', item.id;
+      end if;
+      -- Whole days the window touches, for comparing with unavailability periods
+      -- (end is exclusive, so the last day is the one holding end - 1 ms).
+      first_day := (to_timestamp(p_window_start_ms / 1000.0) at time zone 'UTC')::date;
+      last_day := (to_timestamp((p_window_end_ms - 1) / 1000.0) at time zone 'UTC')::date;
+
+      select coalesce(array_agg(t.value::bigint), '{}') into claimed
+        from jsonb_array_elements_text(claim -> 'unitIds') as t(value);
+      if (select count(distinct x) from unnest(claimed) as x) <> delta
+         or coalesce(array_length(claimed, 1), 0) <> delta then
+        raise exception 'Item % needs % units but % were chosen', item.id, delta, coalesce(array_length(claimed, 1), 0);
+      end if;
+
+      -- Lock the units so two reservations of the same unit run one after the other.
+      found_units := 0;
+      for unit in
+        select id, equipment_catalog_id, status
+        from equipment
+        where id = any(claimed)
+        order by id
+        for update
+      loop
+        found_units := found_units + 1;
+        if unit.equipment_catalog_id is distinct from item.equipment_catalog_id then
+          raise exception 'Unit % is not the requested equipment type', unit.id;
+        end if;
+        if unit.status <> 'Available' then
+          raise exception 'Unit % is no longer available', unit.id;
+        end if;
+        if exists (
+          select 1 from equipment_booking b where b.equipment_id = unit.id and b.event_id = req.event_id
+        ) then
+          raise exception 'Unit % is already reserved for this event', unit.id;
+        end if;
+        if exists (
+          select 1 from equipment_booking b
+          where b.equipment_id = unit.id
+            and b.window_start_ms is not null
+            and b.window_start_ms < p_window_end_ms
+            and p_window_start_ms < b.window_end_ms
+        ) then
+          raise exception 'Unit % is already booked for overlapping dates', unit.id;
+        end if;
+        if exists (
+          select 1 from equipment_unavailability u
+          where u.equipment_id = unit.id
+            and u.start_date <= last_day
+            and (u.end_date is null or u.end_date >= first_day)
+        ) then
+          raise exception 'Unit % is unavailable during these dates', unit.id;
+        end if;
+      end loop;
+      if found_units <> delta then
+        raise exception 'Unknown equipment unit in the claim for item %', item.id;
+      end if;
+
+      insert into equipment_booking (equipment_id, event_id, request_item_id, window_start_ms, window_end_ms)
+        select u, req.event_id, item.id, p_window_start_ms, p_window_end_ms from unnest(claimed) as u;
+    end if;
+  end loop;
+end;
+$$;
+
+-- ===== 0051_stop_using_stock_counters.sql =====
+-- Stop using the stock counters (equipment_catalog.total_stock and
+-- available_stock) and compute stock from the unit rows and their bookings.
+--
+-- The counters were a date-blind running total: reserving a unit for any event,
+-- on any day, took one off available_stock, so an item with N units could back
+-- at most N reservations across all events however far apart, and the
+-- availability page subtracted reserved units twice (once in the counter, once
+-- as "reserved elsewhere"). Whether a unit is free is a per-unit, per-date
+-- question that equipment_booking's stored windows (0050) can already answer.
+--
+-- From here:
+--   total      = the number of unit rows for the catalog item;
+--   available  = units that are Available, have no unusable period today and
+--                no booking whose window overlaps today (catalog_stock_now);
+--   a reservation is refused by the per-unit checks in reserve_equipment_request
+--   (type, status, booked for overlapping dates, unavailable during these
+--   dates), not by a counter, so "Not enough stock" is no longer raised.
+--
+-- equipment_request_items.quantity_fulfilled is still written: it is the
+-- request's own record of how many Technical Support marked fulfilled, which the
+-- routes and the API use. The stock counters are simply no longer read or
+-- written. The columns stay until migration 0052 drops them, so this can be
+-- rolled back by redeploying the previous functions.
+--
+-- Guarded (create or replace) so this is safe to re-run.
+
+create or replace function apply_equipment_request_status(
+  p_request_id bigint,
+  p_status text,
+  p_note text,
+  p_fulfillments jsonb default '[]'::jsonb
+)
+returns void
+language plpgsql
+as $$
+declare
+  item record;
+  target_fulfilled integer;
+begin
+  if p_status not in ('Requested', 'Arranged', 'Partially Fulfilled') then
+    raise exception 'Invalid status: %', p_status;
+  end if;
+
+  if not exists (select 1 from equipment_requests where id = p_request_id for update) then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+
+  for item in
+    select id, quantity, quantity_fulfilled, equipment_catalog_id
+    from equipment_request_items
+    where request_id = p_request_id
+    order by equipment_catalog_id, id
+  loop
+    if p_status = 'Requested' then
+      target_fulfilled := 0;
+    elsif p_status = 'Arranged' then
+      target_fulfilled := item.quantity;
+    else
+      select (elem->>'fulfilledQuantity')::integer into target_fulfilled
+      from jsonb_array_elements(p_fulfillments) elem
+      where (elem->>'itemId')::bigint = item.id;
+
+      if target_fulfilled is null then
+        raise exception 'Missing fulfilled quantity for item %', item.id;
+      end if;
+      if target_fulfilled < 0 or target_fulfilled > item.quantity then
+        raise exception 'Fulfilled quantity for item % must be between 0 and %', item.id, item.quantity;
+      end if;
+    end if;
+
+    update equipment_request_items
+      set quantity_fulfilled = target_fulfilled
+      where id = item.id;
+  end loop;
+
+  update equipment_requests
+    set status = p_status, fulfillment_note = p_note
+    where id = p_request_id;
+end;
+$$;
+
+create or replace function release_equipment_for_event(p_event_id integer)
+returns void
+language plpgsql
+as $$
+declare
+  item record;
+begin
+  for item in
+    select eri.id, eri.quantity_fulfilled, eri.equipment_catalog_id
+    from equipment_request_items eri
+    join equipment_requests er on er.id = eri.request_id
+    where er.event_id = p_event_id and eri.quantity_fulfilled > 0
+    order by eri.equipment_catalog_id, eri.id
+  loop
+    update equipment_request_items
+      set quantity_fulfilled = 0
+      where id = item.id;
+  end loop;
+
+  delete from equipment_booking where event_id = p_event_id;
+end;
+$$;
+
+create or replace function amend_equipment_request(p_request_id bigint, p_items jsonb)
+returns jsonb
+language plpgsql
+as $$
+declare
+  req_status text;
+  item record;
+  spec jsonb;
+  new_qty integer;
+  new_catalog bigint;
+  new_type text;
+  surplus integer;
+  total_fulfilled integer;
+  all_met boolean;
+  new_status text;
+  changes jsonb := '[]'::jsonb;
+begin
+  select status into req_status from equipment_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+  if req_status not in ('Requested', 'Partially Fulfilled') then
+    raise exception 'Equipment request cannot be amended: %', req_status;
+  end if;
+  if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'At least one item is required';
+  end if;
+
+  if exists (
+    select 1 from jsonb_array_elements(p_items) as e(v)
+    where e.v->>'itemId' is not null
+      and not exists (
+        select 1 from equipment_request_items i
+        where i.id = (e.v->>'itemId')::bigint and i.request_id = p_request_id
+      )
+  ) then
+    raise exception 'Unknown item in amendment';
+  end if;
+
+  for item in
+    select id, equipment_type, quantity, quantity_fulfilled, equipment_catalog_id
+    from equipment_request_items
+    where request_id = p_request_id
+    order by equipment_catalog_id, id
+  loop
+    select e.v into spec
+    from jsonb_array_elements(p_items) as e(v)
+    where (e.v->>'itemId')::bigint = item.id
+    limit 1;
+
+    if spec is null then
+      -- Removed: give back everything it held. Its equipment_booking rows go
+      -- with it (on delete cascade, migration 0027).
+      delete from equipment_request_items where id = item.id;
+      changes := changes || jsonb_build_object(
+        'kind', 'removed',
+        'equipmentType', item.equipment_type,
+        'quantity', item.quantity,
+        'released', item.quantity_fulfilled
+      );
+      continue;
+    end if;
+
+    new_qty := (spec->>'quantity')::integer;
+    new_catalog := (spec->>'equipmentCatalogId')::bigint;
+    new_type := spec->>'equipmentType';
+
+    if new_catalog is distinct from item.equipment_catalog_id then
+      delete from equipment_booking where request_item_id = item.id;
+      update equipment_request_items
+        set equipment_catalog_id = new_catalog,
+            equipment_type = new_type,
+            quantity = new_qty,
+            quantity_fulfilled = 0
+        where id = item.id;
+      changes := changes || jsonb_build_object(
+        'kind', 'type',
+        'fromType', item.equipment_type,
+        'equipmentType', new_type,
+        'from', item.quantity,
+        'to', new_qty,
+        'released', item.quantity_fulfilled
+      );
+    elsif new_qty <> item.quantity then
+      surplus := greatest(0, item.quantity_fulfilled - new_qty);
+      if surplus > 0 then
+        delete from equipment_booking
+          where id in (
+            select id from equipment_booking
+            where request_item_id = item.id
+            order by id
+            limit surplus
+          );
+      end if;
+      update equipment_request_items
+        set quantity = new_qty,
+            quantity_fulfilled = least(item.quantity_fulfilled, new_qty)
+        where id = item.id;
+      changes := changes || jsonb_build_object(
+        'kind', 'quantity',
+        'equipmentType', item.equipment_type,
+        'from', item.quantity,
+        'to', new_qty,
+        'released', surplus
+      );
+    end if;
+  end loop;
+
+  for spec in
+    select e.v from jsonb_array_elements(p_items) as e(v) where e.v->>'itemId' is null
+  loop
+    insert into equipment_request_items (request_id, equipment_catalog_id, equipment_type, quantity)
+    values (
+      p_request_id,
+      (spec->>'equipmentCatalogId')::bigint,
+      spec->>'equipmentType',
+      (spec->>'quantity')::integer
+    );
+    changes := changes || jsonb_build_object(
+      'kind', 'added',
+      'equipmentType', spec->>'equipmentType',
+      'quantity', (spec->>'quantity')::integer,
+      'released', 0
+    );
+  end loop;
+
+  select coalesce(sum(quantity_fulfilled), 0), coalesce(bool_and(quantity_fulfilled >= quantity), false)
+    into total_fulfilled, all_met
+    from equipment_request_items
+    where request_id = p_request_id;
+
+  if total_fulfilled = 0 then
+    new_status := 'Requested';
+  elsif all_met then
+    new_status := 'Arranged';
+  else
+    new_status := 'Partially Fulfilled';
+  end if;
+
+  update equipment_requests
+    set status = new_status,
+        fulfillment_note = case when new_status = 'Partially Fulfilled' then fulfillment_note else null end
+    where id = p_request_id;
+
+  return jsonb_build_object('status', new_status, 'changes', changes);
+end;
+$$;
+
+create or replace function release_equipment_for_request(p_request_id bigint)
+returns jsonb
+language plpgsql
+as $$
+declare
+  req_status text;
+  item record;
+  released jsonb := '[]'::jsonb;
+begin
+  select status into req_status from equipment_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+  if req_status = 'Cancelled' then
+    raise exception 'Equipment request already cancelled: %', p_request_id;
+  end if;
+
+  for item in
+    select id, equipment_type, quantity_fulfilled, equipment_catalog_id
+    from equipment_request_items
+    where request_id = p_request_id
+    order by equipment_catalog_id, id
+  loop
+    if item.quantity_fulfilled > 0 then
+      released := released || jsonb_build_object(
+        'equipmentType', item.equipment_type,
+        'quantity', item.quantity_fulfilled
+      );
+      update equipment_request_items set quantity_fulfilled = 0 where id = item.id;
+    end if;
+    delete from equipment_booking where request_item_id = item.id;
+  end loop;
+
+  update equipment_requests
+    set status = 'Cancelled', fulfillment_note = null
+    where id = p_request_id;
+
+  return jsonb_build_object('released', released);
+end;
+$$;
+
+create or replace function change_equipment_stock(
+  p_catalog_id bigint,
+  p_delta integer,
+  p_reason text,
+  p_user text
+)
+returns jsonb
+language plpgsql
+as $$
+declare
+  cat record;
+  free_ids bigint[];
+  removable integer;
+  wanted integer;
+  total_before integer;
+  total_after integer;
+begin
+  if p_delta is null or p_delta = 0 then
+    raise exception 'Quantity must be at least 1';
+  end if;
+  if p_reason is null or btrim(p_reason) = '' then
+    raise exception 'A reason is required';
+  end if;
+
+  select id, name into cat from equipment_catalog where id = p_catalog_id for update;
+  if not found then
+    raise exception 'Equipment item not found: %', p_catalog_id;
+  end if;
+
+  select count(*) into total_before from equipment where equipment_catalog_id = cat.id;
+
+  if p_delta > 0 then
+    insert into equipment (type, status, equipment_catalog_id)
+      select cat.name, 'Available', cat.id from generate_series(1, p_delta);
+  else
+    wanted := -p_delta;
+    select coalesce(array_agg(s.id), '{}') into free_ids from (
+      select e.id
+      from equipment e
+      where e.equipment_catalog_id = cat.id
+        and e.status = 'Available'
+        and not exists (select 1 from equipment_booking b where b.equipment_id = e.id)
+        and not exists (
+          select 1 from equipment_unavailability u
+          where u.equipment_id = e.id and (u.end_date is null or u.end_date >= current_date)
+        )
+      order by e.id desc
+      limit wanted
+    ) s;
+
+    removable := coalesce(array_length(free_ids, 1), 0);
+    if removable < wanted then
+      raise exception 'Cannot remove %: only % can be removed', wanted, removable;
+    end if;
+
+    delete from equipment where id = any(free_ids);
+  end if;
+
+  total_after := total_before + p_delta;
+
+  insert into equipment_stock_changes
+    (equipment_catalog_id, change_type, quantity, total_before, total_after, reason, changed_by)
+  values
+    (cat.id, case when p_delta > 0 then 'Added' else 'Removed' end, abs(p_delta),
+     total_before, total_after, btrim(p_reason), p_user);
+
+  return jsonb_build_object('id', cat.id, 'name', cat.name, 'totalStock', total_after);
+end;
+$$;
+
+create or replace function catalog_stock_now(p_day date, p_start_ms bigint, p_end_ms bigint)
+returns table (catalog_id bigint, total integer, unusable_now integer, available integer)
+language sql
+stable
+as $$
+  with unit as (
+    select
+      e.equipment_catalog_id as catalog_id,
+      (
+        e.status <> 'Available'
+        or exists (
+          select 1 from equipment_unavailability u
+          where u.equipment_id = e.id
+            and u.start_date <= p_day
+            and (u.end_date is null or u.end_date >= p_day)
+        )
+      ) as unusable,
+      exists (
+        select 1 from equipment_booking b
+        where b.equipment_id = e.id
+          and b.window_start_ms is not null
+          and b.window_start_ms < p_end_ms
+          and p_start_ms < b.window_end_ms
+      ) as booked
+    from equipment e
+  )
+  select
+    c.id,
+    count(u.catalog_id)::integer,
+    count(*) filter (where u.unusable)::integer,
+    count(*) filter (where not u.unusable and not u.booked)::integer
+  from equipment_catalog c
+  left join unit u on u.catalog_id = c.id
+  group by c.id;
+$$;
+
+create or replace function reserve_equipment_request(
+  p_request_id bigint,
+  p_status text,
+  p_note text,
+  p_fulfillments jsonb default '[]'::jsonb,
+  p_claims jsonb default '[]'::jsonb,
+  p_window_start_ms bigint default null,
+  p_window_end_ms bigint default null
+)
+returns void
+language plpgsql
+as $$
+declare
+  req record;
+  before_fulfilled jsonb;
+  item record;
+  claim jsonb;
+  claimed bigint[];
+  delta integer;
+  unit record;
+  found_units integer;
+  first_day date;
+  last_day date;
+begin
+  select id, event_id into req from equipment_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+
+  -- What each item held before, to tell how many units to claim or release.
+  select coalesce(jsonb_object_agg(id::text, quantity_fulfilled), '{}'::jsonb)
+    into before_fulfilled
+    from equipment_request_items
+    where request_id = p_request_id;
+
+  -- The stock counters and the request status (0022). Raises if there is not enough stock.
+  perform apply_equipment_request_status(p_request_id, p_status, p_note, p_fulfillments);
+
+  for item in
+    select id, equipment_catalog_id, quantity_fulfilled
+    from equipment_request_items
+    where request_id = p_request_id
+    order by id
+  loop
+    delta := item.quantity_fulfilled - coalesce((before_fulfilled ->> item.id::text)::integer, 0);
+
+    if delta < 0 then
+      delete from equipment_booking
+      where id in (
+        select id from equipment_booking where request_item_id = item.id order by id limit -delta
+      );
+
+    elsif delta > 0 then
+      select e.c into claim
+        from jsonb_array_elements(p_claims) as e(c)
+        where (e.c ->> 'itemId')::bigint = item.id
+        limit 1;
+      if claim is null then
+        raise exception 'No units were chosen for item %', item.id;
+      end if;
+
+      if p_window_start_ms is null or p_window_end_ms is null or p_window_end_ms <= p_window_start_ms then
+        raise exception 'The event window is required to reserve item %', item.id;
+      end if;
+      -- Whole days the window touches, for comparing with unavailability periods
+      -- (end is exclusive, so the last day is the one holding end - 1 ms).
+      first_day := (to_timestamp(p_window_start_ms / 1000.0) at time zone 'UTC')::date;
+      last_day := (to_timestamp((p_window_end_ms - 1) / 1000.0) at time zone 'UTC')::date;
+
+      select coalesce(array_agg(t.value::bigint), '{}') into claimed
+        from jsonb_array_elements_text(claim -> 'unitIds') as t(value);
+      if (select count(distinct x) from unnest(claimed) as x) <> delta
+         or coalesce(array_length(claimed, 1), 0) <> delta then
+        raise exception 'Item % needs % units but % were chosen', item.id, delta, coalesce(array_length(claimed, 1), 0);
+      end if;
+
+      -- Lock the units so two reservations of the same unit run one after the other.
+      found_units := 0;
+      for unit in
+        select id, equipment_catalog_id, status
+        from equipment
+        where id = any(claimed)
+        order by id
+        for update
+      loop
+        found_units := found_units + 1;
+        if unit.equipment_catalog_id is distinct from item.equipment_catalog_id then
+          raise exception 'Unit % is not the requested equipment type', unit.id;
+        end if;
+        if unit.status <> 'Available' then
+          raise exception 'Unit % is no longer available', unit.id;
+        end if;
+        if exists (
+          select 1 from equipment_booking b where b.equipment_id = unit.id and b.event_id = req.event_id
+        ) then
+          raise exception 'Unit % is already reserved for this event', unit.id;
+        end if;
+        if exists (
+          select 1 from equipment_booking b
+          where b.equipment_id = unit.id
+            and b.window_start_ms is not null
+            and b.window_start_ms < p_window_end_ms
+            and p_window_start_ms < b.window_end_ms
+        ) then
+          raise exception 'Unit % is already booked for overlapping dates', unit.id;
+        end if;
+        if exists (
+          select 1 from equipment_unavailability u
+          where u.equipment_id = unit.id
+            and u.start_date <= last_day
+            and (u.end_date is null or u.end_date >= first_day)
+        ) then
+          raise exception 'Unit % is unavailable during these dates', unit.id;
+        end if;
+      end loop;
+      if found_units <> delta then
+        raise exception 'Unknown equipment unit in the claim for item %', item.id;
+      end if;
+
+      insert into equipment_booking (equipment_id, event_id, request_item_id, window_start_ms, window_end_ms)
+        select u, req.event_id, item.id, p_window_start_ms, p_window_end_ms from unnest(claimed) as u;
+    end if;
+  end loop;
+end;
+$$;
+
+-- ===== 0052_equipment_booking_history.sql =====
+-- Keep a history of equipment reservations: a released booking is marked, not deleted.
+--
+-- equipment_booking rows were deleted whenever equipment was released (event or
+-- request cancelled, request reverted, quantity lowered, item removed or
+-- retyped), so nothing recorded which units an event had held. Now:
+--   status          enum equipment_booking_status: 'Reserved' (holds the unit) or
+--                   'Released' (freed, kept for audit);
+--   released_at     when it was freed;
+--   release_reason  why: Event cancelled, Request cancelled, Fulfilment reduced,
+--                   Quantity lowered, Item removed, Item type changed.
+-- Only 'Reserved' rows count as booked: the overlap check, "already reserved for
+-- this event", the catalog's available-today count and the check on which units
+-- stock removal may take all ignore 'Released' rows.
+--
+-- The two foreign keys no longer delete history. request_item_id (0027) was
+-- "on delete cascade", so removing a request item removed its bookings; it is
+-- now "on delete set null". equipment_id had no cascade, so deleting a unit
+-- (stock removal) failed once it had any booking; it is now "on delete set null"
+-- too, which means a removed unit's old rows keep the event, dates and reason but
+-- lose the unit id. Stock removal still only takes units with no Reserved booking.
+--
+-- Existing rows become 'Reserved'. Guarded so this is safe to re-run.
+
+-- status is a Postgres enum like every other status column (AGENTS.md section 5), so
+-- the database rejects any other value. If a text column was created by an earlier
+-- run of this migration, it is converted in place.
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'equipment_booking_status') then
+    create type equipment_booking_status as enum ('Reserved', 'Released');
+  end if;
+
+  if not exists (
+    select 1 from information_schema.columns
+    where table_name = 'equipment_booking' and column_name = 'status'
+  ) then
+    alter table equipment_booking add column status equipment_booking_status not null default 'Reserved';
+  elsif (
+    select data_type from information_schema.columns
+    where table_name = 'equipment_booking' and column_name = 'status'
+  ) = 'text' then
+    alter table equipment_booking drop constraint if exists equipment_booking_status_check;
+    alter table equipment_booking drop constraint if exists equipment_booking_released_check;
+    alter table equipment_booking alter column status drop default;
+    alter table equipment_booking
+      alter column status type equipment_booking_status using status::equipment_booking_status;
+    alter table equipment_booking alter column status set default 'Reserved';
+  end if;
+end
+$$;
+
+alter table equipment_booking add column if not exists released_at timestamptz;
+alter table equipment_booking add column if not exists release_reason text;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'equipment_booking_released_check') then
+    alter table equipment_booking
+      add constraint equipment_booking_released_check
+      check ((status = 'Released') = (released_at is not null));
+  end if;
+end
+$$;
+
+alter table equipment_booking drop constraint if exists equipment_booking_request_item_id_fkey;
+alter table equipment_booking
+  add constraint equipment_booking_request_item_id_fkey
+  foreign key (request_item_id) references equipment_request_items (id) on delete set null;
+
+alter table equipment_booking drop constraint if exists equipment_booking_equipment_id_fkey;
+alter table equipment_booking
+  add constraint equipment_booking_equipment_id_fkey
+  foreign key (equipment_id) references equipment (id) on delete set null;
+
+create index if not exists equipment_booking_status_idx on equipment_booking (equipment_id, status);
+
+create or replace function release_equipment_for_event(p_event_id integer)
+returns void
+language plpgsql
+as $$
+declare
+  item record;
+begin
+  for item in
+    select eri.id, eri.quantity_fulfilled, eri.equipment_catalog_id
+    from equipment_request_items eri
+    join equipment_requests er on er.id = eri.request_id
+    where er.event_id = p_event_id and eri.quantity_fulfilled > 0
+    order by eri.equipment_catalog_id, eri.id
+  loop
+    update equipment_request_items
+      set quantity_fulfilled = 0
+      where id = item.id;
+  end loop;
+
+  update equipment_booking set status = 'Released', released_at = now(), release_reason = 'Event cancelled'
+    where event_id = p_event_id and status = 'Reserved';
+end;
+$$;
+
+create or replace function amend_equipment_request(p_request_id bigint, p_items jsonb)
+returns jsonb
+language plpgsql
+as $$
+declare
+  req_status text;
+  item record;
+  spec jsonb;
+  new_qty integer;
+  new_catalog bigint;
+  new_type text;
+  surplus integer;
+  total_fulfilled integer;
+  all_met boolean;
+  new_status text;
+  changes jsonb := '[]'::jsonb;
+begin
+  select status into req_status from equipment_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+  if req_status not in ('Requested', 'Partially Fulfilled') then
+    raise exception 'Equipment request cannot be amended: %', req_status;
+  end if;
+  if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'At least one item is required';
+  end if;
+
+  if exists (
+    select 1 from jsonb_array_elements(p_items) as e(v)
+    where e.v->>'itemId' is not null
+      and not exists (
+        select 1 from equipment_request_items i
+        where i.id = (e.v->>'itemId')::bigint and i.request_id = p_request_id
+      )
+  ) then
+    raise exception 'Unknown item in amendment';
+  end if;
+
+  for item in
+    select id, equipment_type, quantity, quantity_fulfilled, equipment_catalog_id
+    from equipment_request_items
+    where request_id = p_request_id
+    order by equipment_catalog_id, id
+  loop
+    select e.v into spec
+    from jsonb_array_elements(p_items) as e(v)
+    where (e.v->>'itemId')::bigint = item.id
+    limit 1;
+
+    if spec is null then
+      -- Removed: give back everything it held. Its bookings are marked Released
+      -- and stay as history (their request_item_id is cleared by the delete).
+      update equipment_booking set status = 'Released', released_at = now(), release_reason = 'Item removed'
+        where request_item_id = item.id and status = 'Reserved';
+      delete from equipment_request_items where id = item.id;
+      changes := changes || jsonb_build_object(
+        'kind', 'removed',
+        'equipmentType', item.equipment_type,
+        'quantity', item.quantity,
+        'released', item.quantity_fulfilled
+      );
+      continue;
+    end if;
+
+    new_qty := (spec->>'quantity')::integer;
+    new_catalog := (spec->>'equipmentCatalogId')::bigint;
+    new_type := spec->>'equipmentType';
+
+    if new_catalog is distinct from item.equipment_catalog_id then
+      update equipment_booking set status = 'Released', released_at = now(), release_reason = 'Item type changed'
+        where request_item_id = item.id and status = 'Reserved';
+      update equipment_request_items
+        set equipment_catalog_id = new_catalog,
+            equipment_type = new_type,
+            quantity = new_qty,
+            quantity_fulfilled = 0
+        where id = item.id;
+      changes := changes || jsonb_build_object(
+        'kind', 'type',
+        'fromType', item.equipment_type,
+        'equipmentType', new_type,
+        'from', item.quantity,
+        'to', new_qty,
+        'released', item.quantity_fulfilled
+      );
+    elsif new_qty <> item.quantity then
+      surplus := greatest(0, item.quantity_fulfilled - new_qty);
+      if surplus > 0 then
+        update equipment_booking set status = 'Released', released_at = now(), release_reason = 'Quantity lowered'
+          where id in (
+            select id from equipment_booking
+            where request_item_id = item.id and status = 'Reserved'
+            order by id
+            limit surplus
+          );
+      end if;
+      update equipment_request_items
+        set quantity = new_qty,
+            quantity_fulfilled = least(item.quantity_fulfilled, new_qty)
+        where id = item.id;
+      changes := changes || jsonb_build_object(
+        'kind', 'quantity',
+        'equipmentType', item.equipment_type,
+        'from', item.quantity,
+        'to', new_qty,
+        'released', surplus
+      );
+    end if;
+  end loop;
+
+  for spec in
+    select e.v from jsonb_array_elements(p_items) as e(v) where e.v->>'itemId' is null
+  loop
+    insert into equipment_request_items (request_id, equipment_catalog_id, equipment_type, quantity)
+    values (
+      p_request_id,
+      (spec->>'equipmentCatalogId')::bigint,
+      spec->>'equipmentType',
+      (spec->>'quantity')::integer
+    );
+    changes := changes || jsonb_build_object(
+      'kind', 'added',
+      'equipmentType', spec->>'equipmentType',
+      'quantity', (spec->>'quantity')::integer,
+      'released', 0
+    );
+  end loop;
+
+  select coalesce(sum(quantity_fulfilled), 0), coalesce(bool_and(quantity_fulfilled >= quantity), false)
+    into total_fulfilled, all_met
+    from equipment_request_items
+    where request_id = p_request_id;
+
+  if total_fulfilled = 0 then
+    new_status := 'Requested';
+  elsif all_met then
+    new_status := 'Arranged';
+  else
+    new_status := 'Partially Fulfilled';
+  end if;
+
+  update equipment_requests
+    set status = new_status,
+        fulfillment_note = case when new_status = 'Partially Fulfilled' then fulfillment_note else null end
+    where id = p_request_id;
+
+  return jsonb_build_object('status', new_status, 'changes', changes);
+end;
+$$;
+
+create or replace function release_equipment_for_request(p_request_id bigint)
+returns jsonb
+language plpgsql
+as $$
+declare
+  req_status text;
+  item record;
+  released jsonb := '[]'::jsonb;
+begin
+  select status into req_status from equipment_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+  if req_status = 'Cancelled' then
+    raise exception 'Equipment request already cancelled: %', p_request_id;
+  end if;
+
+  for item in
+    select id, equipment_type, quantity_fulfilled, equipment_catalog_id
+    from equipment_request_items
+    where request_id = p_request_id
+    order by equipment_catalog_id, id
+  loop
+    if item.quantity_fulfilled > 0 then
+      released := released || jsonb_build_object(
+        'equipmentType', item.equipment_type,
+        'quantity', item.quantity_fulfilled
+      );
+      update equipment_request_items set quantity_fulfilled = 0 where id = item.id;
+    end if;
+    update equipment_booking set status = 'Released', released_at = now(), release_reason = 'Request cancelled'
+      where request_item_id = item.id and status = 'Reserved';
+  end loop;
+
+  update equipment_requests
+    set status = 'Cancelled', fulfillment_note = null
+    where id = p_request_id;
+
+  return jsonb_build_object('released', released);
+end;
+$$;
+
+create or replace function change_equipment_stock(
+  p_catalog_id bigint,
+  p_delta integer,
+  p_reason text,
+  p_user text
+)
+returns jsonb
+language plpgsql
+as $$
+declare
+  cat record;
+  free_ids bigint[];
+  removable integer;
+  wanted integer;
+  total_before integer;
+  total_after integer;
+begin
+  if p_delta is null or p_delta = 0 then
+    raise exception 'Quantity must be at least 1';
+  end if;
+  if p_reason is null or btrim(p_reason) = '' then
+    raise exception 'A reason is required';
+  end if;
+
+  select id, name into cat from equipment_catalog where id = p_catalog_id for update;
+  if not found then
+    raise exception 'Equipment item not found: %', p_catalog_id;
+  end if;
+
+  select count(*) into total_before from equipment where equipment_catalog_id = cat.id;
+
+  if p_delta > 0 then
+    insert into equipment (type, status, equipment_catalog_id)
+      select cat.name, 'Available', cat.id from generate_series(1, p_delta);
+  else
+    wanted := -p_delta;
+    select coalesce(array_agg(s.id), '{}') into free_ids from (
+      select e.id
+      from equipment e
+      where e.equipment_catalog_id = cat.id
+        and e.status = 'Available'
+        and not exists (select 1 from equipment_booking b where b.equipment_id = e.id and b.status = 'Reserved')
+        and not exists (
+          select 1 from equipment_unavailability u
+          where u.equipment_id = e.id and (u.end_date is null or u.end_date >= current_date)
+        )
+      order by e.id desc
+      limit wanted
+    ) s;
+
+    removable := coalesce(array_length(free_ids, 1), 0);
+    if removable < wanted then
+      raise exception 'Cannot remove %: only % can be removed', wanted, removable;
+    end if;
+
+    delete from equipment where id = any(free_ids);
+  end if;
+
+  total_after := total_before + p_delta;
+
+  insert into equipment_stock_changes
+    (equipment_catalog_id, change_type, quantity, total_before, total_after, reason, changed_by)
+  values
+    (cat.id, case when p_delta > 0 then 'Added' else 'Removed' end, abs(p_delta),
+     total_before, total_after, btrim(p_reason), p_user);
+
+  return jsonb_build_object('id', cat.id, 'name', cat.name, 'totalStock', total_after);
+end;
+$$;
+
+create or replace function catalog_stock_now(p_day date, p_start_ms bigint, p_end_ms bigint)
+returns table (catalog_id bigint, total integer, unusable_now integer, available integer)
+language sql
+stable
+as $$
+  with unit as (
+    select
+      e.equipment_catalog_id as catalog_id,
+      (
+        e.status <> 'Available'
+        or exists (
+          select 1 from equipment_unavailability u
+          where u.equipment_id = e.id
+            and u.start_date <= p_day
+            and (u.end_date is null or u.end_date >= p_day)
+        )
+      ) as unusable,
+      exists (
+        select 1 from equipment_booking b
+        where b.equipment_id = e.id
+          and b.status = 'Reserved'
+          and b.window_start_ms is not null
+          and b.window_start_ms < p_end_ms
+          and p_start_ms < b.window_end_ms
+      ) as booked
+    from equipment e
+  )
+  select
+    c.id,
+    count(u.catalog_id)::integer,
+    count(*) filter (where u.unusable)::integer,
+    count(*) filter (where not u.unusable and not u.booked)::integer
+  from equipment_catalog c
+  left join unit u on u.catalog_id = c.id
+  group by c.id;
+$$;
+
+create or replace function reserve_equipment_request(
+  p_request_id bigint,
+  p_status text,
+  p_note text,
+  p_fulfillments jsonb default '[]'::jsonb,
+  p_claims jsonb default '[]'::jsonb,
+  p_window_start_ms bigint default null,
+  p_window_end_ms bigint default null
+)
+returns void
+language plpgsql
+as $$
+declare
+  req record;
+  before_fulfilled jsonb;
+  item record;
+  claim jsonb;
+  claimed bigint[];
+  delta integer;
+  unit record;
+  found_units integer;
+  first_day date;
+  last_day date;
+begin
+  select id, event_id into req from equipment_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Equipment request not found: %', p_request_id;
+  end if;
+
+  -- What each item held before, to tell how many units to claim or release.
+  select coalesce(jsonb_object_agg(id::text, quantity_fulfilled), '{}'::jsonb)
+    into before_fulfilled
+    from equipment_request_items
+    where request_id = p_request_id;
+
+  -- The stock counters and the request status (0022). Raises if there is not enough stock.
+  perform apply_equipment_request_status(p_request_id, p_status, p_note, p_fulfillments);
+
+  for item in
+    select id, equipment_catalog_id, quantity_fulfilled
+    from equipment_request_items
+    where request_id = p_request_id
+    order by id
+  loop
+    delta := item.quantity_fulfilled - coalesce((before_fulfilled ->> item.id::text)::integer, 0);
+
+    if delta < 0 then
+      update equipment_booking set status = 'Released', released_at = now(), release_reason = 'Fulfilment reduced'
+      where id in (
+        select id from equipment_booking
+        where request_item_id = item.id and status = 'Reserved'
+        order by id
+        limit -delta
+      );
+
+    elsif delta > 0 then
+      select e.c into claim
+        from jsonb_array_elements(p_claims) as e(c)
+        where (e.c ->> 'itemId')::bigint = item.id
+        limit 1;
+      if claim is null then
+        raise exception 'No units were chosen for item %', item.id;
+      end if;
+
+      if p_window_start_ms is null or p_window_end_ms is null or p_window_end_ms <= p_window_start_ms then
+        raise exception 'The event window is required to reserve item %', item.id;
+      end if;
+      -- Whole days the window touches, for comparing with unavailability periods
+      -- (end is exclusive, so the last day is the one holding end - 1 ms).
+      first_day := (to_timestamp(p_window_start_ms / 1000.0) at time zone 'UTC')::date;
+      last_day := (to_timestamp((p_window_end_ms - 1) / 1000.0) at time zone 'UTC')::date;
+
+      select coalesce(array_agg(t.value::bigint), '{}') into claimed
+        from jsonb_array_elements_text(claim -> 'unitIds') as t(value);
+      if (select count(distinct x) from unnest(claimed) as x) <> delta
+         or coalesce(array_length(claimed, 1), 0) <> delta then
+        raise exception 'Item % needs % units but % were chosen', item.id, delta, coalesce(array_length(claimed, 1), 0);
+      end if;
+
+      -- Lock the units so two reservations of the same unit run one after the other.
+      found_units := 0;
+      for unit in
+        select id, equipment_catalog_id, status
+        from equipment
+        where id = any(claimed)
+        order by id
+        for update
+      loop
+        found_units := found_units + 1;
+        if unit.equipment_catalog_id is distinct from item.equipment_catalog_id then
+          raise exception 'Unit % is not the requested equipment type', unit.id;
+        end if;
+        if unit.status <> 'Available' then
+          raise exception 'Unit % is no longer available', unit.id;
+        end if;
+        if exists (
+          select 1 from equipment_booking b
+          where b.equipment_id = unit.id and b.event_id = req.event_id and b.status = 'Reserved'
+        ) then
+          raise exception 'Unit % is already reserved for this event', unit.id;
+        end if;
+        if exists (
+          select 1 from equipment_booking b
+          where b.equipment_id = unit.id
+            and b.status = 'Reserved'
+            and b.window_start_ms is not null
+            and b.window_start_ms < p_window_end_ms
+            and p_window_start_ms < b.window_end_ms
+        ) then
+          raise exception 'Unit % is already booked for overlapping dates', unit.id;
+        end if;
+        if exists (
+          select 1 from equipment_unavailability u
+          where u.equipment_id = unit.id
+            and u.start_date <= last_day
+            and (u.end_date is null or u.end_date >= first_day)
+        ) then
+          raise exception 'Unit % is unavailable during these dates', unit.id;
+        end if;
+      end loop;
+      if found_units <> delta then
+        raise exception 'Unknown equipment unit in the claim for item %', item.id;
+      end if;
+
+      insert into equipment_booking (equipment_id, event_id, request_item_id, window_start_ms, window_end_ms)
+        select u, req.event_id, item.id, p_window_start_ms, p_window_end_ms from unnest(claimed) as u;
+    end if;
+  end loop;
+end;
+$$;
+
+-- ===== 0053_catalog_total_stock_trigger.sql =====
+-- Drop the stored available_stock counter; keep total_stock, but have the
+-- database keep it equal to the number of unit rows.
+--
+-- available_stock was a date-blind running total that 0051 stopped using. What
+-- is "available" depends on the date (bookings, unusable periods), so it is
+-- worked out when read (catalog_stock_now, 0051) and has no place as a column.
+--
+-- total_stock stays because it is a plain fact that only changes when a unit
+-- row is added or removed. Instead of the application remembering to update it
+-- (change_equipment_stock and the catalog POST used to, then stopped in 0051),
+-- a trigger on `equipment` recomputes it for the catalog items touched by any
+-- insert, delete or update, so it cannot drift. Statement-level, so adding
+-- 1000 units recounts once, not 1000 times.
+--
+-- This also means total_stock can no longer be used as an input: seeds that
+-- built units from it now carry the quantities themselves (seed.sql,
+-- scripts/seed_equipment.sql). Writing total_stock by hand is overwritten the
+-- next time a unit changes.
+--
+-- Guarded so this is safe to re-run.
+
+alter table equipment_catalog drop column if exists available_stock;
+
+create or replace function sync_catalog_total_stock()
+returns trigger
+language plpgsql
+as $$
+begin
+  if tg_op in ('INSERT', 'UPDATE') then
+    update equipment_catalog c
+      set total_stock = (select count(*) from equipment e where e.equipment_catalog_id = c.id)
+      where c.id in (select equipment_catalog_id from new_rows where equipment_catalog_id is not null);
+  end if;
+  if tg_op in ('DELETE', 'UPDATE') then
+    update equipment_catalog c
+      set total_stock = (select count(*) from equipment e where e.equipment_catalog_id = c.id)
+      where c.id in (select equipment_catalog_id from old_rows where equipment_catalog_id is not null);
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists equipment_total_stock_insert on equipment;
+create trigger equipment_total_stock_insert
+  after insert on equipment
+  referencing new table as new_rows
+  for each statement execute function sync_catalog_total_stock();
+
+drop trigger if exists equipment_total_stock_update on equipment;
+create trigger equipment_total_stock_update
+  after update on equipment
+  referencing old table as old_rows new table as new_rows
+  for each statement execute function sync_catalog_total_stock();
+
+drop trigger if exists equipment_total_stock_delete on equipment;
+create trigger equipment_total_stock_delete
+  after delete on equipment
+  referencing old table as old_rows
+  for each statement execute function sync_catalog_total_stock();
+
+-- Catch up anything that drifted while nothing maintained the column.
+update equipment_catalog c
+  set total_stock = (select count(*) from equipment e where e.equipment_catalog_id = c.id);
+
+
+
+-- ===== 0054_fulfilled_quantity_trigger.sql =====
+-- Keep equipment_request_items.quantity_fulfilled equal to the number of
+-- Reserved bookings for the item, by trigger.
+--
+-- quantity_fulfilled is the request's record of how many units it holds. The
+-- units themselves are the Reserved rows in equipment_booking, so the two must
+-- always agree. Until now every function that touched a booking also updated
+-- the counter by hand, so a new code path (or a manual fix in SQL) that forgot
+-- would let them drift. A statement-level trigger on equipment_booking now
+-- recomputes the count for each item a statement touched, the same approach as
+-- total_stock (0053). The existing functions still write the column; they now
+-- write the value the trigger would, so nothing about them has to change.
+--
+-- Guarded so this is safe to re-run.
+
+create or replace function sync_item_quantity_fulfilled()
+returns trigger
+language plpgsql
+as $$
+begin
+  if tg_op in ('INSERT', 'UPDATE') then
+    update equipment_request_items i
+      set quantity_fulfilled = (
+        select count(*) from equipment_booking b
+        where b.request_item_id = i.id and b.status = 'Reserved'
+      )
+      where i.id in (select request_item_id from new_rows where request_item_id is not null);
+  end if;
+  if tg_op in ('DELETE', 'UPDATE') then
+    update equipment_request_items i
+      set quantity_fulfilled = (
+        select count(*) from equipment_booking b
+        where b.request_item_id = i.id and b.status = 'Reserved'
+      )
+      where i.id in (select request_item_id from old_rows where request_item_id is not null);
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists equipment_booking_fulfilled_insert on equipment_booking;
+create trigger equipment_booking_fulfilled_insert
+  after insert on equipment_booking
+  referencing new table as new_rows
+  for each statement execute function sync_item_quantity_fulfilled();
+
+drop trigger if exists equipment_booking_fulfilled_update on equipment_booking;
+create trigger equipment_booking_fulfilled_update
+  after update on equipment_booking
+  referencing old table as old_rows new table as new_rows
+  for each statement execute function sync_item_quantity_fulfilled();
+
+drop trigger if exists equipment_booking_fulfilled_delete on equipment_booking;
+create trigger equipment_booking_fulfilled_delete
+  after delete on equipment_booking
+  referencing old table as old_rows
+  for each statement execute function sync_item_quantity_fulfilled();
+
+-- Catch up anything that drifted before the trigger existed.
+update equipment_request_items i
+  set quantity_fulfilled = (
+    select count(*) from equipment_booking b
+    where b.request_item_id = i.id and b.status = 'Reserved'
+  )
+  where quantity_fulfilled <> (
+    select count(*) from equipment_booking b
+    where b.request_item_id = i.id and b.status = 'Reserved'
+  );
+
+
+-- ===== 0055_equipment_reschedule_clashes.sql =====
+-- Which of an event's reserved units now clash, after the event was rescheduled.
+--
+-- When an event moves, equipment-service rewrites the stored window on its
+-- Reserved bookings (event.rescheduled). That is a plain update, and the
+-- overlap checks in reserve_equipment_request only run when units are reserved,
+-- so nothing noticed that the new window may overlap another event's booking
+-- of the same unit, or a period the unit is out of use. This lists those, so
+-- equipment-service can notify the coordinator and Technical Support (and have
+-- a Confirmed event moved to Needs Review).
+--
+-- One row per clashing booking of the event:
+--   item_id  the request item the booking belongs to
+--   unit_id  the unit
+--   kind     'booking'      another event's Reserved booking overlaps the window
+--            'unavailable'  a period the unit is out of use (E5-5) touches the
+--                           window's days
+-- A booking with no stored window (made before 0050) can't be compared and is
+-- left out. The unavailability test is the one reserve_equipment_request uses:
+-- whole days, the last day being the one holding the window's end minus 1 ms.
+--
+-- Read-only and stable. Guarded (create or replace) so it is safe to re-run.
+
+create or replace function equipment_reschedule_clashes(p_event_id bigint)
+returns table (item_id bigint, unit_id bigint, kind text)
+language sql
+stable
+as $$
+  select b.request_item_id, b.equipment_id, 'booking'::text
+  from equipment_booking b
+  where b.event_id = p_event_id
+    and b.status = 'Reserved'
+    and b.window_start_ms is not null
+    and b.window_end_ms is not null
+    and exists (
+      select 1 from equipment_booking o
+      where o.equipment_id = b.equipment_id
+        and o.event_id <> b.event_id
+        and o.status = 'Reserved'
+        and o.window_start_ms is not null
+        and o.window_start_ms < b.window_end_ms
+        and b.window_start_ms < o.window_end_ms
+    )
+  union all
+  select b.request_item_id, b.equipment_id, 'unavailable'::text
+  from equipment_booking b
+  where b.event_id = p_event_id
+    and b.status = 'Reserved'
+    and b.window_start_ms is not null
+    and b.window_end_ms is not null
+    and exists (
+      select 1 from equipment_unavailability u
+      where u.equipment_id = b.equipment_id
+        and u.start_date <= (to_timestamp((b.window_end_ms - 1) / 1000.0) at time zone 'UTC')::date
+        and (u.end_date is null or u.end_date >= (to_timestamp(b.window_start_ms / 1000.0) at time zone 'UTC')::date)
+    );
+$$;
+
+
+-- ===== 0056_cancel_requests_with_event.sql =====
+-- When an event is cancelled, its equipment requests are cancelled too.
+--
+-- release_equipment_for_event (E3-6, run when equipment-service receives
+-- event.cancelled) freed the event's units and zeroed each item's
+-- quantity_fulfilled, but left the request's status alone. Technical Support
+-- then still saw the cancelled event's request in their queue, as "Arranged"
+-- or "Partially Fulfilled" with every item "Not arranged", or as "Requested" and
+-- waiting for them to act on it.
+--
+-- It now also sets every request of the event that is not already Cancelled to
+-- 'Cancelled' and clears its outstanding note. A Cancelled request is already
+-- out of Technical Support's queue (E5-2) and shows greyed out to the
+-- coordinator, with its items kept as history. The bookings are released as
+-- before, with the reason 'Event cancelled' (0052).
+--
+-- Safe to run twice: a second run finds nothing left to cancel or release.
+-- Guarded (create or replace) so this is safe to re-run.
+
+create or replace function release_equipment_for_event(p_event_id integer)
+returns void
+language plpgsql
+as $$
+declare
+  item record;
+begin
+  for item in
+    select eri.id, eri.quantity_fulfilled, eri.equipment_catalog_id
+    from equipment_request_items eri
+    join equipment_requests er on er.id = eri.request_id
+    where er.event_id = p_event_id and eri.quantity_fulfilled > 0
+    order by eri.equipment_catalog_id, eri.id
+  loop
+    update equipment_request_items
+      set quantity_fulfilled = 0
+      where id = item.id;
+  end loop;
+
+  update equipment_booking set status = 'Released', released_at = now(), release_reason = 'Event cancelled'
+    where event_id = p_event_id and status = 'Reserved';
+
+  update equipment_requests
+    set status = 'Cancelled', fulfillment_note = null
+    where event_id = p_event_id and status <> 'Cancelled';
+end;
+$$;

@@ -12,6 +12,8 @@ import { fetchUnavailability, overlappingPeriods } from "./unitUnavailability.js
 export interface UnitRecord {
   id: number;
   type: string;
+  /** Which catalog item this unit is (migration 0048); only loaded where a route needs to check it. */
+  equipment_catalog_id?: number;
   status: string;
   label: string | null;
 }
@@ -62,7 +64,11 @@ export async function impactForUnits(
   const periods = await fetchUnavailability(supabase, ids);
   const outOfUse = overlappingPeriods(periods, period);
 
-  const { data: bookingRows, error } = await supabase.from("equipment_booking").select("equipment_id, event_id").in("equipment_id", ids);
+  const { data: bookingRows, error } = await supabase
+    .from("equipment_booking")
+    .select("equipment_id, event_id")
+    .eq("status", "Reserved")
+    .in("equipment_id", ids);
   if (error) throw new Error("Failed to load equipment bookings");
   const bookings = (bookingRows ?? []) as { equipment_id: number; event_id: number }[];
 

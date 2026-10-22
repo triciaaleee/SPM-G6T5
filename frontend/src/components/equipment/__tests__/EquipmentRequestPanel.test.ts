@@ -21,6 +21,8 @@ vi.mock("../../../lib/equipmentApi", async () => {
     cancelEquipmentRequest: vi.fn(),
     fetchEquipmentCatalog: vi.fn(),
     fetchEquipmentRequestsForEvent: vi.fn(),
+    itemFulfilmentBadgeClass: actual.itemFulfilmentBadgeClass,
+    itemFulfilmentState: actual.itemFulfilmentState,
     submitEquipmentRequest: vi.fn(),
   };
 });
@@ -94,6 +96,29 @@ describe("EquipmentRequestPanel — cancelled requests (E5-2)", () => {
 
     const order = wrapper.findAll(".eq-request").map((li) => li.attributes("data-testid"));
     expect(order).toEqual(["eq-request-2", "eq-request-4", "eq-request-1", "eq-request-3"]);
+  });
+});
+
+describe("EquipmentRequestPanel — per-item progress", () => {
+  it("shows which items are arranged, partly arranged or not arranged on a partly fulfilled request", async () => {
+    const wrapper = await mountPanel([
+      equipmentRequest({
+        status: "Partially Fulfilled",
+        items: [
+          { id: 1, equipmentCatalogId: 1, equipmentType: "Round table", quantity: 2, quantityFulfilled: 2, reservationFlag: NO_FLAG },
+          { id: 2, equipmentCatalogId: 2, equipmentType: "Chairs", quantity: 5, quantityFulfilled: 3, reservationFlag: NO_FLAG },
+          { id: 3, equipmentCatalogId: 3, equipmentType: "Screen", quantity: 1, quantityFulfilled: 0, reservationFlag: NO_FLAG },
+        ],
+      }),
+    ]);
+
+    const states = wrapper.findAll("[data-testid='item-status']").map((b) => b.text());
+    expect(states).toEqual(["Arranged", "Partially fulfilled", "Not arranged"]);
+  });
+
+  it("shows no per-item badges while the request is still Requested", async () => {
+    const wrapper = await mountPanel([equipmentRequest({ status: "Requested", fulfillmentNote: null })]);
+    expect(wrapper.findAll("[data-testid='item-status']")).toHaveLength(0);
   });
 });
 
@@ -391,8 +416,8 @@ describe("EquipmentRequestPanel — one table per request", () => {
     expect(table.findAll(".cell-header").map((h) => h.text())).toEqual(["Equipment", "Quantity", "Reserved"]);
     const rows = table.findAll(".row-item");
     expect(rows.map(rowCells)).toEqual([
-      ["Projector", "2", "1 of 2"],
-      ["Screen", "1", "1 of 1"],
+      ["Projector", "2", "1 of 2 Partially fulfilled"],
+      ["Screen", "1", "1 of 1 Arranged"],
     ]);
   });
 
@@ -407,8 +432,8 @@ describe("EquipmentRequestPanel — one table per request", () => {
       const request = card(wrapper, id);
       expect(request.findAll(".badge")).toHaveLength(1);
       expect(request.get(".badge").text()).toBe(status);
-      // The status is not a column of the table.
-      expect(request.get(".eq-items").text()).not.toContain(status);
+      // The request's status is not a column of the table (each item shows its own progress beside its count).
+      expect(request.findAll(".eq-items .cell-header").map((h) => h.text())).not.toContain("Status");
     }
   });
 

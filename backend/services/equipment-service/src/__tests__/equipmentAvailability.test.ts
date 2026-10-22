@@ -45,7 +45,8 @@ function buildApp(
     user?: { id: string; role: string };
     equipmentRows?: { id: number; status: string }[];
     bookingRows?: { equipment_id: number; event_id: number }[];
-    catalogRow?: { available_stock: number } | null;
+    /** null means the type isn't in the catalog; omitted means it is. */
+    catalogRow?: null;
     /** E5-5: periods Technical Support marked on units (migration 0043). */
     unavailabilityRows?: { id: number; equipment_id: number; reason: string; start_date: string; end_date: string | null; note: string | null }[];
     eventsById?: Record<number, TestEvent>;
@@ -54,7 +55,9 @@ function buildApp(
 ) {
   const equipmentSelect = query({ data: options.equipmentRows ?? [], error: null });
   const bookingSelect = query({ data: options.bookingRows ?? [], error: null });
-  const catalogSelect = query({ data: options.catalogRow ?? null, error: null });
+  // Units belong to a catalog item by id (migration 0048), so by default the type is in the catalog.
+  const catalogRow = options.catalogRow === null ? null : { id: 1 };
+  const catalogSelect = query({ data: catalogRow, error: null });
   // Honours `.in("equipment_id", ids)`, like the real table.
   const unavailabilitySelect = {
     select: vi.fn(() => {
@@ -325,29 +328,27 @@ describe("GET /api/equipment-availability", () => {
     expect(res.body).toMatchObject({ availableCount: 2, shortfall: 3 });
   });
 
-  // The real fix: equipment_catalog.available_stock is what E5-3 actually
-  // moves (Arranged/Partially Fulfilled), so it's the baseline — not the
-  // per-unit equipment_booking table, which E5-6 hasn't started writing to.
-  describe("ties availability to equipment_catalog (the number the stock table shows)", () => {
-    it("reports a shortfall once the catalog is depleted, even though every physical unit is still marked Available", async () => {
+  // There is no stored stock counter in the sum (migration 0051): availability
+  // is the item's own units, less those out of use and those booked elsewhere.
+  describe("counts availability from the units, not a stored counter", () => {
+    it("counts every Available unit, however many other reservations exist for other dates", async () => {
       const { app } = buildApp({
         eventsById: { 7: testEvent({ id: 7 }) },
-        catalogRow: { available_stock: 0 },
         equipmentRows: [
           { id: 1, status: "Available" },
           { id: 2, status: "Available" },
         ],
         bookingRows: [],
       });
-      const res = await request(app).get("/api/equipment-availability?eventId=7&type=Projector&quantity=1");
+      const res = await request(app).get("/api/equipment-availability?eventId=7&type=Projector&quantity=2");
       expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ catalogAvailableStock: 0, availableCount: 0, shortfall: 1 });
+      expect(res.body).toMatchObject({ totalUnits: 2, availableCount: 2, shortfall: 0 });
+      expect(res.body).not.toHaveProperty("catalogAvailableStock");
     });
 
-    it("uses the catalog's count as the baseline, then still subtracts damaged/under-maintenance units on top", async () => {
+    it("subtracts damaged and under-maintenance units once", async () => {
       const { app } = buildApp({
         eventsById: { 7: testEvent({ id: 7 }) },
-        catalogRow: { available_stock: 5 },
         equipmentRows: [
           { id: 1, status: "Available" },
           { id: 2, status: "Damaged" },
@@ -356,13 +357,14 @@ describe("GET /api/equipment-availability", () => {
       });
       const res = await request(app).get("/api/equipment-availability?eventId=7&type=Projector&quantity=3");
       expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ catalogAvailableStock: 5, unusableCount: 2, availableCount: 3, shortfall: 0 });
+      expect(res.body).toMatchObject({ unusableCount: 2, availableCount: 1, shortfall: 2 });
     });
 
-    it("falls back to the physical unit count when the type isn't in the catalog at all", async () => {
+    it("reports nothing available when the type isn't in the catalog, since units belong to a catalog item", async () => {
       const { app } = buildApp({
         eventsById: { 7: testEvent({ id: 7 }) },
         catalogRow: null,
+        // Never read: with no catalog item there is nothing to look units up by.
         equipmentRows: [
           { id: 1, status: "Available" },
           { id: 2, status: "Available" },
@@ -370,13 +372,12 @@ describe("GET /api/equipment-availability", () => {
       });
       const res = await request(app).get("/api/equipment-availability?eventId=7&type=Spare+Widget&quantity=1");
       expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ catalogAvailableStock: null, availableCount: 2 });
+      expect(res.body).toMatchObject({ totalUnits: 0, availableCount: 0, shortfall: 1 });
     });
 
-    it("never reports a negative availableCount when exclusions exceed the catalog's count", async () => {
+    it("never reports a negative availableCount", async () => {
       const { app } = buildApp({
         eventsById: { 7: testEvent({ id: 7 }) },
-        catalogRow: { available_stock: 1 },
         equipmentRows: [
           { id: 1, status: "Damaged" },
           { id: 2, status: "Damaged" },

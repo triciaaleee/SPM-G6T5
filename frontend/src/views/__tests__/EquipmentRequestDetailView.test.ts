@@ -88,7 +88,6 @@ beforeEach(() => {
     type: "Projector",
     requestedQuantity: 2,
     totalUnits: 5,
-    catalogAvailableStock: 5,
     unusableCount: 0,
     reservedElsewhereCount: 0,
     availableCount: 5,
@@ -169,7 +168,9 @@ describe("EquipmentRequestDetailView", () => {
     const wrapper = await mountView();
 
     await wrapper.find(".status-editor .btn--outline").trigger("click");
+    // Each item has its own Requested / Arranged / Partially Fulfilled pills: Arranged for both.
     await wrapper.findAll(".status-pill")[1].trigger("click");
+    await wrapper.findAll(".status-pill")[4].trigger("click");
     await wrapper.find(".btn--primary").trigger("click");
     await flushPromises();
 
@@ -187,9 +188,10 @@ describe("EquipmentRequestDetailView", () => {
     const wrapper = await mountView();
 
     await wrapper.find(".status-editor .btn--outline").trigger("click");
-    await wrapper.findAll(".status-pill")[2].trigger("click");
+    await wrapper.findAll(".status-pill")[1].trigger("click");
+    await wrapper.findAll(".status-pill")[5].trigger("click");
 
-    // Only 1 of the 3 Microphones is in stock; all 2 Projectors are.
+    // Projectors Arranged; Microphones partly, starting at the 1 of 3 that is in stock.
     expect(wrapper.find(".outstanding-preview").text()).toBe("2 Microphones outstanding");
 
     await wrapper.find(".btn--primary").trigger("click");
@@ -199,5 +201,72 @@ describe("EquipmentRequestDetailView", () => {
       { itemId: 1, fulfilledQuantity: 2 },
       { itemId: 2, fulfilledQuantity: 1 },
     ]);
+  });
+  it("lets Technical Support mark one item arranged and another only partly", async () => {
+    mockedView.mockResolvedValue(eventView());
+    mockedUpdate.mockResolvedValue({
+      equipmentRequest: {
+        ...eventView().equipmentRequests[0],
+        status: "Partially Fulfilled",
+        items: [
+          { id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 2, reservationFlag: { flagged: false, reason: null } },
+          { id: 2, equipmentType: "Microphones", quantity: 3, quantityFulfilled: 2, reservationFlag: { flagged: false, reason: null } },
+        ],
+      },
+      notified: true,
+    });
+    const wrapper = await mountView();
+
+    await wrapper.find(".status-editor .btn--outline").trigger("click");
+    await wrapper.findAll(".status-pill")[1].trigger("click");
+    await wrapper.findAll(".status-pill")[5].trigger("click");
+    await wrapper.find("input[aria-label='Microphones arranged']").setValue(2);
+
+    expect(wrapper.find(".outstanding-preview").text()).toBe("1 Microphones outstanding");
+
+    await wrapper.find(".btn--primary").trigger("click");
+    await flushPromises();
+
+    expect(mockedUpdate).toHaveBeenCalledWith(55, "Partially Fulfilled", "1 Microphones outstanding", [
+      { itemId: 1, fulfilledQuantity: 2 },
+      { itemId: 2, fulfilledQuantity: 2 },
+    ]);
+    const states = wrapper.findAll("[data-testid='item-status']").map((b) => b.text());
+    expect(states).toEqual(["Arranged", "Partially fulfilled"]);
+  });
+
+  it("saves as Arranged when every item is fully in, even if one was set by number", async () => {
+    mockedView.mockResolvedValue(eventView());
+    mockedUpdate.mockResolvedValue({
+      equipmentRequest: { ...eventView().equipmentRequests[0], status: "Arranged" },
+      notified: true,
+    });
+    const wrapper = await mountView();
+
+    await wrapper.find(".status-editor .btn--outline").trigger("click");
+    await wrapper.findAll(".status-pill")[1].trigger("click");
+    await wrapper.findAll(".status-pill")[5].trigger("click");
+    await wrapper.find("input[aria-label='Microphones arranged']").setValue(3);
+    await wrapper.find(".btn--primary").trigger("click");
+    await flushPromises();
+
+    expect(mockedUpdate).toHaveBeenCalledWith(55, "Arranged", undefined, undefined);
+  });
+  it("shows a cancelled request read-only: no Update status, no per-item badges, and says why", async () => {
+    mockedView.mockResolvedValue(
+      eventView({
+        equipmentRequests: [{ ...eventView().equipmentRequests[0], status: "Cancelled" }],
+      }),
+    );
+    const wrapper = await mountView();
+
+    expect(wrapper.find(".badge").text()).toBe("Cancelled");
+    expect(wrapper.find(".badge").classes()).toContain("status-cancelled");
+    expect(wrapper.find(".status-editor").exists()).toBe(false);
+    expect(wrapper.findAll("[data-testid='item-status']")).toHaveLength(0);
+    expect(wrapper.findAll("[data-testid='item-cancelled']")).toHaveLength(2);
+    expect(wrapper.find("[data-testid='cancelled-note']").text()).toContain("cancelled");
+    // Nothing is checked for availability on a request that is no longer live.
+    expect(mockedAvailability).not.toHaveBeenCalled();
   });
 });

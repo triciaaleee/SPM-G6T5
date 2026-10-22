@@ -6,6 +6,8 @@ import { randomUUID } from "node:crypto";
  * (c4_diagrams/RabbitMQ.md section 2).
  */
 export interface OutboundMessage {
+  /** Set by a caller that must publish the same message twice as one (a redelivered trigger); otherwise generated. */
+  messageId?: string;
   type: string;
   eventId: number | null;
   actorId: string | null;
@@ -49,7 +51,7 @@ function createRealPublisher(url: string): EventPublisher {
       try {
         const channel = await getChannel();
         const envelope = {
-          messageId: randomUUID(),
+          messageId: msg.messageId ?? randomUUID(),
           type: msg.type,
           occurredAt: new Date().toISOString(),
           publisher: "equipment-service",

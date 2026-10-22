@@ -50,7 +50,8 @@ test("safety review waits for equipment to be reserved; reserving takes it out o
     signInAsCoordinatorLead(),
     signInAsVenueStaff(),
   ]);
-  const event = await submitEvent(organiser, { proposedDate: uniqueFutureDate() });
+  const date = uniqueFutureDate();
+  const event = await submitEvent(organiser, { proposedDate: date });
   await assignCoordinator(lead, event.id, coordinator.id);
   await approveRequest(coordinator, event.id);
   const [venue] = await fetchMyVenues(venueStaff);
@@ -62,10 +63,11 @@ test("safety review waits for equipment to be reserved; reserving takes it out o
   const blocked = await expectRefused(submitForSafetyReview(coordinator, event.id), 409);
   expect(blocked.body).toMatchObject({ outstanding: expect.anything() });
 
-  const before = (await catalogItem(techSupport, item.id)).availableStock;
+  // Stock is counted per day, so look at the event's own day.
+  const before = (await catalogItem(techSupport, item.id, date)).availableStock;
   const arranged = await setEquipmentRequestStatus(techSupport, request.id, "Arranged");
   expect(arranged.items[0].quantityFulfilled).toBe(3);
-  expect((await catalogItem(techSupport, item.id)).availableStock).toBe(before - 3);
+  expect((await catalogItem(techSupport, item.id, date)).availableStock).toBe(before - 3);
 
   expect((await submitForSafetyReview(coordinator, event.id)).status).toBe("Safety Review");
 });
@@ -74,35 +76,37 @@ test("reserving more than is in stock is refused and takes nothing", async () =>
   const { techSupport, item } = await catalogItemAt(2);
   const organiser = await registerOrganiser("equip-too-many");
   const [coordinator, lead] = await Promise.all([signInAsCoordinator(), signInAsCoordinatorLead()]);
-  const event = await submitEvent(organiser, { proposedDate: uniqueFutureDate() });
+  const date = uniqueFutureDate();
+  const event = await submitEvent(organiser, { proposedDate: date });
   await assignCoordinator(lead, event.id, coordinator.id);
   await approveRequest(coordinator, event.id);
 
-  const before = await catalogItem(techSupport, item.id);
+  const before = await catalogItem(techSupport, item.id, date);
   const request = await requestEquipment(coordinator, event.id, [
     { equipmentCatalogId: item.id, quantity: before.totalStock + 1 },
   ]);
 
   await expectRefused(setEquipmentRequestStatus(techSupport, request.id, "Arranged"), 409);
-  expect((await catalogItem(techSupport, item.id)).availableStock).toBe(before.availableStock);
+  expect((await catalogItem(techSupport, item.id, date)).availableStock).toBe(before.availableStock);
   expect((await fetchEventEquipment(techSupport, event.id))[0].items[0].quantityFulfilled).toBe(0);
 });
 
 test("cancelling an event returns its reserved equipment to stock", async () => {
   const { techSupport, item } = await catalogItemAt(3);
-  const before = (await catalogItem(techSupport, item.id)).availableStock;
+  const date = uniqueFutureDate();
+  const before = (await catalogItem(techSupport, item.id, date)).availableStock;
 
-  const { event, organiser } = await climbToConfirmed("equip-cancel", {}, async ({ event, coordinator }) => {
+  const { event, organiser } = await climbToConfirmed("equip-cancel", { proposedDate: date }, async ({ event, coordinator }) => {
     const request = await requestEquipment(coordinator, event.id, [{ equipmentCatalogId: item.id, quantity: 2 }]);
     await setEquipmentRequestStatus(techSupport, request.id, "Arranged");
   });
-  expect((await catalogItem(techSupport, item.id)).availableStock).toBe(before - 2);
+  expect((await catalogItem(techSupport, item.id, date)).availableStock).toBe(before - 2);
 
   await cancelEvent(organiser, event.id, "Funding fell through.");
 
   // equipment-service releases it off the event.cancelled message, asynchronously.
   await expect
-    .poll(async () => (await catalogItem(techSupport, item.id)).availableStock, {
+    .poll(async () => (await catalogItem(techSupport, item.id, date)).availableStock, {
       message: "waiting for equipment-service to release the reservation",
       timeout: 15_000,
     })

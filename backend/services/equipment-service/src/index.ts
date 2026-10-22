@@ -6,7 +6,7 @@ import { equipmentCatalogRouter } from "./routes/equipmentCatalog.js";
 import { equipmentAvailabilityRouter } from "./routes/equipmentAvailability.js";
 import { equipmentUnitsRouter } from "./routes/equipmentUnits.js";
 import { connectAndConsume } from "./lib/rabbitConsumer.js";
-import { handleEventCancelled } from "./lib/eventCancelledHandler.js";
+import { handleMessage } from "./lib/handleMessage.js";
 import { supabaseAdmin } from "./lib/supabaseAdmin.js";
 
 /**
@@ -57,9 +57,9 @@ async function startRabbit(): Promise<void> {
   }
 
   try {
-    const consumer = connectAndConsume(url, (msg) => handleEventCancelled(msg, { supabase: supabaseAdmin }));
+    const consumer = connectAndConsume(url, (msg) => handleMessage(msg, { supabase: supabaseAdmin }));
     await consumer.start();
-    console.log("equipment-service: connected to RabbitMQ, consuming event.cancelled");
+    console.log("equipment-service: connected to RabbitMQ, consuming event.cancelled and event.rescheduled");
   } catch (err) {
     console.error("equipment-service: failed to connect to RabbitMQ, consumer idle", err);
   }

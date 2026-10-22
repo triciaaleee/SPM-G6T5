@@ -16,9 +16,9 @@ export interface EquipmentUnitRow {
   status: string;
 }
 
-/** Every physical unit of `type`, whatever its condition. */
-export async function fetchUnitsByType(supabase: any, type: string): Promise<EquipmentUnitRow[]> {
-  const { data, error } = await supabase.from("equipment").select("id, status").eq("type", type);
+/** Every physical unit of one catalog item, whatever its condition. */
+export async function fetchUnitsByCatalogId(supabase: any, catalogId: number): Promise<EquipmentUnitRow[]> {
+  const { data, error } = await supabase.from("equipment").select("id, status").eq("equipment_catalog_id", catalogId);
   if (error) throw new Error("Failed to load equipment");
   return (data ?? []) as EquipmentUnitRow[];
 }
@@ -35,6 +35,12 @@ export interface BlockingOptions {
    * so an own-event claim DOES block a new claim.
    */
   treatOwnEventClaimsAsBlocking: boolean;
+  /**
+   * Write each other event's current window onto its bookings (migration 0050),
+   * so reserve_equipment_request can refuse overlaps itself and a rescheduled
+   * event's stored window catches up. Best-effort; only a claim sets it.
+   */
+  refreshStoredWindows?: boolean;
 }
 
 /**
@@ -52,18 +58,44 @@ export async function unitsBlocked(
 ): Promise<Set<number>> {
   if (usableIds.length === 0) return new Set();
 
-  let query = supabase.from("equipment_booking").select("equipment_id, event_id").in("equipment_id", usableIds);
+  let query = supabase.from("equipment_booking").select("equipment_id, event_id, window_start_ms, window_end_ms")
+    .eq("status", "Reserved")
+    .in("equipment_id", usableIds);
   if (!options.treatOwnEventClaimsAsBlocking) {
     query = query.neq("event_id", options.eventId);
   }
   const { data, error } = await query;
   if (error) throw new Error("Failed to load equipment bookings");
 
-  const bookings = (data ?? []) as { equipment_id: number; event_id: number }[];
+  const bookings = (data ?? []) as {
+    equipment_id: number;
+    event_id: number;
+    window_start_ms: number | null;
+    window_end_ms: number | null;
+  }[];
   const otherEventIds = [...new Set(bookings.map((b) => b.event_id).filter((id) => id !== options.eventId))];
 
   const otherInfo = otherEventIds.length > 0 ? await fetchEventBookingInfo(otherEventIds, authorization) : { status: "ok" as const, events: [] };
   const otherEventsById = new Map(otherInfo.status === "ok" ? otherInfo.events.map((e) => [e.id, e]) : []);
+
+  if (options.refreshStoredWindows) {
+    const stale = new Map<number, OccupiedWindow>();
+    for (const booking of bookings) {
+      if (booking.event_id === options.eventId || stale.has(booking.event_id)) continue;
+      const current = otherEventsById.has(booking.event_id) ? occupiedWindow(otherEventsById.get(booking.event_id)!) : null;
+      if (current && (booking.window_start_ms !== current.startMs || booking.window_end_ms !== current.endMs)) {
+        stale.set(booking.event_id, current);
+      }
+    }
+    for (const [eventId, window] of stale) {
+      // Best-effort: a failed write only leaves the old window, which the checks below don't rely on.
+      await supabase
+        .from("equipment_booking")
+        .update({ window_start_ms: window.startMs, window_end_ms: window.endMs })
+        .eq("event_id", eventId)
+        .eq("status", "Reserved");
+    }
+  }
 
   const blocked = new Set<number>();
   for (const booking of bookings) {
@@ -107,14 +139,14 @@ export interface ClaimResult {
  */
 export async function claimUnits(
   supabase: any,
-  type: string,
+  catalogId: number,
   quantity: number,
   eventId: number,
   targetWindow: OccupiedWindow,
   authorization: string,
   alreadyClaimed: ReadonlySet<number> = new Set(),
 ): Promise<ClaimResult> {
-  const units = await fetchUnitsByType(supabase, type);
+  const units = await fetchUnitsByCatalogId(supabase, catalogId);
   // E5-5: a unit marked damaged or under maintenance for a period overlapping
   // the event is not offered, on top of one whose status is not Available.
   const availableIds = units.filter((u) => u.status === "Available").map((u) => u.id);
@@ -123,36 +155,9 @@ export async function claimUnits(
   const blocked = await unitsBlocked(supabase, usableIds, targetWindow, authorization, {
     eventId,
     treatOwnEventClaimsAsBlocking: true,
+    refreshStoredWindows: true,
   });
   const freeIds = usableIds.filter((id) => !blocked.has(id) && !alreadyClaimed.has(id));
   const claimedIds = freeIds.slice(0, quantity);
   return { claimedIds, availableCount: freeIds.length, shortfall: Math.max(0, quantity - freeIds.length) };
-}
-
-/** Releases up to `count` of this item's claimed units (arbitrary which, they're interchangeable). */
-export async function releaseUnitsForItem(supabase: any, itemId: number, count: number): Promise<void> {
-  if (count <= 0) return;
-
-  const { data, error } = await supabase
-    .from("equipment_booking")
-    .select("id")
-    .eq("request_item_id", itemId)
-    .order("id", { ascending: true })
-    .limit(count);
-  if (error) throw new Error("Failed to load equipment bookings to release");
-
-  const ids = ((data ?? []) as { id: number }[]).map((row) => row.id);
-  if (ids.length === 0) return;
-
-  const { error: deleteError } = await supabase.from("equipment_booking").delete().in("id", ids);
-  if (deleteError) throw new Error("Failed to release equipment bookings");
-}
-
-/** Claims `claimedIds` for `itemId`/`eventId` — call only after the stock move itself has committed. */
-export async function recordClaims(supabase: any, itemId: number, eventId: number, claimedIds: number[]): Promise<void> {
-  if (claimedIds.length === 0) return;
-  const { error } = await supabase
-    .from("equipment_booking")
-    .insert(claimedIds.map((equipmentId) => ({ equipment_id: equipmentId, event_id: eventId, request_item_id: itemId })));
-  if (error) throw new Error("Failed to record equipment reservation");
 }

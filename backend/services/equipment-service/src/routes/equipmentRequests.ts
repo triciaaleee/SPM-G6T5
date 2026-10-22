@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEvent, fetchEventBookingInfo, toSupportEventInfo, type EquipmentBookingInfo } from "../lib/eventsClient.js";
-import { claimUnits, recordClaims, releaseUnitsForItem } from "../lib/equipmentConflicts.js";
+import { claimUnits } from "../lib/equipmentConflicts.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { computeReservationFlags, type ReservationFlag } from "../lib/reservationFlags.js";
 import { releaseEquipmentForEvent } from "../lib/eventCancellation.js";
@@ -310,11 +310,13 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  // E5-2: a cancelled request is no longer Technical Support's to act on.
+  // E5-2: a cancelled request is no longer Technical Support's to act on (the status
+  // update refuses it), but it stays in the list so they can look back at it: the
+  // queue's Cancelled / Past tab shows those, whether the coordinator cancelled the
+  // request or the event was cancelled.
   const { data: requests, error: requestsError } = await supabase
     .from("equipment_requests")
     .select("id, event_id, status, fulfillment_note, created_at")
-    .neq("status", CANCELLED)
     .order("created_at", { ascending: false });
 
   if (requestsError || !requests) {
@@ -394,7 +396,6 @@ equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) =
     .from("equipment_requests")
     .select("id, event_id, status, fulfillment_note, created_at")
     .eq("event_id", eventId)
-    .neq("status", CANCELLED)
     .order("created_at", { ascending: true });
 
   if (requestsError || !requests) {
@@ -475,17 +476,20 @@ function targetFulfilledByItem(
  * it down (reverting a status, or lowering a partial fulfilment) releases
  * that many of the item's claimed units back.
  *
- * The per-unit claim has to happen here in the application layer rather
- * than inside apply_equipment_request_status (migration 0022) — unlike the
- * flat catalog math, it needs every *other* booking's owning event's
- * current schedule, which only events-service knows, over HTTP. So this
- * route: (1) pre-checks claimability for AC2 before touching anything, (2)
- * runs the existing atomic stock move, then (3) records the claims/releases
- * the stock move just paid for. If (3) fails after (2) already committed,
- * it's rolled back with a corrective call to the same RPC — best-effort,
- * same stance as POST's own cleanup above, not a true distributed
- * transaction (same documented limitation as venue-service's booking
- * decisions, AGENTS.md §3a).
+ * Which units are free has to be decided here in the application layer —
+ * unlike the flat catalog math, it needs every *other* booking's owning
+ * event's current schedule, which only events-service knows, over HTTP. So
+ * this route: (1) works out the free units for AC2 before touching anything,
+ * then (2) hands the chosen units to reserve_equipment_request (migration
+ * 0049), which moves the stock, sets the status and writes or releases the
+ * bookings in one transaction. It re-checks only what the database knows
+ * (the unit's type, that it is still Available, that it isn't reserved for this
+ * event already) and, from migration 0050, the event's window the application
+ * passes in: a unit with an overlapping booking or unavailability period is
+ * refused after the unit is locked, so two reservations for overlapping dates
+ * picking the same unit at the same instant can't both succeed. Bookings made
+ * before 0050 have no stored window; they are checked here against
+ * events-service, which also fills their windows in.
  */
 equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -520,7 +524,7 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     return;
   }
   if (existingRequest.status === CANCELLED) {
-    res.status(409).json({ error: "This request was cancelled by the coordinator." });
+    res.status(409).json({ error: "This request was cancelled, so its status can't be updated." });
     return;
   }
 
@@ -529,7 +533,7 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // never exists (POST always inserts at least one alongside it).
   const { data: existingItems, error: existingItemsError } = await supabase
     .from("equipment_request_items")
-    .select("id, quantity, quantity_fulfilled, equipment_type")
+    .select("id, quantity, quantity_fulfilled, equipment_type, equipment_catalog_id")
     .eq("request_id", requestId);
 
   if (existingItemsError) {
@@ -584,6 +588,15 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   // `provisionallyClaimed` tracks units already picked by an earlier item
   // in this same loop — nothing is written yet, so without it two items
   // needing the same type could otherwise pick the same free unit twice.
+  // Units belong to a catalog item by id (migration 0048), so an item with no
+  // link can't be reserved. Migration 0048 links every item it can; only an
+  // item whose name matched nothing in the catalog is still unlinked.
+  const unlinked = deltas.find(({ item, delta }) => delta > 0 && item.equipment_catalog_id == null);
+  if (unlinked) {
+    res.status(409).json({ error: `${unlinked.item.equipment_type} isn't linked to an equipment catalog item, so it can't be reserved.` });
+    return;
+  }
+
   const claimsByItemId = new Map<number, number[]>();
   const shortfalls: Record<string, { equipmentType: string; availableCount: number; shortfall: number }> = {};
   const provisionallyClaimed = new Set<number>();
@@ -591,7 +604,7 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     if (delta <= 0) continue;
     const result = await claimUnits(
       supabase,
-      item.equipment_type,
+      item.equipment_catalog_id as number,
       delta,
       existingRequest.event_id,
       eventWindow!,
@@ -610,53 +623,40 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  // Atomic: recomputes every item's quantity_fulfilled for the target
-  // status and applies only the delta to equipment_catalog.available_stock
-  // (migration 0022) — a single DB round trip so a request's status and
-  // the stock it holds can never drift apart.
-  const { error: applyError } = await supabase.rpc("apply_equipment_request_status", {
+  // One database function (migration 0049) moves the stock counters, sets the
+  // status and writes or removes the equipment_booking rows together, so a
+  // failure anywhere leaves nothing changed.
+  const claims = [...claimsByItemId].map(([itemId, unitIds]) => ({ itemId, unitIds }));
+  const { error: reserveError } = await supabase.rpc("reserve_equipment_request", {
     p_request_id: requestId,
     p_status: status,
     p_note: note,
     p_fulfillments: fulfillments,
+    p_claims: claims,
+    // Stored on each new booking and checked against overlapping ones (migration 0050).
+    // Null when nothing is being reserved, which the function does not need.
+    p_window_start_ms: eventWindow?.startMs ?? null,
+    p_window_end_ms: eventWindow?.endMs ?? null,
   });
 
-  if (applyError) {
-    if ((applyError.message ?? "").includes("Not enough stock")) {
+  if (reserveError) {
+    const message = reserveError.message ?? "";
+    if (message.includes("Not enough stock")) {
       res.status(409).json({ error: "Not enough stock available to make this change." });
       return;
     }
+    // A unit was marked unusable, or taken for this event, after it was picked.
+    if (
+      message.includes("no longer available") ||
+      message.includes("already reserved") ||
+      message.includes("not the requested") ||
+      message.includes("overlapping dates") ||
+      message.includes("unavailable during")
+    ) {
+      res.status(409).json({ error: "Some of that equipment was just taken or changed. Check availability and try again." });
+      return;
+    }
     res.status(500).json({ error: "Failed to update the equipment request" });
-    return;
-  }
-
-  // The stock move committed — now spend it on the actual per-unit
-  // claim/release it was for.
-  try {
-    for (const { item, delta } of deltas) {
-      if (delta > 0) {
-        await recordClaims(supabase, item.id, existingRequest.event_id, claimsByItemId.get(item.id) ?? []);
-      } else if (delta < 0) {
-        await releaseUnitsForItem(supabase, item.id, -delta);
-      }
-    }
-  } catch {
-    // Best-effort rollback of the stock move above, mirroring POST's own
-    // orphan cleanup — this is a known gap (no single transaction spans
-    // both the RPC and these per-unit writes), documented in this
-    // handler's docstring.
-    const previousFulfillments = items.map((item) => ({ itemId: item.id, fulfilledQuantity: item.quantity_fulfilled ?? 0 }));
-    try {
-      await supabase.rpc("apply_equipment_request_status", {
-        p_request_id: requestId,
-        p_status: existingRequest.status,
-        p_note: existingRequest.fulfillment_note,
-        p_fulfillments: existingRequest.status === "Partially Fulfilled" ? previousFulfillments : [],
-      });
-    } catch {
-      // Nothing more to do — see the handler's docstring.
-    }
-    res.status(500).json({ error: "Failed to reserve the equipment for this change. Please try again." });
     return;
   }
 
