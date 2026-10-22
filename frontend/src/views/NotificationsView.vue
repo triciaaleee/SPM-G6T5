@@ -108,7 +108,7 @@ onMounted(loadFirstPage);
 
 <style scoped>
 .feed {
-  max-width: 640px;
+  max-width: 720px;
   margin: 0 auto;
   padding: var(--spacing-24) var(--grid-desktop-margin);
 }

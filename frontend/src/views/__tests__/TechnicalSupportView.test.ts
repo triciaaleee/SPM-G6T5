@@ -6,16 +6,23 @@ import TechnicalSupportView from "../TechnicalSupportView.vue";
 import {
   fetchAllEquipmentRequests,
   fetchEquipmentCatalog,
+  updateEquipmentRequestStatus,
   type EquipmentRequestWithEvent,
 } from "../../lib/equipmentApi";
 
 vi.mock("../../lib/equipmentApi", async () => {
   const actual = await vi.importActual<typeof import("../../lib/equipmentApi")>("../../lib/equipmentApi");
-  return { ...actual, fetchAllEquipmentRequests: vi.fn(), fetchEquipmentCatalog: vi.fn() };
+  return {
+    ...actual,
+    fetchAllEquipmentRequests: vi.fn(),
+    fetchEquipmentCatalog: vi.fn(),
+    updateEquipmentRequestStatus: vi.fn(),
+  };
 });
 
 const mockedList = vi.mocked(fetchAllEquipmentRequests);
 const mockedCatalog = vi.mocked(fetchEquipmentCatalog);
+const mockedUpdateStatus = vi.mocked(updateEquipmentRequestStatus);
 
 const router = createRouter({
   history: createMemoryHistory(),
@@ -89,6 +96,10 @@ beforeEach(() => {
     { id: 1, name: "Projector", totalStock: 5, availableStock: 3 },
     { id: 2, name: "Microphones", totalStock: 10, availableStock: 6 },
   ]);
+  mockedUpdateStatus.mockResolvedValue({
+    equipmentRequest: makeRequest({ status: "Arranged" }),
+    notified: true,
+  });
 });
 
 describe("TechnicalSupportView", () => {
@@ -109,13 +120,11 @@ describe("TechnicalSupportView", () => {
     expect(groupTitles(wrapper)).toEqual(["Gala", "Demo Day"]);
     const [gala, demoDay] = wrapper.findAll(".group");
 
-    expect(gala.find(".count-badge").text()).toBe("2 needed");
     const galaRows = gala.findAll(".row:not(.row--header)");
     expect(galaRows).toHaveLength(1);
     expect(galaRows[0].find(".cell-equipment").text()).toBe("Projector");
     expect(galaRows[0].find(".cell-stock").text()).toBe("3");
 
-    expect(demoDay.find(".count-badge").text()).toBe("4 needed");
     expect(demoDay.findAll(".row:not(.row--header)")).toHaveLength(2);
   });
 
@@ -165,19 +174,19 @@ describe("TechnicalSupportView", () => {
     expect(link.attributes("href")).toBe("/equipment-requests/event/7");
   });
 
-  it("counts rows in each status tab and filters by tab", async () => {
+  it("counts and filters by event, not by equipment row", async () => {
     const wrapper = await mountView([
       makeRequest({ id: 1, status: "Requested", items: [{ type: "Projector", quantity: 1 }, { type: "Microphones", quantity: 1 }] }),
       makeRequest({ id: 2, status: "Arranged", offset: 4 }),
     ]);
 
     const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
-    expect(tabs).toEqual(["Requested 2", "Arranged 1", "Partially Fulfilled 0"]);
+    // One event (two rows) in Requested, one event in Arranged — tab counts are events, not rows.
+    expect(tabs).toEqual(["Requested 1", "Arranged 1", "Partially Fulfilled 0"]);
     expect(dataRows(wrapper)).toHaveLength(2);
 
     await wrapper.findAll("[role='tab']")[1].trigger("click");
     expect(dataRows(wrapper)).toHaveLength(1);
-    expect(wrapper.find(".count-badge").text()).toBe("2 arranged");
   });
 
   it("opens on the first tab that has requests", async () => {
@@ -192,7 +201,73 @@ describe("TechnicalSupportView", () => {
     ]);
 
     expect(wrapper.find(".cell-qty").text()).toBe("1 of 3");
-    expect(wrapper.find(".count-badge").text()).toBe("2 still needed");
+  });
+
+  it("shows each row's own status as a badge", async () => {
+    const wrapper = await mountView([
+      makeRequest({ id: 1, eventId: 1, status: "Arranged", items: [{ type: "Projector", quantity: 1 }] }),
+      makeRequest({ id: 2, eventId: 1, status: "Requested", items: [{ type: "Microphones", quantity: 1 }] }),
+    ]);
+
+    // Mixed event -> Partially Fulfilled tab (opened by default since it's the first non-empty one in status order... see below).
+    await wrapper.find("[role='tab']").element; // no-op, just ensures mount settled
+    const tab = wrapper.findAll("[role='tab']").find((t) => t.text().startsWith("Partially Fulfilled"))!;
+    await tab.trigger("click");
+
+    const badges = dataRows(wrapper).map((r) => r.find(".badge").text());
+    expect(badges.sort()).toEqual(["Arranged", "Requested"]);
+  });
+
+  describe("event-level aggregation across multiple requests", () => {
+    it("merges every request of one event into a single table, never split across tabs", async () => {
+      const wrapper = await mountView([
+        makeRequest({ id: 1, eventId: 1, name: "Gala", status: "Arranged", items: [{ type: "Projector", quantity: 1 }] }),
+        makeRequest({ id: 2, eventId: 1, name: "Gala", status: "Requested", items: [{ type: "Microphones", quantity: 1 }] }),
+      ]);
+
+      // Only one "Gala" table should ever exist, across every tab.
+      for (const tab of wrapper.findAll("[role='tab']")) {
+        await tab.trigger("click");
+        expect(groupTitles(wrapper).filter((t) => t === "Gala").length).toBeLessThanOrEqual(1);
+      }
+    });
+
+    it("Arranged tab only shows events where every request is fulfilled", async () => {
+      const wrapper = await mountView([
+        makeRequest({ id: 1, eventId: 1, name: "Mixed Event", status: "Arranged" }),
+        makeRequest({ id: 2, eventId: 1, name: "Mixed Event", status: "Requested" }),
+        makeRequest({ id: 3, eventId: 2, name: "Fully Arranged Event", status: "Arranged" }),
+      ]);
+
+      const arrangedTab = wrapper.findAll("[role='tab']").find((t) => t.text().startsWith("Arranged"))!;
+      expect(arrangedTab.text().replace(/\s+/g, " ")).toBe("Arranged 1");
+      await arrangedTab.trigger("click");
+
+      expect(groupTitles(wrapper)).toEqual(["Fully Arranged Event"]);
+    });
+
+    it("puts an event with a mix of request statuses under Partially Fulfilled", async () => {
+      const wrapper = await mountView([
+        makeRequest({ id: 1, eventId: 1, name: "Mixed Event", status: "Arranged" }),
+        makeRequest({ id: 2, eventId: 1, name: "Mixed Event", status: "Requested" }),
+      ]);
+
+      const partialTab = wrapper.findAll("[role='tab']").find((t) => t.text().startsWith("Partially Fulfilled"))!;
+      expect(partialTab.text().replace(/\s+/g, " ")).toBe("Partially Fulfilled 1");
+      await partialTab.trigger("click");
+
+      expect(groupTitles(wrapper)).toEqual(["Mixed Event"]);
+    });
+
+    it("Requested tab only shows events where no request has been touched", async () => {
+      const wrapper = await mountView([
+        makeRequest({ id: 1, eventId: 1, name: "Untouched Event", status: "Requested" }),
+        makeRequest({ id: 2, eventId: 2, name: "Mixed Event", status: "Arranged" }),
+        makeRequest({ id: 3, eventId: 2, name: "Mixed Event", status: "Requested" }),
+      ]);
+
+      expect(groupTitles(wrapper)).toEqual(["Untouched Event"]);
+    });
   });
 
   describe("date range", () => {
@@ -256,26 +331,25 @@ describe("TechnicalSupportView", () => {
       expect(dataRows(wrapper)).toHaveLength(1);
       expect(dataRows(wrapper)[0].find(".cell-equipment").text()).toBe("Microphones");
     });
-  });
 
-  describe("urgency badge", () => {
-    const label = async (offset: number, status = "Requested") => {
-      const wrapper = await mountView([makeRequest({ offset, status })]);
-      const badge = wrapper.find(".urgency");
-      return badge.exists() ? badge.text() : null;
-    };
+    it("never moves an event to a different tab just because the filter hides some of its rows", async () => {
+      const wrapper = await mountView([
+        makeRequest({ id: 1, eventId: 1, status: "Arranged", items: [{ type: "Projector", quantity: 1 }] }),
+        makeRequest({ id: 2, eventId: 1, status: "Requested", items: [{ type: "Microphones", quantity: 1 }] }),
+      ]);
+      // Mixed-status event -> Partially Fulfilled. Filtering to just the Arranged item must not
+      // make the event look "fully arranged" and jump to the Arranged tab.
+      const partialTab = wrapper.findAll("[role='tab']").find((t) => t.text().startsWith("Partially Fulfilled"))!;
+      await partialTab.trigger("click");
 
-    it("flags an unarranged event that is overdue, today, tomorrow or within three days", async () => {
-      expect(await label(-2)).toBe("Overdue");
-      expect(await label(0)).toBe("Today");
-      expect(await label(1)).toBe("Tomorrow");
-      expect(await label(2)).toBe("In 2 days");
-      expect(await label(3)).toBe("In 3 days");
-    });
+      await wrapper.find("select[aria-label='Equipment']").setValue("Projector");
 
-    it("says nothing for an event further out, or one already arranged", async () => {
-      expect(await label(4)).toBeNull();
-      expect(await label(1, "Arranged")).toBeNull();
+      expect(groupTitles(wrapper)).toHaveLength(1);
+      expect(dataRows(wrapper)).toHaveLength(1);
+
+      const arrangedTab = wrapper.findAll("[role='tab']").find((t) => t.text().startsWith("Arranged"))!;
+      await arrangedTab.trigger("click");
+      expect(groupTitles(wrapper)).toHaveLength(0);
     });
   });
 
@@ -303,5 +377,97 @@ describe("TechnicalSupportView", () => {
     await flushPromises();
 
     expect(wrapper.find("[role='alert']").text()).toContain("couldn't load equipment requests");
+  });
+
+  describe("quick status update", () => {
+    it("shows one 'Update status' button per row, not once per event", async () => {
+      const wrapper = await mountView([
+        makeRequest({ id: 1, name: "Gala", items: [{ type: "Projector", quantity: 1 }, { type: "Microphones", quantity: 1 }] }),
+      ]);
+
+      expect(dataRows(wrapper)).toHaveLength(2);
+      expect(wrapper.findAll(".status-menu")).toHaveLength(2);
+    });
+
+    it("opens a menu listing Requested and Arranged, with the current status checked", async () => {
+      const wrapper = await mountView([makeRequest({ status: "Requested" })]);
+
+      await wrapper.find("[data-status-trigger]").trigger("click");
+
+      const options = wrapper.findAll(".status-menu__option");
+      expect(options.map((o) => o.text())).toEqual(["Requested", "Arranged"]);
+      expect(options[0].attributes("aria-checked")).toBe("true");
+      expect(options[1].attributes("aria-checked")).toBe("false");
+    });
+
+    it("picking the other option calls the API for that row's request and moves the event to its new tab", async () => {
+      const wrapper = await mountView([makeRequest({ id: 1, status: "Requested" })]);
+
+      await wrapper.find("[data-status-trigger]").trigger("click");
+      await wrapper.findAll(".status-menu__option").find((o) => o.text() === "Arranged")!.trigger("click");
+      await flushPromises();
+
+      expect(mockedUpdateStatus).toHaveBeenCalledWith(1, "Arranged");
+      // The menu closes and the event leaves the Requested tab (now empty) once moved.
+      expect(wrapper.find(".status-menu__popover").exists()).toBe(false);
+      expect(wrapper.find(".empty-state").exists()).toBe(true);
+
+      await wrapper.findAll("[role='tab']").find((t) => t.text().startsWith("Arranged"))!.trigger("click");
+      expect(groupTitles(wrapper)).toHaveLength(1);
+    });
+
+    it("acts on only the clicked row's request when an event has more than one", async () => {
+      const wrapper = await mountView([
+        makeRequest({ id: 1, eventId: 1, status: "Requested", items: [{ type: "Projector", quantity: 1 }] }),
+        makeRequest({ id: 2, eventId: 1, status: "Requested", items: [{ type: "Microphones", quantity: 1 }] }),
+      ]);
+
+      // Rows sort alphabetically by equipment type within a group, so the first row/trigger
+      // is Microphones (request 2), not Projector (request 1).
+      const triggers = wrapper.findAll("[data-status-trigger]");
+      expect(triggers).toHaveLength(2);
+
+      await triggers[0].trigger("click");
+      await wrapper.findAll(".status-menu__option").find((o) => o.text() === "Arranged")!.trigger("click");
+      await flushPromises();
+
+      expect(mockedUpdateStatus).toHaveBeenCalledTimes(1);
+      expect(mockedUpdateStatus).toHaveBeenCalledWith(2, "Arranged");
+    });
+
+    it("clicking the already-selected status is a no-op", async () => {
+      const wrapper = await mountView([makeRequest({ status: "Requested" })]);
+
+      await wrapper.find("[data-status-trigger]").trigger("click");
+      await wrapper.find(".status-menu__option[aria-checked='true']").trigger("click");
+      await flushPromises();
+
+      expect(mockedUpdateStatus).not.toHaveBeenCalled();
+    });
+
+    it("shows an inline error and keeps the row in place when the update fails", async () => {
+      mockedUpdateStatus.mockRejectedValue(new Error("boom"));
+      const wrapper = await mountView([makeRequest({ id: 1, status: "Requested" })]);
+
+      await wrapper.find("[data-status-trigger]").trigger("click");
+      await wrapper.findAll(".status-menu__option").find((o) => o.text() === "Arranged")!.trigger("click");
+      await flushPromises();
+
+      expect(wrapper.find(".status-menu__error").text()).toContain("Couldn't update the status");
+      expect(dataRows(wrapper)).toHaveLength(1);
+    });
+
+    it("closes when clicking outside, without changing anything", async () => {
+      const wrapper = await mountView([makeRequest({ status: "Requested" })]);
+
+      await wrapper.find("[data-status-trigger]").trigger("click");
+      expect(wrapper.find(".status-menu__popover").exists()).toBe(true);
+
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      await wrapper.vm.$nextTick();
+
+      expect(wrapper.find(".status-menu__popover").exists()).toBe(false);
+      expect(mockedUpdateStatus).not.toHaveBeenCalled();
+    });
   });
 });
