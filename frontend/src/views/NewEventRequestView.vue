@@ -139,8 +139,8 @@ onMounted(async () => {
       <div v-else-if="submittedEventId" class="rounded-lg border border-grey-100 bg-grey-50 p-8">
         <p class="text-2xl font-bold text-grey-900">Request submitted</p>
         <p class="mt-2 text-grey-500">
-          Your event request has been created with status <span class="font-bold text-grey-700">Requested</span>.
-          You'll see it in your events list along with its submission date.
+          Your event request has been created with status <span class="font-bold text-grey-700">Unassigned</span>
+          until a coordinator is assigned to it. You'll see it in your events list along with its submission date.
         </p>
         <AppButton variant="primary" :to="{ name: 'event-detail', params: { id: submittedEventId } }" class="mt-6">
           View request
