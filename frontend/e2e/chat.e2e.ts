@@ -72,8 +72,17 @@ test("nobody outside the event can read or post in its chat", async () => {
   await approveRequest(coordinator, event.id);
   await sendChatMessage(organiser, event.id, "Just between us.");
 
-  for (const outsider of [stranger, otherCoordinator, attendee, lead]) {
-    await expectRefused(fetchChat(outsider, event.id), 403);
-    await expectRefused(sendChatMessage(outsider, event.id, "Let me in"), 403);
+  // Another organiser can't even see the event exists: chat-service asks
+  // events-service with the caller's own token, and treats "not yours" as
+  // not found. Everyone else is refused outright.
+  const outsiders: [typeof stranger, number][] = [
+    [stranger, 404],
+    [otherCoordinator, 403],
+    [attendee, 403],
+    [lead, 403],
+  ];
+  for (const [outsider, status] of outsiders) {
+    await expectRefused(fetchChat(outsider, event.id), status);
+    await expectRefused(sendChatMessage(outsider, event.id, "Let me in"), status);
   }
 });
