@@ -18,7 +18,7 @@ import {
   uniqueFutureDate,
   uniqueName,
 } from "./support/backend";
-import { logIn, signInThroughStorage } from "./support/browser";
+import { expectEventStatus, logIn, signInThroughStorage } from "./support/browser";
 
 /**
  * The full event lifecycle (AGENTS.md §3): Draft is skipped (every test
@@ -68,7 +68,7 @@ test.describe("Event lifecycle happy path", () => {
 
     // 3. Visible as Planning on the event detail page.
     await page.goto(`/events/${event.id}`);
-    await expect(page.getByText("Planning", { exact: true })).toBeVisible();
+    await expectEventStatus(page, "Planning");
 
     // Book and approve a venue — required before Planning -> Safety Review.
     // Picked from signInAsVenueStaff()'s own venues (see fetchMyVenues's doc
@@ -98,7 +98,7 @@ test.describe("Event lifecycle happy path", () => {
     // before the form ever rendered.
     await signInThroughStorage(page, organiser);
     await page.goto(`/events/${event.id}`);
-    await expect(page.getByText("Confirmed", { exact: true })).toBeVisible();
+    await expectEventStatus(page, "Confirmed");
 
     const final = await getEvent(organiser, event.id);
     expect(final.status).toBe("Confirmed");
@@ -120,6 +120,6 @@ test.describe("Event lifecycle: rejection branch", () => {
 
     await logIn(page, organiser);
     await page.goto(`/events/${event.id}`);
-    await expect(page.getByText("Rejected", { exact: true })).toBeVisible();
+    await expectEventStatus(page, "Rejected");
   });
 });

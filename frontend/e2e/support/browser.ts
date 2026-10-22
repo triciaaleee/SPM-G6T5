@@ -45,3 +45,14 @@ export async function signInThroughStorage(page: Page, session: Session): Promis
     { token: session.token, user: session.user },
   );
 }
+
+/**
+ * Asserts the event page shows `status` as the current step of its progress
+ * tracker. Not a bare getByText(status): the page repeats the status in more
+ * than one badge as well as the tracker, so text alone matches several
+ * elements. aria-current marks exactly the one step the event is on.
+ */
+export async function expectEventStatus(page: Page, status: string): Promise<void> {
+  const current = page.getByRole("list", { name: "Event progress" }).locator('[aria-current="step"]');
+  await expect(current.locator(".status-tracker__label")).toHaveText(status);
+}
