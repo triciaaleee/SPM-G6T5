@@ -1,0 +1,38 @@
+# Local Supabase stack (Supabase CLI). Used by CI's e2e job to build a
+# throwaway database from scratch on every run; works the same locally with
+# `supabase start`. Anything not set here takes the CLI's default.
+project_id = "SPM-G6T5"
+
+[db]
+# Must match the hosted database's major version (`SHOW server_version;`).
+major_version = 17
+
+# Off: several migrations share a number (two 0002_, two 0041_, ...), and the
+# CLI records migrations by number, so it can't apply both of a pair.
+# supabase/scripts/build_database.sh applies them in filename order instead,
+# the same order scripts/rebuild_all.sql concatenates them in, then the seed.
+[db.migrations]
+enabled = false
+
+[db.seed]
+enabled = false
+
+# Not used by this app: services talk to Postgres through the REST API only,
+# and auth is custom (public.users + our own JWTs). Off for a faster start.
+[realtime]
+enabled = false
+
+[studio]
+enabled = false
+
+[local_smtp]
+enabled = false
+
+[storage]
+enabled = false
+
+[edge_runtime]
+enabled = false
+
+[analytics]
+enabled = false

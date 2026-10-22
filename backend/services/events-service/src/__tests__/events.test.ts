@@ -293,6 +293,35 @@ describe("GET /api/events/:id", () => {
     expect(res.body.event.organiser_id).toBe("someone-else");
   });
 
+  it("denies a coordinator an organiser's draft, and logs it (AGENTS.md §3: drafts sit outside the process)", async () => {
+    const eventId = "6";
+    const maybeSingle = vi.fn().mockResolvedValue({
+      data: {
+        id: Number(eventId),
+        status: "Draft",
+        submitted_details: {},
+        coordinator_id: null,
+        review_outcome: null,
+        created_at: "2026-01-01",
+        organiser_id: "someone-else",
+      },
+      error: null,
+    });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const select = vi.fn().mockReturnValue({ eq });
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert };
+      return { select };
+    });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get(`/api/events/${eventId}`);
+
+    expect(res.status).toBe(403);
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ event_id: eventId }));
+  });
+
   it("returns the event when the caller owns it", async () => {
     const ownedEventId = "1";
     const maybeSingle = vi.fn().mockResolvedValue({

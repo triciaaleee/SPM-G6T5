@@ -859,7 +859,8 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
   }
 
   const isOwner = data?.organiser_id === user.id;
-  const isCoordinator = user.role === "coordinator";
+  // Drafts sit outside the process (AGENTS.md §3): only their organiser sees them.
+  const isCoordinator = user.role === "coordinator" && data?.status !== EVENT_STATUS.Draft;
   const isLead = user.role === COORDINATOR_LEAD_ROLE && data?.status !== EVENT_STATUS.Draft;
   // E3-14: read-only, for events the Safety Officer reviews — ones that
   // have been submitted for safety review. venue-service and
@@ -3395,7 +3396,8 @@ async function loadEventForClarification(
   }
 
   const isOwner = data?.organiser_id === user.id;
-  const isCoordinator = user.role === "coordinator";
+  // Drafts sit outside the process (AGENTS.md §3): only their organiser sees them.
+  const isCoordinator = user.role === "coordinator" && data?.status !== EVENT_STATUS.Draft;
   const isLead = user.role === COORDINATOR_LEAD_ROLE && data?.status !== EVENT_STATUS.Draft;
 
   if (!data || (!isOwner && !isCoordinator && !isLead)) {

@@ -1,0 +1,127 @@
+import { expect, test } from "@playwright/test";
+import {
+  approveRequest,
+  approveSafetyReview,
+  approveVenueBooking,
+  assignCoordinator,
+  climbToConfirmed,
+  expectRefused,
+  fetchEventRegistrations,
+  fetchMyVenues,
+  openRegistrationToday,
+  registerAttendee,
+  registerForEvent,
+  registerOrganiser,
+  requestVenueBooking,
+  signInAsCoordinator,
+  signInAsCoordinatorLead,
+  signInAsSafetyOfficer,
+  signInAsVenueStaff,
+  submitEvent,
+  submitForSafetyReview,
+  uniqueFutureDate,
+  uniqueName,
+  withdrawRegistration,
+} from "./support/backend";
+import { logIn } from "./support/browser";
+
+/**
+ * E6: once an event is Confirmed with registrationNeeded true, hasn't ended
+ * and its registration open date has arrived, an attendee discovers it,
+ * views its detail page and registers; it then appears in their own events
+ * list as Registered. The full Unassigned -> Confirmed climb is driven
+ * through backend.ts; only the attendee's own discover/view/register flow
+ * is driven through the browser.
+ */
+
+test("attendee discovers a Confirmed, registration-open event and registers for it", async ({ page }) => {
+  // The climb to Confirmed runs a dozen real API calls, including a venue
+  // decision that queues behind other parallel tests' decisions for the same
+  // venue (venue-service's per-venue lock), so it needs more than the
+  // default 30s.
+  test.setTimeout(60_000);
+  const organiser = await registerOrganiser("attendee-reg-organiser");
+  const attendee = await registerAttendee("attendee-reg-attendee");
+  const coordinator = await signInAsCoordinator();
+  const lead = await signInAsCoordinatorLead();
+  const venueStaff = await signInAsVenueStaff();
+  const safetyOfficer = await signInAsSafetyOfficer();
+
+  const eventName = uniqueName("Open For Registration Event");
+  const event = await submitEvent(organiser, {
+    name: eventName,
+    registrationNeeded: true,
+    // Far in the future (so "hasn't ended" never flakes) and unique per run
+    // so this test's venue booking can't collide with another test's for
+    // the same venue and window — see uniqueFutureDate's doc comment.
+    proposedDate: uniqueFutureDate(),
+  });
+
+  await assignCoordinator(lead, event.id, coordinator.id);
+  await approveRequest(coordinator, event.id);
+
+  // Picked from signInAsVenueStaff()'s own venues — see fetchMyVenues's doc
+  // comment on why a coordinator's search result isn't safe to use here.
+  const myVenues = await fetchMyVenues(venueStaff);
+  const booking = await requestVenueBooking(coordinator, event.id, myVenues[0].id);
+  await approveVenueBooking(venueStaff, booking.id);
+
+  await submitForSafetyReview(coordinator, event.id);
+  await approveSafetyReview(safetyOfficer, event.id);
+  await openRegistrationToday(coordinator, event.id);
+
+  // Attendee discovers it.
+  await logIn(page, attendee);
+  await page.goto("/attendee/discover");
+  await expect(page.getByText(eventName)).toBeVisible();
+
+  // Views it and registers from the detail page.
+  await page.getByText(eventName).click();
+  await expect(page).toHaveURL(new RegExp(`/attendee/events/${event.id}$`));
+  await page.getByRole("button", { name: "Register", exact: true }).click();
+  await expect(page.getByText("Registered", { exact: true })).toBeVisible();
+
+  // It now appears in their own events list, under Upcoming, as Registered.
+  await page.goto("/attendee/events");
+  const card = page.locator(".card-item", { hasText: eventName }).first();
+  await expect(card).toBeVisible();
+  await expect(card.getByText("Registered", { exact: true })).toBeVisible();
+});
+
+/**
+ * E6 edge cases, against registration-service's own rules: no registering
+ * before registration opens, no registering twice, no place beyond the
+ * event's expected attendance (its capacity), and a withdrawn place goes
+ * back to the pool.
+ */
+test("registration refuses not-yet-open, duplicate and over-capacity sign-ups; a withdrawal frees the place", async () => {
+  test.setTimeout(60_000);
+  const { event, coordinator, organiser } = await climbToConfirmed("reg-rules", {
+    registrationNeeded: true,
+    expectedAttendance: 1,
+  });
+  const [first, second] = await Promise.all([
+    registerAttendee("reg-rules-first"),
+    registerAttendee("reg-rules-second"),
+  ]);
+
+  // Confirmed, but the coordinator hasn't opened registration yet.
+  await expectRefused(registerForEvent(first, event.id), 409);
+
+  await openRegistrationToday(coordinator, event.id);
+  await registerForEvent(first, event.id);
+  const duplicate = await expectRefused(registerForEvent(first, event.id), 409);
+  expect(duplicate.body).toMatchObject({ code: "already_registered" });
+
+  const full = await expectRefused(registerForEvent(second, event.id), 409);
+  expect(full.body).toMatchObject({ code: "event_full" });
+
+  await withdrawRegistration(first, event.id);
+  await registerForEvent(second, event.id);
+
+  const byAttendee = new Map(
+    (await fetchEventRegistrations(organiser, event.id)).map((r) => [r.userId, r.status] as const),
+  );
+  expect(byAttendee.get(first.id)).toBe("Withdrawn");
+  expect(byAttendee.get(second.id)).toBe("Registered");
+});
