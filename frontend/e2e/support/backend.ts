@@ -248,6 +248,18 @@ export async function approveSafetyReview(safetyOfficer: Session, eventId: numbe
   return event;
 }
 
+/**
+ * Assigned coordinator sets the registration open date to today. Attendees
+ * only see an event once its open date has arrived (events-service
+ * lib/registrationPeriod.ts isListed), and a Confirmed event has none until
+ * the coordinator sets one. "Today" is the Singapore date, the same UTC+8
+ * the service reads open dates in.
+ */
+export async function openRegistrationToday(coordinator: Session, eventId: number): Promise<void> {
+  const singaporeToday = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  await call("PUT", `${EVENTS_URL}/${eventId}/registration`, coordinator.token, { openDate: singaporeToday });
+}
+
 export async function getEvent(session: Session, eventId: number): Promise<EventRow> {
   const { event } = await call<{ event: EventRow }>("GET", `${EVENTS_URL}/${eventId}`, session.token);
   return event;

@@ -5,6 +5,7 @@ import {
   approveVenueBooking,
   assignCoordinator,
   fetchMyVenues,
+  openRegistrationToday,
   registerAttendee,
   registerOrganiser,
   requestVenueBooking,
@@ -20,8 +21,8 @@ import {
 import { logIn } from "./support/browser";
 
 /**
- * E6: once an event is Confirmed with registrationNeeded true (and hasn't
- * ended — registration-service's "open" rule), an attendee discovers it,
+ * E6: once an event is Confirmed with registrationNeeded true, hasn't ended
+ * and its registration open date has arrived, an attendee discovers it,
  * views its detail page and registers; it then appears in their own events
  * list as Registered. The full Unassigned -> Confirmed climb is driven
  * through backend.ts; only the attendee's own discover/view/register flow
@@ -57,6 +58,7 @@ test("attendee discovers a Confirmed, registration-open event and registers for 
 
   await submitForSafetyReview(coordinator, event.id);
   await approveSafetyReview(safetyOfficer, event.id);
+  await openRegistrationToday(coordinator, event.id);
 
   // Attendee discovers it.
   await logIn(page, attendee);
