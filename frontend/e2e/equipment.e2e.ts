@@ -36,17 +36,22 @@ test("coordinator records equipment requirements via the form; Technical Support
   expect(catalog.length).toBeGreaterThan(0);
   const item = catalog[0];
 
-  // Coordinator drives the real Equipment Requirements form on the event page.
+  // Coordinator drives the real Equipment Requirements form, which sits on
+  // the event page's Arrangements tab.
   await signInThroughStorage(page, coordinator);
   await page.goto(`/events/${event.id}`);
-  await page.getByRole("button", { name: /record equipment requirements/i }).click();
+  await page.getByRole("button", { name: /^Arrangements/ }).click();
+  await page.getByRole("button", { name: "Add Equipment Request" }).click();
 
   await page.getByLabel("Equipment type").selectOption(String(item.id));
   await page.getByLabel("Quantity").fill("2");
   await page.getByRole("button", { name: /submit request/i }).click();
 
   await expect(page.getByText(/equipment request submitted/i)).toBeVisible();
-  await expect(page.getByText(`2× ${item.name}`)).toBeVisible();
+  // The panel lists items in a table: name in one column, quantity in another.
+  const itemRow = page.locator("li.row-item", { hasText: item.name }).first();
+  await expect(itemRow).toBeVisible();
+  await expect(itemRow).toContainText("2");
 
   // Technical Support sees it in their queue, grouped under this event.
   // backend.ts's default eventDetails() proposedDate is 2099-09-24 (safely
