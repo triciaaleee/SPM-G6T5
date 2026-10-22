@@ -83,7 +83,7 @@ onMounted(async () => {
         <AppButton variant="primary" :to="{ name: 'signup' }">Sign up for free</AppButton>
         <AppButton variant="outline" :to="{ name: 'public-events' }">Explore events</AppButton>
       </div>
-      <img :src="heroImage" alt="A crowd enjoying a live event" class="hero__image" />
+      <img :src="heroImage" alt="A crowd enjoying a live event" class="hero__image" fetchpriority="high" decoding="async" />
     </section>
 
     <section class="page section" aria-labelledby="events-title">

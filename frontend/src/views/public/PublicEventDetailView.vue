@@ -86,7 +86,7 @@ onMounted(async () => {
       <p v-else-if="errorMessage || !event" class="full body-default error-text" role="alert">{{ errorMessage }}</p>
 
       <template v-else>
-        <img :src="eventThumbnail(event.id)" alt="" class="full banner" />
+        <img :src="eventThumbnail(event.id)" alt="" class="full banner" decoding="async" />
 
         <div class="main">
           <span class="badge" :class="badge.className">{{ badge.label }}</span>

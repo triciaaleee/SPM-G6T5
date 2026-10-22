@@ -62,4 +62,42 @@ describe("DataTable", () => {
     const links = linked.findAll("a.row--link");
     expect(links.map((l) => l.attributes("href"))).toEqual(["/items/1", "/items/2"]);
   });
+
+  it("renders a group-header divider only before the first row of each new group", () => {
+    const grouped = [
+      { id: 1, name: "First", note: "a" },
+      { id: 2, name: "Second", note: "b" },
+      { id: 3, name: "Third", note: "c" },
+    ];
+    const wrapper = mount(DataTable, {
+      props: {
+        columns,
+        columnWidths: "10rem 5rem",
+        rows: grouped,
+        rowKey: (r: unknown) => (r as Row).id,
+        rowGroup: (r: unknown) => ({ key: (r as Row).name === "Third" ? "b" : "a", label: "Group", count: 1 }),
+      },
+      slots: {
+        "cell-name": `<template #cell-name="{ row }">{{ row.name }}</template>`,
+        "cell-note": `<template #cell-note="{ row }">{{ row.note }}</template>`,
+        "group-header": `<template #group-header="{ group }"><span class="hdr">{{ group.key }}</span></template>`,
+      },
+      global: { plugins: [router] },
+    });
+
+    const headers = wrapper.findAll(".row-group-header .hdr").map((h) => h.text());
+    expect(headers).toEqual(["a", "b"]);
+  });
+
+  it("applies rowClass to each row when given, alongside row--link", () => {
+    const wrapper = mountTable({
+      rowTo: (r: Row) => ({ name: "item", params: { id: r.id } }),
+      rowClass: (r: Row) => ({ "row--flagged": r.name === "Second" }),
+    });
+
+    const dataRows = wrapper.findAll(".row:not(.row--header)");
+    expect(dataRows[0].classes()).not.toContain("row--flagged");
+    expect(dataRows[1].classes()).toContain("row--flagged");
+    expect(dataRows[1].classes()).toContain("row--link");
+  });
 });

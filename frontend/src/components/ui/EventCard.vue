@@ -78,7 +78,7 @@ const ICONS: Record<CardFact["icon"], string[]> = {
 
 <template>
   <RouterLink :to="to" class="event-card">
-    <img :src="thumbnail" alt="" class="card-thumbnail" />
+    <img :src="thumbnail" alt="" class="card-thumbnail" loading="lazy" decoding="async" />
 
     <div class="card-content">
       <div class="card-header">
