@@ -1,5 +1,6 @@
 import {
   AUTH_URL,
+  CHAT_URL,
   EQUIPMENT_CATALOG_URL,
   EQUIPMENT_URL,
   EVENTS_URL,
@@ -14,7 +15,9 @@ import {
  * way a real client would — not through direct DB writes and not by
  * clicking through the UI. Only the one flow a test is actually about gets
  * driven through the browser; everything that flow needs to exist
- * beforehand is set up here. See e2e/README.md.
+ * beforehand is set up here. See e2e/README.md. The one exception is
+ * support/database.ts, which only fakes the passing of time, and only
+ * against a local database.
  */
 
 export interface Session {
@@ -369,8 +372,14 @@ export async function requestEquipment(
   coordinator: Session,
   eventId: number,
   items: { equipmentCatalogId: number; quantity: number }[],
-) {
-  return call("POST", EQUIPMENT_URL, coordinator.token, { eventId, items });
+): Promise<EquipmentRequestRow> {
+  const { equipmentRequest } = await call<{ equipmentRequest: EquipmentRequestRow }>(
+    "POST",
+    EQUIPMENT_URL,
+    coordinator.token,
+    { eventId, items },
+  );
+  return equipmentRequest;
 }
 
 // ---- registration-service -------------------------------------------------------
@@ -478,6 +487,8 @@ export interface ClimbedEvent {
 export async function climbToSafetyReview(
   label: string,
   overrides: Partial<Record<string, unknown>> = {},
+  /** Runs while the event is in Planning with its venue approved, e.g. to arrange equipment. */
+  inPlanning?: (climb: Omit<ClimbedEvent, "event"> & { event: EventRow }) => Promise<void>,
 ): Promise<ClimbedEvent> {
   const organiser = await registerOrganiser(`${label}-organiser`);
   const [coordinator, lead, venueStaff, safetyOfficer] = await Promise.all([
@@ -495,6 +506,7 @@ export async function climbToSafetyReview(
   const venue = venues[Math.floor(Math.random() * venues.length)];
   const requested = await requestVenueBooking(coordinator, event.id, venue.id);
   const booking = await approveVenueBooking(venueStaff, requested.id);
+  await inPlanning?.({ event, organiser, coordinator, lead, venueStaff, safetyOfficer, venue, booking });
   const inReview = await submitForSafetyReview(coordinator, event.id);
   return { event: inReview, organiser, coordinator, lead, venueStaff, safetyOfficer, venue, booking };
 }
@@ -503,8 +515,9 @@ export async function climbToSafetyReview(
 export async function climbToConfirmed(
   label: string,
   overrides: Partial<Record<string, unknown>> = {},
+  inPlanning?: Parameters<typeof climbToSafetyReview>[2],
 ): Promise<ClimbedEvent> {
-  const climbed = await climbToSafetyReview(label, overrides);
+  const climbed = await climbToSafetyReview(label, overrides, inPlanning);
   const confirmed = await approveSafetyReview(climbed.safetyOfficer, climbed.event.id);
   return { ...climbed, event: confirmed };
 }
@@ -631,9 +644,9 @@ export async function releaseVenueBooking(coordinator: Session, bookingId: numbe
 export async function fetchEventBookings(
   session: Session,
   eventId: number,
-): Promise<(VenueBookingRow & { decisionReason: string | null })[]> {
+): Promise<(VenueBookingRow & { decisionReason: string | null; holdExpiresAt: string | null })[]> {
   const { bookings } = await call<{
-    bookings: (VenueBookingRow & { decisionReason: string | null })[];
+    bookings: (VenueBookingRow & { decisionReason: string | null; holdExpiresAt: string | null })[];
   }>("GET", `${VENUES_URL}/events/${eventId}/bookings`, session.token);
   return bookings;
 }
@@ -651,4 +664,110 @@ export async function fetchEventRegistrations(session: Session, eventId: number)
 /** Attendee gives up their own place (E6-4). */
 export async function withdrawRegistration(attendee: Session, eventId: number): Promise<void> {
   await call("PATCH", `${REGISTRATION_URL}/event/${eventId}/withdraw`, attendee.token, {});
+}
+
+// ---- holds and completion -------------------------------------------------------
+
+/** Venue Staff hold a requested booking for a fixed 72 hours (E4-10, E4-12). */
+export async function holdVenueBooking(venueStaff: Session, bookingId: number): Promise<VenueBookingRow> {
+  const { booking } = await call<{ booking: VenueBookingRow }>(
+    "POST",
+    `${VENUES_URL}/staff/bookings/${bookingId}/hold`,
+    venueStaff.token,
+    {},
+  );
+  return booking;
+}
+
+/** Assigned coordinator marks a Confirmed event completed, once it has ended (E3-5). */
+export async function completeEvent(coordinator: Session, eventId: number): Promise<EventRow> {
+  const { event } = await call<{ event: EventRow }>("POST", `${EVENTS_URL}/${eventId}/complete`, coordinator.token, {});
+  return event;
+}
+
+// ---- equipment reservation ------------------------------------------------------
+
+export interface EquipmentRequestRow {
+  id: number;
+  status: string;
+  items: { id: number; equipmentCatalogId: number | null; quantity: number; quantityFulfilled: number }[];
+}
+
+/** Technical Support move a request to a status; "Arranged" reserves every requested unit (E5-3, E5-6). */
+export async function setEquipmentRequestStatus(
+  techSupport: Session,
+  requestId: number,
+  status: "Requested" | "Arranged",
+): Promise<EquipmentRequestRow> {
+  const { equipmentRequest } = await call<{ equipmentRequest: EquipmentRequestRow }>(
+    "PATCH",
+    `${EQUIPMENT_URL}/${requestId}`,
+    techSupport.token,
+    { status },
+  );
+  return equipmentRequest;
+}
+
+/** An event's equipment requests, as Technical Support see them. */
+export async function fetchEventEquipment(techSupport: Session, eventId: number): Promise<EquipmentRequestRow[]> {
+  const { equipmentRequests } = await call<{ equipmentRequests: EquipmentRequestRow[] }>(
+    "GET",
+    `${EQUIPMENT_URL}/event/${eventId}`,
+    techSupport.token,
+  );
+  return equipmentRequests;
+}
+
+/** One catalog item's current stock. */
+export async function catalogItem(session: Session, id: number): Promise<CatalogItem> {
+  const item = (await listEquipmentCatalog(session)).find((c) => c.id === id);
+  if (!item) throw new Error(`catalog item ${id} not found`);
+  return item;
+}
+
+// ---- chat-service -----------------------------------------------------------------
+
+export interface ChatMessage {
+  id: number;
+  body: string;
+  mine: boolean;
+}
+
+/** Organiser or assigned coordinator posts to an event's chat (E2-15). */
+export async function sendChatMessage(session: Session, eventId: number, body: string): Promise<ChatMessage> {
+  const { message } = await call<{ message: ChatMessage }>("POST", `${CHAT_URL}/${eventId}/messages`, session.token, {
+    body,
+  });
+  return message;
+}
+
+export async function fetchChat(
+  session: Session,
+  eventId: number,
+): Promise<{ messages: ChatMessage[]; unreadCount: number }> {
+  return call("GET", `${CHAT_URL}/${eventId}/messages`, session.token);
+}
+
+export async function markChatRead(session: Session, eventId: number): Promise<void> {
+  await call("POST", `${CHAT_URL}/${eventId}/read`, session.token, {});
+}
+
+// ---- drafts -------------------------------------------------------------------------
+
+/** Organiser saves unfinished work (E2-4) — no validation, status Draft, outside the lifecycle. */
+export async function saveDraft(organiser: Session, details: Record<string, unknown>): Promise<EventRow> {
+  const { event } = await call<{ event: EventRow }>("POST", `${EVENTS_URL}/draft`, organiser.token, details);
+  return event;
+}
+
+export async function deleteDraft(organiser: Session, eventId: number): Promise<void> {
+  await call("DELETE", `${EVENTS_URL}/${eventId}/draft`, organiser.token);
+}
+
+// ---- public pages ---------------------------------------------------------------------
+
+/** What a signed-out visitor can see of events (no token). */
+export async function fetchPublicEvents(): Promise<{ id: number; name?: string }[]> {
+  const { events } = await call<{ events: { id: number; name?: string }[] }>("GET", `${EVENTS_URL}/public`, null);
+  return events;
 }

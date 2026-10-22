@@ -46,6 +46,10 @@ job before any test runs.
   API — the same way a real client would — so only the one UI flow a test
   actually cares about gets driven through the browser. Never click through
   a flow just to get into the state the test under test needs.
+- Rules that depend on time passing (a 72-hour hold lapsing, an event
+  having ended) use `support/database.ts`, which edits only the test's own
+  row as if time had passed. It works only when `backend/.env` points at a
+  local database, so those tests skip against the shared dev one.
 - `support/browser.ts` has thin, intent-named helpers (`logIn`, not a Page
   Object Model class hierarchy).
 - Every test creates its own data with a per-run random suffix
