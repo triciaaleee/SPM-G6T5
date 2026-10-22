@@ -358,10 +358,15 @@ export interface CatalogItem {
   availableStock: number;
 }
 
-export async function listEquipmentCatalog(session: Session): Promise<CatalogItem[]> {
+/**
+ * The catalog with its stock. Available stock is worked out for one day: today, or
+ * `date` (YYYY-MM-DD) when given. Stock reserved for an event only shows on the
+ * event's own day, so a test that reserves for a future date must ask for that date.
+ */
+export async function listEquipmentCatalog(session: Session, date?: string): Promise<CatalogItem[]> {
   const { equipmentCatalog } = await call<{ equipmentCatalog: CatalogItem[] }>(
     "GET",
-    EQUIPMENT_CATALOG_URL,
+    date ? `${EQUIPMENT_CATALOG_URL}?date=${encodeURIComponent(date)}` : EQUIPMENT_CATALOG_URL,
     session.token,
   );
   return equipmentCatalog;
@@ -719,8 +724,8 @@ export async function fetchEventEquipment(techSupport: Session, eventId: number)
 }
 
 /** One catalog item's current stock. */
-export async function catalogItem(session: Session, id: number): Promise<CatalogItem> {
-  const item = (await listEquipmentCatalog(session)).find((c) => c.id === id);
+export async function catalogItem(session: Session, id: number, date?: string): Promise<CatalogItem> {
+  const item = (await listEquipmentCatalog(session, date)).find((c) => c.id === id);
   if (!item) throw new Error(`catalog item ${id} not found`);
   return item;
 }
