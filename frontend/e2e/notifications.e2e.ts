@@ -47,6 +47,21 @@ test("Lead assigning a coordinator notifies that coordinator, visible in their f
     )
     .toBe(true);
 
+  // The organiser is told too (AGENTS.md §3, Unassigned -> Requested). By
+  // type, since they already have a request.submitted for this same event.
+  await expect
+    .poll(
+      async () =>
+        (await fetchMyNotifications(organiser)).some(
+          (n) => n.eventId === event.id && n.type === "coordinator.assigned",
+        ),
+      {
+        message: "waiting for the organiser's copy of coordinator.assigned",
+        timeout: 10_000,
+      },
+    )
+    .toBe(true);
+
   // No assertion on found.read: this coordinator is a shared seeded account
   // on the dev database, and anyone signed in as it who opens their
   // notification bell marks every notification read, this one included.

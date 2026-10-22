@@ -14,6 +14,7 @@ test.describe("Login lands every role on its own page", () => {
   test("organiser lands on the events list", async ({ page }) => {
     const session = await registerOrganiser("login-organiser");
     await logIn(page, session);
+    await expect(page).toHaveURL("/");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   });
 

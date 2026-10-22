@@ -13,7 +13,7 @@ import { landingPathPattern, signInThroughStorage } from "./support/browser";
 
 /**
  * A representative sweep of the router's role guard (frontend/src/router/
- * index.ts `beforeEach`): for every one of its 19 routes, one role that is
+ * index.ts `beforeEach`): for every route with a role restriction, one role
  * NOT permitted on it visits the URL directly, and the guard must redirect
  * them to their own landing route rather than showing the page, a blank
  * screen or a 403. There's no router unit test suite in this repo
@@ -22,7 +22,7 @@ import { landingPathPattern, signInThroughStorage } from "./support/browser";
  *
  * The guard logic itself is uniform (one `roles` check), so one wrong role
  * per route is enough to prove it actually fires in a real browser; this
- * isn't trying to cover all 7 roles x 19 routes.
+ * isn't trying to cover every role x route pair.
  *
  * /notifications has no role restriction (any signed-in role may visit it)
  * so it has nothing to sweep here.
@@ -57,6 +57,7 @@ const ROUTES: RouteCase[] = [
   { path: "/events/1/edit", wrongRole: "attendee" },
   { path: "/events/1", wrongRole: "venue_staff" },
   { path: "/coordinator", wrongRole: "attendee" },
+  { path: "/all-events", wrongRole: "organiser" },
   { path: "/venues", wrongRole: "attendee" },
   { path: "/venue-requests", wrongRole: "coordinator" },
   { path: "/venue-availability", wrongRole: "venue_staff" },
