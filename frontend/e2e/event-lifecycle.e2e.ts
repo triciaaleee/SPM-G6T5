@@ -32,6 +32,11 @@ test.describe("Event lifecycle happy path", () => {
   test("submit -> assign -> approve -> safety review -> confirm, each visible in the right place", async ({
     page,
   }) => {
+    // The climb to Confirmed runs a dozen real API calls, including a venue
+    // decision that queues behind other parallel tests' decisions for the same
+    // venue (venue-service's per-venue lock), so it needs more than the
+    // default 30s.
+    test.setTimeout(60_000);
     const organiser = await registerOrganiser("lifecycle-organiser");
     const coordinator = await signInAsCoordinator();
     const lead = await signInAsCoordinatorLead();

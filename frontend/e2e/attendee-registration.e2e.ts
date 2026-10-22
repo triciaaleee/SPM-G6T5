@@ -30,6 +30,11 @@ import { logIn } from "./support/browser";
  */
 
 test("attendee discovers a Confirmed, registration-open event and registers for it", async ({ page }) => {
+  // The climb to Confirmed runs a dozen real API calls, including a venue
+  // decision that queues behind other parallel tests' decisions for the same
+  // venue (venue-service's per-venue lock), so it needs more than the
+  // default 30s.
+  test.setTimeout(60_000);
   const organiser = await registerOrganiser("attendee-reg-organiser");
   const attendee = await registerAttendee("attendee-reg-attendee");
   const coordinator = await signInAsCoordinator();

@@ -65,7 +65,9 @@ test("coordinator requests a venue through the search page, then Venue Staff app
   await expect(queueCard).toBeVisible();
   await expect(queueCard.getByText(venue.name)).toBeVisible();
   await queueCard.getByRole("button", { name: "Approve", exact: true }).click();
-  await expect(page.getByText(/is approved/i)).toBeVisible();
+  // The decision waits its turn on venue-service's per-venue lock, which
+  // other parallel tests booking the same venue may be holding.
+  await expect(page.getByText(/is approved/i)).toBeVisible({ timeout: 15_000 });
 
   // Both sides now show Approved: the queue empties this row, and the
   // event's own panel updates — viewed as the coordinator, since
