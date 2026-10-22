@@ -110,17 +110,30 @@ const venues = computed(() => venueReadiness(props.venueBookings));
 const equipment = computed(() => equipmentReadiness(props.equipmentRequests));
 const ready = computed(() => isReadyForSafetyReview(props.venueBookings, props.equipmentRequests));
 
-const checklist = computed(() => [
-  { key: "venues", label: "Venues approved", ...venues.value },
-  { key: "equipment", label: "Equipment reserved", ...equipment.value },
-]);
+type CheckState = "done" | "action" | "pending";
 
-/** Under the Submit button: why it is disabled, or that it is ready. */
+function checkState(item: { done: boolean; needsAction: boolean }): CheckState {
+  if (item.done) return "done";
+  return item.needsAction ? "action" : "pending";
+}
+
+const CHECK_BADGE: Record<CheckState, string> = { done: "Done", action: "Needs action", pending: "Pending" };
+
+const checklist = computed(() =>
+  [
+    { key: "venues", label: "Venues approved", ...venues.value },
+    { key: "equipment", label: "Equipment reserved", ...equipment.value },
+  ].map((item) => ({ ...item, state: checkState(item) })),
+);
+
+/** Under the Submit button: what to resolve, what it is waiting on, or that the event locks once submitted. */
 const submitNote = computed(() => {
-  const review = "The event can't be edited while it is under review.";
-  if (!venues.value.done) return `Available once all venues are approved. ${review}`;
-  if (!equipment.value.done) return `Available once all requested equipment is reserved. ${review}`;
-  return `Ready to submit. ${review}`;
+  if (venues.value.needsAction && equipment.value.needsAction) return "Resolve the venue and equipment issues to submit.";
+  if (venues.value.needsAction) return "Resolve the venue issue to submit.";
+  if (equipment.value.needsAction) return "Resolve the equipment issue to submit.";
+  if (!venues.value.done) return "Available once all venues are approved.";
+  if (!equipment.value.done) return "Available once all requested equipment is reserved.";
+  return "The event can't be edited while it is under review.";
 });
 
 onMounted(async () => {
@@ -192,19 +205,21 @@ async function submit(): Promise<void> {
 
     <ul class="sr-checklist" data-testid="safety-checklist">
       <li v-for="item in checklist" :key="item.key" class="sr-check" :data-testid="`check-${item.key}`">
-        <span class="sr-check__mark" :class="{ 'sr-check__mark--done': item.done }" aria-hidden="true">
-          <svg v-if="item.done" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.5"
+        <span class="sr-check__mark" :class="`sr-check__mark--${item.state}`" aria-hidden="true">
+          <svg v-if="item.state === 'done'" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.5"
             stroke-linecap="round" stroke-linejoin="round">
             <path d="m5 10.5 3.25 3.25L15 7" />
+          </svg>
+          <svg v-else-if="item.state === 'action'" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 9v4m0 3.5h.01M10.3 3.9 2.4 17.6a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
           </svg>
         </span>
         <div class="sr-check__text">
           <p class="sr-check__label">{{ item.label }}</p>
           <p class="sr-check__caption">{{ item.caption }}</p>
         </div>
-        <span class="sr-badge" :class="item.done ? 'sr-badge--done' : 'sr-badge--pending'">
-          {{ item.done ? "Done" : "Pending" }}
-        </span>
+        <span class="sr-badge" :class="`sr-badge--${item.state}`">{{ CHECK_BADGE[item.state] }}</span>
       </li>
     </ul>
 
@@ -334,6 +349,23 @@ async function submit(): Promise<void> {
   background: var(--color-success-700);
 }
 
+/* Waiting on someone else: a hollow amber ring. */
+.sr-check__mark--pending {
+  border-color: var(--color-warning-400);
+}
+
+/* Something went wrong: the ring gives way to a bare warning triangle. */
+.sr-check__mark--action {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-warning-900);
+}
+
+.sr-check__mark--action svg {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
 .sr-check__mark svg {
   width: 1rem;
   height: 1rem;
@@ -376,6 +408,18 @@ async function submit(): Promise<void> {
 .sr-badge--done {
   background: var(--color-success-200);
   color: var(--color-success-700);
+}
+
+.sr-badge--action {
+  background: var(--color-warning-200);
+  color: var(--color-warning-900);
+}
+
+/* Not ready yet: the Submit button reads as an empty, outlined field rather than a faded purple one. */
+.sr-panel :deep(.btn:disabled) {
+  background: var(--color-base-white);
+  border-color: var(--color-grey-200);
+  color: var(--color-grey-300);
 }
 
 .sr-note {

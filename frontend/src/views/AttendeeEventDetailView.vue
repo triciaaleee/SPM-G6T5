@@ -196,7 +196,7 @@ onMounted(async () => {
 
     <template v-else>
       <!-- The event's thumbnail as a full-width banner, same picture as on its cards. -->
-      <img :src="eventThumbnail(event.id)" alt="" class="banner" />
+      <img :src="eventThumbnail(event.id)" alt="" class="banner" decoding="async" />
 
       <div class="title-row">
         <div class="title-block">

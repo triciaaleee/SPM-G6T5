@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import EventCard, { type CardFact } from "../components/ui/EventCard.vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { CheckCircleIcon, CheckIcon, ChevronDownIcon, ClockIcon, ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
+import DataTable from "../components/ui/DataTable.vue";
 import { fetchMyEvents, getCurrentUser, type EventSummary } from "../lib/eventsApi";
 import { statusBadgeClass, statusLabel } from "../lib/eventStatus";
-import { eventThumbnail, formatCardDate, formatCardTimeRange } from "../lib/attendeeEvents";
+import { formatCardDate, formatCardTimeRange } from "../lib/attendeeEvents";
+import { hasEventEnded } from "../lib/eventTiming";
 
 /**
  * One list for two pages: "mine" is a coordinator's own workload (/coordinator),
@@ -16,63 +18,83 @@ const events = ref<EventSummary[]>([]);
 const loading = ref(true);
 const errorMessage = ref<string | null>(null);
 const userId = ref<string>("");
-const role = ref<string>("");
 const viewMode = computed(() => props.scope);
 
-interface StatusGroup {
+const TABLE_COLUMN_WIDTHS = "minmax(0, 3fr) minmax(0, 2fr) minmax(0, 1.5fr) minmax(0, 1.5fr) minmax(0, 1.5fr) 24px";
+
+/** Completed only happens after the event ends (AGENTS.md), but a Rejected/Cancelled
+ * request is dead on arrival — it belongs in Past even with a future event date. */
+function isClosedStatus(status: string): boolean {
+  return status === "Completed" || status === "Rejected" || status === "Cancelled";
+}
+
+/** Upcoming tab only, scope="mine" only: every status buckets into exactly one of
+ * these three — who acts next. Matches the design's status-to-group mapping, except
+ * Requested (here, in Needs your action) — the design's own doc flags excluding it
+ * as unconfirmed, and it conflicts with this codebase's needsAction() precedent. */
+const GROUP_DEFS: { key: string; label: string; statuses: string[] }[] = [
+  { key: "action", label: "Needs your action", statuses: ["Requested", "Needs Review", "Planning"] },
+  { key: "wait", label: "Waiting on others", statuses: ["Clarification Requested", "Safety Review"] },
+  { key: "ontrack", label: "On track", statuses: ["Confirmed"] },
+];
+
+interface StatusOption {
   key: string;
   label: string;
   statuses: string[];
 }
 
-// "Unassigned" isn't a coordinator's to act on — the Lead assigns it
-// (E2-13) — so it's its own group, seen only under "All events".
-const STATUS_GROUPS: StatusGroup[] = [
-  { key: "awaiting-review", label: "Awaiting Review",        statuses: ["Requested"] },
-  { key: "unassigned",    label: "Unassigned",              statuses: ["Unassigned"] },
+// "Unassigned" isn't a coordinator's to act on — the Lead assigns it (E2-13).
+const STATUS_OPTIONS: StatusOption[] = [
+  { key: "awaiting-review", label: "Awaiting Review", statuses: ["Requested"] },
+  { key: "unassigned", label: "Unassigned", statuses: ["Unassigned"] },
   { key: "clarification", label: "Clarification Requested", statuses: ["Clarification Requested"] },
-  { key: "planning",      label: "Planning",                statuses: ["Planning"] },
-  { key: "safety-review", label: "Safety Review",           statuses: ["Safety Review"] },
-  { key: "confirmed",     label: "Confirmed",               statuses: ["Confirmed"] },
-  { key: "needs-review",  label: "Needs Review",            statuses: ["Needs Review"] },
-  { key: "completed",     label: "Completed",               statuses: ["Completed"] },
-  { key: "rejected",      label: "Rejected",                statuses: ["Rejected"] },
-  { key: "cancelled",     label: "Cancelled",               statuses: ["Cancelled"] },
+  { key: "planning", label: "Planning", statuses: ["Planning"] },
+  { key: "safety-review", label: "Safety Review", statuses: ["Safety Review"] },
+  { key: "confirmed", label: "Confirmed", statuses: ["Confirmed"] },
+  { key: "needs-review", label: "Needs Review", statuses: ["Needs Review"] },
+  { key: "completed", label: "Completed", statuses: ["Completed"] },
+  { key: "rejected", label: "Rejected", statuses: ["Rejected"] },
+  { key: "cancelled", label: "Cancelled", statuses: ["Cancelled"] },
 ];
 
-/**
- * E3-5 AC1: end states (AGENTS.md §3) leave the coordinator's active list.
- * They stay under "All" and their own status tab, so the record isn't lost.
- */
-const CLOSED_STATUSES = new Set(["Completed", "Rejected", "Cancelled"]);
-
-// Statuses that wait on the coordinator: flagged with an accent bar. Unassigned is the Lead's to act on.
-const NEEDS_ACTION_STATUSES = ["Requested", "Needs Review"];
-
-/** Only the assigned coordinator is waited on, so the Lead and other coordinators' events get no flag. */
-function needsAction(event: EventSummary): boolean {
-  return (
-    role.value === "coordinator" && event.coordinator_id === userId.value && NEEDS_ACTION_STATUSES.includes(event.status)
-  );
+function eventDetails(event: EventSummary): Record<string, unknown> {
+  return event.submitted_details as Record<string, unknown>;
 }
 
 function eventProposedDate(event: EventSummary): string {
-  return ((event.submitted_details as Record<string, unknown>)?.proposedDate as string) ?? event.created_at;
+  return (eventDetails(event)?.proposedDate as string) ?? event.created_at;
 }
 
 function eventName(event: EventSummary): string {
-  const details = event.submitted_details as Record<string, unknown>;
+  const details = eventDetails(event);
   return (details?.name as string) || `Event #${event.id}`;
 }
 
-/** Date and time each get their own line on the card, as on the organiser's list. */
-function cardFacts(event: EventSummary): CardFact[] {
-  const details = event.submitted_details as Record<string, string | undefined>;
-  return [
-    { icon: "calendar", text: formatCardDate(details?.proposedDate) },
-    { icon: "clock", text: formatCardTimeRange(details?.startTime, details?.endTime) },
-  ];
+function eventDateLabel(event: EventSummary): string {
+  return formatCardDate(eventDetails(event)?.proposedDate as string | undefined);
 }
+
+function eventTimeLabel(event: EventSummary): string {
+  const details = eventDetails(event);
+  return formatCardTimeRange(details?.startTime as string | undefined, details?.endTime as string | undefined);
+}
+
+function personName(event: EventSummary): string {
+  if (viewMode.value === "all") return event.coordinator?.name ?? "Unassigned";
+  return event.organiser?.name ?? "Unknown";
+}
+
+// Date and time, and the organiser/coordinator, are their own columns — the person
+// column's header follows which name it holds (organiser for "mine", coordinator for "all").
+const TABLE_COLUMNS = computed(() => [
+  { key: "event", label: "Event" },
+  { key: "person", label: viewMode.value === "all" ? "Coordinator" : "Requested by" },
+  { key: "date", label: "Date" },
+  { key: "time", label: "Time" },
+  { key: "status", label: "Status" },
+  { key: "chevron", label: "" },
+]);
 
 /** E1-8 AC4: "My events" is only what's assigned to this coordinator. */
 const visibleEvents = computed(() => {
@@ -82,59 +104,179 @@ const visibleEvents = computed(() => {
   return events.value;
 });
 
-const groupedEvents = computed(() =>
-  STATUS_GROUPS.map((group) => ({
+// Upcoming/Past tabs, mainly by the event's own date. For "mine" only, a dead
+// request (Rejected/Cancelled) also counts as Past even before its event date.
+const timingTab = ref<"upcoming" | "past">("upcoming");
+
+function isPast(event: EventSummary): boolean {
+  if (hasEventEnded(eventDetails(event))) return true;
+  return viewMode.value === "mine" && isClosedStatus(event.status);
+}
+
+const upcomingEvents = computed(() => visibleEvents.value.filter((e) => !isPast(e)));
+const pastEvents = computed(() => visibleEvents.value.filter((e) => isPast(e)));
+
+const timingTabs = computed(() => [
+  { key: "upcoming" as const, label: "Upcoming", count: upcomingEvents.value.length },
+  { key: "past" as const, label: "Past", count: pastEvents.value.length },
+]);
+
+// Status dropdown: narrows whichever timing tab is active. "All statuses" (empty key) clears it.
+const ALL_STATUSES_KEY = "";
+const statusFilter = ref<string>(ALL_STATUSES_KEY);
+
+// Quick-filter chips: narrows by who-acts-next group instead of one status. "" = the "All" chip.
+// Only one of chip/dropdown narrows at a time — picking one resets the other, so they never contradict.
+const ALL_GROUPS_KEY = "";
+const groupFilter = ref<string>(ALL_GROUPS_KEY);
+
+function selectStatusFilter(key: string): void {
+  statusFilter.value = key;
+  groupFilter.value = ALL_GROUPS_KEY;
+}
+
+function selectGroupFilter(key: string): void {
+  groupFilter.value = key;
+  statusFilter.value = ALL_STATUSES_KEY;
+}
+
+// Status popover: counts always reflect the whole active tab (like the chips), and an
+// option with no events in it is left out, same as "All statuses" never changes.
+const statusOptionCounts = computed(() =>
+  STATUS_OPTIONS.map((option) => ({
+    ...option,
+    count: timingFilteredEvents.value.filter((e) => option.statuses.includes(e.status)).length,
+  })).filter((option) => option.count > 0),
+);
+
+const totalStatusCount = computed(() => timingFilteredEvents.value.length);
+
+const STATUS_GROUP_ICONS: Record<string, typeof ExclamationTriangleIcon> = {
+  action: ExclamationTriangleIcon,
+  wait: ClockIcon,
+  ontrack: CheckCircleIcon,
+};
+
+/** Grouped sections (with icons) only where the chips/inline headers already group by
+ * who-acts-next; otherwise one flat list, same options just without section labels. */
+const groupedStatusSections = computed(() => {
+  if (!(viewMode.value === "mine" && timingTab.value === "upcoming")) return null;
+  return GROUP_DEFS.map((group) => ({
+    key: group.key,
+    label: group.label,
+    icon: STATUS_GROUP_ICONS[group.key],
+    options: statusOptionCounts.value.filter((o) => group.statuses.includes(o.statuses[0])),
+  })).filter((section) => section.options.length > 0);
+});
+
+const statusDropdownOpen = ref(false);
+const statusFilterRoot = ref<HTMLElement | null>(null);
+
+const statusFilterTriggerLabel = computed(() => {
+  if (statusFilter.value === ALL_STATUSES_KEY) return `All statuses (${totalStatusCount.value})`;
+  const option = statusOptionCounts.value.find((o) => o.key === statusFilter.value);
+  return option ? `${option.label} (${option.count})` : `All statuses (${totalStatusCount.value})`;
+});
+
+function chooseStatus(key: string): void {
+  selectStatusFilter(key);
+  statusDropdownOpen.value = false;
+}
+
+function closeStatusDropdown(returnFocus = false): void {
+  statusDropdownOpen.value = false;
+  if (returnFocus) (statusFilterRoot.value?.querySelector(".status-filter__trigger") as HTMLElement | null)?.focus();
+}
+
+function onStatusFilterPointerDown(e: PointerEvent): void {
+  if (statusFilterRoot.value && !statusFilterRoot.value.contains(e.target as Node)) closeStatusDropdown();
+}
+
+function onStatusFilterKeydown(e: KeyboardEvent): void {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    closeStatusDropdown(true);
+  }
+}
+
+watch(statusDropdownOpen, (isOpen) => {
+  if (isOpen) {
+    document.addEventListener("pointerdown", onStatusFilterPointerDown);
+  } else {
+    document.removeEventListener("pointerdown", onStatusFilterPointerDown);
+  }
+});
+
+onBeforeUnmount(() => document.removeEventListener("pointerdown", onStatusFilterPointerDown));
+
+// Chip counts always reflect the whole Upcoming tab, so they don't shift as a chip/status is picked.
+const chipOptions = computed(() => [
+  { key: ALL_GROUPS_KEY, label: "All", count: upcomingEvents.value.length },
+  ...GROUP_DEFS.map((group) => ({
+    key: group.key,
+    label: group.label,
+    count: upcomingEvents.value.filter((e) => group.statuses.includes(e.status)).length,
+  })),
+]);
+
+const showChips = computed(() => viewMode.value === "mine" && timingTab.value === "upcoming");
+
+const timingFilteredEvents = computed(() =>
+  (timingTab.value === "upcoming" ? upcomingEvents.value : pastEvents.value),
+);
+
+const shownEvents = computed(() => {
+  const sorted = [...timingFilteredEvents.value].sort((a, b) => {
+    const da = eventProposedDate(a);
+    const db = eventProposedDate(b);
+    return timingTab.value === "upcoming" ? (da < db ? -1 : da > db ? 1 : 0) : (da > db ? -1 : da < db ? 1 : 0);
+  });
+
+  const group = GROUP_DEFS.find((g) => g.key === groupFilter.value);
+  if (group) return sorted.filter((e) => group.statuses.includes(e.status));
+
+  const option = STATUS_OPTIONS.find((o) => o.key === statusFilter.value);
+  if (option) return sorted.filter((e) => option.statuses.includes(e.status));
+
+  return sorted;
+});
+
+/** Grouped by who-acts-next only for the coordinator's own Upcoming list with
+ * neither narrowing applied — any narrower view already shares one status/meaning. */
+const showGroups = computed(
+  () =>
+    viewMode.value === "mine" &&
+    timingTab.value === "upcoming" &&
+    statusFilter.value === ALL_STATUSES_KEY &&
+    groupFilter.value === ALL_GROUPS_KEY,
+);
+
+const groupedShownEvents = computed(() =>
+  GROUP_DEFS.map((group) => ({
     ...group,
-    events: visibleEvents.value
-      .filter((e) => group.statuses.includes(e.status))
-      .sort((a, b) => {
-        const da = eventProposedDate(a);
-        const db = eventProposedDate(b);
-        return da < db ? -1 : da > db ? 1 : 0;
-      }),
+    events: shownEvents.value.filter((e) => group.statuses.includes(e.status)),
   })).filter((g) => g.events.length > 0),
 );
 
-// Status tabs: "active" (the default) shows every event that isn't closed, "all" shows
-// every event, both in one flat list (status-priority order, then date); a group key
-// shows only that bucket. A tab whose bucket empties (e.g. after switching My/All)
-// falls back to "active".
-const activeTab = ref<string>("active");
+// Grouped: events reordered group-by-group (each already date-sorted) so DataTable's
+// rowGroup can tell where one group ends and the next begins. Ungrouped: unchanged order.
+const tableRows = computed(() => (showGroups.value ? groupedShownEvents.value.flatMap((g) => g.events) : shownEvents.value));
 
-function isClosedGroup(group: StatusGroup): boolean {
-  return group.statuses.every((status) => CLOSED_STATUSES.has(status));
+function groupInfoFor(event: EventSummary) {
+  if (!showGroups.value) return null;
+  const group = groupedShownEvents.value.find((g) => g.statuses.includes(event.status));
+  return group ? { key: group.key, label: group.label, count: group.events.length } : null;
 }
 
-const activeEventCount = computed(
-  () => visibleEvents.value.filter((e) => !CLOSED_STATUSES.has(e.status)).length,
-);
-
-const tabs = computed(() => [
-  { key: "active", label: "Active", count: activeEventCount.value },
-  { key: "all", label: "All", count: visibleEvents.value.length },
-  ...groupedEvents.value.map((g) => ({ key: g.key, label: g.label, count: g.events.length })),
-]);
-
-const currentTab = computed(() =>
-  tabs.value.some((t) => t.key === activeTab.value) ? activeTab.value : "active",
-);
-
-const shownEvents = computed(() =>
-  groupedEvents.value
-    .filter((g) => {
-      if (currentTab.value === "all") return true;
-      if (currentTab.value === "active") return !isClosedGroup(g);
-      return g.key === currentTab.value;
-    })
-    .flatMap((g) => g.events),
-);
+function rowClass(event: EventSummary) {
+  return { "row--needs-review": event.status === "Needs Review" };
+}
 
 onMounted(async () => {
   try {
     const [eventsData, user] = await Promise.all([fetchMyEvents(), getCurrentUser()]);
     events.value = eventsData;
     userId.value = user.id;
-    role.value = user.role ?? "";
   } catch {
     errorMessage.value = "We couldn't load your events. Please try again.";
   } finally {
@@ -149,8 +291,7 @@ onMounted(async () => {
     Desktop (12-col): outer container col 1-12, grid-desktop-margin 80px; content col 1-12, full width.
     Tablet (6-col):   content col 1-6, full width, grid-tablet-margin 32px.
     Mobile (4-col):   content col 1-4, full width, grid-mobile-margin 6px.
-    Status tabs: tab row spans the full content width (12 / 6 / 4 cols) and wraps onto a second line on small screens.
-    Nested grid: card list uses a local 12-col grid (desktop, 3 cards per row), 6-col (tablet), 4-col (mobile).
+    Timing tabs span the full content width; the status dropdown sits beside them.
   -->
   <div class="page">
     <div class="content">
@@ -159,7 +300,7 @@ onMounted(async () => {
         <div>
           <h1 class="h2">{{ viewMode === "mine" ? "My events" : "All events" }}</h1>
           <p class="subheading">
-            {{ viewMode === "mine" ? "Your assigned events. Use the tabs to filter by status." : "Every event in the system." }}
+            {{ viewMode === "mine" ? "Your assigned events. Use the tabs and filter to narrow the list." : "Every event in the system." }}
           </p>
         </div>
       </div>
@@ -171,44 +312,156 @@ onMounted(async () => {
       </p>
 
       <template v-else>
-        <div class="tabs" role="tablist" aria-label="Filter events by status">
+        <div class="toolbar">
+          <div class="tabs" role="tablist" aria-label="Filter events by timing">
+            <button
+              v-for="tab in timingTabs"
+              :id="`coordinator-tab-${tab.key}`"
+              :key="tab.key"
+              type="button"
+              role="tab"
+              class="tab"
+              :class="{ 'tab--active': timingTab === tab.key }"
+              :aria-selected="timingTab === tab.key"
+              aria-controls="coordinator-panel"
+              @click="timingTab = tab.key"
+            >
+              {{ tab.label }}
+              <span class="tab__count">{{ tab.count }}</span>
+            </button>
+          </div>
+
+          <div ref="statusFilterRoot" class="status-filter" @keydown="onStatusFilterKeydown">
+            <span id="status-filter-label" class="status-filter__label">Status</span>
+            <button
+              id="status-filter"
+              type="button"
+              class="status-filter__trigger"
+              :class="{ 'status-filter__trigger--open': statusDropdownOpen }"
+              aria-haspopup="listbox"
+              :aria-expanded="statusDropdownOpen"
+              aria-labelledby="status-filter-label"
+              @click="statusDropdownOpen = !statusDropdownOpen"
+            >
+              <span>{{ statusFilterTriggerLabel }}</span>
+              <ChevronDownIcon class="status-filter__chevron" aria-hidden="true" />
+            </button>
+
+            <div v-if="statusDropdownOpen" class="status-filter__popover" role="listbox" aria-label="Status">
+              <button
+                type="button"
+                role="option"
+                class="status-filter__option"
+                :class="{ 'status-filter__option--selected': statusFilter === ALL_STATUSES_KEY }"
+                :aria-selected="statusFilter === ALL_STATUSES_KEY"
+                @click="chooseStatus(ALL_STATUSES_KEY)"
+              >
+                <span class="status-filter__option-label">
+                  <CheckIcon v-if="statusFilter === ALL_STATUSES_KEY" class="status-filter__check" aria-hidden="true" />
+                  All statuses
+                </span>
+                <span>{{ totalStatusCount }}</span>
+              </button>
+
+              <template v-if="groupedStatusSections">
+                <template v-for="section in groupedStatusSections" :key="section.key">
+                  <div class="status-filter__section-label" :class="`status-filter__section-label--${section.key}`">
+                    <component :is="section.icon" class="status-filter__section-icon" aria-hidden="true" />
+                    {{ section.label.toUpperCase() }}
+                  </div>
+                  <button
+                    v-for="option in section.options"
+                    :key="option.key"
+                    type="button"
+                    role="option"
+                    class="status-filter__option status-filter__option--indented"
+                    :class="{ 'status-filter__option--selected': statusFilter === option.key }"
+                    :aria-selected="statusFilter === option.key"
+                    @click="chooseStatus(option.key)"
+                  >
+                    <span>{{ option.label }}</span>
+                    <span>{{ option.count }}</span>
+                  </button>
+                </template>
+              </template>
+              <template v-else>
+                <button
+                  v-for="option in statusOptionCounts"
+                  :key="option.key"
+                  type="button"
+                  role="option"
+                  class="status-filter__option"
+                  :class="{ 'status-filter__option--selected': statusFilter === option.key }"
+                  :aria-selected="statusFilter === option.key"
+                  @click="chooseStatus(option.key)"
+                >
+                  <span>{{ option.label }}</span>
+                  <span>{{ option.count }}</span>
+                </button>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="showChips" role="group" aria-label="Quick filter" class="chips">
           <button
-            v-for="tab in tabs"
-            :id="`coordinator-tab-${tab.key}`"
-            :key="tab.key"
+            v-for="chip in chipOptions"
+            :key="chip.key"
             type="button"
-            role="tab"
-            class="tab"
-            :class="{ 'tab--active': currentTab === tab.key }"
-            :aria-selected="currentTab === tab.key"
-            aria-controls="coordinator-panel"
-            @click="activeTab = tab.key"
+            class="chip"
+            :class="{ 'chip--active': groupFilter === chip.key }"
+            :aria-pressed="groupFilter === chip.key"
+            @click="selectGroupFilter(chip.key)"
           >
-            {{ tab.label }}
-            <span class="tab__count">{{ tab.count }}</span>
+            {{ chip.label }}
+            <span class="chip__count">{{ chip.count }}</span>
           </button>
         </div>
 
-        <div id="coordinator-panel" role="tabpanel" :aria-labelledby="`coordinator-tab-${currentTab}`">
+        <div id="coordinator-panel" role="tabpanel" :aria-labelledby="`coordinator-tab-${timingTab}`">
           <p v-if="shownEvents.length === 0" class="body-default muted">
-            No active events. Completed, rejected and cancelled events are under All.
+            No events match this tab and filter.
           </p>
-          <div v-else class="card-grid">
-            <div v-for="event in shownEvents" :key="event.id" class="card-cell">
-              <EventCard
-                :to="{ name: 'event-detail', params: { id: event.id } }"
-                :thumbnail="eventThumbnail(event.id)"
-                :title="eventName(event)"
-                :status-label="statusLabel(event.status)"
-                :status-class="statusBadgeClass(event.status)"
-                :facts="cardFacts(event)"
-                :person-label="viewMode === 'all' ? 'Coordinator' : 'Requested by'"
-                :person-name="viewMode === 'all' ? event.coordinator?.name : event.organiser?.name"
-                :person-empty="viewMode === 'all' ? 'Unassigned' : 'Unknown'"
-                :class="{ 'event-card--needs-action': needsAction(event) }"
-              />
-            </div>
-          </div>
+
+          <DataTable
+            v-else
+            class="events-table"
+            :columns="TABLE_COLUMNS"
+            :column-widths="TABLE_COLUMN_WIDTHS"
+            :rows="tableRows"
+            :row-key="(event: EventSummary) => event.id"
+            :row-to="(event: EventSummary) => ({ name: 'event-detail', params: { id: event.id } })"
+            :row-class="rowClass"
+            :row-group="groupInfoFor"
+          >
+            <template #cell-event="{ row: event }">
+              <div class="cell-event__title">{{ eventName(event) }}</div>
+            </template>
+            <template #cell-person="{ row: event }">
+              <span class="cell-person">{{ personName(event) }}</span>
+            </template>
+            <template #cell-date="{ row: event }">
+              <span class="cell-date">{{ eventDateLabel(event) }}</span>
+            </template>
+            <template #cell-time="{ row: event }">
+              <span class="cell-time">{{ eventTimeLabel(event) }}</span>
+            </template>
+            <template #cell-status="{ row: event }">
+              <span class="status-badge" :class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</span>
+            </template>
+            <template #cell-chevron>
+              <svg class="row-chevron" aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none"
+                stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6 3.5L10.5 8 6 12.5" />
+              </svg>
+            </template>
+            <template #group-header="{ group }">
+              <div class="group-header" :class="`group-header--${group.key}`">
+                <span class="group-header__title">{{ group.label }}</span>
+                <span class="group-header__badge">{{ group.count }}</span>
+              </div>
+            </template>
+          </DataTable>
         </div>
       </template>
 
@@ -281,11 +534,6 @@ onMounted(async () => {
   margin-top: var(--spacing-32);
 }
 
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
   color: var(--color-grey-500);
 }
@@ -294,13 +542,22 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
-/* Status tabs (same pattern as AttendeeEventsView) */
+/* Toolbar: timing tabs on the left, status dropdown on the right */
+
+.toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--spacing-16);
+  margin-top: var(--spacing-32);
+  flex-wrap: wrap;
+}
 
 .tabs {
   display: flex;
   gap: var(--spacing-32);
-  margin-top: var(--spacing-32);
   border-bottom: 1px solid var(--color-grey-100);
+  flex: 1 1 auto;
   flex-wrap: wrap;
 }
 
@@ -348,49 +605,312 @@ onMounted(async () => {
   text-align: center;
 }
 
-/* Card grid */
+.status-filter {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
 
-.card-grid {
+.status-filter__label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+  color: var(--color-grey-500);
+}
+
+.status-filter__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-8);
+  min-width: 220px;
+  min-height: 44px;
+  padding: 0 var(--spacing-12);
+  border: 1px solid var(--color-grey-300);
+  border-radius: var(--radius-sm);
+  background: var(--color-base-white);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  color: var(--color-grey-700);
+  cursor: pointer;
+}
+
+.status-filter__trigger--open {
+  border-color: var(--ring-brand);
+  box-shadow: 0 0 0 4px var(--color-purple-alpha-24, rgba(112, 30, 194, 0.24));
+}
+
+.status-filter__trigger:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.status-filter__chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--color-grey-700);
+}
+
+.status-filter__popover {
+  position: absolute;
+  top: calc(100% + var(--spacing-8));
+  right: 0;
+  z-index: 20;
+  width: 340px;
+  box-sizing: border-box;
+  padding: var(--spacing-8);
+  background: var(--color-base-white);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover);
+}
+
+.status-filter__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 0 var(--spacing-12);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  color: var(--color-grey-900);
+  cursor: pointer;
+  text-align: left;
+}
+
+.status-filter__option:hover {
+  background: var(--color-grey-50);
+}
+
+.status-filter__option--indented {
+  padding-left: var(--spacing-32);
+  color: var(--color-grey-900);
+}
+
+.status-filter__option span:last-child {
+  color: var(--color-grey-500);
+}
+
+.status-filter__option--selected {
+  background: var(--color-purple-100);
+  color: var(--color-purple-800);
+  font-weight: 700;
+}
+
+.status-filter__option--selected span:last-child {
+  color: var(--color-purple-800);
+}
+
+.status-filter__option-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+}
+
+.status-filter__check {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--color-purple-800);
+}
+
+.status-filter__section-label {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  padding: var(--spacing-12) var(--spacing-12) var(--spacing-4);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+}
+
+.status-filter__section-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.status-filter__section-label--action {
+  color: var(--color-warning-900);
+}
+
+.status-filter__section-label--wait {
+  color: var(--color-grey-700);
+}
+
+.status-filter__section-label--ontrack {
+  color: var(--color-success-700);
+}
+
+/* Quick-filter chips: My events, Upcoming tab only. Same "Selected" treatment as
+   components/venues/FilterChip.vue's active state. */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-8);
+  margin-top: var(--spacing-16);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  min-height: 40px;
+  padding: 0 var(--spacing-16);
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-full);
+  background: var(--color-base-white);
+  color: var(--color-grey-700);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--color-grey-75);
+  color: var(--color-grey-800);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.chip--active,
+.chip--active:hover {
+  background: var(--color-purple-100);
+  border-color: var(--color-purple-300);
+  color: var(--color-purple-800);
+}
+
+.chip__count {
+  padding: 2px var(--spacing-6);
+  border-radius: var(--radius-full);
+  background: var(--color-grey-100);
+  color: var(--color-grey-600);
+  font-size: 0.75rem;
+  min-width: 20px;
+  text-align: center;
+}
+
+.chip--active .chip__count {
+  background: var(--color-base-white);
+  color: var(--color-purple-800);
+}
+
+/* Group dividers: "who acts next", Upcoming tab only, My events only, no status
+   narrowed — rendered inline inside the table (DataTable's group-header slot),
+   below the shared Event/Date/Status column header, not a box of their own. */
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+  padding: var(--spacing-12) var(--spacing-20);
+}
+
+.group-header__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+}
+
+.group-header__badge {
+  padding: 2px var(--spacing-8);
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+}
+
+.group-header--action {
+  background: var(--color-warning-100);
+}
+.group-header--action .group-header__badge {
+  background: var(--color-warning-900);
+  color: var(--color-base-white);
+}
+
+.group-header--wait {
+  background: var(--color-grey-50);
+}
+.group-header--wait .group-header__badge {
+  background: var(--color-grey-700);
+  color: var(--color-base-white);
+}
+
+.group-header--ontrack {
+  background: var(--color-success-100);
+}
+.group-header--ontrack .group-header__badge {
+  background: var(--color-success-700);
+  color: var(--color-base-white);
+}
+
+/* Table */
+
+.events-table {
   margin-top: var(--spacing-32);
-  display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  gap: var(--grid-desktop-gutter);
-  align-content: start;
+  width: 100%;
 }
 
-@media (max-width: 1024px) {
-  .card-grid {
-    grid-template-columns: repeat(6, 1fr);
-  }
+.row-chevron {
+  color: var(--color-grey-500);
 }
 
-@media (max-width: 640px) {
-  .card-grid {
-    grid-template-columns: repeat(4, 1fr);
-  }
+.cell-event__title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-grey-900);
 }
 
-/* Each card sits in a cell that carries the 12/6/4-column spans: 3 per row on desktop, 2 on tablet, 1 on mobile. */
-.card-cell {
-  grid-column: span 4;
+.status-badge {
+  display: inline-block;
+  padding: var(--spacing-4) var(--spacing-8);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
 }
 
-@media (max-width: 1024px) {
-  .card-cell {
-    grid-column: span 3;
-  }
+.status-success {
+  background: var(--color-success-200);
+  color: var(--color-success-700);
 }
 
-@media (max-width: 640px) {
-  .card-cell {
-    grid-column: span 4;
-  }
+.status-warning {
+  background: var(--color-warning-100);
+  color: var(--color-warning-900);
 }
 
-/* Needs the coordinator's action: the shared card with a thick warning-coloured border (kept on hover too). */
-.event-card.event-card--needs-action,
-.event-card.event-card--needs-action:hover {
-  border-width: var(--spacing-4);
-  border-color: var(--color-warning-300);
+.status-error {
+  background: var(--color-error-200);
+  color: var(--color-error-600);
+}
+
+.status-info {
+  background: var(--color-blue-200);
+  color: var(--color-blue-800);
+}
+
+/* Needs Review: yellow highlight, so the row stands out at a glance */
+:deep(.row--needs-review) {
+  background: var(--color-warning-100);
+  border-left: 3px solid var(--color-warning-300);
+}
+
+:deep(.row--needs-review:hover) {
+  background: var(--color-warning-100);
 }
 </style>

@@ -23,16 +23,16 @@ function request(items: EquipmentItem[], status = "Requested"): EquipmentRequest
 
 describe("venueReadiness", () => {
   it("is checking while the bookings load", () => {
-    expect(venueReadiness(undefined)).toEqual({ done: false, caption: "Checking…" });
+    expect(venueReadiness(undefined)).toEqual({ done: false, caption: "Checking…", needsAction: false });
   });
 
   it("says no venue has been requested yet", () => {
-    expect(venueReadiness([])).toEqual({ done: false, caption: "No venue requested yet" });
+    expect(venueReadiness([])).toEqual({ done: false, caption: "No venue requested yet", needsAction: false });
   });
 
   it("counts approved against all live bookings and names who is still to decide", () => {
     const result = venueReadiness([booking("Approved", 1), booking("Requested", 2), booking("Requested", 3)]);
-    expect(result).toEqual({ done: false, caption: "1 of 3 approved, 2 awaiting Venue Staff" });
+    expect(result).toEqual({ done: false, caption: "1 of 3 approved, 2 awaiting Venue Staff", needsAction: false });
   });
 
   it("mentions holds and replacements", () => {
@@ -49,7 +49,7 @@ describe("venueReadiness", () => {
       booking("Withdrawn", 3),
       booking("Expired", 4),
     ]);
-    expect(result).toEqual({ done: true, caption: "1 of 1 approved" });
+    expect(result).toEqual({ done: true, caption: "1 of 1 approved", needsAction: false });
   });
 
   it("is not done when only unsettled bookings remain", () => {
@@ -58,24 +58,45 @@ describe("venueReadiness", () => {
   });
 });
 
+describe("needs action", () => {
+  it("flags a Replacement Required venue booking", () => {
+    const result = venueReadiness([booking("Approved", 1), booking("Replacement Required", 2)]);
+    expect(result).toMatchObject({ done: false, needsAction: true });
+  });
+
+  it("flags equipment whose reservation no longer holds, naming it", () => {
+    const flagged = { ...item(1, 1), equipmentType: "Chair", reservationFlag: { flagged: true, reason: "Damaged" } };
+    expect(equipmentReadiness([request([flagged])])).toEqual({
+      done: false,
+      caption: "A reserved chair is unavailable.",
+      needsAction: true,
+    });
+  });
+
+  it("is not needs-action while merely waiting", () => {
+    expect(venueReadiness([booking("Approved", 1), booking("Requested", 2)]).needsAction).toBe(false);
+    expect(equipmentReadiness([request([item(2, 1)])]).needsAction).toBe(false);
+  });
+});
+
 describe("equipmentReadiness", () => {
   it("is checking while the requests load", () => {
-    expect(equipmentReadiness(undefined)).toEqual({ done: false, caption: "Checking…" });
+    expect(equipmentReadiness(undefined)).toEqual({ done: false, caption: "Checking…", needsAction: false });
   });
 
   it("has nothing outstanding when no equipment was requested, or the request was cancelled", () => {
-    expect(equipmentReadiness([])).toEqual({ done: true, caption: "No equipment requested" });
+    expect(equipmentReadiness([])).toEqual({ done: true, caption: "No equipment requested", needsAction: false });
     expect(equipmentReadiness([request([item(2, 0)], "Cancelled")]).done).toBe(true);
   });
 
   it("is done when every item is fully reserved", () => {
     const result = equipmentReadiness([request([item(2, 2, 1), item(1, 1, 2), item(5, 5, 3)], "Arranged")]);
-    expect(result).toEqual({ done: true, caption: "All 3 requested items arranged" });
+    expect(result).toEqual({ done: true, caption: "All 3 requested items arranged", needsAction: false });
   });
 
   it("counts partly reserved items as not yet reserved", () => {
     const result = equipmentReadiness([request([item(2, 2, 1), item(4, 1, 2), item(1, 0, 3)])]);
-    expect(result).toEqual({ done: false, caption: "1 of 3 items reserved" });
+    expect(result).toEqual({ done: false, caption: "1 of 3 items reserved", needsAction: false });
   });
 });
 

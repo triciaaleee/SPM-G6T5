@@ -18,6 +18,13 @@ interface Column {
   hideOnNarrow?: boolean;
 }
 
+/** A row's section, for an optional divider rendered before the first row of each new one. */
+interface RowGroup {
+  key: string;
+  label: string;
+  count: number;
+}
+
 const props = defineProps<{
   columns: Column[];
   /** The `grid-template-columns` value, so each page keeps its own widths. */
@@ -28,12 +35,31 @@ const props = defineProps<{
   rowKey: (row: T) => string | number;
   /** When given, each row is a link to this location. */
   rowTo?: (row: T) => RouteLocationRaw;
+  /** When given, extra class(es) applied to the row element (e.g. to flag a row needing attention). */
+  rowClass?: (row: T) => string | Record<string, boolean>;
+  /**
+   * When given, groups rows under a divider rendered via the `group-header` slot,
+   * right before the first row of each new group. `rows` must already be sorted so
+   * each group's rows are contiguous; returning null/undefined skips the divider.
+   */
+  rowGroup?: (row: T) => RowGroup | null | undefined;
 }>();
 
 const gridStyle = computed(() => ({
   "--table-columns": props.columnWidths,
   ...(props.columnGap ? { "--table-gap": props.columnGap } : {}),
 }));
+
+/** Each row, paired with its group header (only on the first row of that group). */
+const rowEntries = computed(() => {
+  let lastKey: string | null = null;
+  return props.rows.map((row) => {
+    const group = props.rowGroup?.(row) ?? null;
+    const header = group && group.key !== lastKey ? group : null;
+    if (group) lastKey = group.key;
+    return { row, header };
+  });
+});
 </script>
 
 <template>
@@ -48,18 +74,28 @@ const gridStyle = computed(() => ({
         {{ column.label }}
       </span>
     </li>
-    <li v-for="row in rows" :key="rowKey(row)" class="row-item">
-      <component :is="rowTo ? 'RouterLink' : 'div'" :to="rowTo?.(row)" class="row" :class="{ 'row--link': rowTo }">
-        <span
-          v-for="column in columns"
-          :key="column.key"
-          class="cell"
-          :class="{ 'cell--narrow-hidden': column.hideOnNarrow }"
+    <template v-for="entry in rowEntries" :key="rowKey(entry.row)">
+      <li v-if="entry.header" class="row-group-header">
+        <slot name="group-header" :group="entry.header" />
+      </li>
+      <li class="row-item">
+        <component
+          :is="rowTo ? 'RouterLink' : 'div'"
+          :to="rowTo?.(entry.row)"
+          class="row"
+          :class="[{ 'row--link': rowTo }, rowClass?.(entry.row)]"
         >
-          <slot :name="`cell-${column.key}`" :row="row" />
-        </span>
-      </component>
-    </li>
+          <span
+            v-for="column in columns"
+            :key="column.key"
+            class="cell"
+            :class="{ 'cell--narrow-hidden': column.hideOnNarrow }"
+          >
+            <slot :name="`cell-${column.key}`" :row="entry.row" />
+          </span>
+        </component>
+      </li>
+    </template>
   </ul>
 </template>
 
@@ -81,7 +117,7 @@ const gridStyle = computed(() => ({
   justify-content: start;
   column-gap: var(--table-gap, var(--spacing-32));
   align-items: center;
-  padding: var(--spacing-16) var(--spacing-20);
+  padding: var(--spacing-20) var(--spacing-24);
   border-bottom: 1px solid var(--color-grey-100);
 }
 
@@ -106,8 +142,8 @@ const gridStyle = computed(() => ({
 /* Column header row: same grid as the data rows, so labels line up. */
 .row--header {
   background: var(--color-grey-50);
-  padding-top: var(--spacing-12);
-  padding-bottom: var(--spacing-12);
+  padding-top: var(--spacing-16);
+  padding-bottom: var(--spacing-16);
 }
 
 .cell-header {
@@ -121,11 +157,18 @@ const gridStyle = computed(() => ({
 }
 
 .cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   min-width: 0;
   font-size: 0.875rem;
-  line-height: 1.125rem;
   color: var(--color-grey-600);
   overflow-wrap: anywhere;
+  gap: 8px;
+}
+
+.row-group-header {
+  border-top: 1px solid var(--color-grey-100);
 }
 
 @media (max-width: 640px) {
