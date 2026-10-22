@@ -4,9 +4,13 @@ import {
   approveSafetyReview,
   approveVenueBooking,
   assignCoordinator,
+  climbToConfirmed,
+  expectRefused,
+  fetchEventRegistrations,
   fetchMyVenues,
   openRegistrationToday,
   registerAttendee,
+  registerForEvent,
   registerOrganiser,
   requestVenueBooking,
   signInAsCoordinator,
@@ -17,6 +21,7 @@ import {
   submitForSafetyReview,
   uniqueFutureDate,
   uniqueName,
+  withdrawRegistration,
 } from "./support/backend";
 import { logIn } from "./support/browser";
 
@@ -81,4 +86,42 @@ test("attendee discovers a Confirmed, registration-open event and registers for 
   const card = page.locator(".card-item", { hasText: eventName }).first();
   await expect(card).toBeVisible();
   await expect(card.getByText("Registered", { exact: true })).toBeVisible();
+});
+
+/**
+ * E6 edge cases, against registration-service's own rules: no registering
+ * before registration opens, no registering twice, no place beyond the
+ * event's expected attendance (its capacity), and a withdrawn place goes
+ * back to the pool.
+ */
+test("registration refuses not-yet-open, duplicate and over-capacity sign-ups; a withdrawal frees the place", async () => {
+  test.setTimeout(60_000);
+  const { event, coordinator, organiser } = await climbToConfirmed("reg-rules", {
+    registrationNeeded: true,
+    expectedAttendance: 1,
+  });
+  const [first, second] = await Promise.all([
+    registerAttendee("reg-rules-first"),
+    registerAttendee("reg-rules-second"),
+  ]);
+
+  // Confirmed, but the coordinator hasn't opened registration yet.
+  await expectRefused(registerForEvent(first, event.id), 409);
+
+  await openRegistrationToday(coordinator, event.id);
+  await registerForEvent(first, event.id);
+  const duplicate = await expectRefused(registerForEvent(first, event.id), 409);
+  expect(duplicate.body).toMatchObject({ code: "already_registered" });
+
+  const full = await expectRefused(registerForEvent(second, event.id), 409);
+  expect(full.body).toMatchObject({ code: "event_full" });
+
+  await withdrawRegistration(first, event.id);
+  await registerForEvent(second, event.id);
+
+  const byAttendee = new Map(
+    (await fetchEventRegistrations(organiser, event.id)).map((r) => [r.userId, r.status] as const),
+  );
+  expect(byAttendee.get(first.id)).toBe("Withdrawn");
+  expect(byAttendee.get(second.id)).toBe("Registered");
 });
