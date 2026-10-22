@@ -64,10 +64,30 @@ export function uniqueFutureDate(): string {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-class ApiError extends Error {
-  constructor(method: string, url: string, status: number, body: unknown) {
+export class ApiError extends Error {
+  constructor(
+    method: string,
+    url: string,
+    readonly status: number,
+    readonly body: unknown,
+  ) {
     super(`${method} ${url} -> ${status}: ${JSON.stringify(body)}`);
   }
+}
+
+/**
+ * Asserts an API call is refused with exactly `status` — for the backend's
+ * own enforcement of who may do what and which transitions are legal
+ * (AGENTS.md §3: the backend is the source of truth, not the UI).
+ */
+export async function expectRefused(request: Promise<unknown>, status: number): Promise<ApiError> {
+  try {
+    await request;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === status) return err;
+    throw err;
+  }
+  throw new Error(`expected the request to be refused with ${status}, but it succeeded`);
 }
 
 async function call<T>(method: string, url: string, token: string | null, body?: unknown): Promise<T> {
@@ -394,4 +414,116 @@ export async function fetchMyNotifications(session: Session, limit = 20): Promis
     session.token,
   );
   return notifications;
+}
+
+// ---- more lifecycle steps ---------------------------------------------------
+
+/** Assigned coordinator asks the organiser a question — Requested/Planning -> Clarification Requested. */
+export async function requestClarification(coordinator: Session, eventId: number, message: string): Promise<EventRow> {
+  const { event } = await call<{ event: EventRow }>(
+    "POST",
+    `${EVENTS_URL}/${eventId}/request-clarification`,
+    coordinator.token,
+    { message },
+  );
+  return event;
+}
+
+/** Safety Officer rejects the safety arrangement — Safety Review -> Planning (E3-13). */
+export async function rejectSafetyReview(safetyOfficer: Session, eventId: number, reason: string): Promise<EventRow> {
+  const { event } = await call<{ event: EventRow }>(
+    "POST",
+    `${EVENTS_URL}/${eventId}/safety-review/reject`,
+    safetyOfficer.token,
+    { reason },
+  );
+  return event;
+}
+
+/** Owning organiser cancels — any active status -> Cancelled (E3-6). */
+export async function cancelEvent(organiser: Session, eventId: number, reason: string): Promise<EventRow> {
+  const { event } = await call<{ event: EventRow }>("POST", `${EVENTS_URL}/${eventId}/cancel`, organiser.token, {
+    reason,
+  });
+  return event;
+}
+
+/** A direct edit of the event's details (PATCH /events/:id) with the full details body. */
+export async function editEvent(
+  session: Session,
+  eventId: number,
+  details: Record<string, unknown>,
+): Promise<EventRow> {
+  const { event } = await call<{ event: EventRow }>("PATCH", `${EVENTS_URL}/${eventId}`, session.token, details);
+  return event;
+}
+
+export interface ConfirmedEvent {
+  event: EventRow;
+  organiser: Session;
+  coordinator: Session;
+  venueStaff: Session;
+  booking: VenueBookingRow;
+}
+
+/**
+ * Drives a fresh event all the way to Confirmed through the real APIs:
+ * submit, assign, approve, book and approve a venue, submit for and pass
+ * safety review. For tests whose subject is what happens to a Confirmed
+ * event, not the climb itself (event-lifecycle.e2e.ts covers that).
+ */
+export async function climbToConfirmed(
+  label: string,
+  overrides: Partial<Record<string, unknown>> = {},
+): Promise<ConfirmedEvent> {
+  const organiser = await registerOrganiser(`${label}-organiser`);
+  const [coordinator, lead, venueStaff, safetyOfficer] = await Promise.all([
+    signInAsCoordinator(),
+    signInAsCoordinatorLead(),
+    signInAsVenueStaff(),
+    signInAsSafetyOfficer(),
+  ]);
+  const event = await submitEvent(organiser, {
+    proposedDate: uniqueFutureDate(),
+    ...overrides,
+  });
+  await assignCoordinator(lead, event.id, coordinator.id);
+  await approveRequest(coordinator, event.id);
+  // Any of this staff member's venues, picked at random so parallel tests
+  // don't all queue on one venue's decision lock (venue-service lib/venueLock.ts).
+  const venues = await fetchMyVenues(venueStaff);
+  const venue = venues[Math.floor(Math.random() * venues.length)];
+  const requested = await requestVenueBooking(coordinator, event.id, venue.id);
+  const booking = await approveVenueBooking(venueStaff, requested.id);
+  await submitForSafetyReview(coordinator, event.id);
+  const confirmed = await approveSafetyReview(safetyOfficer, event.id);
+  return { event: confirmed, organiser, coordinator, venueStaff, booking };
+}
+
+// ---- reading other services' side of a flow ----------------------------------
+
+/** Every venue booking of an event, any status — as its coordinator or organiser sees them. */
+export async function fetchEventBookings(
+  session: Session,
+  eventId: number,
+): Promise<(VenueBookingRow & { decisionReason: string | null })[]> {
+  const { bookings } = await call<{
+    bookings: (VenueBookingRow & { decisionReason: string | null })[];
+  }>("GET", `${VENUES_URL}/events/${eventId}/bookings`, session.token);
+  return bookings;
+}
+
+/** An event's registrations, any status — as its organiser or coordinator sees them. */
+export async function fetchEventRegistrations(session: Session, eventId: number): Promise<RegistrationRow[]> {
+  const { registrations } = await call<{ registrations: RegistrationRow[] }>(
+    "GET",
+    `${REGISTRATION_URL}/event/${eventId}`,
+    session.token,
+  );
+  return registrations;
+}
+
+/** Attendee gives up their own place (E6-4). */
+export async function withdrawRegistration(attendee: Session, eventId: number): Promise<void> {
+  await call("PATCH", `${REGISTRATION_URL}/event/${eventId}/withdraw`, attendee.token, {});
 }
