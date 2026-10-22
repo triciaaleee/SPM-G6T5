@@ -181,9 +181,9 @@ jobs:
   # Real build, real backend (all 7 services), real database — the layer
   # that catches contract drift between services unit tests can't, because
   # each side's unit tests mock the other. Unlike `smoke` above, these
-  # services need real Supabase/JWT/RabbitMQ credentials to do anything
-  # useful, so this job reads them from repo secrets rather than using
-  # placeholders. See frontend/e2e/README.md for the suite's own
+  # services need a real database to do anything useful, so this job starts
+  # its own throwaway Supabase (built from the migrations and seed) and a
+  # RabbitMQ container. No repo secrets. See frontend/e2e/README.md for the suite's own
   # conventions (retries: 0 is deliberate — don't add retries here either).
   e2e:
     name: E2E (Playwright)
@@ -211,17 +211,29 @@ jobs:
             backend/services/*/package-lock.json
             frontend/package-lock.json
 
-      - name: Write backend/.env from secrets
-        # Secrets must exist in this repo's Settings -> Secrets and
-        # variables -> Actions before this job can pass (see PR description
-        # / CI.md). Until then this job is expected to fail here, loudly,
-        # rather than silently run against nothing.
+      # A throwaway Supabase for this run only, built from supabase/migrations/
+      # and seed.sql. Nothing touches the shared dev database, nothing needs
+      # cleaning up afterwards, and a migration that doesn't apply from
+      # scratch fails the job here.
+      - uses: supabase/setup-cli@v3.0.1
+        with:
+          version: 2.118.0
+      - name: Start a local Supabase
+        run: supabase start
+      - name: Build the database from migrations and seed
+        run: supabase/scripts/build_database.sh "$(supabase status -o env | sed -n 's/^DB_URL="\(.*\)"$/\1/p')"
+
+      - name: Write backend/.env for the local Supabase
+        # JWT_SECRET and INTERNAL_SERVICE_SECRET only have to agree between
+        # the services in this job, so they're fixed test values, not secrets.
         run: |
+          eval "$(supabase status -o env)"
+          test -n "$API_URL" && test -n "$SERVICE_ROLE_KEY"
           cat > backend/.env <<EOF
-          SUPABASE_URL=${{ secrets.E2E_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY=${{ secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}
-          JWT_SECRET=${{ secrets.E2E_JWT_SECRET }}
-          INTERNAL_SERVICE_SECRET=${{ secrets.E2E_INTERNAL_SERVICE_SECRET }}
+          SUPABASE_URL=$API_URL
+          SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY
+          JWT_SECRET=e2e-only-jwt-secret-not-used-anywhere-else
+          INTERNAL_SERVICE_SECRET=e2e-only-internal-secret
           EVENTS_SERVICE_PORT=4001
           USER_SERVICE_PORT=4002
           VENUE_SERVICE_PORT=4003
