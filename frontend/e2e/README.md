@@ -17,6 +17,26 @@ other side.
 This builds the frontend and serves the production build (`vite preview`),
 not the dev server — the suite tests what ships.
 
+Run like this, the suite writes to whatever database `backend/.env` points
+at — normally the shared dev one. To keep test data out of it, run against
+a throwaway local Supabase instead, the same way CI does:
+
+1. `supabase start` (repo root; needs the [Supabase CLI](https://supabase.com/docs/guides/local-development) and Docker)
+2. `supabase/scripts/build_database.sh "$(supabase status -o env | sed -n 's/^DB_URL="\(.*\)"$/\1/p')"`
+   builds it from `supabase/migrations/` and `seed.sql`
+3. Point `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env` at
+   it (`API_URL` and `SERVICE_ROLE_KEY` from `supabase status`), then follow
+   the steps above
+4. `supabase stop --no-backup` when done throws it all away
+
+## CI
+
+The `e2e` job in `.github/workflows/ci.yml` does exactly the local Supabase
+steps above on every run, so CI never touches the shared dev database and
+needs no repo secrets. Because the database is rebuilt from the migrations
+each time, a migration that doesn't apply cleanly from scratch fails the
+job before any test runs.
+
 ## Conventions
 
 - Tests live in `e2e/*.e2e.ts` — **not** `*.test.ts`, so Vitest's default
