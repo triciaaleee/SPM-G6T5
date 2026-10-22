@@ -61,6 +61,10 @@ test("coordinator records equipment requirements via the form; Technical Support
   await signInThroughStorage(page, techSupport);
   await page.goto("/equipment-requests");
   await page.getByLabel("Date range").selectOption({ label: "All dates" });
+  // The queue opens on its first non-empty status tab as judged by the
+  // default date range, which this 2099 event falls outside of, so it may
+  // open on another tab. A new request is always under Requested.
+  await page.getByRole("tab", { name: /^Requested/ }).click();
   await expect(page.getByRole("heading", { name: eventName, level: 2 })).toBeVisible();
 
   // And on the event's own equipment request detail page.
