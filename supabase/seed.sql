@@ -345,3 +345,13 @@ where id in (select id from equipment where type = 'Microphones' order by id lim
 -- other seeded events share that date, so this isn't a conflict for them.
 insert into equipment_booking (equipment_id, event_id)
 select id, 5 from equipment where type = 'Projector' and status = 'Available' order by id limit 2;
+
+-- Venue staff (E4-10 AC7) ------------------------------------------------
+--
+-- Migration 0015 gives every unassigned venue to the first venue_staff
+-- account, but on a fresh database it runs before this file inserts any
+-- venues or users. Repeat it here so a database built from scratch matches
+-- one that was migrated in place.
+update venues
+set staff_id = (select id from users where role = 'venue_staff' order by id limit 1)
+where staff_id is null;
