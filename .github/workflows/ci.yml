@@ -178,6 +178,141 @@ jobs:
           done
       - run: npm run smoke
 
+  # Real build, real backend (all 7 services), real database — the layer
+  # that catches contract drift between services unit tests can't, because
+  # each side's unit tests mock the other. Unlike `smoke` above, these
+  # services need a real database to do anything useful, so this job starts
+  # its own throwaway Supabase (built from the migrations and seed) and a
+  # RabbitMQ container. No repo secrets. See frontend/e2e/README.md for the suite's own
+  # conventions (retries: 0 is deliberate — don't add retries here either).
+  e2e:
+    name: E2E (Playwright)
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      rabbitmq:
+        image: rabbitmq:3-management
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            backend/services/*/package-lock.json
+            frontend/package-lock.json
+
+      # A throwaway Supabase for this run only, built from supabase/migrations/
+      # and seed.sql. Nothing touches the shared dev database, nothing needs
+      # cleaning up afterwards, and a migration that doesn't apply from
+      # scratch fails the job here.
+      - uses: supabase/setup-cli@v3.0.1
+        with:
+          version: 2.118.0
+      - name: Start a local Supabase
+        run: supabase start
+      - name: Build the database from migrations and seed
+        run: supabase/scripts/build_database.sh "$(supabase status -o env | sed -n 's/^DB_URL="\(.*\)"$/\1/p')"
+
+      - name: Write backend/.env for the local Supabase
+        # JWT_SECRET and INTERNAL_SERVICE_SECRET only have to agree between
+        # the services in this job, so they're fixed test values, not secrets.
+        run: |
+          eval "$(supabase status -o env)"
+          test -n "$API_URL" && test -n "$SERVICE_ROLE_KEY"
+          cat > backend/.env <<EOF
+          SUPABASE_URL=$API_URL
+          SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY
+          JWT_SECRET=e2e-only-jwt-secret-not-used-anywhere-else
+          INTERNAL_SERVICE_SECRET=e2e-only-internal-secret
+          EVENTS_SERVICE_PORT=4001
+          USER_SERVICE_PORT=4002
+          VENUE_SERVICE_PORT=4003
+          NOTIFICATION_SERVICE_PORT=4004
+          EQUIPMENT_SERVICE_PORT=4005
+          CHAT_SERVICE_PORT=4006
+          REGISTRATION_SERVICE_PORT=4007
+          EVENTS_SERVICE_URL=http://localhost:4001
+          NOTIFICATION_SERVICE_URL=http://localhost:4004
+          USER_SERVICE_URL=http://localhost:4002
+          VENUE_SERVICE_URL=http://localhost:4003
+          EQUIPMENT_SERVICE_URL=http://localhost:4005
+          RABBITMQ_URL=amqp://guest:guest@localhost:5672
+          EOF
+      - name: Use example frontend env
+        run: cp frontend/.env.example frontend/.env
+
+      - name: Install backend root and every service
+        run: |
+          cd backend
+          npm ci
+          for dir in services/*/; do
+            echo "::group::npm ci $dir"
+            npm ci --prefix "$dir"
+            echo "::endgroup::"
+          done
+      - name: Install frontend
+        run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Start all backend services
+        working-directory: backend
+        # disown so the process survives this step's shell exiting — a
+        # background `&` alone isn't guaranteed to outlive it. The job
+        # itself cleans this up when the runner VM is torn down; there is
+        # no explicit stop step, matching smoke.mjs's own "a dev run is
+        # throwaway" stance.
+        run: |
+          nohup npm run dev > /tmp/backend-dev.log 2>&1 &
+          disown
+          sleep 2
+          jobs -l
+      - name: Wait for every service's /health
+        run: |
+          for port in 4001 4002 4003 4004 4005 4006 4007; do
+            echo "waiting for :$port/health"
+            for i in $(seq 1 60); do
+              if curl -sf "http://127.0.0.1:$port/health" > /dev/null; then
+                echo ":$port is up"
+                break
+              fi
+              if [ "$i" = 60 ]; then
+                echo "::error:::$port never became healthy"
+                cat /tmp/backend-dev.log
+                exit 1
+              fi
+              sleep 1
+            done
+          done
+
+      - name: Run Playwright
+        run: npm run e2e
+        working-directory: frontend
+
+      - name: Save the backend services' logs
+        if: failure()
+        run: cp /tmp/backend-dev.log backend-dev.log
+      - name: Upload the trace, report and backend logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-artifacts
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+            backend-dev.log
+
   # The single check to require in branch protection. GitHub treats a skipped
   # required check as passing, so requiring e.g. only `smoke` would let a PR
   # merge when a backend job fails (smoke is then skipped, not failed). This job
@@ -186,7 +321,7 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    needs: [secret-scan, discover-services, backend-lint, backend, frontend, smoke]
+    needs: [secret-scan, discover-services, backend-lint, backend, frontend, smoke, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
