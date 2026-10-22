@@ -7,28 +7,39 @@
  * by date range and by equipment. Opening a section's link (E5-1 AC1/AC2)
  * shows the full request, which is also where the status is updated (E5-3).
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
+import AppButton from "../components/ui/AppButton.vue";
 import DataTable from "../components/ui/DataTable.vue";
 import {
   EQUIPMENT_REQUEST_STATUSES,
   fetchAllEquipmentRequests,
   fetchEquipmentCatalog,
+  updateEquipmentRequestStatus,
   type EquipmentCatalogItem,
   type EquipmentRequestStatus,
   type EquipmentRequestWithEvent,
 } from "../lib/equipmentApi";
 
+/** The quick status menu only offers a bare flip — no extra data needed. Partially
+ * Fulfilled needs per-item fulfilled quantities (EquipmentRequestDetailView.vue's
+ * fulfilledQuantityFor/outstandingSummary), so it stays on the full request page. */
+const QUICK_STATUS_OPTIONS: EquipmentRequestStatus[] = ["Requested", "Arranged"];
+
 const TABLE_COLUMNS = [
   { key: "equipment", label: "Equipment" },
   { key: "qty", label: "Qty needed" },
   { key: "stock", label: "In stock" },
+  { key: "status", label: "Status" },
+  { key: "action", label: "" },
 ];
+const TABLE_COLUMN_WIDTHS = "10rem 8rem 6rem 9rem 10rem";
 
 /** One line of the queue: a single item of a request, with its event's timing. */
 interface QueueRow {
   key: string;
   eventId: number;
+  requestId: number;
   status: EquipmentRequestStatus;
   date: string | null;
   startTime: string | null;
@@ -51,9 +62,6 @@ const RANGES: { key: RangeKey; label: string; empty: string }[] = [
 
 const ALL_EQUIPMENT = "";
 
-/** How close an unarranged event has to be before its row gets an urgency badge. */
-const URGENT_WITHIN_DAYS = 3;
-
 const requests = ref<EquipmentRequestWithEvent[]>([]);
 const catalog = ref<EquipmentCatalogItem[]>([]);
 const loading = ref(true);
@@ -74,6 +82,7 @@ const rows = computed<QueueRow[]>(() =>
     r.items.map((item) => ({
       key: `${r.id}-${item.id}`,
       eventId: r.eventId,
+      requestId: r.id,
       status: statusOf(r),
       date: r.event?.proposedDate ?? null,
       startTime: r.event?.startTime ?? null,
@@ -124,17 +133,11 @@ function inRange(row: QueueRow): boolean {
 
 // Filtering and grouping --------------------------------------------------------
 
-const filteredRows = computed(() =>
-  rows.value.filter(
-    (row) => inRange(row) && (equipment.value === ALL_EQUIPMENT || row.equipmentType === equipment.value),
-  ),
-);
-
-const rowsByTab = computed(() => {
-  const groups: Record<EquipmentRequestStatus, QueueRow[]> = { Requested: [], Arranged: [], "Partially Fulfilled": [] };
-  for (const row of filteredRows.value) groups[row.status].push(row);
-  return groups;
-});
+// Date range is a per-event concern (every row of one event shares the same date),
+// so it's safe to apply before grouping. The equipment-type filter is not: it must
+// never change which tab an event belongs to, only narrow what's displayed once an
+// event is already there (see `groups` below).
+const dateFilteredRows = computed(() => rows.value.filter(inRange));
 
 const equipmentOptions = computed(() => [...new Set(rows.value.map((row) => row.equipmentType))].sort());
 
@@ -146,15 +149,23 @@ interface Group {
   endTime: string | null;
   venue: string | null;
   rows: QueueRow[];
-  total: number;
+  aggregateStatus: EquipmentRequestStatus;
 }
 
-/** What the group's badge counts: what is still needed for a partial fulfilment, otherwise the quantity. */
-function groupTotal(groupRows: QueueRow[]): number {
-  return groupRows.reduce(
-    (sum, row) => sum + (row.status === "Partially Fulfilled" ? row.quantity - row.quantityFulfilled : row.quantity),
-    0,
-  );
+/**
+ * One event can have several equipment requests (supabase/migrations/0020's own
+ * comment: "an event may accumulate more than one", same as venue_bookings). Its
+ * equipment is always ONE table, never split across tabs by each request's own
+ * status — so the event's tab is decided by all of its requests together:
+ * Arranged only once every request is Arranged; Requested only while every
+ * request is still untouched; anything in between (a mix, or a request that's
+ * itself Partially Fulfilled) is Partially Fulfilled.
+ */
+function aggregateStatus(eventRows: QueueRow[]): EquipmentRequestStatus {
+  const statuses = new Set(eventRows.map((row) => row.status));
+  if (statuses.size === 1 && statuses.has("Arranged")) return "Arranged";
+  if (statuses.size === 1 && statuses.has("Requested")) return "Requested";
+  return "Partially Fulfilled";
 }
 
 /** Stock on hand for one equipment type, looked up per row now that a group spans several types. */
@@ -162,47 +173,55 @@ function stockFor(equipmentType: string): number | null {
   return catalog.value.find((item) => item.name === equipmentType)?.availableStock ?? null;
 }
 
-const groups = computed<Group[]>(() => {
+/** Every event (date-range filtered), each with ALL of its rows and its aggregate status — the
+ * single source both the tab counts and the per-tab table list are built from. */
+const eventAggregates = computed<Group[]>(() => {
   const byEvent = new Map<number, QueueRow[]>();
-  for (const row of rowsByTab.value[activeTab.value]) {
+  for (const row of dateFilteredRows.value) {
     byEvent.set(row.eventId, [...(byEvent.get(row.eventId) ?? []), row]);
   }
-  return [...byEvent.entries()]
-    .map(([eventId, groupRows]) => {
-      const sorted = [...groupRows].sort((a, b) => a.equipmentType.localeCompare(b.equipmentType));
-      const [first] = groupRows;
-      return {
-        eventId,
-        eventName: first.eventName,
-        date: first.date,
-        startTime: first.startTime,
-        endTime: first.endTime,
-        venue: first.venue,
-        rows: sorted,
-        total: groupTotal(sorted),
-      };
-    })
-    .sort(compareRows);
+  return [...byEvent.entries()].map(([eventId, eventRows]) => {
+    const sorted = [...eventRows].sort((a, b) => a.equipmentType.localeCompare(b.equipmentType));
+    const [first] = eventRows;
+    return {
+      eventId,
+      eventName: first.eventName,
+      date: first.date,
+      startTime: first.startTime,
+      endTime: first.endTime,
+      venue: first.venue,
+      rows: sorted,
+      aggregateStatus: aggregateStatus(eventRows),
+    };
+  });
 });
 
-const badgeLabel = computed(() => {
-  if (activeTab.value === "Arranged") return "arranged";
-  if (activeTab.value === "Partially Fulfilled") return "still needed";
-  return "needed";
+const tabCounts = computed(() => {
+  const counts: Record<EquipmentRequestStatus, number> = { Requested: 0, Arranged: 0, "Partially Fulfilled": 0 };
+  for (const event of eventAggregates.value) counts[event.aggregateStatus]++;
+  return counts;
 });
+
+const groups = computed<Group[]>(() =>
+  eventAggregates.value
+    .filter((event) => event.aggregateStatus === activeTab.value)
+    .map((event) => ({
+      ...event,
+      rows: equipment.value === ALL_EQUIPMENT ? event.rows : event.rows.filter((row) => row.equipmentType === equipment.value),
+    }))
+    .filter((event) => event.rows.length > 0)
+    .sort(compareRows),
+);
 
 function quantityLabel(row: QueueRow): string {
   return row.status === "Partially Fulfilled" ? `${row.quantityFulfilled} of ${row.quantity}` : `${row.quantity}×`;
 }
 
-/** A red badge for an unarranged event that is close or already past. */
-function urgencyLabel(row: QueueRow): string | null {
-  if (row.status !== "Requested" || !row.date) return null;
-  const days = daysUntil(row.date);
-  if (days < 0) return "Overdue";
-  if (days === 0) return "Today";
-  if (days === 1) return "Tomorrow";
-  return days <= URGENT_WITHIN_DAYS ? `In ${days} days` : null;
+/** Same colour convention as EquipmentRequestDetailView.vue's statusBadgeClass. */
+function rowStatusBadgeClass(status: EquipmentRequestStatus): string {
+  if (status === "Arranged") return "status-success";
+  if (status === "Partially Fulfilled") return "status-warning";
+  return "status-open";
 }
 
 const emptyMessage = computed(() => {
@@ -210,6 +229,75 @@ const emptyMessage = computed(() => {
   const suffix = RANGES.find((r) => r.key === range.value)?.empty ?? "";
   return `Nothing ${what}${suffix ? ` ${suffix}` : ""}.`;
 });
+
+// Quick status menu: one per ROW (a table can now mix rows from different requests
+// in different states), flips Requested <-> Arranged with a single API call.
+// Partially Fulfilled needs per-item fulfilled quantities, so it stays on the full
+// request page (EquipmentRequestDetailView.vue), not duplicated here. Keyed by the
+// row's own key, not its requestId — two rows can share a request but still open independently.
+const statusMenuOpenFor = ref<string | null>(null);
+const statusUpdating = ref<number | null>(null);
+const statusUpdateError = ref<string | null>(null);
+
+function toggleStatusMenu(rowKey: string): void {
+  if (statusMenuOpenFor.value === rowKey) {
+    statusMenuOpenFor.value = null;
+    return;
+  }
+  statusUpdateError.value = null;
+  statusMenuOpenFor.value = rowKey;
+}
+
+function closeStatusMenu(returnFocus = false): void {
+  const openRowKey = statusMenuOpenFor.value;
+  statusMenuOpenFor.value = null;
+  if (returnFocus && openRowKey !== null) {
+    document.querySelector<HTMLElement>(`[data-status-trigger="${openRowKey}"]`)?.focus();
+  }
+}
+
+// Click anywhere outside every status menu (not just the open one — v-for means there's
+// one .status-menu per row) closes whichever is open.
+function onStatusMenuPointerDown(e: PointerEvent): void {
+  if (!(e.target as HTMLElement).closest(".status-menu")) closeStatusMenu();
+}
+
+function onStatusMenuKeydown(e: KeyboardEvent): void {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    closeStatusMenu(true);
+  }
+}
+
+watch(statusMenuOpenFor, (openRowKey) => {
+  if (openRowKey !== null) {
+    document.addEventListener("pointerdown", onStatusMenuPointerDown);
+  } else {
+    document.removeEventListener("pointerdown", onStatusMenuPointerDown);
+  }
+});
+
+onBeforeUnmount(() => document.removeEventListener("pointerdown", onStatusMenuPointerDown));
+
+async function quickUpdateStatus(requestId: number, status: EquipmentRequestStatus): Promise<void> {
+  const current = requests.value.find((r) => r.id === requestId);
+  if (!current || statusOf(current) === status) {
+    closeStatusMenu();
+    return;
+  }
+
+  statusUpdating.value = requestId;
+  statusUpdateError.value = null;
+  try {
+    await updateEquipmentRequestStatus(requestId, status);
+    current.status = status;
+    closeStatusMenu();
+  } catch {
+    statusUpdateError.value = "Couldn't update the status. Please try again.";
+  } finally {
+    statusUpdating.value = null;
+  }
+}
 
 onMounted(async () => {
   try {
@@ -220,7 +308,7 @@ onMounted(async () => {
     requests.value = loadedRequests;
     catalog.value = loadedCatalog;
     // Open on the first tab that has anything in it.
-    const first = EQUIPMENT_REQUEST_STATUSES.find((status) => rowsByTab.value[status].length > 0);
+    const first = EQUIPMENT_REQUEST_STATUSES.find((status) => tabCounts.value[status] > 0);
     activeTab.value = first ?? "Requested";
   } catch {
     errorMessage.value = "We couldn't load equipment requests. Please try again.";
@@ -254,7 +342,7 @@ onMounted(async () => {
             type="button" role="tab" :aria-selected="activeTab === tabStatus" aria-controls="requests-panel" class="tab"
             :class="{ 'tab--active': activeTab === tabStatus }" @click="activeTab = tabStatus">
             {{ tabStatus }}
-            <span class="tab-count">{{ rowsByTab[tabStatus].length }}</span>
+            <span class="tab-count">{{ tabCounts[tabStatus] }}</span>
           </button>
         </div>
 
@@ -315,22 +403,12 @@ onMounted(async () => {
                   <span :class="{ 'cell-venue--empty': !group.venue }">{{ group.venue || "Venue not set" }}</span>
                 </span>
               </div>
-              <div class="group-header__badges">
-                <span class="count-badge">{{ group.total }} {{ badgeLabel }}</span>
-                <span v-if="urgencyLabel(group.rows[0])" class="urgency">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                  </svg>
-                  {{ urgencyLabel(group.rows[0]) }}
-                </span>
-              </div>
             </div>
           </div>
 
           <DataTable
             :columns="TABLE_COLUMNS"
-            column-widths="12rem 9rem 6rem"
+            :column-widths="TABLE_COLUMN_WIDTHS"
             :rows="group.rows"
             :row-key="(row) => row.key"
           >
@@ -342,6 +420,42 @@ onMounted(async () => {
             </template>
             <template #cell-stock="{ row }">
               <span class="cell-stock">{{ stockFor(row.equipmentType) ?? "—" }}</span>
+            </template>
+            <template #cell-status="{ row }">
+              <span class="badge" :class="rowStatusBadgeClass(row.status)">{{ row.status }}</span>
+            </template>
+            <template #cell-action="{ row }">
+              <div class="status-menu" @keydown="onStatusMenuKeydown">
+                <AppButton
+                  :data-status-trigger="row.key"
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  aria-haspopup="menu"
+                  :aria-expanded="statusMenuOpenFor === row.key"
+                  :disabled="statusUpdating === row.requestId"
+                  @click="toggleStatusMenu(row.key)"
+                >
+                  Update status
+                  <ChevronDownIcon class="status-menu__chevron" aria-hidden="true" />
+                </AppButton>
+
+                <div v-if="statusMenuOpenFor === row.key" class="status-menu__popover" role="menu" aria-label="Update status">
+                  <button
+                    v-for="option in QUICK_STATUS_OPTIONS"
+                    :key="option"
+                    type="button"
+                    role="menuitemradio"
+                    class="status-menu__option"
+                    :aria-checked="row.status === option"
+                    :disabled="statusUpdating === row.requestId"
+                    @click="quickUpdateStatus(row.requestId, option)"
+                  >
+                    {{ option }}
+                  </button>
+                  <p v-if="statusUpdateError" class="status-menu__error" role="alert">{{ statusUpdateError }}</p>
+                </div>
+              </div>
             </template>
           </DataTable>
         </section>
@@ -573,7 +687,7 @@ onMounted(async () => {
   display: flex;
   align-items: flex-start;
   flex-wrap: wrap;
-  gap: var(--spacing-8);
+  /* gap: var(--spacing-8); */
   flex-direction: column;
 }
 
@@ -638,18 +752,6 @@ onMounted(async () => {
   color: var(--color-grey-600);
 }
 
-.count-badge {
-  display: inline-flex;
-  align-items: center;
-  height: var(--spacing-24);
-  padding: 0 var(--spacing-12);
-  border-radius: var(--radius-full);
-  background: var(--color-blue-200);
-  color: var(--color-blue-800);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-}
 
 .empty-state {
   display: flex;
@@ -686,25 +788,95 @@ onMounted(async () => {
   color: var(--color-grey-900);
 }
 
-.urgency {
+/* Per-row status badge (same colour convention as EquipmentRequestDetailView.vue). */
+
+.badge {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-4);
   height: var(--spacing-24);
-  padding: 0 var(--spacing-8);
+  padding: 0 var(--spacing-12);
   border-radius: var(--radius-full);
-  background: var(--color-error-200);
-  color: var(--color-error-600);
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-  white-space: nowrap;
 }
 
-.group-header__badges {
+.status-open {
+  background: var(--color-blue-200);
+  color: var(--color-blue-800);
+}
+
+.status-success {
+  background: var(--color-success-200);
+  color: var(--color-success-700);
+}
+
+.status-warning {
+  background: var(--color-warning-100);
+  color: var(--color-warning-900);
+}
+
+/* Update status: a ghost button that opens a small menu of the two bare-flip statuses. */
+
+.status-menu {
+  position: relative;
+}
+
+.status-menu__chevron {
+  width: var(--spacing-16);
+  height: var(--spacing-16);
+}
+
+.status-menu__popover {
+  position: absolute;
+  top: calc(100% + var(--spacing-8));
+  right: 0;
+  z-index: 20;
+  width: 200px;
+  box-sizing: border-box;
+  padding: var(--spacing-8);
+  background: var(--color-base-white);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover);
+}
+
+.status-menu__option {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: var(--spacing-12);
+  justify-content: space-between;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 0 var(--spacing-12);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+  cursor: pointer;
+  text-align: left;
+}
+
+.status-menu__option:hover:not(:disabled) {
+  background: var(--color-grey-50);
+}
+
+.status-menu__option:disabled {
+  color: var(--color-grey-300);
+  cursor: not-allowed;
+}
+
+.status-menu__option[aria-checked="true"] {
+  background: var(--color-purple-100);
+  color: var(--color-purple-800);
+}
+
+.status-menu__error {
+  margin: var(--spacing-8) var(--spacing-4) 0;
+  font-size: 0.75rem;
+  color: var(--color-error-600);
 }
 </style>
