@@ -2,8 +2,13 @@ import { expect, test } from "@playwright/test";
 import {
   approveRequest,
   assignCoordinator,
+  approveVenueBooking,
+  expectRefused,
+  fetchEventBookings,
+  fetchMyNotifications,
   fetchMyVenues,
   registerOrganiser,
+  requestVenueBooking,
   signInAsCoordinator,
   signInAsCoordinatorLead,
   signInAsVenueStaff,
@@ -78,4 +83,66 @@ test("coordinator requests a venue through the search page, then Venue Staff app
   await page.getByRole("button", { name: /^Arrangements/ }).click();
   const approvedRow = page.locator(".request-row", { hasText: venue.name }).first();
   await expect(approvedRow.getByText("Approved", { exact: true })).toBeVisible();
+});
+
+/**
+ * E4-11 (AGENTS.md §3a, "First to reach On Hold or Approved wins"): two
+ * events want the same venue for the same window. Both requests may sit in
+ * Requested together, but the moment Venue Staff approve one, the other is
+ * rejected automatically with the fixed reason, and its coordinator is told.
+ * After that, a new request for the same window is refused at submission.
+ */
+test("approving one of two overlapping requests auto-rejects the other, and blocks new ones", async () => {
+  test.setTimeout(60_000);
+  const organiser = await registerOrganiser("venue-conflict-organiser");
+  const [coordinator, lead, venueStaff] = await Promise.all([
+    signInAsCoordinator(),
+    signInAsCoordinatorLead(),
+    signInAsVenueStaff(),
+  ]);
+  const date = uniqueFutureDate();
+
+  async function plannedEvent(label: string) {
+    const event = await submitEvent(organiser, {
+      name: uniqueName(label),
+      proposedDate: date,
+    });
+    await assignCoordinator(lead, event.id, coordinator.id);
+    await approveRequest(coordinator, event.id);
+    return event;
+  }
+  const [winner, loser, late] = await Promise.all([
+    plannedEvent("Conflict Winner"),
+    plannedEvent("Conflict Loser"),
+    plannedEvent("Conflict Latecomer"),
+  ]);
+
+  const myVenues = await fetchMyVenues(venueStaff);
+  const venue = myVenues[Math.floor(Math.random() * myVenues.length)];
+  const winning = await requestVenueBooking(coordinator, winner.id, venue.id);
+  const losing = await requestVenueBooking(coordinator, loser.id, venue.id);
+  expect(losing.status).toBe("Requested"); // Requested doesn't block the venue
+
+  await approveVenueBooking(venueStaff, winning.id);
+
+  const [lost] = (await fetchEventBookings(coordinator, loser.id)).filter((b) => b.id === losing.id);
+  expect(lost.status).toBe("Rejected");
+  expect(lost.decisionReason).toBe("Venue no longer available for this period");
+  expect((await fetchEventBookings(coordinator, winner.id)).map((b) => b.status)).toEqual(["Approved"]);
+
+  await expect
+    .poll(
+      async () =>
+        (await fetchMyNotifications(coordinator, 50)).some(
+          (n) => n.eventId === loser.id && /reject/i.test(n.title + n.body),
+        ),
+      {
+        message: "waiting for the auto-rejection notification",
+        timeout: 15_000,
+      },
+    )
+    .toBe(true);
+
+  // E4-8: a new request overlapping an Approved booking is refused on submission.
+  await expectRefused(requestVenueBooking(coordinator, late.id, venue.id), 409);
 });
