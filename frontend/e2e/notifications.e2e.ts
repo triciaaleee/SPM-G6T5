@@ -47,7 +47,9 @@ test("Lead assigning a coordinator notifies that coordinator, visible in their f
     )
     .toBe(true);
 
-  expect(found!.read).toBe(false);
+  // No assertion on found.read: this coordinator is a shared seeded account
+  // on the dev database, and anyone signed in as it who opens their
+  // notification bell marks every notification read, this one included.
 
   // The same notification shows up in the coordinator's own feed in the
   // browser. The title ("New event assigned to you") is shared by every
