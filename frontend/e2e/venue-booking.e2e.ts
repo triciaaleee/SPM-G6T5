@@ -16,7 +16,8 @@ import { signInThroughStorage } from "./support/browser";
 /**
  * E4-8/E4-10 (AGENTS.md §3a): a coordinator requests a venue booking from
  * the UI, it appears Requested in the event's Venue Requests panel; Venue
- * Staff see the same booking in their decision queue (/venue-requests) and
+ * Staff see the same booking in their decision queue (the Requests tab of
+ * /venue-schedule, which /venue-requests redirects to) and
  * approve it there; both sides then show Approved.
  */
 
@@ -49,15 +50,18 @@ test("coordinator requests a venue through the search page, then Venue Staff app
   await venueCard.getByRole("button", { name: /request this venue/i }).click();
   await expect(venueCard.getByText(/requested — awaiting venue staff/i)).toBeVisible();
 
-  // It shows Requested on the event's own Venue Requests panel.
+  // It shows Requested on the event's own Venue Requests panel, which sits
+  // on the event page's Arrangements tab.
   await page.goto(`/events/${event.id}`);
+  await page.getByRole("button", { name: /^Arrangements/ }).click();
   const requestRow = page.locator(".request-row", { hasText: venue.name }).first();
   await expect(requestRow.getByText("Requested", { exact: true })).toBeVisible();
 
   // Venue Staff see the same request in their decision queue and approve it.
+  // /venue-requests redirects to the Requests tab of their venue schedule.
   await signInThroughStorage(page, venueStaff);
   await page.goto("/venue-requests");
-  const queueCard = page.locator(".request-card", { hasText: eventName }).first();
+  const queueCard = page.locator("li.row", { hasText: eventName }).first();
   await expect(queueCard).toBeVisible();
   await expect(queueCard.getByText(venue.name)).toBeVisible();
   await queueCard.getByRole("button", { name: "Approve", exact: true }).click();
@@ -69,6 +73,7 @@ test("coordinator requests a venue through the search page, then Venue Staff app
   // would just redirect them away from it).
   await signInThroughStorage(page, coordinator);
   await page.goto(`/events/${event.id}`);
+  await page.getByRole("button", { name: /^Arrangements/ }).click();
   const approvedRow = page.locator(".request-row", { hasText: venue.name }).first();
   await expect(approvedRow.getByText("Approved", { exact: true })).toBeVisible();
 });
