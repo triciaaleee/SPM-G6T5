@@ -4,35 +4,47 @@
  * event. Each event is a section (with its date, time and venue, and a link
  * to its full request) listing the equipment types it still needs, soonest
  * event first. The tabs split the queue by status; the two filters narrow it
- * by date range and by equipment. A last tab, Cancelled / Past, keeps what is no
- * longer to arrange so it can be looked back at: requests that were cancelled
- * (by the coordinator, or because the event was cancelled) and arranged or
- * partly arranged requests whose event date has passed, newest first. An
- * unarranged request for a past event stays under Requested, as overdue. Opening a section's link (E5-1 AC1/AC2)
+ * by date range and by equipment. Opening a section's link (E5-1 AC1/AC2)
  * shows the full request, which is also where the status is updated (E5-3).
+ *
+ * A last tab, Cancelled / Past, keeps what is no longer to arrange so it can be
+ * looked back at: events whose requests were all cancelled (by the coordinator,
+ * or because the event was cancelled), and arranged or partly arranged events
+ * whose date has passed, newest first. An unarranged event that has passed stays
+ * under Requested, as overdue. History rows are read-only.
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
+import AppButton from "../components/ui/AppButton.vue";
 import DataTable from "../components/ui/DataTable.vue";
 import {
   EQUIPMENT_REQUEST_STATUSES,
   fetchAllEquipmentRequests,
   fetchEquipmentCatalog,
+  updateEquipmentRequestStatus,
   type EquipmentCatalogItem,
   type EquipmentRequestStatus,
   type EquipmentRequestWithEvent,
 } from "../lib/equipmentApi";
 
+/** The quick status menu only offers a bare flip — no extra data needed. Partially
+ * Fulfilled needs per-item fulfilled quantities (EquipmentRequestDetailView.vue's
+ * fulfilledQuantityFor/outstandingSummary), so it stays on the full request page. */
+const QUICK_STATUS_OPTIONS: EquipmentRequestStatus[] = ["Requested", "Arranged"];
+
 const TABLE_COLUMNS = [
   { key: "equipment", label: "Equipment" },
   { key: "qty", label: "Qty needed" },
   { key: "stock", label: "In stock" },
+  { key: "status", label: "Status" },
+  { key: "action", label: "" },
 ];
+const TABLE_COLUMN_WIDTHS = "10rem 8rem 6rem 9rem 10rem";
 
 /** A request's status as the queue sees it: the three working statuses, or Cancelled. */
 type RowStatus = EquipmentRequestStatus | "Cancelled";
 
-/** The last tab: cancelled requests and finished arrangements for events that have passed. */
+/** The last tab: cancelled events and finished arrangements for events that have passed. */
 const HISTORY_TAB = "Cancelled / Past";
 type TabKey = EquipmentRequestStatus | typeof HISTORY_TAB;
 const TABS: TabKey[] = [...EQUIPMENT_REQUEST_STATUSES, HISTORY_TAB];
@@ -41,6 +53,7 @@ const TABS: TabKey[] = [...EQUIPMENT_REQUEST_STATUSES, HISTORY_TAB];
 interface QueueRow {
   key: string;
   eventId: number;
+  requestId: number;
   status: RowStatus;
   date: string | null;
   startTime: string | null;
@@ -63,9 +76,6 @@ const RANGES: { key: RangeKey; label: string; empty: string }[] = [
 
 const ALL_EQUIPMENT = "";
 
-/** How close an unarranged event has to be before its row gets an urgency badge. */
-const URGENT_WITHIN_DAYS = 3;
-
 const requests = ref<EquipmentRequestWithEvent[]>([]);
 const catalog = ref<EquipmentCatalogItem[]>([]);
 const loading = ref(true);
@@ -87,6 +97,7 @@ const rows = computed<QueueRow[]>(() =>
     r.items.map((item) => ({
       key: `${r.id}-${item.id}`,
       eventId: r.eventId,
+      requestId: r.id,
       status: statusOf(r),
       date: r.event?.proposedDate ?? null,
       startTime: r.event?.startTime ?? null,
@@ -137,27 +148,11 @@ function inRange(row: QueueRow): boolean {
 
 // Filtering and grouping --------------------------------------------------------
 
-/** Which tab a row belongs to. An unarranged request for a past event is overdue, so it stays under Requested. */
-function tabOf(row: QueueRow): TabKey {
-  if (row.status === "Cancelled") return HISTORY_TAB;
-  if (row.status !== "Requested" && row.date && daysUntil(row.date) < 0) return HISTORY_TAB;
-  return row.status;
-}
-
-/** The date range looks ahead, so it does not apply to the history tab, which shows everything. */
-const filteredRows = computed(() =>
-  rows.value.filter(
-    (row) =>
-      (tabOf(row) === HISTORY_TAB || inRange(row)) &&
-      (equipment.value === ALL_EQUIPMENT || row.equipmentType === equipment.value),
-  ),
-);
-
-const rowsByTab = computed(() => {
-  const groups: Record<TabKey, QueueRow[]> = { Requested: [], Arranged: [], "Partially Fulfilled": [], [HISTORY_TAB]: [] };
-  for (const row of filteredRows.value) groups[tabOf(row)].push(row);
-  return groups;
-});
+// Date range is a per-event concern (every row of one event shares the same date).
+// It looks ahead, so it does not apply to the history tab, which shows everything
+// (see `eventAggregates`). The equipment-type filter must never change which tab an
+// event belongs to, only narrow what's displayed once an event is already there
+// (see `groups` below).
 
 const equipmentOptions = computed(() => [...new Set(rows.value.map((row) => row.equipmentType))].sort());
 
@@ -169,15 +164,34 @@ interface Group {
   endTime: string | null;
   venue: string | null;
   rows: QueueRow[];
-  total: number;
+  aggregateStatus: TabKey;
 }
 
-/** What the group's badge counts: what is still needed for a partial fulfilment, otherwise the quantity. */
-function groupTotal(groupRows: QueueRow[]): number {
-  return groupRows.reduce(
-    (sum, row) => sum + (row.status === "Partially Fulfilled" ? row.quantity - row.quantityFulfilled : row.quantity),
-    0,
-  );
+/**
+ * One event can have several equipment requests (supabase/migrations/0020's own
+ * comment: "an event may accumulate more than one", same as venue_bookings). Its
+ * equipment is always ONE table, never split across tabs by each request's own
+ * status — so the event's tab is decided by all of its requests together:
+ * Arranged only once every request is Arranged; Requested only while every
+ * request is still untouched; anything in between (a mix, or a request that's
+ * itself Partially Fulfilled) is Partially Fulfilled.
+ */
+function aggregateStatus(eventRows: QueueRow[]): TabKey {
+  // Cancelled requests don't count towards the event's status. An event with
+  // nothing live left is history; so is a finished (arranged or partly arranged)
+  // event whose date has passed. An unarranged one that has passed is overdue and
+  // stays under Requested.
+  const live = eventRows.filter((row) => row.status !== "Cancelled");
+  if (live.length === 0) return HISTORY_TAB;
+
+  const statuses = new Set(live.map((row) => row.status));
+  let status: EquipmentRequestStatus = "Partially Fulfilled";
+  if (statuses.size === 1 && statuses.has("Arranged")) status = "Arranged";
+  else if (statuses.size === 1 && statuses.has("Requested")) status = "Requested";
+
+  const [first] = live;
+  if (status !== "Requested" && first.date && daysUntil(first.date) < 0) return HISTORY_TAB;
+  return status;
 }
 
 /** Stock on hand for one equipment type, looked up per row now that a group spans several types. */
@@ -185,52 +199,66 @@ function stockFor(equipmentType: string): number | null {
   return catalog.value.find((item) => item.name === equipmentType)?.availableStock ?? null;
 }
 
-const groups = computed<Group[]>(() => {
+/** Every event (date-range filtered), each with ALL of its rows and its aggregate status — the
+ * single source both the tab counts and the per-tab table list are built from. */
+const eventAggregates = computed<Group[]>(() => {
   const byEvent = new Map<number, QueueRow[]>();
-  for (const row of rowsByTab.value[activeTab.value]) {
+  for (const row of rows.value) {
     byEvent.set(row.eventId, [...(byEvent.get(row.eventId) ?? []), row]);
   }
-  return [...byEvent.entries()]
-    .map(([eventId, groupRows]) => {
-      const sorted = [...groupRows].sort((a, b) => a.equipmentType.localeCompare(b.equipmentType));
-      const [first] = groupRows;
-      return {
-        eventId,
-        eventName: first.eventName,
-        date: first.date,
-        startTime: first.startTime,
-        endTime: first.endTime,
-        venue: first.venue,
-        rows: sorted,
-        total: groupTotal(sorted),
-      };
-    })
-    .sort((a, b) => (activeTab.value === HISTORY_TAB ? compareRows(b, a) : compareRows(a, b)));
+  const aggregates = [...byEvent.entries()].map(([eventId, eventRows]) => {
+    const sorted = [...eventRows].sort((a, b) => a.equipmentType.localeCompare(b.equipmentType));
+    const [first] = eventRows;
+    return {
+      eventId,
+      eventName: first.eventName,
+      date: first.date,
+      startTime: first.startTime,
+      endTime: first.endTime,
+      venue: first.venue,
+      rows: sorted,
+      aggregateStatus: aggregateStatus(eventRows),
+    };
+  });
+  return aggregates.filter((event) => event.aggregateStatus === HISTORY_TAB || inRange(event.rows[0]));
 });
+
+const tabCounts = computed(() => {
+  const counts: Record<TabKey, number> = { Requested: 0, Arranged: 0, "Partially Fulfilled": 0, [HISTORY_TAB]: 0 };
+  for (const event of eventAggregates.value) counts[event.aggregateStatus]++;
+  return counts;
+});
+
+const groups = computed<Group[]>(() =>
+  eventAggregates.value
+    .filter((event) => event.aggregateStatus === activeTab.value)
+    .map((event) => ({
+      ...event,
+      // Outside the history tab, requests that were cancelled are left out of the table.
+      rows: event.rows
+        .filter((row) => activeTab.value === HISTORY_TAB || row.status !== "Cancelled")
+        .filter((row) => equipment.value === ALL_EQUIPMENT || row.equipmentType === equipment.value),
+    }))
+    .filter((event) => event.rows.length > 0)
+    // History reads newest first; the working tabs, soonest first.
+    .sort((a, b) => (activeTab.value === HISTORY_TAB ? compareRows(b, a) : compareRows(a, b))),
+);
 
 /** In the history tab a section says why it is there: cancelled, or an event that has passed. */
 function historyLabel(group: Group): string {
   return group.rows.every((row) => row.status === "Cancelled") ? "Cancelled" : "Past event";
 }
 
-const badgeLabel = computed(() => {
-  if (activeTab.value === "Arranged") return "arranged";
-  if (activeTab.value === "Partially Fulfilled") return "still needed";
-  return "needed";
-});
-
 function quantityLabel(row: QueueRow): string {
   return row.status === "Partially Fulfilled" ? `${row.quantityFulfilled} of ${row.quantity}` : `${row.quantity}×`;
 }
 
-/** A red badge for an unarranged event that is close or already past. */
-function urgencyLabel(row: QueueRow): string | null {
-  if (row.status !== "Requested" || !row.date) return null;
-  const days = daysUntil(row.date);
-  if (days < 0) return "Overdue";
-  if (days === 0) return "Today";
-  if (days === 1) return "Tomorrow";
-  return days <= URGENT_WITHIN_DAYS ? `In ${days} days` : null;
+/** Same colour convention as EquipmentRequestDetailView.vue's statusBadgeClass. */
+function rowStatusBadgeClass(status: RowStatus): string {
+  if (status === "Arranged") return "status-success";
+  if (status === "Partially Fulfilled") return "status-warning";
+  if (status === "Cancelled") return "status-cancelled";
+  return "status-open";
 }
 
 const emptyMessage = computed(() => {
@@ -239,6 +267,75 @@ const emptyMessage = computed(() => {
   const suffix = RANGES.find((r) => r.key === range.value)?.empty ?? "";
   return `Nothing ${what}${suffix ? ` ${suffix}` : ""}.`;
 });
+
+// Quick status menu: one per ROW (a table can now mix rows from different requests
+// in different states), flips Requested <-> Arranged with a single API call.
+// Partially Fulfilled needs per-item fulfilled quantities, so it stays on the full
+// request page (EquipmentRequestDetailView.vue), not duplicated here. Keyed by the
+// row's own key, not its requestId — two rows can share a request but still open independently.
+const statusMenuOpenFor = ref<string | null>(null);
+const statusUpdating = ref<number | null>(null);
+const statusUpdateError = ref<string | null>(null);
+
+function toggleStatusMenu(rowKey: string): void {
+  if (statusMenuOpenFor.value === rowKey) {
+    statusMenuOpenFor.value = null;
+    return;
+  }
+  statusUpdateError.value = null;
+  statusMenuOpenFor.value = rowKey;
+}
+
+function closeStatusMenu(returnFocus = false): void {
+  const openRowKey = statusMenuOpenFor.value;
+  statusMenuOpenFor.value = null;
+  if (returnFocus && openRowKey !== null) {
+    document.querySelector<HTMLElement>(`[data-status-trigger="${openRowKey}"]`)?.focus();
+  }
+}
+
+// Click anywhere outside every status menu (not just the open one — v-for means there's
+// one .status-menu per row) closes whichever is open.
+function onStatusMenuPointerDown(e: PointerEvent): void {
+  if (!(e.target as HTMLElement).closest(".status-menu")) closeStatusMenu();
+}
+
+function onStatusMenuKeydown(e: KeyboardEvent): void {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    closeStatusMenu(true);
+  }
+}
+
+watch(statusMenuOpenFor, (openRowKey) => {
+  if (openRowKey !== null) {
+    document.addEventListener("pointerdown", onStatusMenuPointerDown);
+  } else {
+    document.removeEventListener("pointerdown", onStatusMenuPointerDown);
+  }
+});
+
+onBeforeUnmount(() => document.removeEventListener("pointerdown", onStatusMenuPointerDown));
+
+async function quickUpdateStatus(requestId: number, status: EquipmentRequestStatus): Promise<void> {
+  const current = requests.value.find((r) => r.id === requestId);
+  if (!current || statusOf(current) === status) {
+    closeStatusMenu();
+    return;
+  }
+
+  statusUpdating.value = requestId;
+  statusUpdateError.value = null;
+  try {
+    await updateEquipmentRequestStatus(requestId, status);
+    current.status = status;
+    closeStatusMenu();
+  } catch {
+    statusUpdateError.value = "Couldn't update the status. Please try again.";
+  } finally {
+    statusUpdating.value = null;
+  }
+}
 
 onMounted(async () => {
   try {
@@ -249,7 +346,7 @@ onMounted(async () => {
     requests.value = loadedRequests;
     catalog.value = loadedCatalog;
     // Open on the first tab that has anything in it.
-    const first = EQUIPMENT_REQUEST_STATUSES.find((status) => rowsByTab.value[status].length > 0);
+    const first = EQUIPMENT_REQUEST_STATUSES.find((status) => tabCounts.value[status] > 0);
     activeTab.value = first ?? "Requested";
   } catch {
     errorMessage.value = "We couldn't load equipment requests. Please try again.";
@@ -283,7 +380,7 @@ onMounted(async () => {
             type="button" role="tab" :aria-selected="activeTab === tabStatus" aria-controls="requests-panel" class="tab"
             :class="{ 'tab--active': activeTab === tabStatus }" @click="activeTab = tabStatus">
             {{ tabStatus }}
-            <span class="tab-count">{{ rowsByTab[tabStatus].length }}</span>
+            <span class="tab-count">{{ tabCounts[tabStatus] }}</span>
           </button>
         </div>
 
@@ -344,23 +441,15 @@ onMounted(async () => {
                   <span :class="{ 'cell-venue--empty': !group.venue }">{{ group.venue || "Venue not set" }}</span>
                 </span>
               </div>
-              <div class="group-header__badges">
-                <span v-if="activeTab === HISTORY_TAB" class="count-badge" data-testid="history-label">{{ historyLabel(group) }}</span>
-                <span v-else class="count-badge">{{ group.total }} {{ badgeLabel }}</span>
-                <span v-if="urgencyLabel(group.rows[0])" class="urgency">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                  </svg>
-                  {{ urgencyLabel(group.rows[0]) }}
-                </span>
+              <div v-if="activeTab === HISTORY_TAB" class="group-header__badges">
+                <span class="count-badge" data-testid="history-label">{{ historyLabel(group) }}</span>
               </div>
             </div>
           </div>
 
           <DataTable
             :columns="TABLE_COLUMNS"
-            column-widths="12rem 9rem 6rem"
+            :column-widths="TABLE_COLUMN_WIDTHS"
             :rows="group.rows"
             :row-key="(row) => row.key"
           >
@@ -372,6 +461,43 @@ onMounted(async () => {
             </template>
             <template #cell-stock="{ row }">
               <span class="cell-stock">{{ stockFor(row.equipmentType) ?? "—" }}</span>
+            </template>
+            <template #cell-status="{ row }">
+              <span class="badge" :class="rowStatusBadgeClass(row.status)">{{ row.status }}</span>
+            </template>
+            <template #cell-action="{ row }">
+              <!-- History is read-only: a cancelled or past request can't be updated from here. -->
+              <div v-if="activeTab !== HISTORY_TAB && row.status !== 'Cancelled'" class="status-menu" @keydown="onStatusMenuKeydown">
+                <AppButton
+                  :data-status-trigger="row.key"
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  aria-haspopup="menu"
+                  :aria-expanded="statusMenuOpenFor === row.key"
+                  :disabled="statusUpdating === row.requestId"
+                  @click="toggleStatusMenu(row.key)"
+                >
+                  Update status
+                  <ChevronDownIcon class="status-menu__chevron" aria-hidden="true" />
+                </AppButton>
+
+                <div v-if="statusMenuOpenFor === row.key" class="status-menu__popover" role="menu" aria-label="Update status">
+                  <button
+                    v-for="option in QUICK_STATUS_OPTIONS"
+                    :key="option"
+                    type="button"
+                    role="menuitemradio"
+                    class="status-menu__option"
+                    :aria-checked="row.status === option"
+                    :disabled="statusUpdating === row.requestId"
+                    @click="quickUpdateStatus(row.requestId, option)"
+                  >
+                    {{ option }}
+                  </button>
+                  <p v-if="statusUpdateError" class="status-menu__error" role="alert">{{ statusUpdateError }}</p>
+                </div>
+              </div>
             </template>
           </DataTable>
         </section>
@@ -603,7 +729,7 @@ onMounted(async () => {
   display: flex;
   align-items: flex-start;
   flex-wrap: wrap;
-  gap: var(--spacing-8);
+  /* gap: var(--spacing-8); */
   flex-direction: column;
 }
 
@@ -668,18 +794,6 @@ onMounted(async () => {
   color: var(--color-grey-600);
 }
 
-.count-badge {
-  display: inline-flex;
-  align-items: center;
-  height: var(--spacing-24);
-  padding: 0 var(--spacing-12);
-  border-radius: var(--radius-full);
-  background: var(--color-blue-200);
-  color: var(--color-blue-800);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-}
 
 .empty-state {
   display: flex;
@@ -716,25 +830,122 @@ onMounted(async () => {
   color: var(--color-grey-900);
 }
 
-.urgency {
+/* Per-row status badge (same colour convention as EquipmentRequestDetailView.vue). */
+
+.badge {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-4);
   height: var(--spacing-24);
-  padding: 0 var(--spacing-8);
+  padding: 0 var(--spacing-12);
   border-radius: var(--radius-full);
-  background: var(--color-error-200);
-  color: var(--color-error-600);
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-  white-space: nowrap;
 }
 
+.status-open {
+  background: var(--color-blue-200);
+  color: var(--color-blue-800);
+}
+
+.status-success {
+  background: var(--color-success-200);
+  color: var(--color-success-700);
+}
+
+.status-warning {
+  background: var(--color-warning-100);
+  color: var(--color-warning-900);
+}
+
+/* Cancelled: neutral grey, like a finished event's badge. */
+.status-cancelled {
+  background: var(--color-grey-100);
+  color: var(--color-grey-700);
+}
+
+/* Why an event is in the Cancelled / Past tab. */
 .group-header__badges {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: var(--spacing-12);
+}
+
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  height: var(--spacing-24);
+  padding: 0 var(--spacing-12);
+  border-radius: var(--radius-full);
+  background: var(--color-grey-100);
+  color: var(--color-grey-700);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+}
+
+/* Update status: a ghost button that opens a small menu of the two bare-flip statuses. */
+
+.status-menu {
+  position: relative;
+}
+
+.status-menu__chevron {
+  width: var(--spacing-16);
+  height: var(--spacing-16);
+}
+
+.status-menu__popover {
+  position: absolute;
+  top: calc(100% + var(--spacing-8));
+  right: 0;
+  z-index: 20;
+  width: 200px;
+  box-sizing: border-box;
+  padding: var(--spacing-8);
+  background: var(--color-base-white);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover);
+}
+
+.status-menu__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 0 var(--spacing-12);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+  cursor: pointer;
+  text-align: left;
+}
+
+.status-menu__option:hover:not(:disabled) {
+  background: var(--color-grey-50);
+}
+
+.status-menu__option:disabled {
+  color: var(--color-grey-300);
+  cursor: not-allowed;
+}
+
+.status-menu__option[aria-checked="true"] {
+  background: var(--color-purple-100);
+  color: var(--color-purple-800);
+}
+
+.status-menu__error {
+  margin: var(--spacing-8) var(--spacing-4) 0;
+  font-size: 0.75rem;
+  color: var(--color-error-600);
 }
 </style>
