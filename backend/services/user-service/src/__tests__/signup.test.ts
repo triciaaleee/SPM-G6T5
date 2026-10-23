@@ -310,4 +310,14 @@ describe("POST /api/auth/signup — infrastructure failures", () => {
     expect(res.status).toBe(500);
     expect(res.body.code).toBeUndefined();
   });
+
+  it("reports a failed id generation as a server error and writes nothing", async () => {
+    const { app, inserts } = buildApp();
+    (globalThis as any).__mockSupabase.rpc = async () => ({ data: null, error: { message: "function generate_user_id does not exist" } });
+
+    const res = await signup(app, VALID);
+
+    expect(res.status).toBe(500);
+    expect(inserts).toHaveLength(0);
+  });
 });
