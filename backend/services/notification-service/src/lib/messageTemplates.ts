@@ -534,6 +534,28 @@ const TEMPLATES: Record<string, Template> = {
     };
   },
 
+  /**
+   * #25a in RabbitMQ.md section 3.3 — the event was edited (its date, time or
+   * expected attendance) and one of its venue bookings no longer fits: the venue
+   * is blocked out then, another event holds it, or it is too small. To the
+   * event's coordinator. `data.status` is the booking's status afterwards: an
+   * Approved booking was flagged `Replacement Required`; a pending one
+   * (`Requested`, `On Hold`) was only reported and keeps its status.
+   */
+  "booking.invalidated_by_edit": (msg) => {
+    const eventName = String(msg.data.eventName ?? "Your event");
+    const venueName = String(msg.data.venueName ?? "a venue");
+    const reason = String(msg.data.reason ?? "it no longer fits");
+    const flagged = msg.data.status === "Replacement Required";
+    return {
+      title: flagged ? "Venue booking needs a replacement" : "Venue booking no longer fits",
+      body: flagged
+        ? `${eventName} was edited and its booking at ${venueName} no longer fits: ${reason}. The booking was flagged, so find a replacement venue.`
+        : `${eventName} was edited and its ${String(msg.data.status ?? "pending").toLowerCase()} booking at ${venueName} no longer fits: ${reason}. The booking was not changed; withdraw it and request another venue if needed.`,
+      link: eventLink(msg),
+    };
+  },
+
   /** #28 in RabbitMQ.md section 3.4 (#107 row 5) — to the assigned coordinator. */
   "equipment.status_changed": (msg) => {
     const status = String(msg.data.status ?? "updated");

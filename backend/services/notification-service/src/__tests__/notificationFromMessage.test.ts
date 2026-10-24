@@ -1024,6 +1024,55 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("renders booking.invalidated_by_edit for the coordinator, differently for a flagged and a pending booking", async () => {
+    const flagged = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "booking.invalidated_by_edit",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: { eventName: "Alumni Gala", venueName: "Grand Ballroom", reason: "Grand Ballroom is unavailable on 2099-02-02 (all day): Renovation", status: "Replacement Required" },
+      }),
+      { supabase: flagged.supabase, resolveRoleUserIds: vi.fn() },
+    );
+    expect(flagged.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        recipient_id: "COORD-0001",
+        title: "Venue booking needs a replacement",
+        body: expect.stringContaining("The booking was flagged, so find a replacement venue."),
+        link: "/events/7",
+      }),
+    ]);
+
+    const pending = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "booking.invalidated_by_edit",
+        eventId: 7,
+        recipients: { userIds: ["COORD-0001"], roles: [] },
+        data: { eventName: "Alumni Gala", venueName: "Side Hall", reason: "Side Hall holds 40, fewer than the event's 80 expected attendees", status: "Requested" },
+      }),
+      { supabase: pending.supabase, resolveRoleUserIds: vi.fn() },
+    );
+    expect(pending.insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        title: "Venue booking no longer fits",
+        body: expect.stringContaining("its requested booking at Side Hall no longer fits"),
+      }),
+    ]);
+  });
+
+  it("skips event.attendance_changed quietly too", async () => {
+    const { supabase, insert } = buildSupabase();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleInboundMessage(buildMsg({ type: "event.attendance_changed" }), { supabase, resolveRoleUserIds: vi.fn() });
+
+    expect(insert).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it("skips event.rescheduled quietly: other services act on it, nobody is notified", async () => {
     const { supabase, insert } = buildSupabase();
     const resolveRoleUserIds = vi.fn();
