@@ -93,7 +93,7 @@ workspace "ConnectSphere - C3 Components" "Level 3 of the C4 model. Component vi
 
                 registrationClient = component "Registration client" "Reads registered counts." "TypeScript module"
 
-                publisher = component "Event publisher" "Emits request.submitted, request.edited, coordinator.assigned, coordinator.reassigned, clarification.requested, clarification.answered, request.decided, safety.submitted, safety.decided, event.rereview, change.requested, change.decided, event.cancelled and event.rescheduled. See RabbitMQ.md." "amqplib"
+                publisher = component "Event publisher" "Emits request.submitted, request.edited, coordinator.assigned, coordinator.reassigned, clarification.requested, clarification.answered, request.decided, safety.submitted, safety.decided, event.rereview, change.requested, change.decided, event.cancelled, event.rescheduled and event.attendance_changed. See RabbitMQ.md." "amqplib"
 
                 consumer = component "Event consumer" "Consumes booking.replacement_required." "amqplib"
             }
