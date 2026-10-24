@@ -32,6 +32,25 @@ function buildApp(user: { id: string; role: string }, result: { data: unknown; e
 
 const lead = { id: "LEAD-0001", role: "coordinator_lead" };
 
+describe("GET /api/users/me", () => {
+  it("returns the caller's own identity from their verified token", async () => {
+    const { app } = buildApp({ id: "ORG-0001", role: "organiser" });
+
+    const res = await request(app).get("/api/users/me");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ user: { id: "ORG-0001", role: "organiser" } });
+  });
+
+  it("reflects whatever role the token carries, not just organiser", async () => {
+    const { app } = buildApp({ id: "COORD-0002", role: "coordinator" });
+
+    const res = await request(app).get("/api/users/me");
+
+    expect(res.body.user).toEqual({ id: "COORD-0002", role: "coordinator" });
+  });
+});
+
 describe("GET /api/users?role=coordinator (E2-13 / E2-12)", () => {
   it("lists coordinators' ids and names for the Event Coordinator Lead", async () => {
     const coordinators = [
@@ -81,6 +100,14 @@ describe("GET /api/users?role=coordinator (E2-13 / E2-12)", () => {
     const res = await request(app).get("/api/users");
 
     expect(res.status).toBe(400);
+  });
+
+  it("reports a failed lookup as a server error", async () => {
+    const { app } = buildApp(lead, { data: null, error: { message: "connection refused" } });
+
+    const res = await request(app).get("/api/users?role=coordinator");
+
+    expect(res.status).toBe(500);
   });
 });
 

@@ -17,7 +17,10 @@ vi.mock("../middleware/auth.js", async () => {
 });
 
 /** .from("users").select("id, name").in("id", ids) */
-function buildApp(user: { id: string; role: string }, result = { data: [] as unknown[], error: null as unknown }) {
+function buildApp(
+  user: { id: string; role: string },
+  result: { data: unknown[] | null; error: unknown } = { data: [], error: null },
+) {
   const inFilter = vi.fn().mockResolvedValue(result);
   const select = vi.fn().mockReturnValue({ in: inFilter });
   const from = vi.fn().mockReturnValue({ select });
@@ -63,5 +66,16 @@ describe("GET /api/users/names (E6)", () => {
     const { app } = buildApp({ id: "ORG-0001", role: "organiser" });
 
     expect((await request(app).get("/api/users/names")).status).toBe(400);
+  });
+
+  it("reports a failed lookup as a server error", async () => {
+    const { app } = buildApp(
+      { id: "ORG-0001", role: "organiser" },
+      { data: null, error: { message: "connection refused" } },
+    );
+
+    const res = await request(app).get("/api/users/names?ids=ATT-0001");
+
+    expect(res.status).toBe(500);
   });
 });
