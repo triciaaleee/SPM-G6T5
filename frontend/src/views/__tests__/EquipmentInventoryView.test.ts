@@ -62,11 +62,11 @@ describe("EquipmentInventoryView — stock table", () => {
   it("lists every item with its total and available stock as plain numbers, not editable fields", async () => {
     const wrapper = await mountView();
 
-    expect(wrapper.findAll("tbody tr[data-testid^='item-']")).toHaveLength(2);
+    expect(wrapper.findAll("[data-testid^='item-']")).toHaveLength(2);
     expect(row(wrapper, 1).find("[data-testid='total']").text()).toBe("10");
     expect(row(wrapper, 1).find("[data-testid='available']").text()).toBe("6");
     expect(row(wrapper, 1).findAll("input")).toHaveLength(0);
-    expect(wrapper.find("thead").text()).toContain("calculated");
+    expect(wrapper.text()).toContain("Available = total stock, minus units booked by events, minus units out of use");
   });
 
   it("flags an item with nothing available", async () => {
@@ -79,7 +79,7 @@ describe("EquipmentInventoryView — stock table", () => {
   it("says when there is no equipment yet", async () => {
     const wrapper = await mountView([]);
     expect(wrapper.text()).toContain("No equipment has been added yet.");
-    expect(wrapper.find("table").exists()).toBe(false);
+    expect(wrapper.find("[data-testid^='item-']").exists()).toBe(false);
   });
 });
 
@@ -90,14 +90,24 @@ describe("EquipmentInventoryView — units out of use come off the available num
       { ...microphones, unusableNow: 0 },
     ]);
 
-    expect(wrapper.find("thead").text()).toContain("Booked by events");
-    expect(wrapper.find("thead").text()).toContain("Out of use");
+    expect(wrapper.text()).toContain("Booked by events");
+    expect(wrapper.text()).toContain("Out of use");
     expect(row(wrapper, 1).find("[data-testid='booked']").text()).toBe("4");
     expect(row(wrapper, 1).find("[data-testid='out-of-use']").text()).toBe("2");
     expect(row(wrapper, 1).find("[data-testid='available']").text()).toBe("4");
     // An older response without the counts reads as none.
     expect(row(wrapper, 2).find("[data-testid='booked']").text()).toBe("0");
     expect(row(wrapper, 2).find("[data-testid='out-of-use']").text()).toBe("0");
+  });
+
+  it("flags out of use with a warning badge only once there is at least one unit", async () => {
+    const wrapper = await mountView([
+      { ...projector, unusableNow: 1 },
+      { ...microphones, unusableNow: 0 },
+    ]);
+
+    expect(row(wrapper, 1).find("[data-testid='out-of-use']").classes()).toContain("out-of-use-badge");
+    expect(row(wrapper, 2).find("[data-testid='out-of-use']").classes()).not.toContain("out-of-use-badge");
   });
 
   it("re-reads the numbers as soon as units are marked or cleared, so the change shows at once", async () => {
@@ -368,7 +378,11 @@ describe("EquipmentInventoryView — adding an item", () => {
     await flushPromises();
 
     expect(mockedCreate).toHaveBeenCalledWith("Lectern", 4);
-    expect(wrapper.findAll("tbody th").map((th) => th.text())).toEqual(["Lectern", "Microphones", "Projector"]);
+    expect(wrapper.findAll("[data-testid^='item-'] .item-name").map((el) => el.text())).toEqual([
+      "Lectern",
+      "Microphones",
+      "Projector",
+    ]);
     expect((wrapper.find("#new-name").element as HTMLInputElement).value).toBe("");
   });
 

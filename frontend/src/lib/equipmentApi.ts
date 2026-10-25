@@ -6,6 +6,12 @@ export interface ReservationFlag {
   reason: string | null;
 }
 
+/** A physical unit's display identity — just enough to show "which one" in the UI. */
+export interface UnitLabel {
+  id: number;
+  label: string | null;
+}
+
 /** E5-1: one line item on an equipment request — type and quantity. */
 export interface EquipmentItem {
   id: number;
@@ -17,6 +23,8 @@ export interface EquipmentItem {
   quantityFulfilled: number;
   /** E5-6 AC1/AC3: set once this item has been Arranged/Partially Fulfilled. */
   reservationFlag: ReservationFlag;
+  /** Which physical units are currently Reserved for this item, if any; absent from responses that don't carry it. */
+  reservedUnits?: UnitLabel[];
 }
 
 /** E5-2: the coordinator cancelled the whole request — kept as history, nothing is reserved against it. */
@@ -496,6 +504,29 @@ export async function checkEquipmentAvailability(
     throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to check equipment availability");
   }
   return body as EquipmentAvailability;
+}
+
+/** A read-only preview of which units a claim would pick right now — nothing is saved. */
+export interface UnitPreview {
+  claimedIds: number[];
+  units: UnitLabel[];
+  availableCount: number;
+  shortfall: number;
+}
+
+/**
+ * Preview which physical units arranging `quantity` of this item would
+ * claim, for the item's own event date — the same selection the backend
+ * actually makes on Save, computed without writing anything.
+ */
+export async function previewUnitsForItem(itemId: number, quantity: number): Promise<UnitPreview> {
+  const res = await fetch(`${apiBase}/items/${itemId}/unit-preview?quantity=${quantity}`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+  if (!res.ok) {
+    throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to preview equipment units");
+  }
+  return body as unknown as UnitPreview;
 }
 
 /**

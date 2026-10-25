@@ -85,7 +85,7 @@ async function mountView(requests: EquipmentRequestWithEvent[]) {
 }
 
 const groupTitles = (wrapper: Awaited<ReturnType<typeof mountView>>) =>
-  wrapper.findAll(".group .h4").map((title) => title.text());
+  wrapper.findAll(".group .h5").map((title) => title.text());
 
 /** Data rows only — excludes each group's column-header row. */
 const dataRows = (wrapper: Awaited<ReturnType<typeof mountView>>) => wrapper.findAll(".row:not(.row--header)");
@@ -161,7 +161,7 @@ describe("TechnicalSupportView", () => {
     ]);
 
     const [first, second] = wrapper.findAll(".group");
-    expect(first.find(".h4").text()).toBe("Alumni Gala");
+    expect(first.find(".h5").text()).toBe("Alumni Gala");
     expect(first.find(".cell-qty").text()).toBe("2×");
     expect(second.find(".group-header__meta .cell-venue--empty").text()).toBe("Venue not set");
   });

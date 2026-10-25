@@ -491,7 +491,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Requested",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
+        items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG, reservedUnits: [] }],
       },
     ]);
   });
@@ -513,7 +513,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Arranged",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 2, reservationFlag: NO_FLAG }],
+        items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 2, reservationFlag: NO_FLAG, reservedUnits: [] }],
       },
     ]);
   });
@@ -581,7 +581,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         status: "Requested",
         fulfillmentNote: null,
         createdAt: "2026-01-01T00:00:00Z",
-        items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
+        items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG, reservedUnits: [] }],
         event: {
           id: 7,
           name: "Alumni Gala",
@@ -680,12 +680,27 @@ describe("GET /api/equipment-requests/event/:eventId (E5-1 AC1, AC2)", () => {
           status: "Requested",
           fulfillmentNote: null,
           createdAt: "2026-01-01T00:00:00Z",
-          items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG }],
+          items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG, reservedUnits: [] }],
         },
       ],
     });
     // Nothing else about the event or its people leaks through.
     expect(JSON.stringify(res.body)).not.toMatch(/COORD-0001|expectedAttendance|accessibility|Step-free/);
+  });
+
+  it("includes which physical units are currently reserved for an item", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      requests: [requestRow],
+      items: [itemRow],
+      bookingInfoEvents: [infoEvent],
+      equipmentRows: [{ id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1, label: "Projector #12" }],
+      equipmentBookingRows: [{ equipment_id: 201, event_id: 7, request_item_id: 1 }],
+    });
+    const res = await request(app).get("/api/equipment-requests/event/7");
+
+    expect(res.status).toBe(200);
+    expect(res.body.equipmentRequests[0].items[0].reservedUnits).toEqual([{ id: 201, label: "Projector #12" }]);
   });
 
   it("has no technical requirements when the organiser wrote none", async () => {
@@ -735,6 +750,133 @@ describe("GET /api/equipment-requests/event/:eventId (E5-1 AC1, AC2)", () => {
     const res = await request(app).get("/api/equipment-requests/event/7");
 
     expect(res.status).toBe(502);
+  });
+});
+
+describe("GET /api/equipment-requests/items/:itemId/unit-preview", () => {
+  const requestRow = { id: 55, event_id: 7, status: "Requested", created_at: "2026-01-01T00:00:00Z" };
+  const itemRow = { id: 1, request_id: 55, equipment_type: "Projector", quantity: 3, quantity_fulfilled: 0, equipment_catalog_id: 1 };
+
+  it("picks free units for the quantity asked and reports them with their labels", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      requests: [requestRow],
+      items: [itemRow],
+      equipmentRows: [
+        { id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1, label: "Projector #1" },
+        { id: 202, type: "Projector", status: "Available", equipment_catalog_id: 1, label: "Projector #2" },
+        { id: 203, type: "Projector", status: "Available", equipment_catalog_id: 1, label: null },
+      ],
+    });
+    const res = await request(app).get("/api/equipment-requests/items/1/unit-preview?quantity=2");
+
+    expect(res.status).toBe(200);
+    expect(res.body.claimedIds).toEqual([201, 202]);
+    expect(res.body.units).toEqual([
+      { id: 201, label: "Projector #1" },
+      { id: 202, label: "Projector #2" },
+    ]);
+    expect(res.body.availableCount).toBe(3);
+    expect(res.body.shortfall).toBe(0);
+  });
+
+  it("reports a shortfall instead of picking units it doesn't have", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      requests: [requestRow],
+      items: [itemRow],
+      equipmentRows: [{ id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1 }],
+    });
+    const res = await request(app).get("/api/equipment-requests/items/1/unit-preview?quantity=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.claimedIds).toEqual([201]);
+    expect(res.body.availableCount).toBe(1);
+    expect(res.body.shortfall).toBe(2);
+  });
+
+  it("only previews units beyond what the item already holds, so its own reservation never blocks itself", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      requests: [requestRow],
+      items: [{ ...itemRow, quantity_fulfilled: 2 }],
+      equipmentRows: [
+        { id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1 },
+        { id: 202, type: "Projector", status: "Available", equipment_catalog_id: 1 },
+        { id: 203, type: "Projector", status: "Available", equipment_catalog_id: 1 },
+      ],
+      // Already held by this very item — must not count as "blocking" a preview for the remaining 1.
+      equipmentBookingRows: [
+        { equipment_id: 201, event_id: 7, request_item_id: 1 },
+        { equipment_id: 202, event_id: 7, request_item_id: 1 },
+      ],
+    });
+    const res = await request(app).get("/api/equipment-requests/items/1/unit-preview?quantity=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.claimedIds).toEqual([203]);
+    expect(res.body.availableCount).toBe(1);
+    expect(res.body.shortfall).toBe(0);
+  });
+
+  it("never claims a unit already reserved for this event by another item", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      requests: [requestRow],
+      items: [itemRow],
+      equipmentRows: [
+        { id: 201, type: "Projector", status: "Available", equipment_catalog_id: 1 },
+        { id: 202, type: "Projector", status: "Available", equipment_catalog_id: 1 },
+      ],
+      equipmentBookingRows: [{ equipment_id: 201, event_id: 7, request_item_id: 999, window_start_ms: 0, window_end_ms: 1 }],
+    });
+    const res = await request(app).get("/api/equipment-requests/items/1/unit-preview?quantity=2");
+
+    expect(res.status).toBe(200);
+    expect(res.body.claimedIds).toEqual([202]);
+    expect(res.body.availableCount).toBe(1);
+    expect(res.body.shortfall).toBe(1);
+  });
+
+  it("returns immediately for a quantity of 0 without reserving or checking anything", async () => {
+    const { app, fetchMock } = buildApp({ user: technicalSupport, requests: [requestRow], items: [itemRow] });
+    const res = await request(app).get("/api/equipment-requests/items/1/unit-preview?quantity=0");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ claimedIds: [], units: [], availableCount: 0, shortfall: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("is for Technical Support only", async () => {
+    const { app } = buildApp({ user: coordinator, requests: [requestRow], items: [itemRow] });
+    const res = await request(app).get("/api/equipment-requests/items/1/unit-preview?quantity=1");
+
+    expect(res.status).toBe(403);
+  });
+
+  it("404s for an item that doesn't exist", async () => {
+    const { app } = buildApp({ user: technicalSupport, requests: [requestRow], items: [itemRow] });
+    const res = await request(app).get("/api/equipment-requests/items/999/unit-preview?quantity=1");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects an item that isn't linked to an equipment catalog item", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      requests: [requestRow],
+      items: [{ ...itemRow, equipment_catalog_id: null }],
+    });
+    const res = await request(app).get("/api/equipment-requests/items/1/unit-preview?quantity=1");
+
+    expect(res.status).toBe(409);
+  });
+
+  it("rejects a malformed quantity", async () => {
+    const { app } = buildApp({ user: technicalSupport, requests: [requestRow], items: [itemRow] });
+    const res = await request(app).get("/api/equipment-requests/items/1/unit-preview?quantity=abc");
+
+    expect(res.status).toBe(400);
   });
 });
 

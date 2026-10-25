@@ -39,7 +39,7 @@ const TABLE_COLUMNS = [
   { key: "status", label: "Status" },
   { key: "action", label: "" },
 ];
-const TABLE_COLUMN_WIDTHS = "10rem 8rem 6rem 9rem 10rem";
+const TABLE_COLUMN_WIDTHS = "15rem 12rem 12rem 9rem minmax(10rem, 1fr)";
 
 /** A request's status as the queue sees it: the three working statuses, or Cancelled. */
 type RowStatus = EquipmentRequestStatus | "Cancelled";
@@ -412,7 +412,7 @@ onMounted(async () => {
             <div class="group-header__title">
               <RouterLink :to="{ name: 'equipment-request-detail', params: { eventId: group.eventId } }"
                 class="group-title-link">
-                <h2 :id="`group-${group.eventId}`" class="h4">{{ group.eventName }}</h2>
+                <h2 :id="`group-${group.eventId}`" class="h5">{{ group.eventName }}</h2>
                 <svg class="group-title-link__chevron" width="14" height="14" viewBox="0 0 24 24" fill="none"
                   stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
                   aria-hidden="true">
@@ -561,9 +561,18 @@ onMounted(async () => {
 }
 
 .h4 {
-  font-size: 1.25rem;
+  font-size: 1.75rem;
   font-weight: 700;
-  line-height: 1.75rem;
+  line-height: 2.25rem;
+  color: var(--color-grey-900);
+  margin: 0;
+}
+
+/* Style.md Composite Text Styles — H5: section divider title. */
+.h5 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 2rem;
   color: var(--color-grey-900);
   margin: 0;
 }
@@ -729,7 +738,6 @@ onMounted(async () => {
   display: flex;
   align-items: flex-start;
   flex-wrap: wrap;
-  /* gap: var(--spacing-8); */
   flex-direction: column;
 }
 
@@ -740,6 +748,7 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: var(--spacing-12);
   align-self: stretch;
+  margin-bottom:var(--spacing-8);
 }
 
 .group-header__title {
@@ -776,9 +785,10 @@ onMounted(async () => {
   color: inherit;
   text-decoration: none;
   cursor: pointer;
+  margin-bottom:var(--spacing-8);
 }
 
-.group-title-link:hover .h4,
+.group-title-link:hover .h5,
 .group-title-link:hover .group-title-link__chevron {
   color: var(--color-purple-600);
 }
@@ -886,6 +896,10 @@ onMounted(async () => {
 }
 
 /* Update status: a ghost button that opens a small menu of the two bare-flip statuses. */
+
+:deep(.cell--action) {
+  align-items: flex-end;
+}
 
 .status-menu {
   position: relative;

@@ -15,7 +15,9 @@
  * E5-5: below the stock table, equipment can be marked damaged or under
  * maintenance for a period so it stops being offered to events.
  */
+import { ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
 import AppButton from "../components/ui/AppButton.vue";
+import DataTable from "../components/ui/DataTable.vue";
 import EquipmentUnitsPanel from "../components/equipment/EquipmentUnitsPanel.vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import {
@@ -80,8 +82,22 @@ function formatDay(value: string): string {
   const date = new Date(`${value}T00:00:00`);
   return Number.isNaN(date.getTime())
     ? value
-    : date.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    : date.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).replace(",", "");
 }
+
+const TABLE_COLUMNS = [
+  { key: "equipment", label: "Equipment" },
+  { key: "total", label: "Total stock" },
+  { key: "booked", label: "Booked by events" },
+  { key: "outOfUse", label: "Out of use" },
+  { key: "available", label: "Available" },
+  { key: "actions", label: "Actions" },
+];
+// `auto` here would size this column from each row's own content — and since every row in this
+// DataTable lays out as its own independent CSS Grid, the header row's short "Actions" label would
+// then resolve to a narrower track than the body rows' three buttons, throwing the fr-sized columns
+// before it out of alignment between the header and the body. A fixed width keeps every row identical.
+const TABLE_COLUMN_WIDTHS = "14rem 0.8fr 1fr 0.8fr 0.8fr 22rem";
 
 // Change stock -----------------------------------------------------------------
 
@@ -167,6 +183,11 @@ interface HistoryState {
 
 const histories = reactive<Record<number, HistoryState>>({});
 const openHistory = reactive(new Set<number>());
+
+/** Whether this row's Add/Remove form or its history is open, so DataTable knows to render the detail row. */
+function isRowDetailOpen(item: EquipmentCatalogItem): boolean {
+  return change.itemId === item.id || openHistory.has(item.id);
+}
 
 async function loadHistory(id: number): Promise<void> {
   histories[id] = { status: "loading", changes: histories[id]?.changes ?? [] };
@@ -286,126 +307,123 @@ onMounted(async () => {
       <section class="card" aria-labelledby="stock-title">
         <h2 id="stock-title" class="h4">Items</h2>
 
-        <div class="day-picker">
-          <div class="field">
-            <label for="stock-date" class="field-label">Stock on</label>
-            <input id="stock-date" type="date" class="input" :value="selectedDate" :disabled="dateLoading"
-              data-testid="stock-date" @change="showDate(($event.target as HTMLInputElement).value)" />
+        <div class="stock-header">
+          <div class="stock-header__controls">
+            <div class="field">
+              <label for="stock-date" class="field-label">Stock on</label>
+              <input id="stock-date" type="date" class="input" :value="selectedDate" :disabled="dateLoading"
+                data-testid="stock-date" @change="showDate(($event.target as HTMLInputElement).value)" />
+            </div>
+            <AppButton variant="outline" size="sm" type="button" :disabled="dateLoading || isToday" data-testid="stock-today"
+              @click="showToday">
+              Today
+            </AppButton>
           </div>
-          <AppButton variant="outline" size="sm" type="button" :disabled="dateLoading || isToday" data-testid="stock-today"
-            @click="showToday">
-            Today
-          </AppButton>
-          <p class="body-small muted day-note" data-testid="stock-day">
-            {{ dateLoading ? "Loading…" : `Showing ${formatDay(selectedDate)}` }}
+          <p class="body-small muted stock-header__summary" data-testid="stock-day">
+            {{ dateLoading ? "Loading…" : `${formatDay(selectedDate)} · ${items.length} item${items.length === 1 ? "" : "s"}` }}
           </p>
         </div>
+        <p class="body-small muted stock-note">
+          Available = total stock, minus units booked by events, minus units out of use, for the day shown.
+        </p>
         <p v-if="dateError" class="field-error" role="alert" data-testid="stock-date-error">{{ dateError }}</p>
 
         <p v-if="items.length === 0" class="body-default muted">No equipment has been added yet.</p>
 
         <p v-if="notice" class="body-small notice" role="status" data-testid="stock-notice">{{ notice }}</p>
 
-        <div v-if="items.length > 0" class="table-wrap">
-          <table class="stock-table">
-            <thead>
-              <tr>
-                <th scope="col">Equipment</th>
-                <th scope="col">Total stock</th>
-                <th scope="col">
-                  Booked by events
-                  <span class="th-note">units reserved for an event at any time on this day</span>
-                </th>
-                <th scope="col">
-                  Out of use
-                  <span class="th-note">damaged or under maintenance on this day</span>
-                </th>
-                <th scope="col">
-                  Available
-                  <span class="th-note">calculated: usable and not booked on this day</span>
-                </th>
-                <th scope="col"><span class="visually-hidden">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              <template v-for="item in items" :key="item.id">
-                <tr :data-testid="`item-${item.id}`">
-                  <th scope="row" class="item-name">{{ item.name }}</th>
-                  <td class="count" data-testid="total">{{ item.totalStock }}</td>
-                  <td class="count" data-testid="booked">{{ item.bookedCount ?? 0 }}</td>
-                  <td class="count" data-testid="out-of-use">{{ item.unusableNow ?? 0 }}</td>
-                  <td class="count" :class="{ 'count--low': item.availableStock === 0 }" data-testid="available">
-                    {{ item.availableStock }}
-                  </td>
-                  <td class="row-actions">
-                    <AppButton variant="outline" size="sm" type="button" :aria-label="`Add stock of ${item.name}`"
-                      data-testid="add-stock" @click="startChange(item, 'add')">
-                      Add stock
-                    </AppButton>
-                    <AppButton variant="outline" size="sm" type="button" :aria-label="`Remove stock of ${item.name}`"
-                      data-testid="remove-stock" @click="startChange(item, 'remove')">
-                      Remove stock
-                    </AppButton>
-                    <AppButton variant="ghost" size="sm" type="button" :aria-expanded="openHistory.has(item.id)"
-                      :aria-label="`History of ${item.name}`" data-testid="toggle-history" @click="toggleHistory(item)">
-                      History
-                    </AppButton>
-                  </td>
-                </tr>
+        <DataTable v-if="items.length > 0" :columns="TABLE_COLUMNS" :column-widths="TABLE_COLUMN_WIDTHS"
+          column-gap="var(--spacing-48)" :rows="items" :row-key="(item) => item.id" :row-detail="isRowDetailOpen"
+          :row-test-id="(item) => `item-${item.id}`">
+          <template #cell-equipment="{ row: item }">
+            <span class="item-name">{{ item.name }}</span>
+          </template>
 
-                <tr v-if="change.itemId === item.id" class="detail-row">
-                  <td colspan="6">
-                    <form class="change-form" data-testid="change-form" @submit.prevent="reviewChange">
-                      <p class="body-small"><strong>{{ change.direction === "add" ? "Add stock" : "Remove stock" }}</strong> — {{ item.name }}</p>
-                      <p v-if="change.direction === 'remove'" class="body-small muted">
-                        Only free units can be removed: ones reserved for an event, out of use, or held by a request stay.
-                      </p>
-                      <p v-if="change.error" class="field-error" role="alert">{{ change.error }}</p>
-                      <div class="change-fields">
-                        <div class="field">
-                          <label :for="`qty-${item.id}`" class="field-label">Quantity</label>
-                          <input :id="`qty-${item.id}`" v-model="change.quantity" type="text" inputmode="numeric"
-                            class="input input--count" :aria-invalid="!!change.fieldErrors.quantity" />
-                          <p class="field-error" role="alert">{{ change.fieldErrors.quantity }}</p>
-                        </div>
-                        <div class="field field--grow">
-                          <label :for="`reason-${item.id}`" class="field-label">Reason</label>
-                          <input :id="`reason-${item.id}`" v-model="change.reason" type="text" class="input" maxlength="500"
-                            placeholder="Why is the stock changing?" :aria-invalid="!!change.fieldErrors.reason" />
-                          <p class="field-error" role="alert">{{ change.fieldErrors.reason }}</p>
-                        </div>
-                      </div>
-                      <div class="change-actions">
-                        <AppButton variant="primary" type="submit" data-testid="review-change">Review</AppButton>
-                        <AppButton variant="outline" type="button" @click="cancelChange">Cancel</AppButton>
-                      </div>
-                    </form>
-                  </td>
-                </tr>
+          <template #cell-total="{ row: item }">
+            <span class="count" data-testid="total">{{ item.totalStock }}</span>
+          </template>
 
-                <tr v-if="openHistory.has(item.id)" class="detail-row">
-                  <td colspan="6">
-                    <p v-if="histories[item.id]?.status === 'loading'" class="body-small muted">Loading the history…</p>
-                    <p v-else-if="histories[item.id]?.status === 'error'" class="body-small error-text" role="alert">
-                      We couldn't load the history. Please try again.
-                    </p>
-                    <p v-else-if="histories[item.id]?.changes.length === 0" class="body-small muted">No stock changes recorded yet.</p>
-                    <ul v-else class="history" :aria-label="`${item.name} stock history`">
-                      <li v-for="entry in histories[item.id].changes" :key="entry.id" class="history__row body-small" data-testid="history-entry">
-                        <span class="history__what">
-                          {{ entry.changeType }} {{ entry.quantity }}
-                          <span class="muted">({{ entry.totalBefore }} → {{ entry.totalAfter }})</span>
-                        </span>
-                        <span class="history__reason">{{ entry.reason }}</span>
-                        <span class="muted">{{ formatWhen(entry.createdAt) }}<template v-if="entry.changedBy"> · {{ entry.changedBy }}</template></span>
-                      </li>
-                    </ul>
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-        </div>
+          <template #cell-booked="{ row: item }">
+            <span class="count" data-testid="booked">{{ item.bookedCount ?? 0 }}</span>
+          </template>
+
+          <template #cell-outOfUse="{ row: item }">
+            <span v-if="(item.unusableNow ?? 0) > 0" class="out-of-use-badge" data-testid="out-of-use">
+              <ExclamationTriangleIcon class="out-of-use-badge__icon" aria-hidden="true" />
+              {{ item.unusableNow }}
+            </span>
+            <span v-else class="count" data-testid="out-of-use">0</span>
+          </template>
+
+          <template #cell-available="{ row: item }">
+            <span class="count" :class="{ 'count--low': item.availableStock === 0 }" data-testid="available">
+              {{ item.availableStock }}
+            </span>
+          </template>
+
+          <template #cell-actions="{ row: item }">
+            <div class="row-actions">
+              <AppButton variant="outline" size="sm" type="button" :aria-label="`Add stock of ${item.name}`"
+                data-testid="add-stock" @click="startChange(item, 'add')">
+                Add stock
+              </AppButton>
+              <AppButton variant="outline" size="sm" type="button" :aria-label="`Remove stock of ${item.name}`"
+                data-testid="remove-stock" @click="startChange(item, 'remove')">
+                Remove stock
+              </AppButton>
+              <AppButton variant="ghost" size="sm" type="button" :aria-expanded="openHistory.has(item.id)"
+                :aria-label="`History of ${item.name}`" data-testid="toggle-history" @click="toggleHistory(item)">
+                History
+              </AppButton>
+            </div>
+          </template>
+
+          <template #row-detail="{ row: item }">
+            <form v-if="change.itemId === item.id" class="change-form" data-testid="change-form" @submit.prevent="reviewChange">
+              <p class="body-small"><strong>{{ change.direction === "add" ? "Add stock" : "Remove stock" }}</strong> — {{ item.name }}</p>
+              <p v-if="change.direction === 'remove'" class="body-small muted">
+                Only free units can be removed: ones reserved for an event, out of use, or held by a request stay.
+              </p>
+              <p v-if="change.error" class="field-error" role="alert">{{ change.error }}</p>
+              <div class="change-fields">
+                <div class="field">
+                  <label :for="`qty-${item.id}`" class="field-label">Quantity</label>
+                  <input :id="`qty-${item.id}`" v-model="change.quantity" type="text" inputmode="numeric"
+                    class="input input--count" :aria-invalid="!!change.fieldErrors.quantity" />
+                  <p class="field-error" role="alert">{{ change.fieldErrors.quantity }}</p>
+                </div>
+                <div class="field field--grow">
+                  <label :for="`reason-${item.id}`" class="field-label">Reason</label>
+                  <input :id="`reason-${item.id}`" v-model="change.reason" type="text" class="input" maxlength="500"
+                    placeholder="Why is the stock changing?" :aria-invalid="!!change.fieldErrors.reason" />
+                  <p class="field-error" role="alert">{{ change.fieldErrors.reason }}</p>
+                </div>
+              </div>
+              <div class="change-actions">
+                <AppButton variant="primary" type="submit" data-testid="review-change">Review</AppButton>
+                <AppButton variant="outline" type="button" @click="cancelChange">Cancel</AppButton>
+              </div>
+            </form>
+
+            <template v-if="openHistory.has(item.id)">
+              <p v-if="histories[item.id]?.status === 'loading'" class="body-small muted">Loading the history…</p>
+              <p v-else-if="histories[item.id]?.status === 'error'" class="body-small error-text" role="alert">
+                We couldn't load the history. Please try again.
+              </p>
+              <p v-else-if="histories[item.id]?.changes.length === 0" class="body-small muted">No stock changes recorded yet.</p>
+              <ul v-else class="history" :aria-label="`${item.name} stock history`">
+                <li v-for="entry in histories[item.id].changes" :key="entry.id" class="history__row body-small" data-testid="history-entry">
+                  <span class="history__what">
+                    {{ entry.changeType }} {{ entry.quantity }}
+                    <span class="muted">({{ entry.totalBefore }} → {{ entry.totalAfter }})</span>
+                  </span>
+                  <span class="history__reason">{{ entry.reason }}</span>
+                  <span class="muted">{{ formatWhen(entry.createdAt) }}<template v-if="entry.changedBy"> · {{ entry.changedBy }}</template></span>
+                </li>
+              </ul>
+            </template>
+          </template>
+        </DataTable>
       </section>
 
       <EquipmentUnitsPanel class="card" @changed="refreshCatalog" />
@@ -484,9 +502,9 @@ onMounted(async () => {
 }
 
 .h4 {
-  font-size: 1.25rem;
+  font-size: 1.75rem;
   font-weight: 700;
-  line-height: 1.75rem;
+  line-height: 2.25rem;
   color: var(--color-grey-900);
   margin: 0;
 }
@@ -582,7 +600,6 @@ onMounted(async () => {
 
 /* Calculated counts: plain numbers, not inputs. Zero available is the same red the old stock table used. */
 .count {
-  padding-top: calc(var(--spacing-12) + var(--spacing-12));
   font-size: 1rem;
   line-height: 1.25rem;
   color: var(--color-grey-900);
@@ -593,10 +610,22 @@ onMounted(async () => {
   font-weight: 700;
 }
 
-.th-note {
-  display: block;
-  font-weight: 400;
-  color: var(--color-grey-400);
+/* Out of use: a warning pill once there is at least one unit, like SafetyReviewPanel's "Needs action" badge. */
+.out-of-use-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-8);
+  border-radius: var(--radius-xs);
+  background: var(--color-warning-200);
+  color: var(--color-warning-900);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.out-of-use-badge__icon {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 .body-small {
@@ -610,12 +639,6 @@ onMounted(async () => {
   border-radius: var(--radius-xs);
   background: var(--color-success-200);
   color: var(--color-success-700);
-}
-
-/* The change form and history sit in a row of their own under the item. */
-.detail-row td {
-  padding: var(--spacing-12) var(--spacing-8);
-  background: var(--color-base-white);
 }
 
 .change-form {
@@ -707,49 +730,28 @@ onMounted(async () => {
 
 /* Table --------------------------------------------------------------------- */
 
-.table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
+/* "Stock on" + Today on the left, the day's full name and item count top-right. */
+.stock-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-16);
 }
 
-/* Which day the stock table is for. */
-.day-picker {
+.stock-header__controls {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--spacing-16);
-  margin-bottom: var(--spacing-16);
 }
 
-.day-note {
-  align-self: center;
+.stock-header__summary {
+  white-space: nowrap;
 }
 
-.stock-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.stock-table th,
-.stock-table td {
-  padding: var(--spacing-12) var(--spacing-8);
-  text-align: left;
-  vertical-align: top;
-  border-bottom: 1px solid var(--color-grey-100);
-}
-
-.stock-table thead th {
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  color: var(--color-grey-500);
-  border-bottom-color: var(--color-grey-200);
-}
-
-.stock-table tbody tr:last-child th,
-.stock-table tbody tr:last-child td {
-  border-bottom: none;
+.stock-note {
+  margin: var(--spacing-4) 0 var(--spacing-16);
 }
 
 .item-name {
@@ -757,11 +759,12 @@ onMounted(async () => {
   font-weight: 700;
   line-height: 1.25rem;
   color: var(--color-grey-900);
-  padding-top: calc(var(--spacing-12) + var(--spacing-12));
 }
 
 .row-actions {
-  white-space: nowrap;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-8);
 }
 
 .row-note {
@@ -769,15 +772,6 @@ onMounted(async () => {
   font-size: 0.875rem;
   line-height: 1.125rem;
   color: var(--color-success-700);
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
 }
 
 /* Add item is the one solid button; lined up with the inputs beside it (label height + gap). */

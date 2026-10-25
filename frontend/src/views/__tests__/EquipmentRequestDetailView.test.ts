@@ -1,13 +1,13 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { h } from "vue";
 import EquipmentRequestDetailView from "../EquipmentRequestDetailView.vue";
 import {
   EquipmentAccessDeniedError,
-  checkEquipmentAvailability,
   fetchEquipmentCatalog,
   fetchEquipmentRequestsForSupport,
+  previewUnitsForItem,
   updateEquipmentRequestStatus,
   type EventEquipmentView,
 } from "../../lib/equipmentApi";
@@ -18,14 +18,14 @@ vi.mock("../../lib/equipmentApi", async () => {
     ...actual,
     fetchEquipmentRequestsForSupport: vi.fn(),
     fetchEquipmentCatalog: vi.fn(),
-    checkEquipmentAvailability: vi.fn(),
+    previewUnitsForItem: vi.fn(),
     updateEquipmentRequestStatus: vi.fn(),
   };
 });
 
 const mockedView = vi.mocked(fetchEquipmentRequestsForSupport);
 const mockedCatalog = vi.mocked(fetchEquipmentCatalog);
-const mockedAvailability = vi.mocked(checkEquipmentAvailability);
+const mockedPreview = vi.mocked(previewUnitsForItem);
 const mockedUpdate = vi.mocked(updateEquipmentRequestStatus);
 
 const router = createRouter({
@@ -69,13 +69,24 @@ function eventView(overrides: Partial<EventEquipmentView> = {}): EventEquipmentV
   };
 }
 
+// Tracked so afterEach can unmount it: an unmounted component clears its own
+// pending debounce timers (onBeforeUnmount), which otherwise fire later
+// against whatever mock state a later test has set up.
+let mountedWrapper: ReturnType<typeof mount> | null = null;
+
 async function mountView() {
   await router.push("/equipment-requests/event/7");
   await router.isReady();
   const wrapper = mount(EquipmentRequestDetailView, { global: { plugins: [router] } });
+  mountedWrapper = wrapper;
   await flushPromises();
   return wrapper;
 }
+
+afterEach(() => {
+  mountedWrapper?.unmount();
+  mountedWrapper = null;
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,17 +94,31 @@ beforeEach(() => {
     { id: 1, name: "Projector", totalStock: 5, availableStock: 5 },
     { id: 2, name: "Microphones", totalStock: 10, availableStock: 1 },
   ]);
-  mockedAvailability.mockResolvedValue({
-    event: { id: 7, name: "Alumni Gala" },
-    type: "Projector",
-    requestedQuantity: 2,
-    totalUnits: 5,
-    unusableCount: 0,
-    reservedElsewhereCount: 0,
+  mockedPreview.mockResolvedValue({
+    claimedIds: [201, 202],
+    units: [
+      { id: 201, label: "Projector #1" },
+      { id: 202, label: "Projector #2" },
+    ],
     availableCount: 5,
     shortfall: 0,
   });
 });
+
+/** The two equipment rows' arranging-now steppers, in item order (Projector, Microphones). */
+function qtyValues(wrapper: ReturnType<typeof mount>): string[] {
+  return wrapper.findAll("[data-testid='qty-value']").map((el) => el.text());
+}
+
+async function incQty(wrapper: ReturnType<typeof mount>, rowIndex: number, times = 1): Promise<void> {
+  for (let i = 0; i < times; i++) {
+    await wrapper.findAll("[data-testid='qty-inc']")[rowIndex].trigger("click");
+  }
+}
+
+async function arrangeAll(wrapper: ReturnType<typeof mount>, rowIndex: number): Promise<void> {
+  await wrapper.findAll("[data-testid='qty-all']")[rowIndex].trigger("click");
+}
 
 describe("EquipmentRequestDetailView", () => {
   it("loads the event named in the route", async () => {
@@ -119,8 +144,11 @@ describe("EquipmentRequestDetailView", () => {
       "A lectern mic.",
     ]);
 
-    const items = wrapper.findAll(".item-row").map((row) => row.find("strong").text().replace(/\s+/g, " "));
-    expect(items).toEqual(["2× Projector", "3× Microphones"]);
+    const items = wrapper.findAll(".item-row").map((row) => row.text().replace(/\s+/g, " "));
+    expect(items[0]).toContain("Projector");
+    expect(items[0]).toContain("2×");
+    expect(items[1]).toContain("Microphones");
+    expect(items[1]).toContain("3×");
   });
 
   it("says so when the organiser gave no technical requirements, and when the venue is not set", async () => {
@@ -133,13 +161,16 @@ describe("EquipmentRequestDetailView", () => {
     expect(wrapper.find(".details").text()).toContain("Venue to be confirmed");
   });
 
-  it("checks each item's availability while the request is still Requested", async () => {
+  it("checks each item's availability for the event's own date on load", async () => {
     mockedView.mockResolvedValue(eventView());
     const wrapper = await mountView();
 
-    expect(mockedAvailability).toHaveBeenCalledWith(7, "Projector", 2);
-    expect(mockedAvailability).toHaveBeenCalledWith(7, "Microphones", 3);
-    expect(wrapper.text()).toContain("Available");
+    expect(mockedPreview).toHaveBeenCalledWith(1, 2);
+    expect(mockedPreview).toHaveBeenCalledWith(2, 3);
+
+    // The "Free stock" column only shows once editing (the collapsed view has no such column).
+    await wrapper.find("[data-testid='edit-arrangement']").trigger("click");
+    expect(wrapper.text()).toContain("more free");
   });
 
   it("shows only a no-access message, with none of the event, when access is denied", async () => {
@@ -159,6 +190,22 @@ describe("EquipmentRequestDetailView", () => {
     expect(wrapper.find("[role='alert']").text()).toContain("couldn't load");
   });
 
+  it("status is a read-out, not a choice: it follows the quantity picked, with no separate status control", async () => {
+    mockedView.mockResolvedValue(eventView());
+    const wrapper = await mountView();
+
+    await wrapper.find("[data-testid='edit-arrangement']").trigger("click");
+
+    // Both start at "Not arranged" (nothing fulfilled yet) — the same shared wording used everywhere else.
+    expect(wrapper.findAll("[data-testid='item-status']").map((b) => b.text())).toEqual(["Not arranged", "Not arranged"]);
+    expect(wrapper.find("select").exists()).toBe(false);
+
+    await arrangeAll(wrapper, 0); // Projector: 2 of 2
+    await incQty(wrapper, 1, 1); // Microphones: 1 of 3
+
+    expect(wrapper.findAll("[data-testid='item-status']").map((b) => b.text())).toEqual(["Arranged", "Partially fulfilled"]);
+  });
+
   it("updates a request's status and tells the user the coordinator was notified", async () => {
     mockedView.mockResolvedValue(eventView());
     mockedUpdate.mockResolvedValue({
@@ -167,15 +214,13 @@ describe("EquipmentRequestDetailView", () => {
     });
     const wrapper = await mountView();
 
-    await wrapper.find(".status-editor .btn--outline").trigger("click");
-    // Each item has its own Requested / Arranged / Partially Fulfilled pills: Arranged for both.
-    await wrapper.findAll(".status-pill")[1].trigger("click");
-    await wrapper.findAll(".status-pill")[4].trigger("click");
-    await wrapper.find(".btn--primary").trigger("click");
+    await wrapper.find("[data-testid='edit-arrangement']").trigger("click");
+    await arrangeAll(wrapper, 0);
+    await arrangeAll(wrapper, 1);
+    await wrapper.find("[data-testid='reserve-stock']").trigger("click");
     await flushPromises();
 
     expect(mockedUpdate).toHaveBeenCalledWith(55, "Arranged", undefined, undefined);
-    expect(wrapper.find(".badge").text()).toBe("Arranged");
     expect(wrapper.find("[role='status']").text()).toContain("coordinator has been notified");
   });
 
@@ -187,14 +232,13 @@ describe("EquipmentRequestDetailView", () => {
     });
     const wrapper = await mountView();
 
-    await wrapper.find(".status-editor .btn--outline").trigger("click");
-    await wrapper.findAll(".status-pill")[1].trigger("click");
-    await wrapper.findAll(".status-pill")[5].trigger("click");
+    await wrapper.find("[data-testid='edit-arrangement']").trigger("click");
+    await arrangeAll(wrapper, 0); // Projector fully arranged
+    await incQty(wrapper, 1, 1); // Microphones: 1 of 3
 
-    // Projectors Arranged; Microphones partly, starting at the 1 of 3 that is in stock.
-    expect(wrapper.find(".outstanding-preview").text()).toBe("2 Microphones outstanding");
+    expect(wrapper.find("[data-testid='outstanding-text']").text()).toBe("2 Microphones outstanding");
 
-    await wrapper.find(".btn--primary").trigger("click");
+    await wrapper.find("[data-testid='reserve-stock']").trigger("click");
     await flushPromises();
 
     expect(mockedUpdate).toHaveBeenCalledWith(55, "Partially Fulfilled", "2 Microphones outstanding", [
@@ -202,6 +246,7 @@ describe("EquipmentRequestDetailView", () => {
       { itemId: 2, fulfilledQuantity: 1 },
     ]);
   });
+
   it("lets Technical Support mark one item arranged and another only partly", async () => {
     mockedView.mockResolvedValue(eventView());
     mockedUpdate.mockResolvedValue({
@@ -217,14 +262,13 @@ describe("EquipmentRequestDetailView", () => {
     });
     const wrapper = await mountView();
 
-    await wrapper.find(".status-editor .btn--outline").trigger("click");
-    await wrapper.findAll(".status-pill")[1].trigger("click");
-    await wrapper.findAll(".status-pill")[5].trigger("click");
-    await wrapper.find("input[aria-label='Microphones arranged']").setValue(2);
+    await wrapper.find("[data-testid='edit-arrangement']").trigger("click");
+    await arrangeAll(wrapper, 0); // Projector: 2 of 2
+    await incQty(wrapper, 1, 2); // Microphones: 2 of 3
 
-    expect(wrapper.find(".outstanding-preview").text()).toBe("1 Microphones outstanding");
+    expect(wrapper.find("[data-testid='outstanding-text']").text()).toBe("1 Microphones outstanding");
 
-    await wrapper.find(".btn--primary").trigger("click");
+    await wrapper.find("[data-testid='reserve-stock']").trigger("click");
     await flushPromises();
 
     expect(mockedUpdate).toHaveBeenCalledWith(55, "Partially Fulfilled", "1 Microphones outstanding", [
@@ -235,7 +279,7 @@ describe("EquipmentRequestDetailView", () => {
     expect(states).toEqual(["Arranged", "Partially fulfilled"]);
   });
 
-  it("saves as Arranged when every item is fully in, even if one was set by number", async () => {
+  it("saves as Arranged when every item is fully in, even if one was reached by stepping up", async () => {
     mockedView.mockResolvedValue(eventView());
     mockedUpdate.mockResolvedValue({
       equipmentRequest: { ...eventView().equipmentRequests[0], status: "Arranged" },
@@ -243,16 +287,32 @@ describe("EquipmentRequestDetailView", () => {
     });
     const wrapper = await mountView();
 
-    await wrapper.find(".status-editor .btn--outline").trigger("click");
-    await wrapper.findAll(".status-pill")[1].trigger("click");
-    await wrapper.findAll(".status-pill")[5].trigger("click");
-    await wrapper.find("input[aria-label='Microphones arranged']").setValue(3);
-    await wrapper.find(".btn--primary").trigger("click");
+    await wrapper.find("[data-testid='edit-arrangement']").trigger("click");
+    await arrangeAll(wrapper, 0); // Projector: 2 of 2
+    await incQty(wrapper, 1, 3); // Microphones: 3 of 3, one click at a time
+    await wrapper.find("[data-testid='reserve-stock']").trigger("click");
     await flushPromises();
 
     expect(mockedUpdate).toHaveBeenCalledWith(55, "Arranged", undefined, undefined);
   });
-  it("shows a cancelled request read-only: no Update status, no per-item badges, and says why", async () => {
+
+  it("never lets the stepper go past what was requested, or below zero", async () => {
+    mockedView.mockResolvedValue(eventView());
+    const wrapper = await mountView();
+
+    await wrapper.find("[data-testid='edit-arrangement']").trigger("click");
+    // Projector needs 2 — try to go to 3.
+    await incQty(wrapper, 0, 3);
+    expect(qtyValues(wrapper)[0]).toBe("2");
+    expect((wrapper.findAll("[data-testid='qty-inc']")[0].element as HTMLButtonElement).disabled).toBe(true);
+
+    // Can't go below zero either.
+    await wrapper.findAll("[data-testid='qty-dec']")[1].trigger("click");
+    expect(qtyValues(wrapper)[1]).toBe("0");
+    expect((wrapper.findAll("[data-testid='qty-dec']")[1].element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows a cancelled request read-only: no editor, no per-item badges, and says why", async () => {
     mockedView.mockResolvedValue(
       eventView({
         equipmentRequests: [{ ...eventView().equipmentRequests[0], status: "Cancelled" }],
@@ -260,13 +320,139 @@ describe("EquipmentRequestDetailView", () => {
     );
     const wrapper = await mountView();
 
-    expect(wrapper.find(".badge").text()).toBe("Cancelled");
-    expect(wrapper.find(".badge").classes()).toContain("status-cancelled");
-    expect(wrapper.find(".status-editor").exists()).toBe(false);
-    expect(wrapper.findAll("[data-testid='item-status']")).toHaveLength(0);
-    expect(wrapper.findAll("[data-testid='item-cancelled']")).toHaveLength(2);
-    expect(wrapper.find("[data-testid='cancelled-note']").text()).toContain("cancelled");
+    // No table or editor for it: it sits in the collapsed "Cancelled requests" list instead.
+    expect(wrapper.find(".request-card").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='edit-arrangement']").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='no-active-requests']").text()).toContain("No active equipment requests");
+    expect(wrapper.find("[data-testid='cancelled-list']").exists()).toBe(false);
+    expect(wrapper.get("[data-testid='cancelled-toggle']").text()).toContain("Cancelled requests (1)");
+
+    await wrapper.get("[data-testid='cancelled-toggle']").trigger("click");
+    const rows = wrapper.findAll(".cancelled-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].text()).toContain("Request 1");
+    expect(rows[0].text()).toContain("Cancelled");
+    expect(rows[0].findAll(".cancelled-row__items li")).toHaveLength(2);
+
     // Nothing is checked for availability on a request that is no longer live.
-    expect(mockedAvailability).not.toHaveBeenCalled();
+    expect(mockedPreview).not.toHaveBeenCalled();
+  });
+
+  it("expanding an item reveals which units are already reserved for it", async () => {
+    mockedView.mockResolvedValue(
+      eventView({
+        equipmentRequests: [
+          {
+            ...eventView().equipmentRequests[0],
+            items: [
+              {
+                id: 1,
+                equipmentType: "Projector",
+                quantity: 2,
+                quantityFulfilled: 2,
+                reservationFlag: { flagged: false, reason: null },
+                reservedUnits: [{ id: 201, label: "Projector #1" }],
+              },
+              eventView().equipmentRequests[0].items[1],
+            ],
+          },
+        ],
+      }),
+    );
+    const wrapper = await mountView();
+
+    expect(wrapper.find("[data-testid='unit-panel']").exists()).toBe(false);
+
+    await wrapper.find("[data-testid='expand-toggle']").trigger("click");
+
+    expect(wrapper.find("[data-testid='unit-panel']").text()).toContain("Projector #1");
+  });
+
+  it("re-checks availability live as the arranged quantity changes, without hitting Save", async () => {
+    vi.useFakeTimers();
+    try {
+      mockedView.mockResolvedValue(eventView());
+      const wrapper = await mountView();
+      mockedPreview.mockClear();
+
+      await wrapper.find("[data-testid='edit-arrangement']").trigger("click");
+      mockedPreview.mockResolvedValueOnce({ claimedIds: [], units: [], availableCount: 0, shortfall: 2 });
+      await incQty(wrapper, 1, 3); // Microphones: step up to 3 of 3
+
+      // The quantity change is debounced before it re-fires the live check.
+      await vi.advanceTimersByTimeAsync(400);
+      await flushPromises();
+
+      expect(mockedPreview).toHaveBeenCalledWith(2, 3);
+      expect(wrapper.find("[data-testid='shortfall-banner']").exists()).toBe(true);
+      expect(wrapper.findAll("[data-testid='item-status']")[1].text()).toBe("Needs fixing");
+      expect(wrapper.find("[data-testid='reserve-stock']").attributes("disabled")).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows a shortfall as a disabled Reserve stock, a row warning and a quick fix, and 'Set to N' resolves it", async () => {
+    vi.useFakeTimers();
+    try {
+      // Microphones has exactly 1 free, however many are asked for.
+      mockedPreview.mockImplementation(async (itemId: number, quantity: number) =>
+        itemId === 2
+          ? {
+              claimedIds: quantity > 0 ? [204] : [],
+              units: quantity > 0 ? [{ id: 204, label: "Mic #4" }] : [],
+              availableCount: 1,
+              shortfall: Math.max(0, quantity - 1),
+            }
+          : { claimedIds: [201, 202], units: [{ id: 201, label: "P1" }, { id: 202, label: "P2" }], availableCount: 2, shortfall: 0 },
+      );
+      mockedView.mockResolvedValue(eventView());
+      const wrapper = await mountView();
+
+      await wrapper.find("[data-testid='edit-arrangement']").trigger("click");
+      await incQty(wrapper, 1, 3); // Microphones: step up to 3, only 1 free
+      await vi.advanceTimersByTimeAsync(400);
+      await flushPromises();
+
+      expect(wrapper.find("[data-testid='qty-warning']").text()).toContain("Only 1 free");
+      expect(wrapper.find("[data-testid='reserve-stock']").attributes("disabled")).toBeDefined();
+
+      await wrapper.find("[data-testid='qty-set-to-free']").trigger("click");
+      await vi.advanceTimersByTimeAsync(400);
+      await flushPromises();
+
+      expect(qtyValues(wrapper)[1]).toBe("1");
+      expect(wrapper.find("[data-testid='shortfall-banner']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='reserve-stock']").attributes("disabled")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expanding a shortfall item shows the units it would still reserve, plus how many short", async () => {
+    vi.useFakeTimers();
+    try {
+      mockedPreview.mockImplementation(async (itemId: number) =>
+        itemId === 2
+          ? { claimedIds: [204], units: [{ id: 204, label: "Mic #4" }], availableCount: 1, shortfall: 2 }
+          : { claimedIds: [201, 202], units: [{ id: 201, label: "P1" }, { id: 202, label: "P2" }], availableCount: 2, shortfall: 0 },
+      );
+      mockedView.mockResolvedValue(eventView());
+      const wrapper = await mountView();
+
+      await wrapper.find("[data-testid='edit-arrangement']").trigger("click");
+      await incQty(wrapper, 1, 3);
+      await vi.advanceTimersByTimeAsync(400);
+      await flushPromises();
+
+      const toggles = wrapper.findAll("[data-testid='expand-toggle']");
+      await toggles[1].trigger("click");
+
+      const panel = wrapper.find("[data-testid='unit-panel']");
+      expect(panel.text()).toContain("Mic #4");
+      expect(panel.text()).toContain("2 short");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

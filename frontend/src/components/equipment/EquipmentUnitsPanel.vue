@@ -582,9 +582,9 @@ onMounted(async () => {
 }
 
 .h4 {
-  font-size: 1.25rem;
+  font-size: 1.75rem;
   font-weight: 700;
-  line-height: 1.75rem;
+  line-height: 2.25rem;
   color: var(--color-grey-900);
   margin: 0;
 }
