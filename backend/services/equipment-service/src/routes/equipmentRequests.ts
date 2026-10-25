@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEvent, fetchEventBookingInfo, toSupportEventInfo, type EquipmentBookingInfo } from "../lib/eventsClient.js";
+import { fetchUserNames } from "../lib/usersClient.js";
 import { claimUnits } from "../lib/equipmentConflicts.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { computeReservationFlags, type ReservationFlag } from "../lib/reservationFlags.js";
@@ -412,11 +413,14 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
 /**
  * E5-1 AC1/AC2: Technical Support open one event's equipment requests. They
  * see the requested equipment, quantities and the organiser's technical
- * requirements, plus the event's name, date, time and venue, and nothing
- * else about the event. An event with no equipment request is refused the
- * same way an unknown one is, so this route can't be used to look at events
- * that have nothing to do with Technical Support. Declared before
- * PATCH /:id only for readability; the paths don't overlap.
+ * requirements, plus the event's name, date, time and venue, and — a
+ * deliberate, narrow exception to otherwise showing nothing about the
+ * event's people — which coordinator raised each request (`requestedBy`,
+ * resolved via user-service's /api/users/names; best-effort, so a lookup
+ * failure still returns the id). An event with no equipment request is
+ * refused the same way an unknown one is, so this route can't be used to
+ * look at events that have nothing to do with Technical Support. Declared
+ * before PATCH /:id only for readability; the paths don't overlap.
  */
 equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -438,7 +442,7 @@ equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) =
 
   const { data: requests, error: requestsError } = await supabase
     .from("equipment_requests")
-    .select("id, event_id, status, fulfillment_note, created_at")
+    .select("id, event_id, coordinator_id, status, fulfillment_note, created_at")
     .eq("event_id", eventId)
     .order("created_at", { ascending: true });
 
@@ -486,13 +490,20 @@ equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) =
     allEventItems.map((item) => item.id),
   );
 
+  const typedRequests = requests as RequestRow[];
+  const coordinatorIds = [...new Set(typedRequests.map((r) => r.coordinator_id).filter((id): id is string => !!id))];
+  const namesByCoordinatorId = await fetchUserNames(coordinatorIds, req.headers.authorization!);
+
   res.json({
     event: toSupportEventInfo(info),
     // The organiser's own words on what technical support the event needs (AC1).
     technicalRequirements: info.technicalSupport?.trim() ? info.technicalSupport.trim() : null,
-    equipmentRequests: (requests as RequestRow[]).map((r) =>
-      toRequest(r, allEventItems, flagsByItemId, reservedUnitsByItemId),
-    ),
+    equipmentRequests: typedRequests.map((r) => ({
+      ...toRequest(r, allEventItems, flagsByItemId, reservedUnitsByItemId),
+      requestedBy: r.coordinator_id
+        ? { id: r.coordinator_id, name: namesByCoordinatorId.get(r.coordinator_id) ?? null }
+        : null,
+    })),
   });
 });
 

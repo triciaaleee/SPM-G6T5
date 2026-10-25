@@ -17,7 +17,9 @@
  * matters. A unit marked Damaged or Under Maintenance outside the app (no dates)
  * shows as unusable with no way to clear it here.
  */
+import { ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
 import AppButton from "../ui/AppButton.vue";
+import DataTable from "../ui/DataTable.vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import {
   EquipmentRequestError,
@@ -39,6 +41,14 @@ import { formatCardDate } from "../../lib/attendeeEvents";
 /** Lets the page refresh the stock numbers: marking or clearing units changes what is available. */
 const emit = defineEmits<{ changed: [] }>();
 
+const TYPE_COLUMNS = [
+  { key: "type", label: "Item" },
+  { key: "units", label: "Total units" },
+  { key: "unusable", label: "Unusable now" },
+  { key: "actions", label: "Actions" },
+];
+const TYPE_COLUMN_WIDTHS = "1fr 10rem 10rem 14rem";
+
 const units = ref<EquipmentUnit[]>([]);
 const loading = ref(true);
 const errorMessage = ref<string | null>(null);
@@ -49,10 +59,13 @@ function todayLocal(): string {
   return new Date().toLocaleDateString("en-CA");
 }
 
+/** Types with units currently out of use sort first, so what needs attention is seen first. */
 const groups = computed(() => {
   const byType = new Map<string, EquipmentUnit[]>();
   for (const unit of units.value) byType.set(unit.type, [...(byType.get(unit.type) ?? []), unit]);
-  return [...byType.entries()].map(([type, list]) => ({ type, units: list }));
+  return [...byType.entries()]
+    .map(([type, list]) => ({ type, units: list }))
+    .sort((a, b) => unusableCount(b.units) - unusableCount(a.units) || a.type.localeCompare(b.type));
 });
 
 function isRunning(period: UnitUnavailabilityPeriod): boolean {
@@ -66,6 +79,17 @@ function isUnusableNow(unit: EquipmentUnit): boolean {
 
 function unusableCount(list: EquipmentUnit[]): number {
   return list.filter(isUnusableNow).length;
+}
+
+function availableNow(list: EquipmentUnit[]): number {
+  return list.length - unusableCount(list);
+}
+
+/** What would be left available for this type if the in-progress "how many" were marked out of use. */
+function availableAfterMarking(list: EquipmentUnit[]): number {
+  const quantity = Number(form.quantity);
+  const taken = Number.isInteger(quantity) && quantity > 0 ? quantity : 0;
+  return Math.max(0, availableNow(list) - taken);
 }
 
 /** "Projector #12", or "Projector #12 · A-012" when the unit has a label. */
@@ -358,11 +382,11 @@ onMounted(async () => {
 
 <template>
   <section class="units" aria-labelledby="units-title">
-    <div>
-      <h2 id="units-title" class="h4">Equipment units</h2>
+    <div class="units__header">
+      <h2 id="units-title" class="h4">Out of use</h2>
       <p class="body-small muted">
-        Mark equipment damaged or under maintenance so it isn't offered to events. You'll see which events a change touches
-        before anything is saved.
+        Damaged or under maintenance units are not offered to events. You will see which events a change affects before
+        you save.
       </p>
     </div>
 
@@ -374,41 +398,64 @@ onMounted(async () => {
     <p v-else-if="errorMessage" class="body-default error-text" role="alert">{{ errorMessage }}</p>
     <p v-else-if="groups.length === 0" class="body-default muted">There are no equipment units yet.</p>
 
-    <ul v-else class="type-list">
-      <li v-for="group in groups" :key="group.type" class="type" :data-testid="`type-${group.type}`">
-        <div class="type__top">
-          <button
-            type="button"
-            class="type__header"
-            :aria-expanded="open.has(group.type)"
-            :aria-controls="`units-${group.type}`"
-            @click="toggleList(group.type)"
-          >
-            <span class="type__name">{{ group.type }}</span>
-            <span class="body-small muted">
-              {{ group.units.length }} {{ group.units.length === 1 ? "unit" : "units" }}
-              <template v-if="unusableCount(group.units) > 0"> · {{ unusableCount(group.units) }} unusable now</template>
-            </span>
-          </button>
-          <AppButton
-            v-if="markingType !== group.type"
-            variant="outline"
-            size="sm"
-            type="button"
-            :aria-label="`Mark ${group.type} unusable`"
-            data-testid="type-mark"
-            @click="startMarking(group.type)"
-          >
-            Mark unusable
-          </AppButton>
-        </div>
+    <DataTable
+      v-else
+      :columns="TYPE_COLUMNS"
+      :column-widths="TYPE_COLUMN_WIDTHS"
+      column-gap="var(--spacing-24)"
+      :rows="groups"
+      :row-key="(group) => group.type"
+      :row-test-id="(group) => `type-${group.type}`"
+      :row-detail="(group) => outGroupsOf(group.type).length > 0 || markingType === group.type || open.has(group.type)"
+    >
+      <template #cell-type="{ row: group }">
+        <button
+          type="button"
+          class="type__name-btn"
+          :aria-expanded="open.has(group.type)"
+          :aria-controls="`units-${group.type}`"
+          @click="toggleList(group.type)"
+        >
+          {{ group.type }}
+        </button>
+      </template>
 
+      <template #cell-units="{ row: group }">
+        <span class="count" data-testid="type-total">{{ group.units.length }}</span>
+      </template>
+
+      <template #cell-unusable="{ row: group }">
+        <span v-if="unusableCount(group.units) > 0" class="out-of-use-badge" data-testid="type-unusable">
+          <ExclamationTriangleIcon class="out-of-use-badge__icon" aria-hidden="true" />
+          {{ unusableCount(group.units) }}
+        </span>
+        <span v-else class="count" data-testid="type-unusable">0</span>
+      </template>
+
+      <template #cell-actions="{ row: group }">
+        <AppButton
+          v-if="markingType !== group.type"
+          variant="outline"
+          size="sm"
+          type="button"
+          :aria-label="`Mark ${group.type} out of use`"
+          data-testid="type-mark"
+          @click="startMarking(group.type)"
+        >
+          Mark out of use
+        </AppButton>
+      </template>
+
+      <template #row-detail="{ row: group }">
         <!-- What is out of use, grouped as it was marked -->
         <ul v-if="outGroupsOf(group.type).length > 0" class="out-list" :aria-label="`${group.type} out of use`">
           <li v-for="out in outGroupsOf(group.type)" :key="out.key" class="out body-small" data-testid="out-group">
-            <span>
-              <strong>{{ out.units.length }}× {{ out.reason }}</strong> · {{ periodText(out) }}<template v-if="out.note"> — {{ out.note }}</template>
-              <span class="muted"> ({{ out.units.map((u) => `#${u.id}`).join(", ") }})</span>
+            <span class="out__detail">
+              <span class="chip chip--bad">{{ out.reason }}</span>
+              <span>
+                <strong>{{ out.units.length }}× {{ out.reason }}</strong> · {{ periodText(out) }}<template v-if="out.note"> — {{ out.note }}</template>
+                <span class="muted"> ({{ out.units.map((u) => `#${u.id}`).join(", ") }})</span>
+              </span>
             </span>
             <AppButton
               variant="ghost"
@@ -419,13 +466,19 @@ onMounted(async () => {
               data-testid="group-usable"
               @click="markGroupUsable(group.type, out)"
             >
-              {{ clearingKey === out.key ? "Updating…" : "Mark usable again" }}
+              {{ clearingKey === out.key ? "Updating…" : "Return to use" }}
             </AppButton>
           </li>
         </ul>
 
         <!-- Mark unusable: quantity, then the impact, then confirm -->
-        <form v-if="markingType === group.type" class="form" data-testid="mark-form" @submit.prevent="checkImpact">
+        <form v-if="markingType === group.type" class="form mark-card" data-testid="mark-form" @submit.prevent="checkImpact">
+          <p class="mark-card__title">Mark out of use — {{ group.type }}</p>
+          <p class="body-small muted">
+            Damaged or under maintenance units are not offered to events. You will see which events a change affects
+            before you save.
+          </p>
+
           <p v-if="form.error" class="body-small error-text" role="alert">{{ form.error }}</p>
 
           <div class="form__fields">
@@ -458,6 +511,11 @@ onMounted(async () => {
             <label :for="`note-${group.type}`" class="field-label">Note (optional)</label>
             <textarea :id="`note-${group.type}`" v-model="form.note" class="input" rows="2" maxlength="500" />
             <p v-if="form.fieldErrors.note" class="field-error" role="alert">{{ form.fieldErrors.note }}</p>
+          </div>
+
+          <div v-if="!impact" class="available-after" data-testid="available-after">
+            <span>Available after saving</span>
+            <strong>{{ availableAfterMarking(group.units) }} of {{ group.units.length }}</strong>
           </div>
 
           <div v-if="!impact" class="form__actions">
@@ -569,8 +627,8 @@ onMounted(async () => {
           </ul>
           <p v-if="visibleUnits(group.units).length === 0" class="body-small muted">No units match.</p>
         </div>
-      </li>
-    </ul>
+      </template>
+    </DataTable>
   </section>
 </template>
 
@@ -579,6 +637,15 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-16);
+  grid-column: 1 / 13;
+  padding: var(--spacing-24);
+  box-sizing: border-box;
+}
+
+.units__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
 }
 
 .h4 {
@@ -621,7 +688,6 @@ onMounted(async () => {
   color: var(--color-warning-900);
 }
 
-.type-list,
 .unit-list,
 .period-list,
 .out-list,
@@ -634,51 +700,48 @@ onMounted(async () => {
   flex-direction: column;
 }
 
-.type-list {
-  gap: var(--spacing-8);
-}
-
-.type {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-12);
-  padding: var(--spacing-12) var(--spacing-16);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-xs);
-}
-
-.type__top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--spacing-12);
-}
-
-.type__header {
-  flex: 1 1 12rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-16);
-  padding: var(--spacing-4) 0;
+.type__name-btn {
   border: none;
   background: transparent;
+  padding: 0;
   font-family: var(--font-family-lato);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
   text-align: left;
   cursor: pointer;
 }
 
-.type__header:focus-visible {
+.type__name-btn:hover {
+  color: var(--color-purple-700);
+}
+
+.type__name-btn:focus-visible {
   outline: 2px solid var(--ring-brand);
   outline-offset: 2px;
 }
 
-.type__name {
-  font-size: 1rem;
-  font-weight: 700;
+.count {
+  font-size: 0.875rem;
   color: var(--color-grey-900);
+}
+
+/* Out of use: a warning pill once there is at least one unit (matches the Stock table's "Out of use" column). */
+.out-of-use-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-8);
+  border-radius: var(--radius-xs);
+  background: var(--color-warning-200);
+  color: var(--color-warning-900);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.out-of-use-badge__icon {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 /* What is out of use: the Warning set's "needs attention" role. */
@@ -719,6 +782,31 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: var(--spacing-8);
+}
+
+.mark-card {
+  padding: var(--spacing-24);
+  border: 1px solid var(--color-purple-300);
+  border-radius: var(--radius-lg);
+  background: var(--color-base-white);
+}
+
+.mark-card__title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+}
+
+.available-after {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-12) var(--spacing-16);
+  border-radius: var(--radius-sm);
+  background: var(--color-grey-50);
+  font-size: 0.875rem;
+  color: var(--color-grey-900);
 }
 
 .field {
@@ -899,6 +987,13 @@ onMounted(async () => {
 }
 
 /* Small Text / Tag: Available reads as success, unusable as the Warning set's "needs attention" role. */
+.out__detail {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  flex-wrap: wrap;
+}
+
 .chip {
   display: inline-block;
   padding: var(--spacing-4) var(--spacing-8);

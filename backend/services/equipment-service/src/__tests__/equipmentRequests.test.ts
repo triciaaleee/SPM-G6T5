@@ -173,6 +173,8 @@ function buildApp(
     equipmentBookingRows?: Record<string, unknown>[];
     /** E5-5: periods Technical Support marked on units (migration 0043). */
     unavailabilityRows?: Record<string, unknown>[];
+    /** What /api/users/names answers for requestedBy — defaults to no names resolved. */
+    userNames?: { id: string; name: string }[];
   } = {},
 ) {
   const requestInsert = vi.fn((row: Record<string, unknown>) =>
@@ -273,6 +275,9 @@ function buildApp(
   const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
     if (url.includes("venue-booking-info")) {
       return { ok: true, status: 200, json: async () => ({ events: options.bookingInfoEvents ?? defaultBookingInfoEvents }) };
+    }
+    if (url.includes("/api/users/names")) {
+      return { ok: true, status: 200, json: async () => ({ users: options.userNames ?? [] }) };
     }
     if (url.includes("/api/events/")) {
       const status = options.eventStatus ?? 200;
@@ -681,11 +686,41 @@ describe("GET /api/equipment-requests/event/:eventId (E5-1 AC1, AC2)", () => {
           fulfillmentNote: null,
           createdAt: "2026-01-01T00:00:00Z",
           items: [{ id: 1, equipmentCatalogId: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: NO_FLAG, reservedUnits: [] }],
+          requestedBy: null,
         },
       ],
     });
-    // Nothing else about the event or its people leaks through.
+    // Nothing else about the event or its people leaks through — requestedBy is the one deliberate exception,
+    // and this request has no coordinator_id of its own, so even that stays null.
     expect(JSON.stringify(res.body)).not.toMatch(/COORD-0001|expectedAttendance|accessibility|Step-free/);
+  });
+
+  it("includes which coordinator raised the request, resolving their name via user-service", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      requests: [{ ...requestRow, coordinator_id: "COORD-0002" }],
+      items: [itemRow],
+      bookingInfoEvents: [infoEvent],
+      userNames: [{ id: "COORD-0002", name: "Priya Shah" }],
+    });
+    const res = await request(app).get("/api/equipment-requests/event/7");
+
+    expect(res.status).toBe(200);
+    expect(res.body.equipmentRequests[0].requestedBy).toEqual({ id: "COORD-0002", name: "Priya Shah" });
+  });
+
+  it("falls back to the coordinator's id, not a 500, when the name lookup fails", async () => {
+    const { app } = buildApp({
+      user: technicalSupport,
+      requests: [{ ...requestRow, coordinator_id: "COORD-0002" }],
+      items: [itemRow],
+      bookingInfoEvents: [infoEvent],
+      userNames: [],
+    });
+    const res = await request(app).get("/api/equipment-requests/event/7");
+
+    expect(res.status).toBe(200);
+    expect(res.body.equipmentRequests[0].requestedBy).toEqual({ id: "COORD-0002", name: null });
   });
 
   it("includes which physical units are currently reserved for an item", async () => {

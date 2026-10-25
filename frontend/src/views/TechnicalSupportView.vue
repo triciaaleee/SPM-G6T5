@@ -13,7 +13,7 @@
  * whose date has passed, newest first. An unarranged event that has passed stays
  * under Requested, as overdue. History rows are read-only.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
 import AppButton from "../components/ui/AppButton.vue";
 import DataTable from "../components/ui/DataTable.vue";
@@ -21,25 +21,18 @@ import {
   EQUIPMENT_REQUEST_STATUSES,
   fetchAllEquipmentRequests,
   fetchEquipmentCatalog,
-  updateEquipmentRequestStatus,
   type EquipmentCatalogItem,
   type EquipmentRequestStatus,
   type EquipmentRequestWithEvent,
 } from "../lib/equipmentApi";
-
-/** The quick status menu only offers a bare flip — no extra data needed. Partially
- * Fulfilled needs per-item fulfilled quantities (EquipmentRequestDetailView.vue's
- * fulfilledQuantityFor/outstandingSummary), so it stays on the full request page. */
-const QUICK_STATUS_OPTIONS: EquipmentRequestStatus[] = ["Requested", "Arranged"];
 
 const TABLE_COLUMNS = [
   { key: "equipment", label: "Equipment" },
   { key: "qty", label: "Qty needed" },
   { key: "stock", label: "In stock" },
   { key: "status", label: "Status" },
-  { key: "action", label: "" },
 ];
-const TABLE_COLUMN_WIDTHS = "15rem 12rem 12rem 9rem minmax(10rem, 1fr)";
+const TABLE_COLUMN_WIDTHS = "1fr 12rem 12rem 9rem";
 
 /** A request's status as the queue sees it: the three working statuses, or Cancelled. */
 type RowStatus = EquipmentRequestStatus | "Cancelled";
@@ -268,74 +261,6 @@ const emptyMessage = computed(() => {
   return `Nothing ${what}${suffix ? ` ${suffix}` : ""}.`;
 });
 
-// Quick status menu: one per ROW (a table can now mix rows from different requests
-// in different states), flips Requested <-> Arranged with a single API call.
-// Partially Fulfilled needs per-item fulfilled quantities, so it stays on the full
-// request page (EquipmentRequestDetailView.vue), not duplicated here. Keyed by the
-// row's own key, not its requestId — two rows can share a request but still open independently.
-const statusMenuOpenFor = ref<string | null>(null);
-const statusUpdating = ref<number | null>(null);
-const statusUpdateError = ref<string | null>(null);
-
-function toggleStatusMenu(rowKey: string): void {
-  if (statusMenuOpenFor.value === rowKey) {
-    statusMenuOpenFor.value = null;
-    return;
-  }
-  statusUpdateError.value = null;
-  statusMenuOpenFor.value = rowKey;
-}
-
-function closeStatusMenu(returnFocus = false): void {
-  const openRowKey = statusMenuOpenFor.value;
-  statusMenuOpenFor.value = null;
-  if (returnFocus && openRowKey !== null) {
-    document.querySelector<HTMLElement>(`[data-status-trigger="${openRowKey}"]`)?.focus();
-  }
-}
-
-// Click anywhere outside every status menu (not just the open one — v-for means there's
-// one .status-menu per row) closes whichever is open.
-function onStatusMenuPointerDown(e: PointerEvent): void {
-  if (!(e.target as HTMLElement).closest(".status-menu")) closeStatusMenu();
-}
-
-function onStatusMenuKeydown(e: KeyboardEvent): void {
-  if (e.key === "Escape") {
-    e.stopPropagation();
-    closeStatusMenu(true);
-  }
-}
-
-watch(statusMenuOpenFor, (openRowKey) => {
-  if (openRowKey !== null) {
-    document.addEventListener("pointerdown", onStatusMenuPointerDown);
-  } else {
-    document.removeEventListener("pointerdown", onStatusMenuPointerDown);
-  }
-});
-
-onBeforeUnmount(() => document.removeEventListener("pointerdown", onStatusMenuPointerDown));
-
-async function quickUpdateStatus(requestId: number, status: EquipmentRequestStatus): Promise<void> {
-  const current = requests.value.find((r) => r.id === requestId);
-  if (!current || statusOf(current) === status) {
-    closeStatusMenu();
-    return;
-  }
-
-  statusUpdating.value = requestId;
-  statusUpdateError.value = null;
-  try {
-    await updateEquipmentRequestStatus(requestId, status);
-    current.status = status;
-    closeStatusMenu();
-  } catch {
-    statusUpdateError.value = "Couldn't update the status. Please try again.";
-  } finally {
-    statusUpdating.value = null;
-  }
-}
 
 onMounted(async () => {
   try {
@@ -419,6 +344,11 @@ onMounted(async () => {
                   <path d="m8.25 4.5 7.5 7.5-7.5 7.5" />
                 </svg>
               </RouterLink>
+              <AppButton v-if="activeTab !== HISTORY_TAB" variant="outline" size="md"
+                :to="{ name: 'equipment-request-detail', params: { eventId: group.eventId } }"
+                class="group-header__arrange mt-2" data-testid="make-arrangements">
+                Make arrangements
+              </AppButton>
             </div>
             <div class="group-header__row">
               <div class="group-header__meta">
@@ -464,40 +394,6 @@ onMounted(async () => {
             </template>
             <template #cell-status="{ row }">
               <span class="badge" :class="rowStatusBadgeClass(row.status)">{{ row.status }}</span>
-            </template>
-            <template #cell-action="{ row }">
-              <!-- History is read-only: a cancelled or past request can't be updated from here. -->
-              <div v-if="activeTab !== HISTORY_TAB && row.status !== 'Cancelled'" class="status-menu" @keydown="onStatusMenuKeydown">
-                <AppButton
-                  :data-status-trigger="row.key"
-                  variant="outline"
-                  size="sm"
-                  type="button"
-                  aria-haspopup="menu"
-                  :aria-expanded="statusMenuOpenFor === row.key"
-                  :disabled="statusUpdating === row.requestId"
-                  @click="toggleStatusMenu(row.key)"
-                >
-                  Update status
-                  <ChevronDownIcon class="status-menu__chevron" aria-hidden="true" />
-                </AppButton>
-
-                <div v-if="statusMenuOpenFor === row.key" class="status-menu__popover" role="menu" aria-label="Update status">
-                  <button
-                    v-for="option in QUICK_STATUS_OPTIONS"
-                    :key="option"
-                    type="button"
-                    role="menuitemradio"
-                    class="status-menu__option"
-                    :aria-checked="row.status === option"
-                    :disabled="statusUpdating === row.requestId"
-                    @click="quickUpdateStatus(row.requestId, option)"
-                  >
-                    {{ option }}
-                  </button>
-                  <p v-if="statusUpdateError" class="status-menu__error" role="alert">{{ statusUpdateError }}</p>
-                </div>
-              </div>
             </template>
           </DataTable>
         </section>
@@ -753,8 +649,14 @@ onMounted(async () => {
 
 .group-header__title {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: var(--spacing-12);
+  align-self: stretch;
+}
+
+.group-header__arrange {
+  flex-shrink: 0;
 }
 
 .group-header__meta {
@@ -895,71 +797,4 @@ onMounted(async () => {
   line-height: 1rem;
 }
 
-/* Update status: a ghost button that opens a small menu of the two bare-flip statuses. */
-
-:deep(.cell--action) {
-  align-items: flex-end;
-}
-
-.status-menu {
-  position: relative;
-}
-
-.status-menu__chevron {
-  width: var(--spacing-16);
-  height: var(--spacing-16);
-}
-
-.status-menu__popover {
-  position: absolute;
-  top: calc(100% + var(--spacing-8));
-  right: 0;
-  z-index: 20;
-  width: 200px;
-  box-sizing: border-box;
-  padding: var(--spacing-8);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-popover);
-}
-
-.status-menu__option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  box-sizing: border-box;
-  min-height: 40px;
-  padding: 0 var(--spacing-12);
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
-  cursor: pointer;
-  text-align: left;
-}
-
-.status-menu__option:hover:not(:disabled) {
-  background: var(--color-grey-50);
-}
-
-.status-menu__option:disabled {
-  color: var(--color-grey-300);
-  cursor: not-allowed;
-}
-
-.status-menu__option[aria-checked="true"] {
-  background: var(--color-purple-100);
-  color: var(--color-purple-800);
-}
-
-.status-menu__error {
-  margin: var(--spacing-8) var(--spacing-4) 0;
-  font-size: 0.75rem;
-  color: var(--color-error-600);
-}
 </style>

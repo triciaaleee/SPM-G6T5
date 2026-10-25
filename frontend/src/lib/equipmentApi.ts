@@ -60,7 +60,9 @@ export interface EquipmentRequest {
 
 /**
  * What Technical Support may see about an event (E5-1 AC1): which event it is
- * and when and where it happens. Nothing about its people or purpose.
+ * and when and where it happens. Nothing else about its people or purpose —
+ * the one deliberate exception is `requestedBy` on each request below, so
+ * Technical Support can see which coordinator raised it.
  */
 export interface SupportEventInfo {
   id: number;
@@ -76,12 +78,17 @@ export interface EquipmentRequestWithEvent extends EquipmentRequest {
   event: SupportEventInfo | null;
 }
 
+/** Which coordinator raised a request, for `GET /event/:eventId` only. `name` is null if the lookup failed. */
+export interface EquipmentRequestWithRequester extends EquipmentRequest {
+  requestedBy: { id: string; name: string | null } | null;
+}
+
 /** E5-1 AC1: one event's equipment requests with its timing and the organiser's technical requirements. */
 export interface EventEquipmentView {
   event: SupportEventInfo;
   /** The organiser's own words on what technical support the event needs; null when none were given. */
   technicalRequirements: string | null;
-  equipmentRequests: EquipmentRequest[];
+  equipmentRequests: EquipmentRequestWithRequester[];
 }
 
 /** The fixed catalog Coordinators pick from and Technical Support's stock table reads (migration 0022). */

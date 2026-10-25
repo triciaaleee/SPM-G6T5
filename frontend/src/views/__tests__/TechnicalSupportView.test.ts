@@ -6,7 +6,6 @@ import TechnicalSupportView from "../TechnicalSupportView.vue";
 import {
   fetchAllEquipmentRequests,
   fetchEquipmentCatalog,
-  updateEquipmentRequestStatus,
   type EquipmentRequestWithEvent,
 } from "../../lib/equipmentApi";
 
@@ -16,13 +15,11 @@ vi.mock("../../lib/equipmentApi", async () => {
     ...actual,
     fetchAllEquipmentRequests: vi.fn(),
     fetchEquipmentCatalog: vi.fn(),
-    updateEquipmentRequestStatus: vi.fn(),
   };
 });
 
 const mockedList = vi.mocked(fetchAllEquipmentRequests);
 const mockedCatalog = vi.mocked(fetchEquipmentCatalog);
-const mockedUpdateStatus = vi.mocked(updateEquipmentRequestStatus);
 
 const router = createRouter({
   history: createMemoryHistory(),
@@ -96,10 +93,6 @@ beforeEach(() => {
     { id: 1, name: "Projector", totalStock: 5, availableStock: 3 },
     { id: 2, name: "Microphones", totalStock: 10, availableStock: 6 },
   ]);
-  mockedUpdateStatus.mockResolvedValue({
-    equipmentRequest: makeRequest({ status: "Arranged" }),
-    notified: true,
-  });
 });
 
 describe("TechnicalSupportView", () => {
@@ -172,6 +165,14 @@ describe("TechnicalSupportView", () => {
     const link = wrapper.find("a.group-title-link");
     expect(link.text()).toContain("Alumni Gala");
     expect(link.attributes("href")).toBe("/equipment-requests/event/7");
+  });
+
+  it("offers a Make arrangements button per event, linking to its request's details", async () => {
+    const wrapper = await mountView([makeRequest({ id: 4, eventId: 7, name: "Alumni Gala" })]);
+
+    const button = wrapper.find("[data-testid='make-arrangements']");
+    expect(button.text()).toBe("Make arrangements");
+    expect(button.attributes("href")).toBe("/equipment-requests/event/7");
   });
 
   it("counts and filters by event, not by equipment row", async () => {
@@ -379,97 +380,6 @@ describe("TechnicalSupportView", () => {
     expect(wrapper.find("[role='alert']").text()).toContain("couldn't load equipment requests");
   });
 
-  describe("quick status update", () => {
-    it("shows one 'Update status' button per row, not once per event", async () => {
-      const wrapper = await mountView([
-        makeRequest({ id: 1, name: "Gala", items: [{ type: "Projector", quantity: 1 }, { type: "Microphones", quantity: 1 }] }),
-      ]);
-
-      expect(dataRows(wrapper)).toHaveLength(2);
-      expect(wrapper.findAll(".status-menu")).toHaveLength(2);
-    });
-
-    it("opens a menu listing Requested and Arranged, with the current status checked", async () => {
-      const wrapper = await mountView([makeRequest({ status: "Requested" })]);
-
-      await wrapper.find("[data-status-trigger]").trigger("click");
-
-      const options = wrapper.findAll(".status-menu__option");
-      expect(options.map((o) => o.text())).toEqual(["Requested", "Arranged"]);
-      expect(options[0].attributes("aria-checked")).toBe("true");
-      expect(options[1].attributes("aria-checked")).toBe("false");
-    });
-
-    it("picking the other option calls the API for that row's request and moves the event to its new tab", async () => {
-      const wrapper = await mountView([makeRequest({ id: 1, status: "Requested" })]);
-
-      await wrapper.find("[data-status-trigger]").trigger("click");
-      await wrapper.findAll(".status-menu__option").find((o) => o.text() === "Arranged")!.trigger("click");
-      await flushPromises();
-
-      expect(mockedUpdateStatus).toHaveBeenCalledWith(1, "Arranged");
-      // The menu closes and the event leaves the Requested tab (now empty) once moved.
-      expect(wrapper.find(".status-menu__popover").exists()).toBe(false);
-      expect(wrapper.find(".empty-state").exists()).toBe(true);
-
-      await wrapper.findAll("[role='tab']").find((t) => t.text().startsWith("Arranged"))!.trigger("click");
-      expect(groupTitles(wrapper)).toHaveLength(1);
-    });
-
-    it("acts on only the clicked row's request when an event has more than one", async () => {
-      const wrapper = await mountView([
-        makeRequest({ id: 1, eventId: 1, status: "Requested", items: [{ type: "Projector", quantity: 1 }] }),
-        makeRequest({ id: 2, eventId: 1, status: "Requested", items: [{ type: "Microphones", quantity: 1 }] }),
-      ]);
-
-      // Rows sort alphabetically by equipment type within a group, so the first row/trigger
-      // is Microphones (request 2), not Projector (request 1).
-      const triggers = wrapper.findAll("[data-status-trigger]");
-      expect(triggers).toHaveLength(2);
-
-      await triggers[0].trigger("click");
-      await wrapper.findAll(".status-menu__option").find((o) => o.text() === "Arranged")!.trigger("click");
-      await flushPromises();
-
-      expect(mockedUpdateStatus).toHaveBeenCalledTimes(1);
-      expect(mockedUpdateStatus).toHaveBeenCalledWith(2, "Arranged");
-    });
-
-    it("clicking the already-selected status is a no-op", async () => {
-      const wrapper = await mountView([makeRequest({ status: "Requested" })]);
-
-      await wrapper.find("[data-status-trigger]").trigger("click");
-      await wrapper.find(".status-menu__option[aria-checked='true']").trigger("click");
-      await flushPromises();
-
-      expect(mockedUpdateStatus).not.toHaveBeenCalled();
-    });
-
-    it("shows an inline error and keeps the row in place when the update fails", async () => {
-      mockedUpdateStatus.mockRejectedValue(new Error("boom"));
-      const wrapper = await mountView([makeRequest({ id: 1, status: "Requested" })]);
-
-      await wrapper.find("[data-status-trigger]").trigger("click");
-      await wrapper.findAll(".status-menu__option").find((o) => o.text() === "Arranged")!.trigger("click");
-      await flushPromises();
-
-      expect(wrapper.find(".status-menu__error").text()).toContain("Couldn't update the status");
-      expect(dataRows(wrapper)).toHaveLength(1);
-    });
-
-    it("closes when clicking outside, without changing anything", async () => {
-      const wrapper = await mountView([makeRequest({ status: "Requested" })]);
-
-      await wrapper.find("[data-status-trigger]").trigger("click");
-      expect(wrapper.find(".status-menu__popover").exists()).toBe(true);
-
-      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-      await wrapper.vm.$nextTick();
-
-      expect(wrapper.find(".status-menu__popover").exists()).toBe(false);
-      expect(mockedUpdateStatus).not.toHaveBeenCalled();
-    });
-  });
 });
 
 describe("TechnicalSupportView: Cancelled / Past tab", () => {

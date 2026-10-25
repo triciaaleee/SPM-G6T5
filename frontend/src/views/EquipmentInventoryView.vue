@@ -16,6 +16,7 @@
  * maintenance for a period so it stops being offered to events.
  */
 import { ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
+import { PlusIcon } from "@heroicons/vue/20/solid";
 import AppButton from "../components/ui/AppButton.vue";
 import DataTable from "../components/ui/DataTable.vue";
 import EquipmentUnitsPanel from "../components/equipment/EquipmentUnitsPanel.vue";
@@ -44,6 +45,9 @@ const isToday = computed(() => selectedDate.value === todaySingapore());
 const loading = ref(true);
 const errorMessage = ref<string | null>(null);
 const notice = ref<string | null>(null);
+
+const activeTab = ref<"stock" | "maintenance">("stock");
+const unusableTotal = computed(() => items.value.reduce((sum, item) => sum + (item.unusableNow ?? 0), 0));
 
 /**
  * Marking or clearing units changes what is available, so re-read the numbers.
@@ -130,13 +134,18 @@ function parseQuantity(value: string): number | null {
   return /^\d+$/.test(value.trim()) && Number(value) >= 1 ? Number(value.trim()) : null;
 }
 
-function reviewChange(): void {
+/** Adding stock is low-risk and applies right away; removing is destructive, so it still asks for confirmation first. */
+async function reviewChange(): Promise<void> {
   change.fieldErrors = {};
   change.error = null;
   if (parseQuantity(change.quantity) === null) change.fieldErrors.quantity = "Enter a whole number, 1 or more.";
   if (change.reason.trim() === "") change.fieldErrors.reason = "A reason is required.";
   if (Object.keys(change.fieldErrors).length > 0) return;
-  change.confirming = true;
+  if (change.direction === "add") {
+    await applyChange();
+  } else {
+    change.confirming = true;
+  }
 }
 
 /** What the total would become if the change went through. */
@@ -184,9 +193,9 @@ interface HistoryState {
 const histories = reactive<Record<number, HistoryState>>({});
 const openHistory = reactive(new Set<number>());
 
-/** Whether this row's Add/Remove form or its history is open, so DataTable knows to render the detail row. */
+/** Whether this row's history is open, so DataTable knows to render the detail row. */
 function isRowDetailOpen(item: EquipmentCatalogItem): boolean {
-  return change.itemId === item.id || openHistory.has(item.id);
+  return openHistory.has(item.id);
 }
 
 async function loadHistory(id: number): Promise<void> {
@@ -207,11 +216,18 @@ async function toggleHistory(item: EquipmentCatalogItem): Promise<void> {
   await loadHistory(item.id);
 }
 
-function formatWhen(value: string): string {
+function formatWhenDate(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? value
     : date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function formatWhenTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
 
 /** A count field is a whole number, 0 or more. Blank or anything else is not saved. */
@@ -229,6 +245,26 @@ const addError = ref<string | null>(null);
 
 const canAdd = computed(() => newName.value.trim() !== "" && !adding.value);
 
+/** Shown under Name as soon as it's blank, not only after a failed submit — Total stock's errors stay submit-only. */
+const nameFieldError = computed(() => addErrors.value.name ?? (newName.value.trim() === "" ? "Enter an item name." : null));
+
+/** The form lives in a modal now; opening it resets whatever was left over from a previous visit. */
+const addingOpen = ref(false);
+
+function openAdd(): void {
+  newName.value = "";
+  newTotal.value = "0";
+  addErrors.value = {};
+  addError.value = null;
+  addingOpen.value = true;
+  notice.value = null;
+}
+
+function closeAdd(): void {
+  if (adding.value) return;
+  addingOpen.value = false;
+}
+
 async function addItem(): Promise<void> {
   addErrors.value = {};
   addError.value = null;
@@ -245,6 +281,8 @@ async function addItem(): Promise<void> {
     items.value = [...items.value, created].sort((a, b) => a.name.localeCompare(b.name));
     newName.value = "";
     newTotal.value = "0";
+    addingOpen.value = false;
+    notice.value = `Added "${created.name}". Starting stock ${created.totalStock}.`;
   } catch (err) {
     if (err instanceof EquipmentValidationError) addErrors.value = err.fields;
     else if (err instanceof EquipmentRequestError) addError.value = err.message;
@@ -274,58 +312,50 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="page-header">
-      <h1 class="h2">Equipment inventory</h1>
-      <p class="subheading">Check what is in stock and correct the numbers when they change</p>
+      <div>
+        <h1 class="h2">Equipment inventory</h1>
+        <p class="subheading">Check what is in stock and correct the numbers when they change</p>
+      </div>
+      <AppButton v-if="activeTab === 'stock'" variant="primary" size="xl" type="button" class="add-item-button"
+        data-testid="open-add-item" @click="openAdd">
+        <PlusIcon class="add-item-button__icon" aria-hidden="true" />
+        Add item
+      </AppButton>
+    </div>
+
+    <div class="tabs full" role="tablist">
+      <button type="button" role="tab" class="tab" :class="{ 'tab--active': activeTab === 'stock' }"
+        :aria-selected="activeTab === 'stock'" data-testid="tab-stock" @click="activeTab = 'stock'">
+        Stock
+      </button>
+      <button type="button" role="tab" class="tab" :class="{ 'tab--active': activeTab === 'maintenance' }"
+        :aria-selected="activeTab === 'maintenance'" data-testid="tab-maintenance" @click="activeTab = 'maintenance'">
+        Maintenance
+        <span v-if="unusableTotal > 0" class="tab__badge">{{ unusableTotal }}</span>
+      </button>
     </div>
 
     <p v-if="loading" class="full body-default muted">Loading the inventory…</p>
     <p v-else-if="errorMessage" class="full body-default error-text" role="alert">{{ errorMessage }}</p>
 
     <template v-else>
-      <section class="card" aria-labelledby="add-title">
-        <h2 id="add-title" class="h4">Add an item</h2>
-        <form class="add-form" @submit.prevent="addItem">
-          <div class="field field--grow">
-            <label for="new-name" class="field-label">Name</label>
-            <input id="new-name" v-model="newName" type="text" class="input" maxlength="100" autocomplete="off"
-              :aria-invalid="!!addErrors.name" aria-describedby="new-name-error" />
-            <p id="new-name-error" class="field-error" role="alert">{{ addErrors.name }}</p>
-          </div>
-          <div class="field">
-            <label for="new-total" class="field-label">Total stock</label>
-            <input id="new-total" v-model="newTotal" type="text" inputmode="numeric" class="input input--count"
-              :aria-invalid="!!addErrors.totalStock" aria-describedby="new-total-error" />
-            <p id="new-total-error" class="field-error" role="alert">{{ addErrors.totalStock }}</p>
-          </div>
-          <AppButton variant="primary" type="submit" class="add-button" :disabled="!canAdd">
-            {{ adding ? "Adding…" : "Add item" }}
-          </AppButton>
-        </form>
-        <p v-if="addError" class="field-error" role="alert">{{ addError }}</p>
-      </section>
-
-      <section class="card" aria-labelledby="stock-title">
-        <h2 id="stock-title" class="h4">Items</h2>
-
-        <div class="stock-header">
-          <div class="stock-header__controls">
-            <div class="field">
-              <label for="stock-date" class="field-label">Stock on</label>
-              <input id="stock-date" type="date" class="input" :value="selectedDate" :disabled="dateLoading"
-                data-testid="stock-date" @change="showDate(($event.target as HTMLInputElement).value)" />
+      <section v-if="activeTab === 'stock'" class="stock-card" aria-labelledby="stock-title">
+        <div class="flex flex-row justify-between items-center">
+          <h2 id="stock-title" class="h4">Items</h2>
+          <div class="stock-header">
+            <div class="stock-header__controls">
+              <div class="field">
+                <label for="stock-date" class="field-label">Stock on</label>
+                <input id="stock-date" type="date" class="input" :value="selectedDate" :disabled="dateLoading"
+                  data-testid="stock-date" @change="showDate(($event.target as HTMLInputElement).value)" />
+              </div>
+              <AppButton class="today-btn" variant="outline" size="sm" type="button" :disabled="dateLoading || isToday" data-testid="stock-today"
+                @click="showToday">
+                Today
+              </AppButton>
             </div>
-            <AppButton variant="outline" size="sm" type="button" :disabled="dateLoading || isToday" data-testid="stock-today"
-              @click="showToday">
-              Today
-            </AppButton>
           </div>
-          <p class="body-small muted stock-header__summary" data-testid="stock-day">
-            {{ dateLoading ? "Loading…" : `${formatDay(selectedDate)} · ${items.length} item${items.length === 1 ? "" : "s"}` }}
-          </p>
         </div>
-        <p class="body-small muted stock-note">
-          Available = total stock, minus units booked by events, minus units out of use, for the day shown.
-        </p>
         <p v-if="dateError" class="field-error" role="alert" data-testid="stock-date-error">{{ dateError }}</p>
 
         <p v-if="items.length === 0" class="body-default muted">No equipment has been added yet.</p>
@@ -367,7 +397,7 @@ onMounted(async () => {
                 data-testid="add-stock" @click="startChange(item, 'add')">
                 Add stock
               </AppButton>
-              <AppButton variant="outline" size="sm" type="button" :aria-label="`Remove stock of ${item.name}`"
+              <AppButton variant="danger" size="sm" type="button" :aria-label="`Remove stock of ${item.name}`"
                 data-testid="remove-stock" @click="startChange(item, 'remove')">
                 Remove stock
               </AppButton>
@@ -379,64 +409,130 @@ onMounted(async () => {
           </template>
 
           <template #row-detail="{ row: item }">
-            <form v-if="change.itemId === item.id" class="change-form" data-testid="change-form" @submit.prevent="reviewChange">
-              <p class="body-small"><strong>{{ change.direction === "add" ? "Add stock" : "Remove stock" }}</strong> — {{ item.name }}</p>
-              <p v-if="change.direction === 'remove'" class="body-small muted">
-                Only free units can be removed: ones reserved for an event, out of use, or held by a request stay.
-              </p>
-              <p v-if="change.error" class="field-error" role="alert">{{ change.error }}</p>
-              <div class="change-fields">
-                <div class="field">
-                  <label :for="`qty-${item.id}`" class="field-label">Quantity</label>
-                  <input :id="`qty-${item.id}`" v-model="change.quantity" type="text" inputmode="numeric"
-                    class="input input--count" :aria-invalid="!!change.fieldErrors.quantity" />
-                  <p class="field-error" role="alert">{{ change.fieldErrors.quantity }}</p>
-                </div>
-                <div class="field field--grow">
-                  <label :for="`reason-${item.id}`" class="field-label">Reason</label>
-                  <input :id="`reason-${item.id}`" v-model="change.reason" type="text" class="input" maxlength="500"
-                    placeholder="Why is the stock changing?" :aria-invalid="!!change.fieldErrors.reason" />
-                  <p class="field-error" role="alert">{{ change.fieldErrors.reason }}</p>
-                </div>
-              </div>
-              <div class="change-actions">
-                <AppButton variant="primary" type="submit" data-testid="review-change">Review</AppButton>
-                <AppButton variant="outline" type="button" @click="cancelChange">Cancel</AppButton>
-              </div>
-            </form>
-
             <template v-if="openHistory.has(item.id)">
               <p v-if="histories[item.id]?.status === 'loading'" class="body-small muted">Loading the history…</p>
               <p v-else-if="histories[item.id]?.status === 'error'" class="body-small error-text" role="alert">
                 We couldn't load the history. Please try again.
               </p>
               <p v-else-if="histories[item.id]?.changes.length === 0" class="body-small muted">No stock changes recorded yet.</p>
-              <ul v-else class="history" :aria-label="`${item.name} stock history`">
-                <li v-for="entry in histories[item.id].changes" :key="entry.id" class="history__row body-small" data-testid="history-entry">
-                  <span class="history__what">
-                    {{ entry.changeType }} {{ entry.quantity }}
-                    <span class="muted">({{ entry.totalBefore }} → {{ entry.totalAfter }})</span>
-                  </span>
-                  <span class="history__reason">{{ entry.reason }}</span>
-                  <span class="muted">{{ formatWhen(entry.createdAt) }}<template v-if="entry.changedBy"> · {{ entry.changedBy }}</template></span>
-                </li>
-              </ul>
+              <template v-else>
+                <p class="history__title">History</p>
+                <ul class="history" :aria-label="`${item.name} stock history`">
+                  <li class="history__row history__row--header" aria-hidden="true">
+                    <span class="history__heading">When</span>
+                    <span class="history__heading">Change</span>
+                    <span class="history__heading">Reason</span>
+                    <span class="history__heading history__heading--badge">Type</span>
+                  </li>
+                  <li v-for="entry in histories[item.id].changes" :key="entry.id" class="history__row" data-testid="history-entry">
+                    <span class="history__when">
+                      <span class="history__date">{{ formatWhenDate(entry.createdAt) }}</span>
+                      <span class="history__time">
+                        {{ formatWhenTime(entry.createdAt) }}<template v-if="entry.changedBy"> · {{ entry.changedBy }}</template>
+                      </span>
+                    </span>
+                    <span class="history__what body-small">
+                      {{ entry.changeType }} {{ entry.quantity }} units · total stock {{ entry.totalBefore }} → {{ entry.totalAfter }}
+                    </span>
+                    <span class="history__reason body-small">{{ entry.reason }}</span>
+                    <span class="history__badge" :class="`history__badge--${entry.changeType.toLowerCase()}`">
+                      {{ entry.changeType === "Added" ? "+" : "−" }} {{ entry.changeType }}
+                    </span>
+                  </li>
+                </ul>
+                <hr class="history__divider" />
+              </template>
             </template>
           </template>
         </DataTable>
       </section>
 
-      <EquipmentUnitsPanel class="card" @changed="refreshCatalog" />
+      <EquipmentUnitsPanel v-if="activeTab === 'maintenance'" @changed="refreshCatalog" />
     </template>
+
+    <!-- Add or remove stock of an existing item. -->
+    <div v-if="change.itemId !== null && !change.confirming" class="modal-overlay" @click.self="cancelChange">
+      <div class="modal add-modal" role="dialog" aria-modal="true" aria-labelledby="change-title">
+        <form class="add-form" data-testid="change-form" @submit.prevent="reviewChange">
+          <p id="change-title" class="modal-title add-modal__title">
+            {{ change.direction === "add" ? "Add stock" : "Remove stock" }}
+            <template v-if="changingItem"> — {{ changingItem.name }}</template>
+            <span v-if="changingItem" class="change-title__stock">(current stock: {{ changingItem.totalStock }})</span>
+          </p>
+          <p v-if="change.direction === 'remove'" class="body-base mb-8 muted">
+            Only free units can be removed: ones reserved for an event, out of use, or held by a request stay.
+          </p>
+          <p v-if="change.error" class="field-error" role="alert">{{ change.error }}</p>
+          <div class="field">
+            <label for="change-qty" class="field-label">Quantity</label>
+            <input id="change-qty" v-model="change.quantity" type="text" inputmode="numeric" class="input input--count"
+              :aria-invalid="!!change.fieldErrors.quantity" aria-describedby="change-qty-error" />
+            <p id="change-qty-error" class="field-error" role="alert">
+              <ExclamationTriangleIcon v-if="change.fieldErrors.quantity" class="field-error__icon" aria-hidden="true" />
+              {{ change.fieldErrors.quantity }}
+            </p>
+          </div>
+          <div class="field">
+            <label for="change-reason" class="field-label">Reason</label>
+            <input id="change-reason" v-model="change.reason" type="text" class="input" maxlength="500"
+              placeholder="Why is the stock changing?" :aria-invalid="!!change.fieldErrors.reason" aria-describedby="change-reason-error" />
+            <p id="change-reason-error" class="field-error" role="alert">
+              <ExclamationTriangleIcon v-if="change.fieldErrors.reason" class="field-error__icon" aria-hidden="true" />
+              {{ change.fieldErrors.reason }}
+            </p>
+          </div>
+          <div class="modal-actions">
+            <AppButton variant="primary" type="submit" :disabled="change.saving" data-testid="review-change">
+              {{ change.saving && change.direction === "add" ? "Adding…" : change.direction === "add" ? "Add" : "Remove" }}
+            </AppButton>
+            <AppButton variant="ghost" type="button" :disabled="change.saving" @click="cancelChange">Cancel</AppButton>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Add an item: name and starting stock. -->
+    <div v-if="addingOpen" class="modal-overlay" @click.self="closeAdd">
+      <div class="modal add-modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
+        <p id="add-title" class="modal-title add-modal__title">Add item</p>
+        <form class="add-form" @submit.prevent="addItem">
+          <div class="field">
+            <label for="new-name" class="field-label">Name</label>
+            <input id="new-name" v-model="newName" type="text" class="input" maxlength="100" autocomplete="off"
+              :aria-invalid="!!nameFieldError" aria-describedby="new-name-error" />
+            <p id="new-name-error" class="field-error" role="alert">
+              <ExclamationTriangleIcon v-if="nameFieldError" class="field-error__icon" aria-hidden="true" />
+              {{ nameFieldError }}
+            </p>
+          </div>
+          <div class="field">
+            <label for="new-total" class="field-label">Total stock</label>
+            <input id="new-total" v-model="newTotal" type="text" inputmode="numeric" class="input input--count"
+              :aria-invalid="!!addErrors.totalStock" aria-describedby="new-total-error" />
+            <p id="new-total-error" class="field-error" role="alert">
+              <ExclamationTriangleIcon v-if="addErrors.totalStock" class="field-error__icon" aria-hidden="true" />
+              {{ addErrors.totalStock }}
+            </p>
+          </div>
+          <p v-if="addError" class="field-error" role="alert">{{ addError }}</p>
+          <div class="modal-actions">
+            <AppButton variant="primary" type="submit" :disabled="!canAdd">
+              {{ adding ? "Adding…" : "Add item" }}
+            </AppButton>
+            <AppButton variant="ghost" type="button" :disabled="adding" @click="closeAdd">Cancel</AppButton>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <!-- Changing stock adds or removes real units, so confirm first. -->
     <div v-if="change.confirming && changingItem" class="modal-overlay" @click.self="change.confirming = false">
       <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="stock-confirm-title" aria-describedby="stock-confirm-body">
-        <p id="stock-confirm-title" class="modal-title">
+        <p id="stock-confirm-title" class="modal-title add-modal__title">
           {{ change.direction === "add" ? "Add" : "Remove" }} {{ parseQuantity(change.quantity) }} {{ changingItem.name }}?
-        </p>
-        <p id="stock-confirm-body" class="body-default muted">
-          Total stock goes from {{ changingItem.totalStock }} to {{ totalAfter }}. Reason: {{ change.reason.trim() }}
+          <span id="stock-confirm-body" class="change-title__stock">
+            Total stock goes from {{ changingItem.totalStock }} to {{ totalAfter }}. Reason: {{ change.reason.trim() }}
+          </span>
         </p>
         <div class="modal-actions">
           <AppButton variant="outline" :disabled="change.saving" @click="change.confirming = false">Back</AppButton>
@@ -461,7 +557,8 @@ onMounted(async () => {
 
 .page-header,
 .full,
-.card {
+.card,
+.stock-card {
   grid-column: 1 / 13;
 }
 
@@ -474,7 +571,8 @@ onMounted(async () => {
 
   .page-header,
   .full,
-  .card {
+  .card,
+  .stock-card {
     grid-column: 1 / 7;
   }
 }
@@ -488,7 +586,8 @@ onMounted(async () => {
 
   .page-header,
   .full,
-  .card {
+  .card,
+  .stock-card {
     grid-column: 1 / 5;
   }
 }
@@ -517,6 +616,67 @@ onMounted(async () => {
   margin: var(--spacing-8) 0 0;
 }
 
+/* Title on the left, "Add item" top-aligned with it on the right. */
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-16);
+}
+
+.add-item-button {
+  flex-shrink: 0;
+}
+
+.add-item-button__icon {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.tabs {
+  display: flex;
+  gap: var(--spacing-24);
+  border-bottom: 1px solid var(--color-grey-100);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  padding: var(--spacing-12) 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-grey-600);
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--color-grey-900);
+}
+
+.tab--active {
+  color: var(--color-purple-700);
+  border-bottom-color: var(--color-purple-600);
+}
+
+.tab__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 var(--spacing-4);
+  border-radius: var(--radius-full);
+  background: var(--color-purple-100);
+  color: var(--color-purple-700);
+  font-size: 0.75rem;
+}
+
 .body-default {
   font-size: 1rem;
   line-height: 1.25rem;
@@ -542,23 +702,27 @@ onMounted(async () => {
   border-radius: var(--radius-lg);
 }
 
+/* The stock table's section: same layout as .card, without the card surface. */
+.stock-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+}
+
 /* Add form ------------------------------------------------------------------ */
 
 .add-form {
   display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: var(--spacing-16);
+  flex-direction: column;
+
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
-}
-
-.field--grow {
-  flex: 1 1 240px;
+  gap: var(--spacing-8);
+  margin-bottom:var(--spacing-8);
+  margin-top:var(--spacing-4);
 }
 
 .field-label {
@@ -641,46 +805,96 @@ onMounted(async () => {
   color: var(--color-success-700);
 }
 
-.change-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-8);
-}
-
-.change-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-16);
-}
-
-.change-actions {
-  display: flex;
-  gap: var(--spacing-8);
+.history__title {
+  margin: 0 0 var(--spacing-24);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
 }
 
 .history {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-8);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.history__divider {
+  margin: var(--spacing-16) 0 0;
+  border: none;
+  border-top: 2px solid var(--color-grey-200);
+}
+
+.history li + li {
+  border-top: 1px solid var(--color-grey-100);
 }
 
 .history__row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-8) var(--spacing-16);
+  display: grid;
+  grid-template-columns: 12rem 1fr 1fr 1fr;
+  align-items: center;
+  column-gap: var(--spacing-16);
+  padding: var(--spacing-16);
+  background: var(--color-base-white);
 }
 
-.history__what {
+.history__when {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.history__date {
+  font-size: 0.875rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
 
+.history__time {
+  font-size: 0.75rem;
+  color: var(--color-grey-500);
+}
+
 .history__reason {
-  flex: 1 1 12rem;
   color: var(--color-grey-700);
+}
+
+.history__what {
+  color: var(--color-grey-900);
+}
+
+.history__badge {
+  justify-self: start;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+  padding: var(--spacing-4) var(--spacing-12);
+  border-radius: var(--radius-xs);
+}
+
+.history__badge--added {
+  background: var(--color-success-200);
+  color: var(--color-success-700);
+}
+
+.history__badge--removed {
+  background: var(--color-grey-100);
+  color: var(--color-grey-600);
+}
+
+.history__row--header {
+  padding: var(--spacing-12) var(--spacing-16);
+  background: var(--color-grey-75);
+}
+
+.history__heading {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-grey-500);
 }
 
 /* Confirmation: same modal as the attendee's withdraw dialog, over the Drawer scrim (Style.md 3.5). */
@@ -697,7 +911,7 @@ onMounted(async () => {
 
 .modal {
   width: 100%;
-  max-width: 400px;
+  max-width: 600px;
   padding: var(--spacing-24);
   background: var(--color-base-white);
   border-radius: var(--radius-lg);
@@ -719,8 +933,24 @@ onMounted(async () => {
   margin-top: var(--spacing-24);
 }
 
+/* Add item: a form dialog rather than a yes/no confirmation, so it reads like the old card's own
+   heading, and its actions sit left-aligned under the fields (primary first, Cancel beside it). */
+.add-modal__title {
+  font-size: 1.5rem;
+  line-height: 2rem;
+}
+
+.change-title__stock {
+  font-size: 1.25rem;
+  font-weight: 400;
+  margin-left:var(--spacing-8);
+}
+
 /* Reserves a line so an error appearing doesn't push the layout around. */
 .field-error {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
   min-height: 1.125rem;
   margin: 0;
   font-size: 0.875rem;
@@ -728,14 +958,20 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
+.field-error__icon {
+  flex-shrink: 0;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
 /* Table --------------------------------------------------------------------- */
 
-/* "Stock on" + Today on the left, the day's full name and item count top-right. */
+/* "Stock on" + Today, and the day's full name and item count, both right-aligned. */
 .stock-header {
   display: flex;
+  flex-direction: row;
   flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: center;
   gap: var(--spacing-16);
 }
 
@@ -744,6 +980,11 @@ onMounted(async () => {
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--spacing-16);
+}
+
+.today-btn {
+  height: var(--spacing-48);
+  margin-bottom:var(--spacing-8);
 }
 
 .stock-header__summary {
@@ -772,12 +1013,6 @@ onMounted(async () => {
   font-size: 0.875rem;
   line-height: 1.125rem;
   color: var(--color-success-700);
-}
-
-/* Add item is the one solid button; lined up with the inputs beside it (label height + gap). */
-.add-button {
-  align-self: flex-start;
-  margin-top: calc(var(--spacing-20) + var(--spacing-4));
 }
 
 </style>

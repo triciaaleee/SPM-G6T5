@@ -67,8 +67,13 @@ test("coordinator records equipment requirements via the form; Technical Support
   await page.getByRole("tab", { name: /^Requested/ }).click();
   await expect(page.getByRole("heading", { name: eventName, level: 2 })).toBeVisible();
 
-  // And on the event's own equipment request detail page.
+  // And on the event's own equipment request detail page. Quantity and name
+  // render as separate table cells (DataTable's "qty"/"equipment" columns),
+  // not as one combined text node, so check each cell within the item's row.
   await page.getByRole("heading", { name: eventName, level: 2 }).click();
   await expect(page).toHaveURL(new RegExp(`/equipment-requests/event/${event.id}$`));
-  await expect(page.getByText(`2× ${item.name}`)).toBeVisible();
+  const detailRow = page.locator("li.item-row", { hasText: item.name }).first();
+  await expect(detailRow).toBeVisible();
+  await expect(detailRow.locator(".item-name")).toHaveText(item.name);
+  await expect(detailRow.locator(".item-qty").first()).toHaveText("2×");
 });

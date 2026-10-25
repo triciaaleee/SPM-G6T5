@@ -59,6 +59,7 @@ function eventView(overrides: Partial<EventEquipmentView> = {}): EventEquipmentV
         status: "Requested",
         fulfillmentNote: null,
         createdAt: "2099-01-01T00:00:00Z",
+        requestedBy: { id: "COORD-0001", name: "Priya Shah" },
         items: [
           { id: 1, equipmentType: "Projector", quantity: 2, quantityFulfilled: 0, reservationFlag: { flagged: false, reason: null } },
           { id: 2, equipmentType: "Microphones", quantity: 3, quantityFulfilled: 0, reservationFlag: { flagged: false, reason: null } },
@@ -149,6 +150,24 @@ describe("EquipmentRequestDetailView", () => {
     expect(items[0]).toContain("2×");
     expect(items[1]).toContain("Microphones");
     expect(items[1]).toContain("3×");
+  });
+
+  it("shows which coordinator raised the request, falling back to their id if the name wasn't resolved", async () => {
+    mockedView.mockResolvedValue(
+      eventView({
+        equipmentRequests: [
+          { ...eventView().equipmentRequests[0], requestedBy: { id: "COORD-0001", name: "Priya Shah" } },
+          { ...eventView().equipmentRequests[0], id: 56, requestedBy: { id: "COORD-0002", name: null } },
+          { ...eventView().equipmentRequests[0], id: 57, requestedBy: null },
+        ],
+      }),
+    );
+    const wrapper = await mountView();
+
+    const cards = wrapper.findAll(".request-card");
+    expect(cards[0].text()).toContain("Requested by Priya Shah");
+    expect(cards[1].text()).toContain("Requested by COORD-0002");
+    expect(cards[2].text()).not.toContain("Requested by");
   });
 
   it("says so when the organiser gave no technical requirements, and when the venue is not set", async () => {

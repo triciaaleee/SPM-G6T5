@@ -32,6 +32,7 @@ import {
   type EquipmentItem,
   type EquipmentRequest,
   type EquipmentRequestStatus,
+  type EquipmentRequestWithRequester,
   type EventEquipmentView,
   type UnitLabel,
   type UnitPreview,
@@ -77,7 +78,13 @@ const loading = ref(true);
 const accessDenied = ref(false);
 const errorMessage = ref<string | null>(null);
 
-const requests = computed<EquipmentRequest[]>(() => view.value?.equipmentRequests ?? []);
+const requests = computed<EquipmentRequestWithRequester[]>(() => view.value?.equipmentRequests ?? []);
+
+/** "· Requested by Priya Shah", falling back to the id if the name couldn't be resolved. Omitted if neither is known. */
+function requesterLabel(r: EquipmentRequestWithRequester): string {
+  if (!r.requestedBy) return "";
+  return ` · Requested by ${r.requestedBy.name ?? r.requestedBy.id}`;
+}
 
 /** Live requests keep the full table card; cancelled ones are history, tucked into one collapsible list. */
 const activeRequests = computed(() => requests.value.filter((r) => r.status !== CANCELLED_REQUEST_STATUS));
@@ -510,7 +517,7 @@ onMounted(async () => {
             <div class="request-card__header">
               <div class="request-card__heading">
                 <h3 class="h5">Request {{ requestNumber(r) }}</h3>
-                <p class="body-small muted">Submitted {{ formatSubmitted(r.createdAt) }}</p>
+                <p class="body-small muted">Submitted {{ formatSubmitted(r.createdAt) }}{{ requesterLabel(r) }}</p>
               </div>
               <div class="request-card__header-right">
                 <span class="body-small muted" data-testid="request-summary">{{ summaryText(r) }}</span>
@@ -724,7 +731,7 @@ onMounted(async () => {
             <li v-for="r in cancelledRequests" :key="r.id" class="cancelled-row">
               <div class="cancelled-row__who">
                 <p class="body-default cancelled-row__name">Request {{ requestNumber(r) }}</p>
-                <p class="body-small muted">Submitted {{ formatSubmittedLong(r.createdAt) }}</p>
+                <p class="body-small muted">Submitted {{ formatSubmittedLong(r.createdAt) }}{{ requesterLabel(r) }}</p>
               </div>
               <ul class="cancelled-row__items">
                 <li v-for="item in r.items" :key="item.id" class="body-default">

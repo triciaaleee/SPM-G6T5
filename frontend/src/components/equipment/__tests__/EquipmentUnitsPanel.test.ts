@@ -84,11 +84,23 @@ describe("EquipmentUnitsPanel — one mark button per type (E5-5)", () => {
       unit({ id: 20, type: "Screen" }),
     ]);
 
-    expect(type(wrapper).find(".type__header").text()).toContain("3 units");
-    expect(type(wrapper).find(".type__header").text()).toContain("2 unusable now");
+    expect(type(wrapper).find("[data-testid='type-total']").text()).toBe("3");
+    expect(type(wrapper).find("[data-testid='type-unusable']").text()).toBe("2");
     expect(type(wrapper, "Screen").find("[data-testid='type-mark']").exists()).toBe(true);
     // Hundreds of units never make you scroll: the per-unit list stays collapsed.
     expect(wrapper.find("[data-testid='unit-12']").exists()).toBe(false);
+  });
+
+  it("sorts types with units out of use first, then alphabetically", async () => {
+    const wrapper = await mountPanel([
+      unit({ id: 1, type: "Chairs" }),
+      unit({ id: 2, type: "Lectern" }),
+      unit({ id: 3, type: "Screen", status: "Damaged" }),
+      unit({ id: 4, type: "Amp" }),
+    ]);
+
+    const names = wrapper.findAll("div.row[data-testid^='type-']").map((row) => row.attributes("data-testid"));
+    expect(names).toEqual(["type-Screen", "type-Amp", "type-Chairs", "type-Lectern"]);
   });
 
   it("says when there are no units, and when loading fails", async () => {
@@ -386,7 +398,7 @@ describe("EquipmentUnitsPanel — the per-unit list", () => {
 
   async function openList(list = units) {
     const wrapper = await mountPanel(list);
-    await type(wrapper).find(".type__header").trigger("click");
+    await type(wrapper).find(".type__name-btn").trigger("click");
     return wrapper;
   }
 
@@ -397,7 +409,7 @@ describe("EquipmentUnitsPanel — the per-unit list", () => {
     expect(unitRow(wrapper, 12).find(".chip").text()).toBe("Available");
     expect(unitRow(wrapper, 13).find(".chip").text()).toBe("Damaged");
     expect(unitRow(wrapper, 15).find(".chip").classes()).toContain("chip--bad");
-    expect(type(wrapper).find(".type__header").attributes("aria-expanded")).toBe("true");
+    expect(type(wrapper).find(".type__name-btn").attributes("aria-expanded")).toBe("true");
   });
 
   it("finds a unit by number or label, without hunting through the list", async () => {
