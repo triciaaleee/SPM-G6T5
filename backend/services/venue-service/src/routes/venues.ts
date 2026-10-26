@@ -147,8 +147,8 @@ async function findUnavailableVenueIds(
     const window = occupiedWindow(
       { proposedDate: criteria.date, startTime: criteria.startTime, endTime: criteria.endTime },
       venue,
-    );
-    if (window) wanted.set(venue.id, window);
+    )!;
+    wanted.set(venue.id, window);
   }
 
   // E4-3 AC3: venues staff have blocked out for this slot are excluded too.
@@ -167,7 +167,7 @@ async function findUnavailableVenueIds(
     (data ?? []) as { venue_id: number; event_id: number; status: string; hold_expires_at: string | null }[]
   ).filter(
     // A lapsed On Hold no longer holds the venue, even before the expiry sweep marks it Expired.
-    (booking) => isBlockingBooking(booking, now) && (forEventId === undefined || booking.event_id !== forEventId),
+    (booking) => isBlockingBooking(booking, now) && booking.event_id !== forEventId,
   );
   const infoResult = await fetchVenueBookingInfo([...new Set(bookings.map((b) => b.event_id))], authorization);
   if (infoResult.status === "error") return null;
@@ -206,6 +206,7 @@ venuesRouter.get("/filters", async (req: AuthedRequest, res) => {
  * optional, so no params returns every active venue. When nothing matches,
  * `relax` lists which single filter to drop to get results back (AC3).
  */
+// Stryker disable next-line StringLiteral: Express matches "" and "/" to the same route
 venuesRouter.get("/", async (req: AuthedRequest, res) => {
   const supabase = req.supabase!;
 
@@ -328,10 +329,10 @@ async function notifyVenueStaff(
   if (error || !staffId) return false;
 
   const eventName = typeof details.name === "string" && details.name ? details.name : `Event #${eventId}`;
-  const date = typeof details.proposedDate === "string" ? details.proposedDate : null;
+  const date = details.proposedDate as string;
   const startTime = typeof details.startTime === "string" ? details.startTime : null;
   const endTime = typeof details.endTime === "string" ? details.endTime : null;
-  const when = date ? `${date}${startTime && endTime ? `, ${startTime}–${endTime}` : ""}` : "a date to be confirmed";
+  const when = `${date}${startTime && endTime ? `, ${startTime}–${endTime}` : ""}`;
 
   // #106 row 1, RabbitMQ.md #15 `booking.requested`.
   return getPublisher().publish({
@@ -823,7 +824,7 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
   // E4-17 AC1/AC6: what this venue is for. Optional for the main programme
   // — a request without a plan is it, for the whole attendance, as before
   // E4-17 — but required once the main venue is covered (checked below).
-  const planDefaults = eventDefaults(eventResult.event.submitted_details ?? {}, venueRows);
+  const planDefaults = eventDefaults(eventResult.event.submitted_details, venueRows);
   const planResult = parseBookingPlan(req.body as Record<string, unknown>, planDefaults);
   if (!planResult.valid) {
     res.status(400).json({ error: "Invalid booking request", fields: planResult.fields });
@@ -932,7 +933,7 @@ venuesRouter.post("/bookings", async (req: AuthedRequest, res) => {
     supabase,
     venue,
     eventId,
-    (eventResult.event.submitted_details ?? {}) as Record<string, unknown>,
+    eventResult.event.submitted_details as Record<string, unknown>,
     req.user!.id,
   );
 

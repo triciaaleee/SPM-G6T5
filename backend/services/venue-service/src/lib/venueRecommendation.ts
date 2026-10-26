@@ -47,6 +47,8 @@ const REQUIREMENT_TEXT_FIELDS = ["venue", "accessibility", "equipment", "technic
 const NO_PREFERENCE_PATTERN =
   /^(n\/?a|nil|none|no|nope|-+|not applicable|no preference|no requirements?|not required|not needed)\.?$/i;
 
+const NO_ALIASES: string[] = [];
+
 /**
  * Other ways organisers write each catalogue value. The catalogue value
  * itself always matches, so only genuine alternatives belong here.
@@ -64,14 +66,8 @@ const ALIASES: Record<string, string[]> = {
   "Quiet room": ["quiet space", "sensory room"],
   "Service animals welcome": ["service animal", "guide dog", "assistance dog"],
   Theatre: ["theater", "theatre-style", "theatre style", "theater-style", "theater style"],
-  Classroom: ["classroom-style", "classroom style"],
-  Banquet: ["banquet-style", "banquet style"],
-  Cabaret: ["cabaret-style", "cabaret style"],
-  Boardroom: ["boardroom-style", "boardroom style"],
   "U-shape": ["u-shaped", "u shape", "u shaped"],
   "Reception (standing)": ["reception", "standing reception", "standing room", "standing event", "standing only"],
-  "Open floor": ["open-floor", "open floor plan"],
-  Screen: ["projection screen", "screens"],
   "PA system": ["public address", "p.a. system", "sound system"],
   Microphones: ["microphone", "mic", "mics", "wireless mic"],
   "Lighting rig": ["stage lighting", "lighting equipment"],
@@ -85,7 +81,6 @@ const ALIASES: Record<string, string[]> = {
   // "reception desk" is here so it isn't read as the Reception layout.
   "Registration desk": ["registration table", "check-in desk", "check-in counter", "reception desk"],
   Cloakroom: ["coat check"],
-  "Green room": ["greenroom"],
   "Outdoor space": ["outdoor", "outdoors"],
   Parking: ["car park", "carpark"],
 };
@@ -138,7 +133,7 @@ function escapeRegExp(text: string): string {
 function phrasePattern(phrase: string): RegExp {
   const body = phrase
     .toLowerCase()
-    .split(/[\s-]+/)
+    .split(/[\s-]/)
     .map(escapeRegExp)
     .join("[\\s-]?");
   return new RegExp(`(?<![a-z0-9])${body}(?:s|es)?(?![a-z0-9])`, "g");
@@ -153,6 +148,7 @@ function phrasePattern(phrase: string): RegExp {
 function buildTerms(venues: VenueRow[]): Term[] {
   const values = new Map<string, { group: FeatureGroup; value: string }>();
   const add = (group: FeatureGroup, value: string) => {
+    // Stryker disable next-line MethodExpression: lower and upper case fold the same strings together
     const key = `${group}:${value.toLowerCase()}`;
     if (!values.has(key)) values.set(key, { group, value });
   };
@@ -164,15 +160,24 @@ function buildTerms(venues: VenueRow[]): Term[] {
 
   const terms: Term[] = [];
   for (const { group, value } of values.values()) {
-    for (const phrase of [value, ...(ALIASES[value] ?? [])]) {
+    for (const phrase of [value, ...(ALIASES[value] ?? NO_ALIASES)]) {
       terms.push({ group, value, pattern: phrasePattern(phrase), length: phrase.length });
     }
   }
   return terms.sort((a, b) => b.length - a.length);
 }
 
+/**
+ * Lower-case, one kind of hyphen, single spaces. A line break is kept as one
+ * "\n" because isNegated treats it as the end of a clause ("no stage" on one
+ * line must not cancel the projector on the next).
+ */
 function normalise(text: string): string {
-  return text.toLowerCase().replace(/[‐-―]/g, "-").replace(/\s+/g, " ");
+  return text
+    .toLowerCase()
+    .replace(/[‐-―]/g, "-")
+    .replace(/\s*\n\s*/g, "\n")
+    .replace(/[^\S\n]+/g, " ");
 }
 
 function isNegated(text: string, matchIndex: number): boolean {

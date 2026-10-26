@@ -71,8 +71,7 @@ export function findCapacityShortfalls(
     // E4-17: judged on the booking's own headcount (a breakout room isn't
     // short just because the whole event is bigger). submitted_details is
     // free-form JSON, so the event's attendance may arrive as a string.
-    const attendance =
-      booking.headcount ?? (event.expectedAttendance === null ? NaN : Number(event.expectedAttendance));
+    const attendance = booking.headcount ?? Number(event.expectedAttendance);
     if (!Number.isFinite(attendance) || attendance <= newCapacity) return [];
     return [
       {
@@ -104,10 +103,8 @@ function overlappingPairs(bookings: LiveBooking[], padding: WindowPadding, today
   });
 
   const result: BufferOverlap[] = [];
-  for (let i = 0; i < windows.length; i++) {
-    for (let j = i + 1; j < windows.length; j++) {
-      const a = windows[i];
-      const b = windows[j];
+  for (const [i, a] of windows.entries()) {
+    for (const b of windows.slice(i + 1)) {
       // Two bookings of the same event at one venue are that event's own business.
       if (a.booking.event.id === b.booking.event.id) continue;
       if (overlaps(a.window, b.window)) result.push({ first: side(a), second: side(b) });
@@ -123,19 +120,12 @@ export function findBufferOverlaps(
   next: WindowPadding,
   today: string,
 ): BufferOverlap[] {
-  const unchanged =
-    (previous.setup_minutes ?? 0) === (next.setup_minutes ?? 0) &&
-    (previous.turnaround_minutes ?? 0) === (next.turnaround_minutes ?? 0);
-  if (unchanged) return [];
-
   const before = new Set(overlappingPairs(bookings, previous, today).map((pair) => pairKey(pair)));
   return overlappingPairs(bookings, next, today).filter((pair) => !before.has(pairKey(pair)));
 }
 
 function pairKey(pair: BufferOverlap): string {
-  return pair.first.bookingId < pair.second.bookingId
-    ? `${pair.first.bookingId}:${pair.second.bookingId}`
-    : `${pair.second.bookingId}:${pair.first.bookingId}`;
+  return normalizePair(pair.first.bookingId, pair.second.bookingId).join(":");
 }
 
 /**
@@ -159,7 +149,7 @@ export function findAllBufferOverlaps(bookings: LiveBooking[], padding: WindowPa
  * different ways.
  */
 export function normalizePair(idA: number, idB: number): [number, number] {
-  return idA < idB ? [idA, idB] : [idB, idA];
+  return [Math.min(idA, idB), Math.max(idA, idB)];
 }
 
 /**
@@ -281,11 +271,9 @@ export function impactNotifications(
   venueStaffId: string | null,
 ): OutboundMessage[] {
   const messages: OutboundMessage[] = [];
-  const told = new Set<string>();
 
   for (const shortfall of impact.capacityShortfalls) {
     if (!shortfall.coordinatorId) continue;
-    told.add(`capacity:${shortfall.coordinatorId}:${shortfall.eventId}`);
     messages.push({
       type: "venue.capacity_reduced",
       eventId: shortfall.eventId,
@@ -301,7 +289,7 @@ export function impactNotifications(
     });
   }
 
-  messages.push(...bufferOverlapNotifications(venueName, impact.bufferOverlaps, venueStaffId, told));
+  messages.push(...bufferOverlapNotifications(venueName, impact.bufferOverlaps, venueStaffId));
   return messages;
 }
 

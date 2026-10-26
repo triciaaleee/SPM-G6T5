@@ -90,6 +90,77 @@ describe("GET /api/venues/public", () => {
     const res = await request(buildApp()).get("/api/venues/public");
 
     expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Failed to load events" });
+  });
+
+  it("orders events on one day by start time, reading a missing start as 00:00 and a missing date as last", async () => {
+    fetchPublicEvents.mockResolvedValue({
+      status: "ok",
+      events: [
+        { id: 1, name: "Undated", proposedDate: null, startTime: "08:00" },
+        { id: 2, name: "Afternoon", proposedDate: "2099-01-01", startTime: "14:00" },
+        { id: 3, name: "Midnight", proposedDate: "2099-01-01", startTime: "00:00" },
+        { id: 4, name: "No start", proposedDate: "2099-01-01", startTime: null },
+        { id: 5, name: "Morning", proposedDate: "2099-01-01", startTime: "09:00" },
+      ],
+    });
+    mockTables({
+      venues: [hall],
+      bookings: [1, 2, 3, 4, 5].map((id) => ({ event_id: id, venue_id: 1, venues: { name: "Main Hall" } })),
+    });
+
+    const res = await request(buildApp()).get("/api/venues/public");
+
+    // "Midnight" and "No start" tie at 00:00, so they keep the order the bookings came in.
+    expect(res.body.venues[0].upcomingEvents.map((e: { name: string }) => e.name)).toEqual([
+      "Midnight",
+      "No start",
+      "Morning",
+      "Afternoon",
+      "Undated",
+    ]);
+  });
+
+  it("keeps equal start times in their original order whichever way round they arrive", async () => {
+    fetchPublicEvents.mockResolvedValue({
+      status: "ok",
+      events: [
+        { id: 1, name: "No start", proposedDate: "2099-01-01", startTime: null },
+        { id: 2, name: "Midnight", proposedDate: "2099-01-01", startTime: "00:00" },
+        { id: 3, name: "Undated A", proposedDate: null, startTime: null },
+        { id: 4, name: "Dated", proposedDate: "2099-01-01", startTime: "23:00" },
+        { id: 5, name: "Undated B", proposedDate: null, startTime: "00:00" },
+      ],
+    });
+    mockTables({
+      venues: [hall],
+      bookings: [1, 2, 3, 4, 5].map((id) => ({ event_id: id, venue_id: 1, venues: { name: "Main Hall" } })),
+    });
+
+    const res = await request(buildApp()).get("/api/venues/public");
+
+    expect(res.body.venues[0].upcomingEvents.map((e: { name: string }) => e.name)).toEqual([
+      "No start",
+      "Midnight",
+      "Dated",
+      "Undated A",
+      "Undated B",
+    ]);
+  });
+
+  it("lists an event once even if it has two Approved bookings at the venue", async () => {
+    fetchPublicEvents.mockResolvedValue({ status: "ok", events: [{ id: 5, name: "Fair", proposedDate: "2099-01-01", startTime: "10:00" }] });
+    mockTables({
+      venues: [hall],
+      bookings: [
+        { event_id: 5, venue_id: 1, venues: { name: "Main Hall" } },
+        { event_id: 5, venue_id: 1, venues: { name: "Main Hall" } },
+      ],
+    });
+
+    const res = await request(buildApp()).get("/api/venues/public");
+
+    expect(res.body.venues[0].upcomingEvents).toEqual([{ id: 5, name: "Fair", proposedDate: "2099-01-01", startTime: "10:00" }]);
   });
 });
 
@@ -115,9 +186,45 @@ describe("GET /api/venues/public/event-venues", () => {
     expect(from).not.toHaveBeenCalled();
   });
 
-  it("answers 400 for malformed ids", async () => {
-    const res = await request(buildApp()).get("/api/venues/public/event-venues?eventIds=abc");
+  it.each(["", "abc", "12abc", "x12", "0", "01", "-1", "1.5", "5,,9", "5,x", "5,12abc", "5, ,9"])(
+    "answers 400 with the exact message for malformed eventIds %j",
+    async (ids) => {
+      const res = await request(buildApp()).get("/api/venues/public/event-venues").query({ eventIds: ids });
 
-    expect(res.status).toBe(400);
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: "eventIds must be 1–100 comma-separated event ids" });
+      expect(fetchPublicEvents).not.toHaveBeenCalled();
+    },
+  );
+
+  it("answers 400 when no eventIds are sent, and for 101 ids but not 100", async () => {
+    expect((await request(buildApp()).get("/api/venues/public/event-venues")).status).toBe(400);
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => i + 1).join(",");
+    mockTables({});
+    expect((await request(buildApp()).get(`/api/venues/public/event-venues?eventIds=${ids(100)}`)).status).toBe(200);
+    expect((await request(buildApp()).get(`/api/venues/public/event-venues?eventIds=${ids(101)}`)).status).toBe(400);
+  });
+
+  it("reads padded and multi-digit ids", async () => {
+    fetchPublicEvents.mockResolvedValue({
+      status: "ok",
+      events: [
+        { id: 12, name: "A", proposedDate: null, startTime: null },
+        { id: 907, name: "B", proposedDate: null, startTime: null },
+      ],
+    });
+    const { bookings } = mockTables({ bookings: [] });
+
+    const res = await request(buildApp()).get("/api/venues/public/event-venues?eventIds=%2012%20,907");
+
+    expect(res.status).toBe(200);
+    expect(bookings.in).toHaveBeenCalledWith("event_id", [12, 907]);
+  });
+
+  it("answers 502 when the public events can't be loaded", async () => {
+    fetchPublicEvents.mockResolvedValue({ status: "error" });
+    const res = await request(buildApp()).get("/api/venues/public/event-venues?eventIds=5");
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Failed to load events" });
   });
 });

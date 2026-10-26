@@ -90,7 +90,8 @@ interface AffectedBooking {
 }
 
 function readId(value: unknown): number | null {
-  const raw = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const raw = String(value);
   return ID_PATTERN.test(raw) ? Number(raw) : null;
 }
 
@@ -210,7 +211,7 @@ async function flagAndNotify(
   affected: AffectedBooking[],
   actorId: string,
   authorization: string,
-): Promise<{ flagged: boolean; coordinatorsNotified: number; notificationsFailed: boolean }> {
+): Promise<{ flagged: false } | { flagged: true; coordinatorsNotified: number; notificationsFailed: boolean }> {
   const toFlag = affected.filter(needsReplacement).map((b) => b.bookingId);
   if (toFlag.length > 0) {
     const { error } = await supabase
@@ -222,7 +223,7 @@ async function flagAndNotify(
       })
       .in("id", toFlag)
       .eq("status", BOOKING_STATUS.approved);
-    if (error) return { flagged: false, coordinatorsNotified: 0, notificationsFailed: false };
+    if (error) return { flagged: false };
 
     // E4-13 AC3: an Approved booking just Cancelled leaves
     // UNAVAILABLE_BOOKING_STATUSES, which can resolve an overlap it was part of. Best-effort and after the write above has committed; no
@@ -269,6 +270,7 @@ function invalid(res: Response, fields: Record<string, string>): void {
 }
 
 /** AC1: periods at one venue overlapping `from`..`to` (inclusive local dates), earliest first. */
+// Stryker disable next-line StringLiteral: Express matches "" and "/" to the same route
 unavailabilityRouter.get("/", async (req: AuthedRequest, res) => {
   const venueId = readId(req.query.venueId);
   const from = typeof req.query.from === "string" ? req.query.from : "";
@@ -341,6 +343,7 @@ unavailabilityRouter.post("/preview", async (req: AuthedRequest, res) => {
 });
 
 /** AC1 + AC2: save a new period, flag affected bookings and notify their coordinators. */
+// Stryker disable next-line StringLiteral: Express matches "" and "/" to the same route
 unavailabilityRouter.post("/", async (req: AuthedRequest, res) => {
   const supabase = req.supabase!;
   const venueId = readId(req.body?.venueId);

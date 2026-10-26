@@ -200,19 +200,20 @@ function buildApp(
           const venueId = filters.venue_id as number | undefined;
           if (venueId !== undefined) {
             const lockedAt = locks.get(venueId);
-            if (lockedAt !== undefined && (before === undefined || lockedAt < before)) locks.delete(venueId);
+            const ownerMatches = filters.locked_at === undefined || filters.locked_at === lockedAt;
+            if (lockedAt !== undefined && ownerMatches && (before === undefined || lockedAt < before)) locks.delete(venueId);
           }
           return resolve({ data: null, error: null });
         };
         return dq;
       }),
-      insert: vi.fn((row: { venue_id: number }) => {
+      insert: vi.fn((row: { venue_id: number; locked_at?: string }) => {
         const iq: any = {};
         iq.then = (resolve: (value: unknown) => unknown) => {
           if (locks.has(row.venue_id)) {
             return resolve({ data: null, error: { code: "23505", message: "duplicate key" } });
           }
-          locks.set(row.venue_id, new Date().toISOString());
+          locks.set(row.venue_id, row.locked_at ?? new Date().toISOString());
           return resolve({ data: { venue_id: row.venue_id }, error: null });
         };
         return iq;

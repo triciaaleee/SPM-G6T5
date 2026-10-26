@@ -66,3 +66,41 @@ describe("withVenueLock (E4-11 AC5)", () => {
     expect(pendingVenueLocks()).toBe(0);
   });
 });
+
+describe("withVenueLock: queue bookkeeping", () => {
+  it("a finished task does not clear the queue while later tasks are still waiting behind it", async () => {
+    const gate = () => {
+      let open!: () => void;
+      const promise = new Promise<void>((resolve) => (open = resolve));
+      return { promise, open };
+    };
+    const a = gate();
+    const b = gate();
+    const started: string[] = [];
+    const run = (name: string, g?: ReturnType<typeof gate>) =>
+      withVenueLock(77, async () => {
+        started.push(name);
+        await g?.promise;
+      });
+
+    const first = run("A", a);
+    const second = run("B", b);
+    a.open();
+    await first;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toEqual(["A", "B"]);
+    expect(pendingVenueLocks()).toBe(1);
+
+    // B is still running, so a newcomer must wait for it.
+    const third = run("C");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toEqual(["A", "B"]);
+
+    b.open();
+    await second;
+    await third;
+    expect(started).toEqual(["A", "B", "C"]);
+  });
+});
