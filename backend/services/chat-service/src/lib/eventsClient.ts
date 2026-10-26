@@ -40,7 +40,13 @@ export async function fetchEvent(eventId: number, authorization: string): Promis
   if (res.status === 403 || res.status === 404) return { status: "not_found" };
   if (!res.ok) return { status: "error" };
 
-  const body = (await res.json()) as { event?: EventForChat };
+  let body: { event?: EventForChat };
+  try {
+    body = (await res.json()) as { event?: EventForChat };
+  } catch {
+    // A 2xx with an unparseable body is still events-service misbehaving.
+    return { status: "error" };
+  }
   return body.event ? { status: "ok", event: body.event } : { status: "not_found" };
 }
 
@@ -83,7 +89,12 @@ export async function fetchEventsForRole(authorization: string): Promise<FetchEv
     submitted_details: Record<string, unknown>;
     created_at: string;
   }
-  const body = (await res.json()) as { events?: RawEvent[] };
+  let body: { events?: RawEvent[] };
+  try {
+    body = (await res.json()) as { events?: RawEvent[] };
+  } catch {
+    return { status: "error" };
+  }
 
   const events = (body.events ?? []).map((row) => ({
     id: row.id,
