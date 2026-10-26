@@ -6,7 +6,7 @@ workspace "ConnectSphere - C3 Equipment Service" "Level 3 of the C4 model. Compo
 
         connectsphere = softwareSystem "ConnectSphere Online" "Plans client events from request to completion." {
 
-            spa = container "Web application" "Single-page app for all seven roles. Calls each service directly at its own base URL (VITE_EQUIPMENT_API_URL for this one)." "Vue 3, TypeScript, Vite, Tailwind"
+            spa = container "Web application" "Single-page app for all seven roles. Calls each service directly." "Vue 3, TypeScript, Vite, Tailwind"
 
             user = container "User service" "E1. Accounts, login, the JWT and the role directory. Port 4002." "Express 5, TypeScript"
 
@@ -25,49 +25,49 @@ workspace "ConnectSphere - C3 Equipment Service" "Level 3 of the C4 model. Compo
 
                 # --- Entry points -------------------------------------------
 
-                authMiddleware = component "Auth middleware" "Verifies the bearer token with the shared JWT_SECRET and attaches the caller's id and role; routes check role and ownership themselves." "src/middleware/auth.ts, src/lib/jwt.ts"
+                authMiddleware = component "Auth middleware" "Checks the caller's sign-in token on every request and notes who they are and their role. Each route then decides what that role may do." "src/middleware/auth.ts, src/lib/jwt.ts"
 
-                requestsController = component "Equipment requests controller" "/api/equipment-requests. The assigned coordinator submits, amends (PUT /:id/items) and cancels a request for an event in Planning; Technical Support list outstanding requests, view one event's request, preview units and update an item's status, which reserves units (PATCH /:id). Also: POST /flag-for-event/:eventId from events-service after an approved change, and the organiser's POST /events/:eventId/release fallback once an event is Cancelled." "src/routes/equipmentRequests.ts" "Detailed"
+                requestsController = component "Equipment requests controller" "Handles equipment requests. Coordinators submit, amend and cancel them; Technical Support review them and reserve units." "src/routes/equipmentRequests.ts"
 
-                catalogController = component "Inventory controller" "/api/equipment-catalog. The stock table for today or a chosen date, add an item, add or remove stock with a reason (only free units can be removed), and the stock history." "src/routes/equipmentCatalog.ts"
+                catalogController = component "Inventory controller" "Manages the inventory: shows stock for any day, adds items, and adds or removes stock with a reason." "src/routes/equipmentCatalog.ts"
 
-                availabilityController = component "Availability controller" "GET /api/equipment-availability: how many usable units of a type are free for an event's own date and time, and the shortfall against a quantity." "src/routes/equipmentAvailability.ts"
+                availabilityController = component "Availability controller" "Answers how many working units of a type are free for an event's date and time, and how many are short." "src/routes/equipmentAvailability.ts"
 
-                unitsController = component "Units controller" "/api/equipment-units. Every physical unit with its running and future out-of-use periods, the impact preview, marking units Damaged or Under Maintenance for a period, marking them usable again, and setting a unit's label." "src/routes/equipmentUnits.ts"
+                unitsController = component "Units controller" "Manages individual units: marks them damaged or under maintenance for a period, previews which reservations that affects, and marks them usable again." "src/routes/equipmentUnits.ts"
 
                 # --- Rules ----------------------------------------------------
 
-                validators = component "Input validators" "Request items (type, quantity above zero, technical requirements), status updates and amendments, new catalog items, stock changes, unavailability periods and availability queries. Every problem reported in one pass." "src/lib/validateEquipmentRequest.ts, validateCatalogItem.ts, validateStockChange.ts, validateUnavailability.ts, validateAvailabilityQuery.ts" "Wide"
+                validators = component "Input validators" "Checks incoming requests, stock changes and out-of-use periods, and reports every problem at once." "src/lib/validate*.ts"
 
-                scheduleWindow = component "Schedule window" "An equipment booking's window is exactly its event's start to end, with no setup or turnaround padding (customer confirmed no transit time). Overlap maths shared by every check below." "src/lib/scheduleWindow.ts"
+                scheduleWindow = component "Schedule window" "Works out when equipment is in use for an event: exactly the event's start to end, with no setup time either side." "src/lib/scheduleWindow.ts"
 
-                unitUnavailability = component "Unit unavailability" "Reads equipment_unavailability: the periods a unit is damaged or under maintenance, and which units are out of use in a window." "src/lib/unitUnavailability.ts"
+                unitUnavailability = component "Unit unavailability" "Looks up when units are damaged or under maintenance." "src/lib/unitUnavailability.ts"
 
-                conflicts = component "Unit conflict rules" "Per-unit conflicts against other events' bookings and out-of-use periods, shared by the read-only availability check and the reservation claim (claimUnits)." "src/lib/equipmentConflicts.ts"
+                conflicts = component "Unit conflict rules" "Finds which units are free for an event, given other bookings and out-of-use periods. Shared by availability checks and reservations." "src/lib/equipmentConflicts.ts"
 
-                reservationFlags = component "Reservation re-check" "Re-runs the conflict check every time a request is viewed, so a reservation that no longer holds after the event moves is shown as flagged." "src/lib/reservationFlags.ts"
+                reservationFlags = component "Reservation re-check" "Re-checks reservations each time a request is viewed, and flags any that no longer hold after the event moves." "src/lib/reservationFlags.ts"
 
-                unitImpact = component "Unit impact" "What marking units unusable would do: free, reserved (and for which events and coordinators) or already out of use; suggests free units first, then reserved ones furthest away." "src/lib/unitImpact.ts"
+                unitImpact = component "Unit impact" "Shows what taking units out of use would affect, and suggests which units to take first." "src/lib/unitImpact.ts"
 
-                catalogStock = component "Catalog stock" "Total, unusable, reserved and available counts per item, worked out from the unit rows on every read (catalog_stock_now function), never a stored counter. Resolves an item's name to its id." "src/lib/catalogStock.ts, src/lib/catalogLookup.ts"
+                catalogStock = component "Catalog stock" "Works out total, reserved, out-of-use and available stock per item, always from the current units rather than a stored count." "src/lib/catalogStock.ts, src/lib/catalogLookup.ts"
 
                 # --- Reacting to events-service ---------------------------------
 
-                consumer = component "Message consumer" "Durable queue equipment-service with a dead-letter queue, bound to event.cancelled and event.rescheduled; routes each to its handler and acks only after it succeeds." "src/lib/rabbitConsumer.ts, src/lib/handleMessage.ts, amqplib"
+                consumer = component "Message consumer" "Receives event cancellations and reschedules from the message broker and passes each to its handler. A message is only marked done once handled." "src/lib/rabbitConsumer.ts, src/lib/handleMessage.ts, amqplib"
 
-                cancellation = component "Event cancellation handler" "event.cancelled: releases every reservation for the event through release_equipment_for_event (stock returned, booking rows kept as Released), then publishes equipment.released. Shared with the organiser's REST fallback. Idempotent on redelivery." "src/lib/eventCancelledHandler.ts, src/lib/eventCancellation.ts" "Wide"
+                cancellation = component "Event cancellation handler" "When an event is cancelled, releases all its reservations and returns the stock. Safe to run twice." "src/lib/eventCancelledHandler.ts, src/lib/eventCancellation.ts"
 
-                rescheduled = component "Event rescheduled handler" "event.rescheduled: moves the stored window of every unit reserved for the event, then checks what now clashes (equipment_reschedule_clashes) and reports it." "src/lib/eventRescheduledHandler.ts" "Wide"
+                rescheduled = component "Event rescheduled handler" "When an event moves, moves its reservations to the new time and reports any that now clash." "src/lib/eventRescheduledHandler.ts"
 
                 # --- Outbound -------------------------------------------------
 
-                publisher = component "Event publisher" "Publishes to connectsphere.events after the write commits; best effort. equipment.requested, equipment.amended, equipment.status_changed, equipment.flagged_for_reassessment, equipment.unusable, equipment.reservation_clash, equipment.released." "src/lib/rabbitPublisher.ts, amqplib" "Wide"
+                publisher = component "Event publisher" "Announces equipment changes on the message broker once each change is saved, so other services can react." "src/lib/rabbitPublisher.ts, amqplib"
 
-                eventsClient = component "Events client" "Reads an event and other events' timing (venue-booking-info), forwarding the caller's token; reports a lost reservation with POST /:id/arrangements-changed using an internal token." "src/lib/eventsClient.ts, src/lib/internalAuth.ts"
+                eventsClient = component "Events client" "Asks events-service for event details (dates, status, coordinator) and reports reservations that were lost." "src/lib/eventsClient.ts, src/lib/internalAuth.ts"
 
-                usersClient = component "Users client" "Coordinator display names for Technical Support's view of a request, forwarding the caller's token." "src/lib/usersClient.ts"
+                usersClient = component "Users client" "Asks user-service for coordinators' names to show Technical Support." "src/lib/usersClient.ts"
 
-                dataAccess = component "Supabase client" "Service-role client; bypasses RLS, so routes enforce access. Tables: equipment_catalog, equipment (units), equipment_requests, equipment_request_items, equipment_booking, equipment_unavailability, equipment_stock_changes. Multi-step writes are Postgres functions: reserve_equipment_request, amend_equipment_request, release_equipment_for_request, release_equipment_for_event, change_equipment_stock." "src/lib/supabaseAdmin.ts, supabase-js" "Detailed"
+                dataAccess = component "Supabase client" "Reads and writes the equipment tables. Multi-step changes, like reserving or releasing units, run as single database functions." "src/lib/supabaseAdmin.ts, supabase-js"
             }
         }
 
@@ -92,7 +92,7 @@ workspace "ConnectSphere - C3 Equipment Service" "Level 3 of the C4 model. Compo
         # Controllers to rules
         # =====================================================================
 
-        connectsphere.equipment.requestsController -> connectsphere.equipment.validators       "Validates items, status updates and amendments"
+        connectsphere.equipment.requestsController -> connectsphere.equipment.validators       "Checks requests and amendments"
         connectsphere.equipment.requestsController -> connectsphere.equipment.conflicts        "Claims free units when reserving"
         connectsphere.equipment.requestsController -> connectsphere.equipment.reservationFlags "Re-checks reservations on every view"
         connectsphere.equipment.requestsController -> connectsphere.equipment.cancellation     "Releases a cancelled event's reservations (fallback)"
@@ -105,7 +105,7 @@ workspace "ConnectSphere - C3 Equipment Service" "Level 3 of the C4 model. Compo
 
         connectsphere.equipment.availabilityController -> connectsphere.equipment.validators         "Validates the query"
         connectsphere.equipment.availabilityController -> connectsphere.equipment.conflicts          "Counts free usable units"
-        connectsphere.equipment.availabilityController -> connectsphere.equipment.unitUnavailability "Leaves out units out of use in the window"
+        connectsphere.equipment.availabilityController -> connectsphere.equipment.unitUnavailability "Skips units that are out of use"
         connectsphere.equipment.availabilityController -> connectsphere.equipment.eventsClient       "Reads the event's date and time"
 
         connectsphere.equipment.unitsController -> connectsphere.equipment.validators         "Validates the period"
@@ -124,12 +124,12 @@ workspace "ConnectSphere - C3 Equipment Service" "Level 3 of the C4 model. Compo
         connectsphere.equipment.unitImpact         -> connectsphere.equipment.scheduleWindow     "Compares windows"
         connectsphere.equipment.unitImpact         -> connectsphere.equipment.unitUnavailability "Finds units already out of use"
         connectsphere.equipment.unitImpact         -> connectsphere.equipment.eventsClient       "Reads the affected events and their coordinators"
-        connectsphere.equipment.unitUnavailability -> connectsphere.equipment.scheduleWindow     "Turns a period into a window"
-        connectsphere.equipment.catalogStock       -> connectsphere.equipment.scheduleWindow     "Scopes the numbers to a day"
+        connectsphere.equipment.unitUnavailability -> connectsphere.equipment.scheduleWindow     "Works out each period's dates"
+        connectsphere.equipment.catalogStock       -> connectsphere.equipment.scheduleWindow     "Limits the counts to one day"
 
         connectsphere.equipment.consumer     -> connectsphere.equipment.cancellation   "Hands over event.cancelled"
         connectsphere.equipment.consumer     -> connectsphere.equipment.rescheduled    "Hands over event.rescheduled"
-        connectsphere.equipment.cancellation -> connectsphere.equipment.publisher      "Emits equipment.released, reason event_cancelled"
+        connectsphere.equipment.cancellation -> connectsphere.equipment.publisher      "Emits equipment.released"
         connectsphere.equipment.rescheduled  -> connectsphere.equipment.scheduleWindow "Builds the new window"
         connectsphere.equipment.rescheduled  -> connectsphere.equipment.eventsClient   "Reports the event if a reserved unit now clashes"
         connectsphere.equipment.rescheduled  -> connectsphere.equipment.publisher      "Emits equipment.reservation_clash"
@@ -138,14 +138,14 @@ workspace "ConnectSphere - C3 Equipment Service" "Level 3 of the C4 model. Compo
         # Persistence
         # =====================================================================
 
-        connectsphere.equipment.requestsController -> connectsphere.equipment.dataAccess "Reads and writes requests and items; reserves and amends"
+        connectsphere.equipment.requestsController -> connectsphere.equipment.dataAccess "Saves requests, reservations and amendments"
         connectsphere.equipment.catalogController  -> connectsphere.equipment.dataAccess "Adds items and changes stock"
         connectsphere.equipment.unitsController    -> connectsphere.equipment.dataAccess "Reads units; writes periods and labels"
         connectsphere.equipment.conflicts          -> connectsphere.equipment.dataAccess "Reads units and their bookings"
-        connectsphere.equipment.unitUnavailability -> connectsphere.equipment.dataAccess "Reads equipment_unavailability"
-        connectsphere.equipment.catalogStock       -> connectsphere.equipment.dataAccess "Calls catalog_stock_now"
-        connectsphere.equipment.cancellation       -> connectsphere.equipment.dataAccess "Calls release_equipment_for_event"
-        connectsphere.equipment.rescheduled        -> connectsphere.equipment.dataAccess "Moves stored booking windows; finds clashes"
+        connectsphere.equipment.unitUnavailability -> connectsphere.equipment.dataAccess "Reads out-of-use periods"
+        connectsphere.equipment.catalogStock       -> connectsphere.equipment.dataAccess "Reads stock levels"
+        connectsphere.equipment.cancellation       -> connectsphere.equipment.dataAccess "Releases the event's reservations"
+        connectsphere.equipment.rescheduled        -> connectsphere.equipment.dataAccess "Moves reservations to the new time"
 
         # =====================================================================
         # Leaving the service
@@ -153,7 +153,7 @@ workspace "ConnectSphere - C3 Equipment Service" "Level 3 of the C4 model. Compo
 
         connectsphere.equipment.dataAccess   -> connectsphere.db     "Reads and writes the equipment-service tables" "supabase-js"
         connectsphere.equipment.publisher    -> connectsphere.broker "Publishes domain events" "AMQP"
-        connectsphere.equipment.eventsClient -> connectsphere.events "Reads events and venue-booking-info; POST /:id/arrangements-changed" "JSON over HTTP"
+        connectsphere.equipment.eventsClient -> connectsphere.events "Reads event details; reports lost reservations" "JSON over HTTP"
         connectsphere.equipment.usersClient  -> connectsphere.user   "GET /api/users/names" "JSON over HTTP"
     }
 
@@ -176,13 +176,6 @@ workspace "ConnectSphere - C3 Equipment Service" "Level 3 of the C4 model. Compo
             element "Component" {
                 background #AFA9EC
                 color #26215C
-            }
-            element "Wide" {
-                width 650
-            }
-            element "Detailed" {
-                width 650
-                height 450
             }
             element "Infrastructure" {
                 background #D85A30

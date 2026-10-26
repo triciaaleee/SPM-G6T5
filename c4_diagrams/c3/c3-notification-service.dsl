@@ -6,7 +6,7 @@ workspace "ConnectSphere - C3 Notification Service" "Level 3 of the C4 model. Co
 
         connectsphere = softwareSystem "ConnectSphere Online" "Plans client events from request to completion." {
 
-            spa = container "Web application" "Single-page app for all seven roles. Calls each service directly at its own base URL (VITE_NOTIFICATIONS_API_URL for this one)." "Vue 3, TypeScript, Vite, Tailwind"
+            spa = container "Web application" "Single-page app for all seven roles. Calls each service directly." "Vue 3, TypeScript, Vite, Tailwind"
 
             user = container "User service" "E1. Accounts, login, the JWT and the role directory. Port 4002." "Express 5, TypeScript"
 
@@ -22,19 +22,19 @@ workspace "ConnectSphere - C3 Notification Service" "Level 3 of the C4 model. Co
 
             notification = container "Notification service" "E7. In-app notification feed with unread count, filled from every message on the broker. Port 4004." "Express 5, TypeScript" {
 
-                authMiddleware = component "Auth middleware" "Verifies the bearer token with the shared JWT_SECRET and attaches the caller's id; every 401 carries a code." "src/middleware/auth.ts, src/lib/jwt.ts"
+                authMiddleware = component "Auth middleware" "Checks the caller's sign-in token on every request and notes who they are and their role. Each route then decides what that role may do." "src/middleware/auth.ts, src/lib/jwt.ts"
 
-                feedController = component "Feed controller" "GET /api/notifications: the caller's own notifications, newest first, paged by a before cursor, with the unread count on the first page. POST /read marks all read; POST /:id/read marks one." "src/routes/notifications.ts"
+                feedController = component "Feed controller" "Shows each user their own notifications, newest first, with an unread count, and marks them as read." "src/routes/notifications.ts"
 
-                consumer = component "Message consumer" "Durable queue notification-service bound to # (every message), with a dead-letter queue. Parses the shared envelope and acks only after the rows are written." "src/lib/rabbitConsumer.ts, amqplib"
+                consumer = component "Message consumer" "Receives every message from the message broker and passes it on. A message is only marked done once its notifications are saved." "src/lib/rabbitConsumer.ts, amqplib"
 
-                messageMapper = component "Message to notification mapper" "Skips messages nobody is notified about (event.rescheduled, event.attendance_changed) and any messageId already stored, merges the named user ids with the role groups resolved through user-service, and inserts one row per recipient." "src/lib/notificationFromMessage.ts" "Wide"
+                messageMapper = component "Message to notification mapper" "Works out who should hear about each message and saves one notification per person. Skips repeats and messages nobody needs to see." "src/lib/notificationFromMessage.ts"
 
-                templates = component "Message templates" "The text and link for each message type, sometimes per recipient (for example coordinator.assigned reads differently to the coordinator and the organiser). Attendees get attendee links." "src/lib/messageTemplates.ts"
+                templates = component "Message templates" "Writes the wording and link for each kind of notification, sometimes differently for each person." "src/lib/messageTemplates.ts"
 
-                usersClient = component "Users client" "Resolves a role group such as coordinator_lead, safety_officer or technical_support to user ids. A queue message has no user token, so it signs a short-lived internal token with INTERNAL_SERVICE_SECRET." "src/lib/usersClient.ts, src/lib/internalAuth.ts" "Wide"
+                usersClient = component "Users client" "Asks user-service who holds a role, such as safety officer. Uses a trusted service call, since messages carry no user token." "src/lib/usersClient.ts, src/lib/internalAuth.ts"
 
-                dataAccess = component "Supabase client" "Service-role client; bypasses RLS, so routes enforce access. Table: notifications, including message_id for deduplication." "src/lib/supabaseAdmin.ts, supabase-js"
+                dataAccess = component "Supabase client" "Reads and writes notifications, keeping each message's id so repeats can be spotted." "src/lib/supabaseAdmin.ts, supabase-js"
             }
         }
 
@@ -42,12 +42,12 @@ workspace "ConnectSphere - C3 Notification Service" "Level 3 of the C4 model. Co
         connectsphere.broker -> connectsphere.notification.consumer       "Delivers every message; each names its recipients" "AMQP"
 
         connectsphere.notification.authMiddleware -> connectsphere.notification.feedController "Passes the authenticated request"
-        connectsphere.notification.feedController -> connectsphere.notification.dataAccess     "Reads the caller's rows; sets read_at"
+        connectsphere.notification.feedController -> connectsphere.notification.dataAccess     "Reads the caller's notifications; marks them read"
 
         connectsphere.notification.consumer      -> connectsphere.notification.messageMapper "Hands over each parsed message"
         connectsphere.notification.messageMapper -> connectsphere.notification.templates     "Renders the text and link for each recipient"
         connectsphere.notification.messageMapper -> connectsphere.notification.usersClient   "Resolves role recipients"
-        connectsphere.notification.messageMapper -> connectsphere.notification.dataAccess    "Skips a seen messageId; inserts the rows"
+        connectsphere.notification.messageMapper -> connectsphere.notification.dataAccess    "Skips repeats; saves notifications"
 
         connectsphere.notification.dataAccess  -> connectsphere.db   "Reads and writes notifications" "supabase-js"
         connectsphere.notification.usersClient -> connectsphere.user "GET /api/users?role=" "JSON over HTTP, internal token"
@@ -72,13 +72,6 @@ workspace "ConnectSphere - C3 Notification Service" "Level 3 of the C4 model. Co
             element "Component" {
                 background #AFA9EC
                 color #26215C
-            }
-            element "Wide" {
-                width 650
-            }
-            element "Detailed" {
-                width 650
-                height 450
             }
             element "Infrastructure" {
                 background #D85A30

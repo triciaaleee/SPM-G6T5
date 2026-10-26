@@ -6,7 +6,7 @@ workspace "ConnectSphere - C3 Events Service" "Level 3 of the C4 model. Componen
 
         connectsphere = softwareSystem "ConnectSphere Online" "Plans client events from request to completion." {
 
-            spa = container "Web application" "Single-page app for all seven roles. Calls each service directly at its own base URL (VITE_EVENTS_API_URL for this one)." "Vue 3, TypeScript, Vite, Tailwind"
+            spa = container "Web application" "Single-page app for all seven roles. Calls each service directly." "Vue 3, TypeScript, Vite, Tailwind"
 
             user = container "User service" "E1. Accounts, login, the JWT and the role directory. Port 4002." "Express 5, TypeScript"
 
@@ -33,63 +33,63 @@ workspace "ConnectSphere - C3 Events Service" "Level 3 of the C4 model. Componen
 
                 # --- Entry points -------------------------------------------
 
-                authMiddleware = component "Auth middleware" "requireAuth verifies the bearer token with the shared JWT_SECRET and attaches the caller's id and role; every 401 carries a code so an expired session reads differently from a bad token. requireAuthOrInternal also admits a sibling service's internal token on GET /venue-booking-info. Routes check role and ownership themselves." "src/middleware/auth.ts, src/lib/jwt.ts" "Wide"
+                authMiddleware = component "Auth middleware" "Checks the caller's sign-in token on every request and notes who they are and their role. One route also accepts trusted calls from other services." "src/middleware/auth.ts, src/lib/jwt.ts"
 
-                internalGuard = component "Internal route guard" "requireInternal: admits only a sibling service's short-lived X-Internal-Auth token, signed with INTERNAL_SERVICE_SECRET (separate from JWT_SECRET). No end-user token is accepted." "src/middleware/internal.ts, src/lib/internalAuth.ts"
+                internalGuard = component "Internal route guard" "Lets in only trusted calls from other services, on routes no user may call." "src/middleware/internal.ts, src/lib/internalAuth.ts"
 
-                publicController = component "Public events controller" "GET /api/events/public and /public/:id, no login. Confirmed events whose registration has opened, with the attendee whitelist minus capacity, so a guest can look before signing up." "src/routes/publicEvents.ts"
+                publicController = component "Public events controller" "Shows guests, without signing in, the confirmed events open for registration." "src/routes/publicEvents.ts"
 
-                requestsController = component "Requests controller" "POST / submits into Unassigned (organiser only), GET / and GET /:id by role (Lead sees every submitted event, read only), PATCH /:id within the edit rules (Organiser up to Planning, assigned coordinator every field in Planning, nobody after), which also submits a draft and answers a clarification, GET /:id/history. Denied direct-URL attempts are recorded in access_denials." "src/routes/events.ts" "Detailed"
+                requestsController = component "Requests controller" "Handles event requests: organisers submit and edit them, and each role sees the events it is allowed to. Edits stop after Planning, and every edit is recorded." "src/routes/events.ts"
 
-                draftsController = component "Drafts controller" "POST /draft, PATCH /:id/draft and DELETE /:id/draft. Saves with relaxed validation and never assigns anyone; only the owning organiser, only while still Draft. Drafts are invisible to every internal role." "src/routes/events.ts"
+                draftsController = component "Drafts controller" "Lets organisers save, resume and delete drafts. Nobody else sees a draft until it is submitted." "src/routes/events.ts"
 
-                assignmentController = component "Assignment controller" "Coordinator Lead only. GET /unassigned (oldest first), POST /:id/assign (Unassigned to Requested) and POST /:id/reassign (any non-terminal status). Conditional updates mean two Leads acting at once give one success and one 409." "src/routes/events.ts" "Wide"
+                assignmentController = component "Assignment controller" "Lets the Coordinator Lead see unassigned requests and assign or reassign a coordinator. If two Leads act at once, only one succeeds." "src/routes/events.ts"
 
-                reviewController = component "Review controller" "Assigned coordinator's review: POST /:id/request-clarification, the clarification threads (ask, reply, resolve), POST /:id/approve to Planning and POST /:id/reject with a required reason." "src/routes/events.ts"
+                reviewController = component "Review controller" "Lets the assigned coordinator ask the organiser questions, then approve the request into Planning or reject it with a reason." "src/routes/events.ts"
 
-                safetyController = component "Safety review controller" "POST /:id/submit-safety-review from Planning or Needs Review with required safety notes; GET /safety-review-queue for the Safety Officer; approve, reject and request-changes; GET /:id/safety-reviews and /:id/safety-changes. Each write is one Postgres function: submit_event_for_safety_review, approve_, reject_event_safety_review, request_event_safety_changes." "src/routes/events.ts" "Detailed"
+                safetyController = component "Safety review controller" "Handles the safety review: the coordinator submits the event with safety notes, and the Safety Officer approves, rejects or asks for changes." "src/routes/events.ts"
 
-                changeController = component "Change request controller" "POST and GET /:id/change-requests, approve and reject. Non-critical fields apply at once; critical ones are held and move a Confirmed event to Needs Review. The coordinator's view carries an impact assessment of affected bookings, reservations and registrations. Approving flags invalidated bookings and equipment in their own services; rejecting the last open request with no stale approval returns the event to Confirmed." "src/routes/events.ts" "Detailed"
+                changeController = component "Change request controller" "Handles change requests on a confirmed event. Minor changes apply at once; major ones wait for the coordinator, who sees what they would affect." "src/routes/events.ts"
 
-                lifecycleController = component "Lifecycle controller" "POST /:id/cancel: the owning Organiser cancels from any active status with a required reason; nothing else is released here, the other services react to event.cancelled. POST /:id/complete: the assigned coordinator closes a Confirmed event once its end time has passed." "src/routes/events.ts" "Wide"
+                lifecycleController = component "Lifecycle controller" "Lets the organiser cancel an event with a reason, and the coordinator mark it completed once it has ended." "src/routes/events.ts"
 
-                registrationController = component "Registration settings controller" "Assigned coordinator only: PUT /:id/registration sets the opening date; POST /:id/registration/open, /close and /auto set the override (Confirmed only). GET /attendee-info and GET /open-for-registration return the attendee whitelist for registration-service (E6, AGENTS.md section 3b)." "src/routes/events.ts" "Wide"
+                registrationController = component "Registration settings controller" "Lets the coordinator set when registration opens, or force it open or closed. Also tells registration-service what attendees may see." "src/routes/events.ts"
 
-                internalController = component "Arrangements-changed handler" "GET /venue-booking-info gives venue and equipment services each event's timing, attendance, status and coordinator. POST /:id/arrangements-changed (internal only): a lost venue or equipment arrangement moves Confirmed to Needs Review or Safety Review back to Planning, and sets safety_approval_stale." "src/routes/events.ts" "Wide"
+                internalController = component "Arrangements-changed handler" "Gives other services event timing and status, and handles reports of lost venues or equipment by sending the event back for review." "src/routes/events.ts"
 
                 # --- Rules ----------------------------------------------------
 
-                eventStatus = component "Event status constants" "The 11 statuses spelled as the event_status enum, and the closed (terminal) set. Each route checks the allowed from-status itself and writes with a conditional update on the current status, so an illegal or raced transition returns 409." "src/lib/eventStatus.ts"
+                eventStatus = component "Event status constants" "The event statuses, in one place. A status change only succeeds if the event is still in the status it was checked in." "src/lib/eventStatus.ts"
 
-                requestValidator = component "Request validator" "Mandatory fields, no past dates, end after start, attendance above zero; collects every field error in one pass. Also normalises a draft and checks route ids." "src/lib/validateEventRequest.ts, src/lib/validation.ts"
+                requestValidator = component "Request validator" "Checks a request is complete and sensible (no past dates, end after start, attendance above zero) and reports every problem at once." "src/lib/validateEventRequest.ts, src/lib/validation.ts"
 
-                historyDiff = component "Details differ" "Field-by-field diff of submitted_details: a readable summary posted as the organiser's clarification reply, and field, old value and new value rows for event_history." "src/lib/diffSubmittedDetails.ts"
+                historyDiff = component "Details differ" "Compares old and new event details, to record each changed field in the history and summarise an organiser's reply." "src/lib/diffSubmittedDetails.ts"
 
-                eventTiming = component "Event timing" "Reads an event's local date and times as Singapore time (UTC+8): when it starts and ends, and whether it has. Used by completion, withdrawal and registration." "src/lib/eventTiming.ts"
+                eventTiming = component "Event timing" "Works out when an event starts and ends in Singapore time, and whether it has." "src/lib/eventTiming.ts"
 
-                safetyRules = component "Safety review gate" "What blocks entering Safety Review: no approved venue booking, bookings still Requested, On Hold or Replacement Required, or equipment not fully reserved, each named. Parses the four required safety notes." "src/lib/safetyReview.ts"
+                safetyRules = component "Safety review gate" "Checks every venue and equipment arrangement is settled before an event can go to safety review, and names anything outstanding." "src/lib/safetyReview.ts"
 
-                safetyChangeRules = component "Safety change rules" "Request-changes flags: which live arrangements can be flagged, a snapshot of each, the combined reason, and when a flag has cleared because its booking or equipment item changed." "src/lib/safetyChanges.ts"
+                safetyChangeRules = component "Safety change rules" "Tracks which arrangements the Safety Officer asked to change, and notices when each one has been changed." "src/lib/safetyChanges.ts"
 
-                changeRules = component "Change request rules" "The critical fields held for review (date and time, attendance, venue, equipment, accessibility), the committed baseline of a field, and the change_requests status values including Auto-Withdrawn." "src/lib/changeRequestFields.ts, src/lib/changeRequestStatus.ts"
+                changeRules = component "Change request rules" "Decides which fields are major (date, time, attendance, venue, equipment, accessibility) and must wait for the coordinator's approval." "src/lib/changeRequestFields.ts, src/lib/changeRequestStatus.ts"
 
-                registrationPeriod = component "Registration period" "Derives NOT_OPEN, OPEN or CLOSED on every read from the open date and override: FORCE_CLOSED, then the event start, then FORCE_OPEN, then the 5-day cutoff. No stored state and no scheduler; registration-service turns OPEN into FULL." "src/lib/registrationPeriod.ts" "Wide"
+                registrationPeriod = component "Registration period" "Works out whether registration is not yet open, open or closed, fresh on every read. It closes five days before the event unless the coordinator overrides it." "src/lib/registrationPeriod.ts"
 
-                reschedule = component "Reschedule announcer" "Detects a change to the date, start or end time, or expected attendance, and announces event.rescheduled or event.attendance_changed through the outbox so venue and equipment services re-check their bookings." "src/lib/reschedule.ts" "Wide"
+                reschedule = component "Reschedule announcer" "Spots when an event's date, time or attendance changes, and announces it so venue and equipment services can re-check their bookings." "src/lib/reschedule.ts"
 
                 # --- Outbound -------------------------------------------------
 
-                outbox = component "Outbox relay" "Reliable publishing for messages another service must act on (event.cancelled, event.rescheduled, event.attendance_changed). Stores the message in event_outbox after the write it announces, publishes it, and a timer started in index.ts retries until the broker confirms. Retries reuse the message id." "src/lib/outbox.ts" "Wide"
+                outbox = component "Outbox relay" "Makes sure messages other services must act on, like a cancellation, get delivered: each is stored first and retried until the broker confirms it." "src/lib/outbox.ts"
 
-                publisher = component "Event publisher" "Publishes to connectsphere.events after the write commits; best effort, never throws. Direct: request.submitted, request.edited, coordinator.assigned, coordinator.reassigned, clarification.requested, clarification.answered, request.decided, safety.submitted, safety.decided, change.requested, change.withdrawn, change.decided, event.needs_review, event.returned_to_planning." "src/lib/rabbitPublisher.ts, amqplib" "Detailed"
+                publisher = component "Event publisher" "Announces event changes on the message broker once each change is saved, so other services can react." "src/lib/rabbitPublisher.ts, amqplib"
 
-                usersClient = component "Users client" "Lists active coordinators for assign and reassign, forwarding the Lead's token." "src/lib/usersClient.ts"
+                usersClient = component "Users client" "Asks user-service for the list of active coordinators." "src/lib/usersClient.ts"
 
-                arrangementsClient = component "Arrangements client" "Reads the event's venue bookings and equipment requests, checks a booking against a proposed new schedule, and flags bookings for rebooking and equipment for reassessment after an approved change. Forwards the caller's token." "src/lib/arrangementsClient.ts" "Wide"
+                arrangementsClient = component "Arrangements client" "Asks venue and equipment services about an event's bookings and equipment, and flags them when an approved change affects them." "src/lib/arrangementsClient.ts"
 
-                registrationsClient = component "Registrations client" "Reads the event's registrations for a change request's capacity impact, forwarding the caller's token." "src/lib/registrationsClient.ts"
+                registrationsClient = component "Registrations client" "Asks registration-service who has registered, to show how a change would affect them." "src/lib/registrationsClient.ts"
 
-                dataAccess = component "Supabase client" "Service-role client; bypasses RLS, so routes enforce access. Tables: events, event_history, event_clarifications, event_safety_submissions, event_safety_reviews, event_safety_review_flags, change_requests, change_request_fields, event_outbox, access_denials. Event reads also embed the coordinator's and organiser's names through the users foreign keys." "src/lib/supabaseAdmin.ts, supabase-js" "Detailed"
+                dataAccess = component "Supabase client" "Reads and writes events, their history, clarifications, safety reviews and change requests. Also reads organiser and coordinator names straight from the users table." "src/lib/supabaseAdmin.ts, supabase-js"
             }
         }
 
@@ -97,14 +97,14 @@ workspace "ConnectSphere - C3 Events Service" "Level 3 of the C4 model. Componen
         # Callers
         # =====================================================================
 
-        connectsphere.spa -> connectsphere.events.authMiddleware   "Calls /api/events with the user's bearer token" "JSON over HTTPS"
+        connectsphere.spa -> connectsphere.events.authMiddleware   "Calls the events APIs with the user's bearer token" "JSON over HTTPS"
         connectsphere.spa -> connectsphere.events.publicController "Shows public events to guests, no token" "JSON over HTTPS"
 
         connectsphere.venue        -> connectsphere.events.authMiddleware "Reads an event and its booking info, forwarding the caller's token" "JSON over HTTP"
-        connectsphere.venue        -> connectsphere.events.internalGuard  "Reports a lost venue booking (POST /:id/arrangements-changed)" "JSON over HTTP, internal token"
+        connectsphere.venue        -> connectsphere.events.internalGuard  "Reports a lost venue booking" "JSON over HTTP, internal token"
         connectsphere.venue        -> connectsphere.events.publicController "Reads public events for its public venue pages" "JSON over HTTP"
         connectsphere.equipment    -> connectsphere.events.authMiddleware "Reads an event and its booking info, forwarding the caller's token" "JSON over HTTP"
-        connectsphere.equipment    -> connectsphere.events.internalGuard  "Reports a lost equipment reservation (POST /:id/arrangements-changed)" "JSON over HTTP, internal token"
+        connectsphere.equipment    -> connectsphere.events.internalGuard  "Reports a lost equipment reservation" "JSON over HTTP, internal token"
         connectsphere.registration -> connectsphere.events.authMiddleware "Reads attendee-info, open-for-registration and single events" "JSON over HTTP"
         connectsphere.chat         -> connectsphere.events.authMiddleware "Reads an event and the caller's events for the chat inbox" "JSON over HTTP"
 
@@ -120,9 +120,9 @@ workspace "ConnectSphere - C3 Events Service" "Level 3 of the C4 model. Componen
         connectsphere.events.authMiddleware -> connectsphere.events.changeController       "Passes the authenticated request"
         connectsphere.events.authMiddleware -> connectsphere.events.lifecycleController    "Passes the authenticated request"
         connectsphere.events.authMiddleware -> connectsphere.events.registrationController "Passes the authenticated request"
-        connectsphere.events.authMiddleware -> connectsphere.events.internalController     "Passes GET /venue-booking-info, user or internal token"
-        connectsphere.events.authMiddleware -> connectsphere.events.internalGuard          "Verifies an internal token on GET /venue-booking-info"
-        connectsphere.events.internalGuard  -> connectsphere.events.internalController     "Passes POST /:id/arrangements-changed"
+        connectsphere.events.authMiddleware -> connectsphere.events.internalController     "Passes requests for event timing"
+        connectsphere.events.authMiddleware -> connectsphere.events.internalGuard          "Checks trusted service calls"
+        connectsphere.events.internalGuard  -> connectsphere.events.internalController     "Passes lost-arrangement reports"
 
         # =====================================================================
         # Controllers to rules
@@ -176,15 +176,15 @@ workspace "ConnectSphere - C3 Events Service" "Level 3 of the C4 model. Componen
 
         connectsphere.events.requestsController     -> connectsphere.events.dataAccess "Reads and writes events, history and clarification replies"
         connectsphere.events.draftsController       -> connectsphere.events.dataAccess "Reads and writes drafts"
-        connectsphere.events.assignmentController   -> connectsphere.events.dataAccess "Writes coordinator_id and the assignment history"
+        connectsphere.events.assignmentController   -> connectsphere.events.dataAccess "Saves the coordinator and the assignment history"
         connectsphere.events.reviewController       -> connectsphere.events.dataAccess "Writes the decision and clarification threads"
-        connectsphere.events.safetyController       -> connectsphere.events.dataAccess "Calls the safety review Postgres functions"
+        connectsphere.events.safetyController       -> connectsphere.events.dataAccess "Saves safety submissions and decisions"
         connectsphere.events.changeController       -> connectsphere.events.dataAccess "Reads and writes change requests and applied fields"
         connectsphere.events.lifecycleController    -> connectsphere.events.dataAccess "Writes the status and history"
         connectsphere.events.registrationController -> connectsphere.events.dataAccess "Writes the open date and override"
         connectsphere.events.publicController       -> connectsphere.events.dataAccess "Reads Confirmed events"
-        connectsphere.events.internalController     -> connectsphere.events.dataAccess "Writes the status and safety_approval_stale"
-        connectsphere.events.outbox                 -> connectsphere.events.dataAccess "Stores and clears event_outbox rows"
+        connectsphere.events.internalController     -> connectsphere.events.dataAccess "Saves the status; marks the safety approval out of date"
+        connectsphere.events.outbox                 -> connectsphere.events.dataAccess "Stores messages until they are sent"
 
         # =====================================================================
         # Leaving the service
@@ -217,13 +217,6 @@ workspace "ConnectSphere - C3 Events Service" "Level 3 of the C4 model. Componen
             element "Component" {
                 background #AFA9EC
                 color #26215C
-            }
-            element "Wide" {
-                width 650
-            }
-            element "Detailed" {
-                width 650
-                height 450
             }
             element "Infrastructure" {
                 background #D85A30

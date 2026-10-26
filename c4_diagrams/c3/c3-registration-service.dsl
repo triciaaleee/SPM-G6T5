@@ -6,7 +6,7 @@ workspace "ConnectSphere - C3 Registration Service" "Level 3 of the C4 model. Co
 
         connectsphere = softwareSystem "ConnectSphere Online" "Plans client events from request to completion." {
 
-            spa = container "Web application" "Single-page app for all seven roles. Calls each service directly at its own base URL (VITE_REGISTRATION_API_URL for this one)." "Vue 3, TypeScript, Vite, Tailwind"
+            spa = container "Web application" "Single-page app for all seven roles. Calls each service directly." "Vue 3, TypeScript, Vite, Tailwind"
 
             user = container "User service" "E1. Accounts, login, the JWT and the role directory. Port 4002." "Express 5, TypeScript"
 
@@ -26,31 +26,31 @@ workspace "ConnectSphere - C3 Registration Service" "Level 3 of the C4 model. Co
 
             registration = container "Registration service" "E6. Attendee discovery, registration, withdrawal and rosters. Port 4007." "Express 5, TypeScript" {
 
-                authMiddleware = component "Auth middleware" "Verifies the bearer token with the shared JWT_SECRET and attaches the caller's id and role; routes check role and ownership themselves." "src/middleware/auth.ts, src/lib/jwt.ts"
+                authMiddleware = component "Auth middleware" "Checks the caller's sign-in token on every request and notes who they are and their role. Each route then decides what that role may do." "src/middleware/auth.ts, src/lib/jwt.ts"
 
-                discoveryController = component "Discovery controller" "Attendee only. GET /open-events: events open for registration with places left and the caller's own status; GET /user/:userId: the caller's own registrations; GET /event/:eventId/view: one event as an attendee sees it, only if they hold or held a place or registration has opened." "src/routes/registrations.ts" "Wide"
+                discoveryController = component "Discovery controller" "Shows attendees the events open for registration, their own registrations, and an event's details once they may see it." "src/routes/registrations.ts"
 
-                registerController = component "Registration controller" "Attendee only. POST / registers for an open event, reusing the attendee's row after a withdrawal; PATCH /event/:eventId/withdraw gives the place up any time before the event starts, keeping the row as Withdrawn." "src/routes/registrations.ts"
+                registerController = component "Registration controller" "Lets attendees register for an open event, or withdraw any time before it starts." "src/routes/registrations.ts"
 
-                rosterController = component "Roster controller" "GET /event/:eventId: everyone registered for an event, with names. Closed to attendees; the owning organiser or a coordinator is admitted by events-service's own rule. Also read by events-service for a change request's capacity impact." "src/routes/registrations.ts" "Wide"
+                rosterController = component "Roster controller" "Lists who has registered for an event, for its organiser and coordinators. Attendees cannot see it." "src/routes/registrations.ts"
 
-                placeCounter = component "Place counter" "Counts Registered places per event (only the count leaves the service), works out places left, and shows an OPEN event with no places left as FULL." "src/routes/registrations.ts"
+                placeCounter = component "Place counter" "Counts the places taken for each event, and shows an open event with none left as full." "src/routes/registrations.ts"
 
-                registrationStatus = component "Registration status constants" "Registered, Withdrawn and Cancelled, spelled as the registration_status enum. Cancelled means the organiser cancelled the whole event and is final." "src/lib/registrationStatus.ts" "Wide"
+                registrationStatus = component "Registration status constants" "The three registration states: Registered, Withdrawn, and Cancelled (when the organiser cancels the whole event)." "src/lib/registrationStatus.ts"
 
-                consumer = component "Message consumer" "Durable queue registration-service with a dead-letter queue, bound to event.cancelled; acks only after the handler succeeds." "src/lib/rabbitConsumer.ts, amqplib"
+                consumer = component "Message consumer" "Receives event cancellations from the message broker and passes them on. A message is only marked done once handled." "src/lib/rabbitConsumer.ts, amqplib"
 
-                cancellation = component "Event cancellation handler" "event.cancelled: every Registered place for the event becomes Cancelled, then each attendee is told with registration.cancelled_by_event. Idempotent on redelivery." "src/lib/eventCancelledHandler.ts" "Wide"
+                cancellation = component "Event cancellation handler" "When an event is cancelled, cancels every place and tells each attendee. Safe to run twice." "src/lib/eventCancelledHandler.ts"
 
-                publisher = component "Event publisher" "Publishes to connectsphere.events after the write commits; best effort. registration.confirmed, registration.withdrawn, registration.cancelled_by_event." "src/lib/rabbitPublisher.ts, amqplib"
+                publisher = component "Event publisher" "Announces registration changes on the message broker once each change is saved, so other services can react." "src/lib/rabbitPublisher.ts, amqplib"
 
-                eventsClient = component "Events client" "Reads the attendee-facing whitelist of events (attendee-info, open-for-registration), the registration state and whether the event has started, and checks roster access. Forwards the caller's token." "src/lib/eventsClient.ts"
+                eventsClient = component "Events client" "Asks events-service for the event details attendees may see, whether registration is open, and who may view a roster." "src/lib/eventsClient.ts"
 
-                venuesClient = component "Venues client" "Venue names of each event's Approved bookings, forwarding the caller's token." "src/lib/venuesClient.ts"
+                venuesClient = component "Venues client" "Asks venue-service where each event is held." "src/lib/venuesClient.ts"
 
-                usersClient = component "Users client" "Display names for a roster, forwarding the caller's token. Best effort: the roster still renders with ids alone." "src/lib/usersClient.ts"
+                usersClient = component "Users client" "Asks user-service for attendees' names for a roster. The roster still shows without them if that fails." "src/lib/usersClient.ts"
 
-                dataAccess = component "Supabase client" "Service-role client; bypasses RLS, so routes enforce access. Table: registrations. Registering goes through register_for_event, which counts and writes under a per-event advisory lock so two attendees cannot take the last place." "src/lib/supabaseAdmin.ts, supabase-js" "Wide"
+                dataAccess = component "Supabase client" "Reads and writes registrations. Registering runs as one database function, so two people can't take the last place." "src/lib/supabaseAdmin.ts, supabase-js"
             }
         }
 
@@ -58,7 +58,7 @@ workspace "ConnectSphere - C3 Registration Service" "Level 3 of the C4 model. Co
         # Callers
         # =====================================================================
 
-        connectsphere.spa    -> connectsphere.registration.authMiddleware "Calls /api/registrations with the user's bearer token" "JSON over HTTPS"
+        connectsphere.spa    -> connectsphere.registration.authMiddleware "Calls the registration APIs with the user's bearer token" "JSON over HTTPS"
         connectsphere.events -> connectsphere.registration.authMiddleware "Reads an event's registrations, forwarding the caller's token" "JSON over HTTP"
         connectsphere.broker -> connectsphere.registration.consumer       "Delivers event.cancelled" "AMQP"
 
@@ -86,9 +86,9 @@ workspace "ConnectSphere - C3 Registration Service" "Level 3 of the C4 model. Co
         connectsphere.registration.cancellation -> connectsphere.registration.publisher          "Emits registration.cancelled_by_event"
 
         connectsphere.registration.discoveryController -> connectsphere.registration.dataAccess "Reads the caller's registrations"
-        connectsphere.registration.registerController  -> connectsphere.registration.dataAccess "Calls register_for_event; writes withdrawals"
+        connectsphere.registration.registerController  -> connectsphere.registration.dataAccess "Saves registrations and withdrawals"
         connectsphere.registration.rosterController    -> connectsphere.registration.dataAccess "Reads the event's registrations"
-        connectsphere.registration.placeCounter        -> connectsphere.registration.dataAccess "Counts Registered rows"
+        connectsphere.registration.placeCounter        -> connectsphere.registration.dataAccess "Counts places taken"
         connectsphere.registration.cancellation        -> connectsphere.registration.dataAccess "Cancels the event's places"
 
         # =====================================================================
@@ -97,7 +97,7 @@ workspace "ConnectSphere - C3 Registration Service" "Level 3 of the C4 model. Co
 
         connectsphere.registration.dataAccess   -> connectsphere.db     "Reads and writes registrations" "supabase-js"
         connectsphere.registration.publisher    -> connectsphere.broker "Publishes domain events" "AMQP"
-        connectsphere.registration.eventsClient -> connectsphere.events "Reads attendee-info, open-for-registration and single events" "JSON over HTTP"
+        connectsphere.registration.eventsClient -> connectsphere.events "Reads event details" "JSON over HTTP"
         connectsphere.registration.venuesClient -> connectsphere.venue  "GET /api/venues/attendee-info" "JSON over HTTP"
         connectsphere.registration.usersClient  -> connectsphere.user   "GET /api/users/names" "JSON over HTTP"
     }
@@ -121,13 +121,6 @@ workspace "ConnectSphere - C3 Registration Service" "Level 3 of the C4 model. Co
             element "Component" {
                 background #AFA9EC
                 color #26215C
-            }
-            element "Wide" {
-                width 650
-            }
-            element "Detailed" {
-                width 650
-                height 450
             }
             element "Infrastructure" {
                 background #D85A30
