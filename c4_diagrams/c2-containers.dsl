@@ -81,8 +81,8 @@ workspace "ConnectSphere - C2 Containers" "Level 2 of the C4 model. Seven roles 
 
         # --- Asynchronous: publishers -----------------------------------------
 
-        connectsphere.events       -> connectsphere.broker "Publishes request.submitted, request.edited, coordinator.assigned, coordinator.reassigned, clarification.requested, clarification.answered, request.decided, safety.submitted, safety.decided, event.rereview, change.requested, change.decided, event.cancelled, event.rescheduled" "AMQP"
-        connectsphere.venue        -> connectsphere.broker "Publishes booking.requested, booking.decided, booking.withdrawn, hold.expiring, hold.expired, booking.replacement_required, booking.unavailability_clash, booking.setup_conflict, venue.capacity_reduced" "AMQP"
+        connectsphere.events       -> connectsphere.broker "Publishes request.submitted, request.edited, coordinator.assigned, coordinator.reassigned, clarification.requested, clarification.answered, request.decided, safety.submitted, safety.decided, event.rereview, change.requested, change.decided, event.cancelled, event.rescheduled, event.attendance_changed" "AMQP"
+        connectsphere.venue        -> connectsphere.broker "Publishes booking.requested, booking.decided, booking.withdrawn, hold.expiring, hold.expired, booking.replacement_required, booking.unavailability_clash, booking.setup_conflict, venue.capacity_reduced, booking.invalidated_by_edit" "AMQP"
         connectsphere.equipment    -> connectsphere.broker "Publishes equipment.requested, equipment.amended, equipment.status_changed, equipment.unusable, equipment.reservation_clash, equipment.released" "AMQP"
         connectsphere.registration -> connectsphere.broker "Publishes registration.confirmed, registration.withdrawn, registration.cancelled_by_event" "AMQP"
 
@@ -90,7 +90,7 @@ workspace "ConnectSphere - C2 Containers" "Level 2 of the C4 model. Seven roles 
 
         connectsphere.broker -> connectsphere.notification "Delivers every message; each one names its recipients (see RabbitMQ.md)" "AMQP"
         connectsphere.broker -> connectsphere.events       "Delivers booking.replacement_required so a Safety Review or Confirmed event returns to Planning (change 2)" "AMQP"
-        connectsphere.broker -> connectsphere.venue        "Delivers event.cancelled so every booking of the event is withdrawn, then announced as booking.withdrawn (E3-6)" "AMQP"
+        connectsphere.broker -> connectsphere.venue        "Delivers event.cancelled so every booking of the event is withdrawn, then announced as booking.withdrawn (E3-6), and event.rescheduled and event.attendance_changed so its bookings are re-checked and any that no longer fit are flagged (AGENTS.md section 3a)" "AMQP"
         connectsphere.broker -> connectsphere.equipment    "Delivers event.cancelled and event.rescheduled so reservations are released (then announced as equipment.released), or their stored booking windows follow the event and are re-checked (E3-6, E5-6)" "AMQP"
         connectsphere.broker -> connectsphere.registration "Delivers event.cancelled so registration closes and places are cancelled, then announced as registration.cancelled_by_event (E3-6)" "AMQP"
     }

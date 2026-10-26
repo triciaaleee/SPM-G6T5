@@ -19,7 +19,7 @@ One durable queue per consuming service, bound only to the routing keys it acts 
 |---|---|---|
 | `notification-service` | `#` (everything) | Every message names people to notify |
 | `events-service` | `booking.replacement_required` | Moves a `Confirmed` event to `Needs Review`, or a `Safety Review` event to `Planning` (AGENTS.md section 3). Today venue-service reports it over REST (`POST /api/events/:id/arrangements-changed`, internal token) after the booking write commits |
-| `venue-service` | `event.cancelled` | Withdraws every active booking of the event (E3-6) |
+| `venue-service` | `event.cancelled`, `event.rescheduled`, `event.attendance_changed` | Withdraws every active booking of the event (E3-6), or reviews its bookings after a Planning edit to its date, time or expected attendance (AGENTS.md section 3a) |
 | `equipment-service` | `event.cancelled`, `event.rescheduled` | Releases reservations (E3-6), or moves each reserved unit's stored booking window when the event's date, start time or end time changes and re-checks the reservations against it (E5-6 AC3) |
 | `registration-service` | `event.cancelled` | Closes registration and cancels every place (E3-6) |
 
@@ -89,7 +89,8 @@ Every message has the same outer shape, so notification-service can route any of
 | 12 | Organiser raises a change request | `change.requested` | Assigned coordinator | Wk4 A20 "important event changes"; E3-9 AC1 |
 | 13 | Coordinator decides a change request | `change.decided` | Organiser; venue staff of affected bookings and Technical Support if venue or equipment is affected | E3-11 AC1 to AC4 |
 | 14 | Organiser cancels the event | `event.cancelled` (with reason) | Organiser (confirmation); assigned coordinator with the reason (leads if `Unassigned`) | Wk4 A20 "cancellation"; E3-6 AC1 |
-| 14a | An event's date, start time or end time changes (an edit in `Planning`, or an approved change request) | `event.rescheduled` (`proposedDate`, `startTime`, `endTime`, `coordinatorId`) | None. Consumed by equipment-service only (section 4); notification-service skips it without a warning | Keeps equipment booking windows in step with the event (E5-6) |
+| 14a | An event's date, start time or end time changes (an edit in `Planning`, or an approved change request) | `event.rescheduled` (`proposedDate`, `startTime`, `endTime`, `coordinatorId`) | None. Consumed by equipment-service and venue-service (section 4); notification-service skips it without a warning | Keeps equipment booking windows in step with the event (E5-6); has venue bookings re-checked (§3a) |
+| 14b | An event's expected attendance changes (an edit in `Planning`, or an approved change request) | `event.attendance_changed` (`expectedAttendance`, `coordinatorId`) | None. Consumed by venue-service (section 4); notification-service skips it without a warning | Has venue bookings checked against the new attendance (§3a) |
 
 ### 3.3 Venue bookings (venue-service)
 
@@ -106,6 +107,7 @@ Every message has the same outer shape, so notification-service can route any of
 | 23 | A `Requested` or `On Hold` booking clashes with new unavailability (status unchanged) | `booking.unavailability_clash` | Assigned coordinator | Wk7 C2, read as covering pending bookings (Team decision; AGENTS.md section 3a) |
 | 24 | A setup or turnaround change makes two bookings overlap | `booking.setup_conflict` | The venue's staff member; assigned coordinator of each event | Wk7 C1 "identified rather than silently removed"; E4-13; E7-2 |
 | 25 | Venue capacity reduced below a booked event's attendance | `venue.capacity_reduced` | Assigned coordinator of each affected event | E4-1 AC5 |
+| 25a | An edit to an event's date, time or expected attendance leaves one of its bookings invalid (the venue is blocked out, another event holds it, or it is too small) | `booking.invalidated_by_edit` (`venueName`, `reason`, `status`) | Assigned coordinator (leads if none) | §3a: identified and flagged, never silently removed |
 
 ### 3.4 Equipment (equipment-service)
 
@@ -161,6 +163,7 @@ An event with no bookings, equipment or registrations produces only `event.cance
 |---|---|---|
 | `booking.replacement_required` | events-service | Moves a `Confirmed` event to `Needs Review` or a `Safety Review` event back to `Planning`, then publishes `event.needs_review` / `event.returned_to_planning` (#11) |
 | `event.cancelled` | venue-service | Withdraws every active booking, then publishes #33 |
+| `event.rescheduled`, `event.attendance_changed` | venue-service | Checks the event's `Requested`, `On Hold` and `Approved` bookings against the new time (block-outs and other bookings, setup and turnaround included) or attendance (whole-attendance bookings only). An `Approved` one that no longer fits becomes `Replacement Required`; a pending one keeps its status. Publishes #25a, and tells events-service the arrangements changed if an Approved booking was flagged (a `Confirmed` event moves to `Needs Review`, one in `Planning` is left as it is). Safe to process twice |
 | `event.cancelled` | equipment-service | Releases reservations, then publishes #34 |
 | `event.cancelled` | registration-service | Cancels registrations, then publishes #35 |
 | `event.rescheduled` | equipment-service | Sets the stored window (`window_start_ms`, `window_end_ms`) on every `Reserved` booking of the event to the new date and time, then checks them for clashes. If any unit now clashes, tells events-service the arrangements changed (a `Confirmed` event moves to `Needs Review`, one in `Planning` is left as it is) and publishes #29a. Safe to process twice: the notification keeps one `messageId` |

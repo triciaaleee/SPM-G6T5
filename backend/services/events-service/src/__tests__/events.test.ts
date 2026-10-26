@@ -1511,6 +1511,44 @@ describe("PATCH /api/events/:id", () => {
       ]);
     });
 
+    const attendanceMessages = () => publish.mock.calls.map((c) => c[0]).filter((m) => m.type === "event.attendance_changed");
+
+    it("publishes event.attendance_changed, with the new number, when a Planning edit changes the expected attendance", async () => {
+      const { from } = buildPatchSupabase({
+        event: { id: 1, status: "Planning", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, owner);
+
+      const res = await request(app).patch("/api/events/1").send({ ...validPayload, expectedAttendance: 500 });
+
+      expect(res.status).toBe(200);
+      expect(attendanceMessages()).toEqual([
+        expect.objectContaining({
+          eventId: 1,
+          recipients: { userIds: [], roles: [] },
+          data: expect.objectContaining({ coordinatorId: coordinator.id, expectedAttendance: 500 }),
+        }),
+      ]);
+      expect(rescheduled()).toHaveLength(0);
+    });
+
+    it("does not publish it when the attendance is unchanged, or before Planning", async () => {
+      const planning = buildPatchSupabase({
+        event: { id: 1, status: "Planning", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      await request(buildApp({ from: planning.from }, owner)).patch("/api/events/1").send({ ...validPayload, venue: "Another Hall" });
+
+      const requested = buildPatchSupabase({
+        event: { id: 1, status: "Requested", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Requested" },
+      });
+      await request(buildApp({ from: requested.from }, owner)).patch("/api/events/1").send({ ...validPayload, expectedAttendance: 500 });
+
+      expect(attendanceMessages()).toHaveLength(0);
+    });
+
     it("does not publish it when the edit leaves the date and time alone", async () => {
       const { from } = buildPatchSupabase({
         event: { id: 1, status: "Planning", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
