@@ -8,7 +8,7 @@ workspace "ConnectSphere - C1 System Context" "Level 1 of the C4 model. Scope de
         safetyOfficer = person "Safety officer"        "Internal. Runs the Operational Safety Check on planned events: approves, rejects or requests changes." "Role"
         venueStaff  = person "Venue staff"             "Internal. Maintains venues, setup and turnaround times and unavailability; holds, approves or rejects booking requests." "Role"
         techSupport = person "Technical support staff" "Internal. Maintains equipment inventory and reserves items against events." "Role"
-        attendee    = person "Attendee"                "Discovers events open for registration, and can register and withdraw from events." "Role"
+        attendee    = person "Attendee"                "External. Discovers events open for registration, and can register and withdraw from events." "Role"
 
         connectsphere = softwareSystem "ConnectSphere Online" "Plans client events from request to completion. The coordinator lead assigns each request to a coordinator, who reviews it and arranges venues and equipment. The event then passes the Operational Safety Check before it is confirmed and opens for attendee registration."
 
@@ -44,7 +44,5 @@ workspace "ConnectSphere - C1 System Context" "Level 1 of the C4 model. Scope de
                 thickness 2
             }
         }
-
-        theme default
     }
 }

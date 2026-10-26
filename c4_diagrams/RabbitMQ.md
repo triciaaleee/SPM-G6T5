@@ -2,7 +2,7 @@
 
 **Version 1.0** | 2026-10-10 | Tricia Lee (@triciaa-leee)
 
-The message catalogue behind the broker in `c2-containers.dsl` and the publishers and consumers in `c3-components.dsl`. It traces every notification requirement to the message that delivers it. The rules every publisher and consumer must follow are in `ArchitectureDecisionRecord.md` section 4; the decision to use RabbitMQ is D6 there.
+The message catalogue behind the broker in `c2-containers.dsl` and the publishers and consumers in the per-service component views in `c3/` (`c3-<service>.dsl`). It traces every notification requirement to the message that delivers it. The rules every publisher and consumer must follow are in `ArchitectureDecisionRecord.md` section 4; the decision to use RabbitMQ is D6 there.
 
 ## 1. Topology
 

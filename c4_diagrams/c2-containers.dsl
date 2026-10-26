@@ -1,103 +1,107 @@
-workspace "ConnectSphere - C2 Containers" "Level 2 of the C4 model. Seven roles use one web application, which reaches six backend services through a single API gateway." {
+workspace "ConnectSphere - C2 Containers" "Level 2 of the C4 model. Seven roles use one web application, which calls seven backend services directly. Each service verifies the JWT itself." {
 
     !identifiers hierarchical
 
     model {
 
-        organiser     = person "Event organiser"         "External client. Submits and edits event requests, answers clarifications, opens registration, raises change requests and cancels their own events." "Role"
-        lead          = person "Event coordinator lead"  "Internal. Watches the unassigned queue, assigns and reassigns coordinators, oversees every coordinator's workload." "Role"
-        coordinator   = person "Event coordinator"       "Internal. Reviews assigned requests, plans venues and equipment, submits events for safety review, decides change requests." "Role"
-        safetyOfficer = person "Safety officer"          "Internal. Runs the Operational Safety Check: approves, rejects or requests changes." "Role"
-        venueStaff    = person "Venue staff"             "Internal. Maintains venues, setup and turnaround times and unavailability; holds, approves or rejects bookings." "Role"
+        organiser     = person "Event organiser"         "External client. Submits and edits event requests, answers clarifications, raises change requests and cancels their own events." "Role"
+        lead          = person "Event coordinator lead"  "Internal. Watches the unassigned queue, assigns each new request to a coordinator, reassigns events and oversees every coordinator's workload." "Role"
+        coordinator   = person "Event coordinator"       "Internal. Reviews the requests assigned to them, plans venues and equipment, submits events for safety review and decides change requests." "Role"
+        safetyOfficer = person "Safety officer"          "Internal. Runs the Operational Safety Check on planned events: approves, rejects or requests changes." "Role"
+        venueStaff    = person "Venue staff"             "Internal. Maintains venues, setup and turnaround times and unavailability; holds, approves or rejects booking requests." "Role"
         techSupport   = person "Technical support staff" "Internal. Maintains equipment inventory and reserves items against events." "Role"
-        attendee      = person "Attendee"                "Discovers events open for registration, registers and withdraws." "Role"
+        attendee      = person "Attendee"                "Discovers events open for registration, and can register and withdraw from events." "Role"
 
-        connectsphere = softwareSystem "ConnectSphere" "Plans client events end to end." {
+        connectsphere = softwareSystem "ConnectSphere Online" "Plans client events from request to completion. The coordinator lead assigns each request to a coordinator, who reviews it and arranges venues and equipment. The event then passes the Operational Safety Check before it is confirmed and opens for attendee registration." {
 
-            spa = container "Web application" "Single-page app for all seven roles. Shows each role only its own views; route guards send unauthenticated users to login. Calls one API base URL." "Vue 3, TypeScript, Vite, Tailwind"
+            spa = container "Web application" "Single-page app for all seven roles. Each role sees only its own views, and signed-out users are sent to login. Calls each service directly, sending the JWT with every request." "Vue 3, TypeScript, Vite, Tailwind"
 
-            gateway = container "API gateway" "Single entry point on port 4000. Verifies the JWT once with the shared JWT_SECRET (only /api/auth is public), then proxies by path prefix to the owning service and forwards the original token." "Express 5, http-proxy-middleware"
+            user = container "User service" "E1. Sign-up and login, with a 15-minute lockout after five failed attempts. Issues the JWT carrying the caller's role, and looks up users by role or name. Port 4002." "Express 5, TypeScript"
 
-            user = container "User service" "E1. Sign-up, login with lockout after five failed attempts, issues the JWT carrying the caller's role, and the role directory (seven roles, including the coordinator lead and safety officer). Port 4002." "Express 5, TypeScript"
+            events = container "Events service" "E2 and E3. Owns each event and its status. Handles drafts, submission, assignment by the lead and clarifications. Covers coordinator review, edits, change requests, safety review, completion and cancellation. Keeps the event history and registration settings. Port 4001." "Express 5, TypeScript"
 
-            events = container "Events service" "E2 and E3. Owns the event and its status machine: drafts, submission into the unassigned queue, lead assignment and reassignment, clarification, coordinator review, edit rules, event history, submission for safety review and the three safety outcomes, arrangements-changed re-review, completion, cancellation and change requests. Port 4001." "Express 5, TypeScript"
+            chat = container "Chat service" "E2. Private chat between an organiser and their event's assigned coordinator, open while the event is in Planning or Confirmed. Port 4006." "Express 5, TypeScript"
 
-            venue = container "Venue service" "E4. Venue catalogue with setup and turnaround times, unavailability periods, availability calendar, search and recommendations, multi-venue booking requests, hold, approve and reject with 72-hour expiring holds, conflict detection on the occupied window, and Replacement Required flagging. Port 4003." "Express 5, TypeScript"
+            venue = container "Venue service" "E4. Venue catalogue with setup and turnaround times and unavailability periods. Venue search and recommendations. Booking requests, 72-hour holds, approvals and rejections, and flags bookings that no longer fit. Port 4003." "Express 5, TypeScript"
 
-            equipment = container "Equipment service" "E5. Equipment requests, inventory and usability, availability checks and reservations. Port 4005." "Express 5, TypeScript"
+            equipment = container "Equipment service" "E5. Equipment catalogue, stock and individual units, including periods out of use. Equipment requests, availability checks and reservations. Port 4005." "Express 5, TypeScript"
 
-            registration = container "Registration service" "E6. Registration configuration, attendee discovery and sign-up, withdrawal, organiser and coordinator roster views. Port 4006." "Express 5, TypeScript"
+            registration = container "Registration service" "E6. Lists events open for registration, takes registrations up to capacity and handles withdrawals. Shows organisers and coordinators who has registered. Port 4007." "Express 5, TypeScript"
 
-            notification = container "Notification service" "E7. In-app notification feed with unread count, and the trigger-to-recipient routing matrix. Port 4004." "Express 5, TypeScript"
+            notification = container "Notification service" "E7. In-app notification feed with an unread count. Consumes every broker message and works out who should receive it. Port 4004." "Express 5, TypeScript"
 
-            broker = container "Message broker" "Topic exchange connectsphere.events. Carries every E7-2 notification trigger and fans out cancellations and re-reviews, so no service waits on another to react. Message catalogue in RabbitMQ.md." "RabbitMQ" "Infrastructure"
+            broker = container "Message broker" "Topic exchange connectsphere.events. Carries every notification trigger and fans out event changes, such as cancellations, so services react without waiting on each other." "RabbitMQ" "Infrastructure"
 
-            db = container "ConnectSphere database" "One Postgres instance. Each service reads and writes only the tables it owns; status, role and booking-status columns are Postgres enums." "Supabase Postgres" "Database"
+            db = container "ConnectSphere database" "One Postgres instance. Each service reads and writes only its own tables. Status, role and booking-status columns are Postgres enums." "Supabase Postgres" "Database"
         }
 
         # --- How each role uses the system ------------------------------------
 
-        organiser     -> connectsphere.spa "Submits and tracks requests, answers clarifications, configures registration, raises change requests, cancels events" "HTTPS"
-        lead          -> connectsphere.spa "Works the unassigned queue, assigns and reassigns coordinators, views the assignment overview" "HTTPS"
-        coordinator   -> connectsphere.spa "Reviews requests, books venues, requests equipment, submits for safety review, decides change requests" "HTTPS"
-        safetyOfficer -> connectsphere.spa "Opens the safety review queue and records approve, reject or request changes" "HTTPS"
-        venueStaff    -> connectsphere.spa "Maintains venues and unavailability, holds, approves or rejects bookings" "HTTPS"
-        techSupport   -> connectsphere.spa "Maintains inventory, updates and reserves equipment requests" "HTTPS"
-        attendee      -> connectsphere.spa "Browses open events, registers, withdraws" "HTTPS"
+        organiser     -> connectsphere.spa "Submits and tracks event requests, raises change requests, cancels events" "HTTPS"
+        lead          -> connectsphere.spa "Assigns and reassigns coordinators, views all assignments" "HTTPS"
+        coordinator   -> connectsphere.spa "Reviews requests, books venues, requests equipment, submits for safety review, manages registration" "HTTPS"
+        safetyOfficer -> connectsphere.spa "Reviews events awaiting the Operational Safety Check and records the outcome" "HTTPS"
+        venueStaff    -> connectsphere.spa "Maintains venues and unavailability, decides booking requests" "HTTPS"
+        techSupport   -> connectsphere.spa "Maintains equipment inventory, reserves items" "HTTPS"
+        attendee      -> connectsphere.spa "Discovers events, registers, withdraws" "HTTPS"
 
-        # --- Front door -------------------------------------------------------
+        # --- Web application to each service ----------------------------------
+        # The app holds one base URL per service, and every service
+        # verifies the bearer token with the shared JWT_SECRET.
 
-        connectsphere.spa -> connectsphere.gateway "Makes every API call with a bearer token" "JSON over HTTPS"
-
-        connectsphere.gateway -> connectsphere.user         "Routes /api/auth and /api/users"     "JSON over HTTP"
-        connectsphere.gateway -> connectsphere.events       "Routes /api/events"                   "JSON over HTTP"
-        connectsphere.gateway -> connectsphere.venue        "Routes /api/venues"                   "JSON over HTTP"
-        connectsphere.gateway -> connectsphere.equipment    "Routes /api/equipment-requests"       "JSON over HTTP"
-        connectsphere.gateway -> connectsphere.registration "Routes /api/registrations"            "JSON over HTTP"
-        connectsphere.gateway -> connectsphere.notification "Routes /api/notifications"            "JSON over HTTP"
+        connectsphere.spa -> connectsphere.user         "Calls /api/auth and /api/users"     "JSON over HTTPS"
+        connectsphere.spa -> connectsphere.events       "Calls /api/events"                  "JSON over HTTPS"
+        connectsphere.spa -> connectsphere.chat         "Calls /api/chat"                    "JSON over HTTPS"
+        connectsphere.spa -> connectsphere.venue        "Calls /api/venues"                  "JSON over HTTPS"
+        connectsphere.spa -> connectsphere.equipment    "Calls /api/equipment-requests"      "JSON over HTTPS"
+        connectsphere.spa -> connectsphere.registration "Calls /api/registrations"           "JSON over HTTPS"
+        connectsphere.spa -> connectsphere.notification "Calls /api/notifications"           "JSON over HTTPS"
 
         # --- Each service owns its own tables ---------------------------------
 
-        connectsphere.user         -> connectsphere.db "Reads and writes users and login attempts"                                 "supabase-js"
-        connectsphere.events       -> connectsphere.db "Reads and writes events, clarifications, event history and safety reviews"  "supabase-js"
-        connectsphere.venue        -> connectsphere.db "Reads and writes venues, unavailability and venue bookings"                 "supabase-js"
-        connectsphere.equipment    -> connectsphere.db "Reads and writes equipment requests, inventory and reservations"            "supabase-js"
-        connectsphere.registration -> connectsphere.db "Reads and writes registration settings and registrations"                   "supabase-js"
-        connectsphere.notification -> connectsphere.db "Reads and writes notifications"                                             "supabase-js"
+        connectsphere.user         -> connectsphere.db "Reads and writes users and login attempts"                                          "supabase-js"
+        connectsphere.events       -> connectsphere.db "Reads and writes events, clarifications, change requests, event history and safety reviews" "supabase-js"
+        connectsphere.chat         -> connectsphere.db "Reads and writes chat messages"                                                     "supabase-js"
+        connectsphere.venue        -> connectsphere.db "Reads and writes venues, unavailability and venue bookings"                         "supabase-js"
+        connectsphere.equipment    -> connectsphere.db "Reads and writes the equipment catalogue, units, requests and reservations"         "supabase-js"
+        connectsphere.registration -> connectsphere.db "Reads and writes registrations"                                                     "supabase-js"
+        connectsphere.notification -> connectsphere.db "Reads and writes notifications"                                                     "supabase-js"
 
-        # --- Synchronous reads across service boundaries -----------------------
+        # --- Synchronous calls across service boundaries -----------------------
         # Used only where the caller needs live state to answer the request.
-        # The caller's bearer token is forwarded, so the owner's access rules apply.
 
-        connectsphere.events       -> connectsphere.user         "Lists active coordinators for assignment and reassignment (E2-12, E2-13)"                       "JSON over HTTP"
-        connectsphere.events       -> connectsphere.venue        "Reads every booking's status before safety review and for change impact (E3-4, E3-10)"          "JSON over HTTP"
-        connectsphere.events       -> connectsphere.equipment    "Reads reservation status before safety review and for change impact (E3-4, E3-10)"              "JSON over HTTP"
-        connectsphere.events       -> connectsphere.registration "Reads registered counts against proposed capacity (E3-10)"                                      "JSON over HTTP"
-        connectsphere.venue        -> connectsphere.events       "Reads event date, times, attendance and status for search, suitability and occupied windows (E4-6 to E4-11)" "JSON over HTTP"
-        connectsphere.equipment    -> connectsphere.events       "Reads event date, times and venue bookings to scope availability windows (E5-4)"                "JSON over HTTP"
-        connectsphere.registration -> connectsphere.events       "Reads event details and status for discovery and registration (E6-1, E6-2)"                     "JSON over HTTP"
-        connectsphere.registration -> connectsphere.venue        "Reads the capacity of the event's approved venue bookings (E6-1, E6-6)"                         "JSON over HTTP"
-        connectsphere.notification -> connectsphere.user         "Resolves role-based recipients such as coordinator leads and safety officers (E7-2)"            "JSON over HTTP"
+        connectsphere.events       -> connectsphere.user         "Lists active coordinators for assignment and reassignment"                          "JSON over HTTP"
+        connectsphere.events       -> connectsphere.venue        "Reads booking status before safety review; checks and flags bookings a change request affects" "JSON over HTTP"
+        connectsphere.events       -> connectsphere.equipment    "Reads reservation status before safety review; flags equipment a change request affects" "JSON over HTTP"
+        connectsphere.events       -> connectsphere.registration "Reads registered counts to check a proposed attendance change"                      "JSON over HTTP"
+        connectsphere.chat         -> connectsphere.events       "Reads the event and its assigned coordinator to check who may chat"                 "JSON over HTTP"
+        connectsphere.venue        -> connectsphere.events       "Reads event dates, times, attendance and status; reports lost bookings"            "JSON over HTTP"
+        connectsphere.equipment    -> connectsphere.events       "Reads event dates, times and status; reports lost reservations"                     "JSON over HTTP"
+        connectsphere.equipment    -> connectsphere.user         "Reads the names of coordinators who raised equipment requests"                     "JSON over HTTP"
+        connectsphere.registration -> connectsphere.events       "Reads event details and status for discovery and registration"                      "JSON over HTTP"
+        connectsphere.registration -> connectsphere.venue        "Reads the names of the event's approved venues"                                     "JSON over HTTP"
+        connectsphere.registration -> connectsphere.user         "Reads attendee names for the registration list"                                     "JSON over HTTP"
+        connectsphere.notification -> connectsphere.user         "Resolves role-based recipients, such as coordinator leads and safety officers"      "JSON over HTTP"
 
         # --- Asynchronous: publishers -----------------------------------------
 
-        connectsphere.events       -> connectsphere.broker "Publishes request.submitted, request.edited, coordinator.assigned, coordinator.reassigned, clarification.requested, clarification.answered, request.decided, safety.submitted, safety.decided, event.rereview, change.requested, change.decided, event.cancelled, event.rescheduled, event.attendance_changed" "AMQP"
-        connectsphere.venue        -> connectsphere.broker "Publishes booking.requested, booking.decided, booking.withdrawn, hold.expiring, hold.expired, booking.replacement_required, booking.unavailability_clash, booking.setup_conflict, venue.capacity_reduced, booking.invalidated_by_edit" "AMQP"
-        connectsphere.equipment    -> connectsphere.broker "Publishes equipment.requested, equipment.amended, equipment.status_changed, equipment.unusable, equipment.reservation_clash, equipment.released" "AMQP"
+        connectsphere.events       -> connectsphere.broker "Publishes request.submitted, request.edited, request.decided, coordinator.assigned, coordinator.reassigned, clarification.requested, clarification.answered, safety.submitted, safety.decided, change.requested, change.decided, change.withdrawn, event.needs_review, event.returned_to_planning, event.rescheduled, event.attendance_changed, event.cancelled" "AMQP"
+        connectsphere.chat         -> connectsphere.broker "Publishes message.sent" "AMQP"
+        connectsphere.venue        -> connectsphere.broker "Publishes booking.requested, booking.decided, booking.withdrawn, hold.expiring, hold.expired, booking.replacement_required, booking.unavailability_clash, booking.setup_conflict, booking.invalidated_by_edit, booking.flagged_for_rebooking, venue.capacity_reduced" "AMQP"
+        connectsphere.equipment    -> connectsphere.broker "Publishes equipment.requested, equipment.amended, equipment.status_changed, equipment.unusable, equipment.reservation_clash, equipment.flagged_for_reassessment, equipment.released" "AMQP"
         connectsphere.registration -> connectsphere.broker "Publishes registration.confirmed, registration.withdrawn, registration.cancelled_by_event" "AMQP"
 
         # --- Asynchronous: consumers ------------------------------------------
 
-        connectsphere.broker -> connectsphere.notification "Delivers every message; each one names its recipients (see RabbitMQ.md)" "AMQP"
-        connectsphere.broker -> connectsphere.events       "Delivers booking.replacement_required so a Safety Review or Confirmed event returns to Planning (change 2)" "AMQP"
-        connectsphere.broker -> connectsphere.venue        "Delivers event.cancelled so every booking of the event is withdrawn, then announced as booking.withdrawn (E3-6), and event.rescheduled and event.attendance_changed so its bookings are re-checked and any that no longer fit are flagged (AGENTS.md section 3a)" "AMQP"
-        connectsphere.broker -> connectsphere.equipment    "Delivers event.cancelled and event.rescheduled so reservations are released (then announced as equipment.released), or their stored booking windows follow the event and are re-checked (E3-6, E5-6)" "AMQP"
-        connectsphere.broker -> connectsphere.registration "Delivers event.cancelled so registration closes and places are cancelled, then announced as registration.cancelled_by_event (E3-6)" "AMQP"
+        connectsphere.broker -> connectsphere.notification "Delivers every message, to be turned into notifications" "AMQP"
+        connectsphere.broker -> connectsphere.venue        "Delivers event.cancelled, so the event's bookings are withdrawn, and event.rescheduled and event.attendance_changed, so its bookings are re-checked and any that no longer fit are flagged" "AMQP"
+        connectsphere.broker -> connectsphere.equipment    "Delivers event.cancelled, so the event's reservations are released, and event.rescheduled, so reserved units move to the new time and any clashes are flagged" "AMQP"
+        connectsphere.broker -> connectsphere.registration "Delivers event.cancelled, so the event's registrations are cancelled" "AMQP"
     }
 
     views {
 
-        container connectsphere "C2-Containers" "Every role, the web application, the API gateway, the six services, the message broker and the database in one view." {
+        container connectsphere "C2-Containers" "Every role, the web application, the seven services, the message broker and the database in one view." {
             include *
             autolayout lr
         }
@@ -113,6 +117,8 @@ workspace "ConnectSphere - C2 Containers" "Level 2 of the C4 model. Seven roles 
                 color #ffffff
             }
             element "Container" {
+                width 550
+                height 380
                 background #534AB7
                 color #ffffff
             }
@@ -130,7 +136,5 @@ workspace "ConnectSphere - C2 Containers" "Level 2 of the C4 model. Seven roles 
                 thickness 2
             }
         }
-
-        theme default
     }
 }
