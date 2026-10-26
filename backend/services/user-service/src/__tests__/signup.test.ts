@@ -30,6 +30,10 @@ interface FakeOptions {
   existing?: { id: string } | null;
   lookupError?: DbError | null;
   insertError?: DbError | null;
+  /** Override the rpc("generate_user_id", ...) result directly, bypassing the default success-by-role behaviour. */
+  rpcResult?: { data: string | null; error: DbError | null };
+  /** Override the insert().select().single() result directly, bypassing the default success-from-row behaviour. */
+  insertResult?: { data: Record<string, any> | null; error: DbError | null };
 }
 
 /**
@@ -39,44 +43,56 @@ interface FakeOptions {
  */
 function buildApp(opts: FakeOptions = {}) {
   const inserts: Record<string, any>[] = [];
+  const rpcCalls: { fn: string; role: string }[] = [];
   const rpcRoles: string[] = [];
   const prefix: Record<string, string> = { attendee: "ATT", organiser: "ORG" };
 
-  (globalThis as any).__mockSupabase = {
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: async () => ({
-            data: opts.lookupError ? null : (opts.existing ?? null),
-            error: opts.lookupError ?? null,
-          }),
-        }),
-      }),
-      insert: (row: Record<string, any>) => {
-        inserts.push(row);
-        return {
-          select: () => ({
-            single: async () =>
-              opts.insertError
-                ? { data: null, error: opts.insertError }
-                : {
-                    data: { id: row.id, name: row.name, email: row.email, role: row.role },
-                    error: null,
-                  },
-          }),
-        };
-      },
-    }),
-    rpc: async (_fn: string, args: { p_role: string }) => {
-      rpcRoles.push(args.p_role);
-      return { data: `${prefix[args.p_role] ?? "X"}-0001`, error: null };
-    },
-  };
+  const lookupMaybeSingle = vi.fn(async () => ({
+    data: opts.lookupError ? null : (opts.existing ?? null),
+    error: opts.lookupError ?? null,
+  }));
+  const lookupEq = vi.fn().mockReturnValue({ maybeSingle: lookupMaybeSingle });
+  const lookupSelect = vi.fn().mockReturnValue({ eq: lookupEq });
+
+  const insertSingle = vi.fn();
+  const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
+  const insert = vi.fn((row: Record<string, any>) => {
+    inserts.push(row);
+    insertSingle.mockImplementation(async () =>
+      opts.insertResult !== undefined
+        ? opts.insertResult
+        : opts.insertError
+          ? { data: null, error: opts.insertError }
+          : { data: { id: row.id, name: row.name, email: row.email, role: row.role }, error: null },
+    );
+    return { select: insertSelect };
+  });
+
+  const from = vi.fn().mockReturnValue({ select: lookupSelect, insert });
+
+  const rpc = vi.fn(async (fn: string, args: { p_role: string }) => {
+    rpcCalls.push({ fn, role: args.p_role });
+    rpcRoles.push(args.p_role);
+    if (opts.rpcResult !== undefined) return opts.rpcResult;
+    return { data: `${prefix[args.p_role] ?? "X"}-0001`, error: null };
+  });
+
+  (globalThis as any).__mockSupabase = { from, rpc };
 
   const app = express();
   app.use(express.json());
   app.use("/api/auth", authRouter);
-  return { app, inserts, rpcRoles };
+  return {
+    app,
+    inserts,
+    rpcRoles,
+    rpcCalls,
+    from,
+    lookupSelect,
+    lookupEq,
+    insert,
+    insertSelect,
+  };
 }
 
 function signup(app: express.Express, body: Record<string, unknown>) {
@@ -85,7 +101,7 @@ function signup(app: express.Express, body: Record<string, unknown>) {
 
 describe("POST /api/auth/signup — valid signup (AC1)", () => {
   it("creates the account and returns a working session", async () => {
-    const { app, inserts } = buildApp();
+    const { app, inserts, from, lookupSelect, lookupEq, insert, insertSelect, rpcCalls } = buildApp();
 
     const res = await signup(app, VALID);
 
@@ -98,6 +114,15 @@ describe("POST /api/auth/signup — valid signup (AC1)", () => {
     });
     expect(verifyToken(res.body.token)).toMatchObject({ sub: "ATT-0001", role: "attendee" });
     expect(inserts).toHaveLength(1);
+    // Two separate .from("users") calls — the email pre-check, then the
+    // insert — each must pass the real table name, not just "one of them".
+    expect(from).toHaveBeenNthCalledWith(1, "users");
+    expect(from).toHaveBeenNthCalledWith(2, "users");
+    expect(lookupSelect).toHaveBeenCalledWith("id");
+    expect(lookupEq).toHaveBeenCalledWith("email", "ada@example.com");
+    expect(insert).toHaveBeenCalled();
+    expect(insertSelect).toHaveBeenCalledWith("id, name, email, role");
+    expect(rpcCalls).toEqual([{ fn: "generate_user_id", role: "attendee" }]);
   });
 
   it("stores a bcrypt hash that verifies against the chosen password", async () => {
@@ -168,11 +193,24 @@ describe("POST /api/auth/signup — role (AC4)", () => {
       const res = await signup(app, { ...VALID, role });
 
       expect(res.status).toBe(400);
-      expect(res.body.field).toBe("role");
+      expect(res.body).toEqual({
+        error: "You can only sign up as an Attendee or an Event Organiser",
+        field: "role",
+      });
       expect(inserts).toHaveLength(0);
       expect(rpcRoles).toHaveLength(0);
     },
   );
+
+  it("defaults to attendee when role is explicitly null", async () => {
+    const { app, inserts } = buildApp();
+
+    const res = await signup(app, { ...VALID, role: null });
+
+    expect(res.status).toBe(201);
+    expect(res.body.user.role).toBe("attendee");
+    expect(inserts[0].role).toBe("attendee");
+  });
 });
 
 describe("POST /api/auth/signup — email already registered (AC2)", () => {
@@ -201,6 +239,25 @@ describe("POST /api/auth/signup — email already registered (AC2)", () => {
     const res = await signup(app, VALID);
 
     expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: "An account with this email already exists",
+      field: "email",
+      code: "email_in_use",
+    });
+  });
+
+  it("detects the email collision from the error details even when the message itself doesn't mention email", async () => {
+    const { app } = buildApp({
+      insertError: {
+        message: 'duplicate key value violates unique constraint "some_other_name"',
+        code: "23505",
+        details: "Key (email)=(ada@example.com) already exists.",
+      } as DbError & { details: string },
+    });
+
+    const res = await signup(app, VALID);
+
+    expect(res.status).toBe(409);
     expect(res.body.code).toBe("email_in_use");
   });
 
@@ -221,6 +278,32 @@ describe("POST /api/auth/signup — email already registered (AC2)", () => {
     expect(res.status).toBe(500);
     expect(res.body.code).toBeUndefined();
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("sync_user_id_sequences"));
+    errorSpy.mockRestore();
+  });
+
+  it("falls back to an empty string, not a placeholder, when error.details is missing", async () => {
+    // `error.details ?? ""` only ever feeds a /email/i.test(...) check, and
+    // neither "" nor any other non-"email"-containing text changes that
+    // check's result — so this is a true equivalent mutant for every
+    // behavioural assertion. Spying on RegExp.prototype.test is the only
+    // way to actually observe which fallback string was built.
+    const testSpy = vi.spyOn(RegExp.prototype, "test");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { app } = buildApp({
+      insertError: {
+        message: 'duplicate key value violates unique constraint "users_pkey"',
+        code: "23505",
+        // deliberately no `details` field
+      },
+    });
+
+    await signup(app, { ...VALID, role: "organiser" });
+
+    const emailCheckCall = testSpy.mock.calls.find(
+      (_, i) => (testSpy.mock.contexts[i] as RegExp | undefined)?.source === "email",
+    );
+    expect(emailCheckCall?.[0]).toBe('duplicate key value violates unique constraint "users_pkey" ');
+    testSpy.mockRestore();
     errorSpy.mockRestore();
   });
 });
@@ -258,13 +341,14 @@ describe("POST /api/auth/signup — password strength (AC3)", () => {
     expect(res.body.error).toBe(PASSWORD_TOO_LONG);
   });
 
-  it("rejects a non-string password", async () => {
-    const { app } = buildApp();
+  it.each([undefined, 12345678])("rejects a missing or non-string password (%j), stating the rule and not the length error", async (password) => {
+    const { app, inserts } = buildApp();
 
-    const res = await signup(app, { ...VALID, password: 12345678 });
+    const res = await signup(app, { ...VALID, password });
 
     expect(res.status).toBe(400);
-    expect(res.body.field).toBe("password");
+    expect(res.body).toEqual({ error: "Password is required", field: "password" });
+    expect(inserts).toHaveLength(0);
   });
 });
 
@@ -275,31 +359,103 @@ describe("POST /api/auth/signup — other validation", () => {
     const res = await signup(app, { ...VALID, name });
 
     expect(res.status).toBe(400);
-    expect(res.body.field).toBe("name");
+    expect(res.body).toEqual({ error: "Name is required", field: "name" });
   });
 
-  it.each(["", "not-an-email", "ada@", "@example.com", "ada@example", "ada lovelace@example.com"])(
-    "rejects the email %j",
+  it("rejects a request sent with no body at all, instead of throwing on an undefined req.body", async () => {
+    // No .send() and no Content-Type: Express leaves req.body as undefined,
+    // not {} — only `req.body ?? {}` stands between that and a crash.
+    const { app, inserts } = buildApp();
+
+    const res = await request(app).post("/api/auth/signup");
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Name is required", field: "name" });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it.each(["", "   "])("requires an email (%j), distinctly from an invalid format", async (email) => {
+    const { app, inserts } = buildApp();
+
+    const res = await signup(app, { ...VALID, email });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Email is required", field: "email" });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("rejects a non-string email as required, without touching .trim()", async () => {
+    const { app, inserts } = buildApp();
+
+    const res = await signup(app, { ...VALID, email: 12345 });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Email is required", field: "email" });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("rejects an email with trailing garbage after a valid-looking prefix (the pattern must anchor to the end)", async () => {
+    // Without the trailing $ anchor, a regex .test() is satisfied by
+    // matching just the "ada@example.com" prefix and ignoring everything
+    // after the second @ — the end anchor is what forces the whole string
+    // to be a single valid address.
+    const { app, inserts } = buildApp();
+
+    const res = await signup(app, { ...VALID, email: "ada@example.com@evil.com" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Enter a valid email address", field: "email" });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it.each(["not-an-email", "ada@", "@example.com", "ada@example", "ada lovelace@example.com"])(
+    "rejects the malformed (non-empty) email %j as an invalid format, distinctly from a missing email",
     async (email) => {
       const { app, inserts } = buildApp();
 
       const res = await signup(app, { ...VALID, email });
 
       expect(res.status).toBe(400);
-      expect(res.body.field).toBe("email");
+      expect(res.body).toEqual({ error: "Enter a valid email address", field: "email" });
       expect(inserts).toHaveLength(0);
     },
   );
+
+  it("accepts an email exactly at the 254-character limit", async () => {
+    const { app } = buildApp();
+    const email = `${"a".repeat(254 - "@example.com".length)}@example.com`;
+    expect(email).toHaveLength(254);
+
+    const res = await signup(app, { ...VALID, email });
+
+    expect(res.status).toBe(201);
+  });
+
+  it("rejects a well-formed email one character past the 254-character limit", async () => {
+    const { app, inserts } = buildApp();
+    const email = `${"a".repeat(255 - "@example.com".length)}@example.com`;
+    expect(email).toHaveLength(255);
+
+    const res = await signup(app, { ...VALID, email });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Enter a valid email address", field: "email" });
+    expect(inserts).toHaveLength(0);
+  });
 });
 
 describe("POST /api/auth/signup — infrastructure failures", () => {
   it("reports a failed email lookup as a server error instead of creating the account", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { app, inserts } = buildApp({ lookupError: { message: "connection refused" } });
 
     const res = await signup(app, VALID);
 
     expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to create account" });
     expect(inserts).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith("Signup lookup failed:", "connection refused");
+    errorSpy.mockRestore();
   });
 
   it("reports any other insert failure as a server error", async () => {
@@ -308,6 +464,40 @@ describe("POST /api/auth/signup — infrastructure failures", () => {
     const res = await signup(app, VALID);
 
     expect(res.status).toBe(500);
-    expect(res.body.code).toBeUndefined();
+    expect(res.body).toEqual({ error: "Failed to create account" });
+  });
+
+  it("reports a failed id generation as a server error and writes nothing", async () => {
+    const { app, inserts } = buildApp({
+      rpcResult: { data: null, error: { message: "function generate_user_id does not exist" } },
+    });
+
+    const res = await signup(app, VALID);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to create account" });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("reports a server error when id generation returns no error but also no id", async () => {
+    // Distinguishes `idError || !generatedId` from `idError && !generatedId`:
+    // neither alone is true here, so only the `||` form rejects it.
+    const { app, inserts } = buildApp({ rpcResult: { data: null, error: null } });
+
+    const res = await signup(app, VALID);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to create account" });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("reports a server error when the insert succeeds with no error but also returns no user", async () => {
+    // Distinguishes `error || !user` from `error && !user`.
+    const { app } = buildApp({ insertResult: { data: null, error: null } });
+
+    const res = await signup(app, VALID);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to create account" });
   });
 });

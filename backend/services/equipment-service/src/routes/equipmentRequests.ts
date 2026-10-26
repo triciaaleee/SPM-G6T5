@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEvent, fetchEventBookingInfo, toSupportEventInfo, type EquipmentBookingInfo } from "../lib/eventsClient.js";
+import { fetchUserNames } from "../lib/usersClient.js";
 import { claimUnits } from "../lib/equipmentConflicts.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { computeReservationFlags, type ReservationFlag } from "../lib/reservationFlags.js";
@@ -55,7 +56,13 @@ const CANCELLED = "Cancelled";
 
 const NO_FLAG: ReservationFlag = { flagged: false, reason: null };
 
-function toItem(row: ItemRow, flag: ReservationFlag = NO_FLAG) {
+/** A physical unit's display identity — just enough to show "which one" in the UI. */
+export interface UnitLabel {
+  id: number;
+  label: string | null;
+}
+
+function toItem(row: ItemRow, flag: ReservationFlag = NO_FLAG, reservedUnits: UnitLabel[] = []) {
   return {
     id: row.id,
     // The catalog entry the item draws stock from; the coordinator's amend form pre-selects it.
@@ -68,10 +75,19 @@ function toItem(row: ItemRow, flag: ReservationFlag = NO_FLAG) {
     // E5-6 AC3: whether this item's claimed units no longer hold, given
     // every involved event's current schedule.
     reservationFlag: flag,
+    // Which physical units are currently Reserved for this item, if any —
+    // so Technical Support can see what "Arranged"/"Partially Fulfilled"
+    // actually claimed, not just a quantity.
+    reservedUnits,
   };
 }
 
-function toRequest(row: RequestRow, items: ItemRow[], flagsByItemId?: Map<number, ReservationFlag>) {
+function toRequest(
+  row: RequestRow,
+  items: ItemRow[],
+  flagsByItemId?: Map<number, ReservationFlag>,
+  reservedUnitsByItemId?: Map<number, UnitLabel[]>,
+) {
   return {
     id: row.id,
     eventId: row.event_id,
@@ -81,8 +97,37 @@ function toRequest(row: RequestRow, items: ItemRow[], flagsByItemId?: Map<number
     createdAt: row.created_at,
     items: items
       .filter((item) => item.request_id === row.id)
-      .map((item) => toItem(item, flagsByItemId?.get(item.id))),
+      .map((item) => toItem(item, flagsByItemId?.get(item.id), reservedUnitsByItemId?.get(item.id))),
   };
+}
+
+/** Every item's currently-Reserved units, labelled, for display (not used by any claim/reserve logic). */
+async function fetchReservedUnitsByItemId(
+  supabase: NonNullable<AuthedRequest["supabase"]>,
+  itemIds: number[],
+): Promise<Map<number, UnitLabel[]>> {
+  const byItemId = new Map<number, UnitLabel[]>();
+  if (itemIds.length === 0) return byItemId;
+
+  const { data: bookings, error: bookingsError } = await supabase
+    .from("equipment_booking")
+    .select("equipment_id, request_item_id")
+    .eq("status", "Reserved")
+    .in("request_item_id", itemIds);
+  if (bookingsError || !bookings || bookings.length === 0) return byItemId;
+
+  const unitIds = [...new Set(bookings.map((b) => b.equipment_id as number))];
+  const { data: units, error: unitsError } = await supabase.from("equipment").select("id, label").in("id", unitIds);
+  if (unitsError) return byItemId;
+
+  const labelById = new Map((units ?? []).map((u) => [u.id as number, (u.label as string | null) ?? null]));
+  for (const booking of bookings as { equipment_id: number; request_item_id: number | null }[]) {
+    if (booking.request_item_id == null) continue;
+    const list = byItemId.get(booking.request_item_id) ?? [];
+    list.push({ id: booking.equipment_id, label: labelById.get(booking.equipment_id) ?? null });
+    byItemId.set(booking.request_item_id, list);
+  }
+  return byItemId;
 }
 
 /** The window of an events-service record shaped like `EquipmentBookingInfo`. */
@@ -368,11 +413,14 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
 /**
  * E5-1 AC1/AC2: Technical Support open one event's equipment requests. They
  * see the requested equipment, quantities and the organiser's technical
- * requirements, plus the event's name, date, time and venue, and nothing
- * else about the event. An event with no equipment request is refused the
- * same way an unknown one is, so this route can't be used to look at events
- * that have nothing to do with Technical Support. Declared before
- * PATCH /:id only for readability; the paths don't overlap.
+ * requirements, plus the event's name, date, time and venue, and — a
+ * deliberate, narrow exception to otherwise showing nothing about the
+ * event's people — which coordinator raised each request (`requestedBy`,
+ * resolved via user-service's /api/users/names; best-effort, so a lookup
+ * failure still returns the id). An event with no equipment request is
+ * refused the same way an unknown one is, so this route can't be used to
+ * look at events that have nothing to do with Technical Support. Declared
+ * before PATCH /:id only for readability; the paths don't overlap.
  */
 equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
@@ -394,7 +442,7 @@ equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) =
 
   const { data: requests, error: requestsError } = await supabase
     .from("equipment_requests")
-    .select("id, event_id, status, fulfillment_note, created_at")
+    .select("id, event_id, coordinator_id, status, fulfillment_note, created_at")
     .eq("event_id", eventId)
     .order("created_at", { ascending: true });
 
@@ -437,13 +485,144 @@ equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) =
   const itemEventIds = new Map(allEventItems.map((item) => [item.id, eventId]));
   const knownWindows = eventWindow ? new Map([[eventId, eventWindow]]) : new Map<number, OccupiedWindow>();
   const flagsByItemId = await computeReservationFlags(supabase, itemEventIds, knownWindows, req.headers.authorization!);
+  const reservedUnitsByItemId = await fetchReservedUnitsByItemId(
+    supabase,
+    allEventItems.map((item) => item.id),
+  );
+
+  const typedRequests = requests as RequestRow[];
+  const coordinatorIds = [...new Set(typedRequests.map((r) => r.coordinator_id).filter((id): id is string => !!id))];
+  const namesByCoordinatorId = await fetchUserNames(coordinatorIds, req.headers.authorization!);
 
   res.json({
     event: toSupportEventInfo(info),
     // The organiser's own words on what technical support the event needs (AC1).
     technicalRequirements: info.technicalSupport?.trim() ? info.technicalSupport.trim() : null,
-    equipmentRequests: (requests as RequestRow[]).map((r) => toRequest(r, allEventItems, flagsByItemId)),
+    equipmentRequests: typedRequests.map((r) => ({
+      ...toRequest(r, allEventItems, flagsByItemId, reservedUnitsByItemId),
+      requestedBy: r.coordinator_id
+        ? { id: r.coordinator_id, name: namesByCoordinatorId.get(r.coordinator_id) ?? null }
+        : null,
+    })),
   });
+});
+
+/**
+ * Read-only preview of which physical units a claim would pick right now,
+ * for `quantity` of one item — same selection rules as the real reservation
+ * (`claimUnits`, shared with PATCH /:id above), but nothing is written. Lets
+ * Technical Support see what a status/quantity pick would actually reserve,
+ * and how many are free for the event's own date, before hitting Save.
+ * Same "preview, nothing is saved" shape as E5-5's GET /equipment-units/impact.
+ *
+ * Only previews the units *beyond* what the item already holds (same delta
+ * PATCH /:id computes) — otherwise an item's own already-Reserved units
+ * would count as blocking a fresh claim for itself.
+ */
+equipmentRequestsRouter.get("/items/:itemId/unit-preview", async (req: AuthedRequest, res) => {
+  const { supabase, user } = req;
+  if (!supabase || !user) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
+  }
+  if (user.role !== "technical_support") {
+    res.status(403).json({ error: "Only Technical Support can preview equipment units" });
+    return;
+  }
+
+  if (!isPositiveInteger(req.params.itemId)) {
+    res.status(400).json({ error: "A valid item id is required" });
+    return;
+  }
+  const itemId = Number(req.params.itemId);
+
+  const rawQuantity = typeof req.query.quantity === "string" ? req.query.quantity : "";
+  if (!isPositiveInteger(rawQuantity) && rawQuantity !== "0") {
+    res.status(400).json({ error: "A valid quantity is required" });
+    return;
+  }
+  const quantity = Number(rawQuantity);
+
+  const { data: itemRow, error: itemError } = await supabase
+    .from("equipment_request_items")
+    .select("id, request_id, equipment_type, equipment_catalog_id, quantity_fulfilled")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (itemError) {
+    res.status(500).json({ error: "Failed to load the equipment item" });
+    return;
+  }
+  if (!itemRow) {
+    res.status(404).json({ error: "Equipment item not found" });
+    return;
+  }
+  if (itemRow.equipment_catalog_id == null) {
+    res.status(409).json({ error: `${itemRow.equipment_type} isn't linked to an equipment catalog item, so it can't be previewed.` });
+    return;
+  }
+
+  const { data: requestRow, error: requestError } = await supabase
+    .from("equipment_requests")
+    .select("id, event_id")
+    .eq("id", itemRow.request_id)
+    .maybeSingle();
+  if (requestError || !requestRow) {
+    res.status(404).json({ error: "Equipment request not found" });
+    return;
+  }
+
+  // Only the units beyond what this item already holds need to be claimed —
+  // otherwise its own existing Reserved bookings would count as "blocking"
+  // against itself (claimUnits treats every Reserved booking on this event
+  // as taken, see lib/equipmentConflicts.ts's treatOwnEventClaimsAsBlocking).
+  const delta = Math.max(0, quantity - ((itemRow.quantity_fulfilled as number | null) ?? 0));
+  if (delta === 0) {
+    res.json({ claimedIds: [], units: [], availableCount: 0, shortfall: 0 });
+    return;
+  }
+
+  const infoResult = await fetchEventBookingInfo([requestRow.event_id as number], req.headers.authorization!);
+  if (infoResult.status === "error") {
+    res.status(502).json({ error: "Failed to load the event" });
+    return;
+  }
+  const event = infoResult.events[0];
+  if (!event) {
+    res.status(404).json({ error: "Event not found" });
+    return;
+  }
+  const targetWindow = occupiedWindow(event);
+  if (!targetWindow) {
+    res.status(409).json({ error: "This event has no date or time set yet, so availability can't be checked." });
+    return;
+  }
+
+  let claim;
+  try {
+    claim = await claimUnits(
+      supabase,
+      itemRow.equipment_catalog_id as number,
+      delta,
+      requestRow.event_id as number,
+      targetWindow,
+      req.headers.authorization!,
+    );
+  } catch {
+    res.status(500).json({ error: "Failed to check equipment availability" });
+    return;
+  }
+
+  let units: UnitLabel[] = [];
+  if (claim.claimedIds.length > 0) {
+    const { data: unitRows, error: unitsError } = await supabase.from("equipment").select("id, label").in("id", claim.claimedIds);
+    if (unitsError) {
+      res.status(500).json({ error: "Failed to load equipment units" });
+      return;
+    }
+    units = (unitRows ?? []).map((u) => ({ id: u.id as number, label: (u.label as string | null) ?? null }));
+  }
+
+  res.json({ claimedIds: claim.claimedIds, units, availableCount: claim.availableCount, shortfall: claim.shortfall });
 });
 
 /** The real values quantity_fulfilled can move between, to size a claim/release delta. */
@@ -705,8 +884,16 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   const itemEventIds = new Map(allItems.map((i) => [i.id, requestRow.event_id as number]));
   const knownWindows = eventWindow ? new Map([[requestRow.event_id as number, eventWindow]]) : new Map<number, OccupiedWindow>();
   const flagsByItemId = await computeReservationFlags(supabase, itemEventIds, knownWindows, req.headers.authorization!);
+  // So the caller sees what was just reserved/released without a second GET.
+  const reservedUnitsByItemId = await fetchReservedUnitsByItemId(
+    supabase,
+    allItems.map((item) => item.id),
+  );
 
-  res.json({ equipmentRequest: toRequest(requestRow as RequestRow, allItems, flagsByItemId), notified });
+  res.json({
+    equipmentRequest: toRequest(requestRow as RequestRow, allItems, flagsByItemId, reservedUnitsByItemId),
+    notified,
+  });
 });
 
 /**

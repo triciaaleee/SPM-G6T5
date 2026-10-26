@@ -45,6 +45,7 @@ const NAV_TABS: Record<string, { name: string; label: string; alsoActiveOn?: str
     // A request's detail page belongs to Requests, so that link stays current while it is open.
     { name: "equipment-requests", label: "Requests", alsoActiveOn: ["equipment-request-detail"] },
     { name: "equipment-inventory", label: "Inventory" },
+    { name: "equipment-maintenance", label: "Maintenance" },
   ],
 };
 

@@ -84,11 +84,23 @@ describe("EquipmentUnitsPanel — one mark button per type (E5-5)", () => {
       unit({ id: 20, type: "Screen" }),
     ]);
 
-    expect(type(wrapper).find(".type__header").text()).toContain("3 units");
-    expect(type(wrapper).find(".type__header").text()).toContain("2 unusable now");
+    expect(type(wrapper).find("[data-testid='type-total']").text()).toBe("3");
+    expect(type(wrapper).find("[data-testid='type-unusable']").text()).toBe("2");
     expect(type(wrapper, "Screen").find("[data-testid='type-mark']").exists()).toBe(true);
     // Hundreds of units never make you scroll: the per-unit list stays collapsed.
     expect(wrapper.find("[data-testid='unit-12']").exists()).toBe(false);
+  });
+
+  it("sorts types with units out of use first, then alphabetically", async () => {
+    const wrapper = await mountPanel([
+      unit({ id: 1, type: "Chairs" }),
+      unit({ id: 2, type: "Lectern" }),
+      unit({ id: 3, type: "Screen", status: "Damaged" }),
+      unit({ id: 4, type: "Amp" }),
+    ]);
+
+    const names = wrapper.findAll("div.row[data-testid^='type-']").map((row) => row.attributes("data-testid"));
+    expect(names).toEqual(["type-Screen", "type-Amp", "type-Chairs", "type-Lectern"]);
   });
 
   it("says when there are no units, and when loading fails", async () => {
@@ -272,7 +284,8 @@ describe("EquipmentUnitsPanel — check impact, then confirm (E5-5 AC1, AC2)", (
     await flushPromises();
 
     expect(wrapper.find("[data-testid='units-notice']").text()).toBe("Marked 1 Projector unit unusable (#12). No reserved events are affected.");
-    expect(wrapper.find("[data-testid='out-group']").text()).toContain("1× Damaged");
+    expect(wrapper.find("[data-testid='out-group']").text()).toContain("1 unit");
+    expect(wrapper.find("[data-testid='out-group'] .out-table__badge").text()).toBe("Damaged");
   });
 
   it("warns when a coordinator couldn't be told", async () => {
@@ -333,26 +346,89 @@ describe("EquipmentUnitsPanel — check impact, then confirm (E5-5 AC1, AC2)", (
 describe("EquipmentUnitsPanel — what is out of use", () => {
   const damaged = (id: number) => ({ id, reason: "Damaged" as const, startDate: "2099-06-01", endDate: "2099-06-30", note: "cracked" });
 
+  /** The out-of-use table starts closed, like the inventory's History; this is the "Out of use" toggle. */
+  async function showOutOfUse(wrapper: Wrapper) {
+    await wrapper.find("[data-testid='out-toggle']").trigger("click");
+  }
+
+  it("keeps the out-of-use table closed until the Out of use button opens it, and closes it again", async () => {
+    const wrapper = await mountPanel([unit({ id: 4, periods: [damaged(1)] })]);
+    const toggle = () => wrapper.find("[data-testid='out-toggle']");
+
+    expect(wrapper.find("[data-testid='out-group']").exists()).toBe(false);
+    expect(toggle().attributes("aria-expanded")).toBe("false");
+
+    await toggle().trigger("click");
+    expect(wrapper.find("[data-testid='out-group']").exists()).toBe(true);
+    expect(toggle().attributes("aria-expanded")).toBe("true");
+
+    await toggle().trigger("click");
+    expect(wrapper.find("[data-testid='out-group']").exists()).toBe(false);
+  });
+
+  it("has no Out of use button for a type with nothing out of use", async () => {
+    const wrapper = await mountPanel([unit({ id: 4 })]);
+
+    expect(wrapper.find("[data-testid='out-toggle']").exists()).toBe(false);
+  });
+
   it("groups units marked together, so there is one line and one Mark usable again", async () => {
     const wrapper = await mountPanel([
       unit({ id: 4, periods: [damaged(1)] }),
       unit({ id: 9, periods: [damaged(2)] }),
       unit({ id: 17, periods: [{ id: 3, reason: "Under Maintenance", startDate: "2099-08-01", endDate: null, note: null }] }),
     ]);
+    await showOutOfUse(wrapper);
 
     const groups = wrapper.findAll("[data-testid='out-group']");
     expect(groups).toHaveLength(2);
-    expect(groups[0].text()).toContain("2× Damaged");
-    expect(groups[0].text()).toContain("1 Jun 2099 to 30 Jun 2099");
+    expect(groups[0].find(".out-table__badge").text()).toBe("Damaged");
+    expect(groups[0].text()).toContain("2 units");
+    expect(groups[0].text()).toContain("1 Jun 2099 – 30 Jun 2099");
     expect(groups[0].text()).toContain("cracked");
-    expect(groups[0].text()).toContain("#4, #9");
-    expect(groups[1].text()).toContain("1× Under Maintenance");
-    expect(groups[1].text()).toContain("From 1 Aug 2099 until marked usable again");
+    expect(groups[0].text()).toContain("Unit #4, Unit #9");
+    expect(groups[0].find("[data-testid='group-usable']").classes()).toContain("btn--outline");
+    expect(groups[1].find(".out-table__badge").text()).toBe("Under Maintenance");
+    expect(groups[1].text()).toContain("1 unit");
+    expect(groups[1].text()).toContain("From 1 Aug 2099");
+  });
+
+  it("also lists units whose status was set outside the app, read-only, so the count matches what is shown", async () => {
+    const wrapper = await mountPanel([
+      unit({ id: 4, type: "Microphones", periods: [damaged(1)] }),
+      unit({ id: 48, type: "Microphones", status: "Damaged" }),
+      unit({ id: 50, type: "Microphones", status: "Damaged" }),
+      unit({ id: 51, type: "Microphones" }),
+    ]);
+    await showOutOfUse(wrapper);
+
+    const groups = wrapper.findAll("[data-testid='out-group']");
+    expect(groups).toHaveLength(2);
+    // The dated group keeps its Return to use; the status-only group has none.
+    expect(groups[0].find("[data-testid='group-usable']").exists()).toBe(true);
+    expect(groups[1].text()).toContain("No dates set");
+    expect(groups[1].text()).toContain("2 units");
+    expect(groups[1].text()).toContain("Unit #48, Unit #50");
+    expect(groups[1].find(".out-table__badge").text()).toBe("Damaged");
+    expect(groups[1].find("[data-testid='group-usable']").exists()).toBe(false);
+    // Unit 4's period isn't running today (2099), so only 48 and 50 are unusable now.
+    expect(wrapper.find("[data-testid='type-unusable']").text()).toBe("2");
+  });
+
+  it("lists a unit set to Damaged outside the app even when it has no dated period at all", async () => {
+    const wrapper = await mountPanel([unit({ id: 48, type: "Microphones", status: "Under Maintenance" })]);
+    await showOutOfUse(wrapper);
+
+    const groups = wrapper.findAll("[data-testid='out-group']");
+    expect(groups).toHaveLength(1);
+    expect(groups[0].find(".out-table__badge").text()).toBe("Under Maintenance");
+    expect(groups[0].text()).toContain("1 unit");
   });
 
   it("clears the whole group at once", async () => {
     mockedClear.mockResolvedValue(2);
     const wrapper = await mountPanel([unit({ id: 4, periods: [damaged(1)] }), unit({ id: 9, periods: [damaged(2)] })]);
+    await showOutOfUse(wrapper);
 
     await wrapper.find("[data-testid='group-usable']").trigger("click");
     await flushPromises();
@@ -366,6 +442,7 @@ describe("EquipmentUnitsPanel — what is out of use", () => {
   it("keeps the group and says why when it can't be cleared", async () => {
     mockedClear.mockRejectedValue(new EquipmentRequestError("Failed to mark the equipment usable again"));
     const wrapper = await mountPanel([unit({ id: 4, periods: [damaged(1)] })]);
+    await showOutOfUse(wrapper);
 
     await wrapper.find("[data-testid='group-usable']").trigger("click");
     await flushPromises();
@@ -386,7 +463,7 @@ describe("EquipmentUnitsPanel — the per-unit list", () => {
 
   async function openList(list = units) {
     const wrapper = await mountPanel(list);
-    await type(wrapper).find(".type__header").trigger("click");
+    await type(wrapper).find(".type__name-btn").trigger("click");
     return wrapper;
   }
 
@@ -397,7 +474,7 @@ describe("EquipmentUnitsPanel — the per-unit list", () => {
     expect(unitRow(wrapper, 12).find(".chip").text()).toBe("Available");
     expect(unitRow(wrapper, 13).find(".chip").text()).toBe("Damaged");
     expect(unitRow(wrapper, 15).find(".chip").classes()).toContain("chip--bad");
-    expect(type(wrapper).find(".type__header").attributes("aria-expanded")).toBe("true");
+    expect(type(wrapper).find(".type__name-btn").attributes("aria-expanded")).toBe("true");
   });
 
   it("finds a unit by number or label, without hunting through the list", async () => {

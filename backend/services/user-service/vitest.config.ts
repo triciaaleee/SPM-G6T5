@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
@@ -9,5 +9,16 @@ export default defineConfig({
     // with a 404 or "socket hang up". Each test gets a fresh port on a retry,
     // so a real failure still fails after three attempts.
     retry: 2,
+    // Integration tests hit the real (shared dev) Supabase project and have
+    // their own config/script (vitest.integration.config.ts, npm run
+    // test:integration) — they must never run as a side effect of `npm test`
+    // or `npm run test:coverage`.
+    exclude: [...configDefaults.exclude, "src/__tests__/integration/**"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "lcov"],
+      include: ["src/**/*.ts"],
+      exclude: ["src/__tests__/**", "src/index.ts"],
+    },
   },
 });

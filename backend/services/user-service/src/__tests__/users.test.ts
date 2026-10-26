@@ -27,10 +27,44 @@ function buildApp(user: { id: string; role: string }, result: { data: unknown; e
   const app = express();
   app.use(express.json());
   app.use("/api/users", usersRouter);
-  return { app, from, select, eq };
+  return { app, from, select, eq, order };
 }
 
 const lead = { id: "LEAD-0001", role: "coordinator_lead" };
+
+describe("usersRouter route table", () => {
+  it("registers the role-listing GET route at the router's own root path", () => {
+    // Express treats router.get("") and router.get("/") identically for any
+    // request that reaches this router — there is no request that could
+    // ever tell them apart, which makes that mutant a true equivalent for
+    // every supertest-based assertion above. Reading the registered path
+    // string directly off the router's internal route table is the only
+    // way to actually pin it down.
+    const rootGetLayer = (usersRouter as any).stack.find(
+      (layer: any) => layer.route?.methods?.get && layer.route.path === "/",
+    );
+    expect(rootGetLayer).toBeDefined();
+  });
+});
+
+describe("GET /api/users/me", () => {
+  it("returns the caller's own identity from their verified token", async () => {
+    const { app } = buildApp({ id: "ORG-0001", role: "organiser" });
+
+    const res = await request(app).get("/api/users/me");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ user: { id: "ORG-0001", role: "organiser" } });
+  });
+
+  it("reflects whatever role the token carries, not just organiser", async () => {
+    const { app } = buildApp({ id: "COORD-0002", role: "coordinator" });
+
+    const res = await request(app).get("/api/users/me");
+
+    expect(res.body.user).toEqual({ id: "COORD-0002", role: "coordinator" });
+  });
+});
 
 describe("GET /api/users?role=coordinator (E2-13 / E2-12)", () => {
   it("lists coordinators' ids and names for the Event Coordinator Lead", async () => {
@@ -38,12 +72,13 @@ describe("GET /api/users?role=coordinator (E2-13 / E2-12)", () => {
       { id: "COORD-0001", name: "Coordinator One" },
       { id: "COORD-0002", name: "Coordinator Two" },
     ];
-    const { app, select, eq } = buildApp(lead, { data: coordinators, error: null });
+    const { app, from, select, eq } = buildApp(lead, { data: coordinators, error: null });
 
     const res = await request(app).get("/api/users?role=coordinator");
 
     expect(res.status).toBe(200);
     expect(res.body.users).toEqual(coordinators);
+    expect(from).toHaveBeenCalledWith("users");
     expect(select).toHaveBeenCalledWith("id, name");
     expect(eq).toHaveBeenCalledWith("role", "coordinator");
   });
@@ -63,6 +98,7 @@ describe("GET /api/users?role=coordinator (E2-13 / E2-12)", () => {
     const res = await request(app).get("/api/users?role=coordinator");
 
     expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "Access denied" });
     expect(from).not.toHaveBeenCalled();
   });
 
@@ -72,6 +108,7 @@ describe("GET /api/users?role=coordinator (E2-13 / E2-12)", () => {
     const res = await request(app).get("/api/users?role=organiser");
 
     expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "Access denied" });
     expect(from).not.toHaveBeenCalled();
   });
 
@@ -81,6 +118,47 @@ describe("GET /api/users?role=coordinator (E2-13 / E2-12)", () => {
     const res = await request(app).get("/api/users");
 
     expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "role is required" });
+  });
+
+  it("rejects role sent as a repeated query param (parsed as an array, not a string), without touching the database", async () => {
+    // Express parses ?role=a&role=b as an array. The typeof guard must
+    // treat anything but a plain string as "no role given".
+    const { app, from } = buildApp(lead);
+
+    const res = await request(app).get("/api/users?role=coordinator&role=organiser");
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "role is required" });
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed lookup as a server error", async () => {
+    const { app, select, eq } = buildApp(lead, { data: null, error: { message: "connection refused" } });
+
+    const res = await request(app).get("/api/users?role=coordinator");
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to load users" });
+    expect(select).toHaveBeenCalledWith("id, name");
+    expect(eq).toHaveBeenCalledWith("role", "coordinator");
+  });
+
+  it("returns an empty list, not null, when the query succeeds with no data", async () => {
+    const { app } = buildApp(lead, { data: null, error: null });
+
+    const res = await request(app).get("/api/users?role=coordinator");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ users: [] });
+  });
+
+  it("orders results by name ascending", async () => {
+    const { app, order } = buildApp(lead, { data: [], error: null });
+
+    await request(app).get("/api/users?role=coordinator");
+
+    expect(order).toHaveBeenCalledWith("name", { ascending: true });
   });
 });
 

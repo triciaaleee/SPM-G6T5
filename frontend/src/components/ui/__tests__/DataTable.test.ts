@@ -100,4 +100,36 @@ describe("DataTable", () => {
     expect(dataRows[1].classes()).toContain("row--flagged");
     expect(dataRows[1].classes()).toContain("row--link");
   });
+
+  it("sets data-testid from rowTestId when given", () => {
+    const wrapper = mountTable({ rowTestId: (r: Row) => `row-${r.id}` });
+
+    expect(wrapper.find("[data-testid='row-1']").exists()).toBe(true);
+    expect(wrapper.find("[data-testid='row-2']").exists()).toBe(true);
+  });
+
+  it("renders the row-detail slot right after a row when rowDetail says so, and not otherwise", () => {
+    const wrapper = mount(DataTable, {
+      props: {
+        columns,
+        columnWidths: "10rem 5rem",
+        rows,
+        rowKey: (r: unknown) => (r as Row).id,
+        rowDetail: (r: unknown) => (r as Row).id === 2,
+      },
+      slots: {
+        "cell-name": `<template #cell-name="{ row }">{{ row.name }}</template>`,
+        "cell-note": `<template #cell-note="{ row }">{{ row.note }}</template>`,
+        "row-detail": `<template #row-detail="{ row }"><p class="detail">Detail for {{ row.name }}</p></template>`,
+      },
+      global: { plugins: [router] },
+    });
+
+    expect(wrapper.find(".row-detail .detail").text()).toBe("Detail for Second");
+    expect(wrapper.findAll(".row-detail")).toHaveLength(1);
+    // It sits right after "Second"'s row, not "First"'s.
+    const items = wrapper.findAll("li");
+    const secondIndex = items.findIndex((li) => li.text().includes("Secondb"));
+    expect(items[secondIndex + 1].classes()).toContain("row-detail");
+  });
 });
