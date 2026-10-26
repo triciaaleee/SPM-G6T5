@@ -19,13 +19,16 @@ const MAX_NAME_LOOKUP_IDS = 200;
 /**
  * E6: display names for a set of user ids, so registration-service can show
  * a roster without ever reading the users table (user-service owns it).
- * Only organisers and coordinators run rosters; attendees may not look each
- * other up. Returns id and name only — never email, role or anything else.
- * Ids that don't exist are simply absent.
+ * Organisers and coordinators run rosters; technical_support uses this to
+ * show which coordinator raised an equipment request (a deliberate
+ * exception to E5-1 AC1's "nothing about [the event's] people" — see
+ * equipment-service's GET /equipment-requests/event/:eventId). Attendees
+ * may not look each other up. Returns id and name only — never email, role
+ * or anything else. Ids that don't exist are simply absent.
  */
 usersRouter.get("/names", requireAuth, async (req: AuthedRequest, res) => {
   const role = req.user?.role;
-  if (role !== "organiser" && role !== "coordinator") {
+  if (role !== "organiser" && role !== "coordinator" && role !== "technical_support") {
     res.status(403).json({ error: "Access denied" });
     return;
   }

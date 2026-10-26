@@ -65,6 +65,7 @@ const ROUTES: RouteCase[] = [
   { path: "/equipment-requests", wrongRole: "coordinator" },
   { path: "/equipment-requests/event/1", wrongRole: "coordinator" },
   { path: "/equipment-inventory", wrongRole: "coordinator" },
+  { path: "/equipment-maintenance", wrongRole: "coordinator" },
   { path: "/lead", wrongRole: "venue_staff" },
   { path: "/lead/unassigned", wrongRole: "venue_staff" },
   { path: "/lead/coordinators/1", wrongRole: "venue_staff" },

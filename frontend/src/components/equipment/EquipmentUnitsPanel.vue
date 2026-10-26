@@ -17,7 +17,9 @@
  * matters. A unit marked Damaged or Under Maintenance outside the app (no dates)
  * shows as unusable with no way to clear it here.
  */
+import { ChevronDownIcon, ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
 import AppButton from "../ui/AppButton.vue";
+import DataTable from "../ui/DataTable.vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import {
   EquipmentRequestError,
@@ -39,6 +41,14 @@ import { formatCardDate } from "../../lib/attendeeEvents";
 /** Lets the page refresh the stock numbers: marking or clearing units changes what is available. */
 const emit = defineEmits<{ changed: [] }>();
 
+const TYPE_COLUMNS = [
+  { key: "type", label: "Item" },
+  { key: "units", label: "Total units" },
+  { key: "unusable", label: "Unusable now" },
+  { key: "actions", label: "Actions" },
+];
+const TYPE_COLUMN_WIDTHS = "1fr 10rem 10rem 22rem";
+
 const units = ref<EquipmentUnit[]>([]);
 const loading = ref(true);
 const errorMessage = ref<string | null>(null);
@@ -49,10 +59,13 @@ function todayLocal(): string {
   return new Date().toLocaleDateString("en-CA");
 }
 
+/** Types with units currently out of use sort first, so what needs attention is seen first. */
 const groups = computed(() => {
   const byType = new Map<string, EquipmentUnit[]>();
   for (const unit of units.value) byType.set(unit.type, [...(byType.get(unit.type) ?? []), unit]);
-  return [...byType.entries()].map(([type, list]) => ({ type, units: list }));
+  return [...byType.entries()]
+    .map(([type, list]) => ({ type, units: list }))
+    .sort((a, b) => unusableCount(b.units) - unusableCount(a.units) || a.type.localeCompare(b.type));
 });
 
 function isRunning(period: UnitUnavailabilityPeriod): boolean {
@@ -66,6 +79,17 @@ function isUnusableNow(unit: EquipmentUnit): boolean {
 
 function unusableCount(list: EquipmentUnit[]): number {
   return list.filter(isUnusableNow).length;
+}
+
+function availableNow(list: EquipmentUnit[]): number {
+  return list.length - unusableCount(list);
+}
+
+/** What would be left available for this type if the in-progress "how many" were marked out of use. */
+function availableAfterMarking(list: EquipmentUnit[]): number {
+  const quantity = Number(form.quantity);
+  const taken = Number.isInteger(quantity) && quantity > 0 ? quantity : 0;
+  return Math.max(0, availableNow(list) - taken);
 }
 
 /** "Projector #12", or "Projector #12 · A-012" when the unit has a label. */
@@ -124,6 +148,54 @@ const outOfUse = computed(() => {
 
 function outGroupsOf(type: string): OutGroup[] {
   return outOfUse.value.get(type) ?? [];
+}
+
+/** Units whose own status is Damaged / Under Maintenance, e.g. set in the database: counted as unusable, but no dated period. */
+interface StatusGroup {
+  key: string;
+  status: string;
+  units: { id: number; label: string | null }[];
+}
+
+const statusOutOf = computed(() => {
+  const byType = new Map<string, Map<string, StatusGroup>>();
+  for (const unit of units.value) {
+    if (unit.status === "Available") continue;
+    const typeGroups = byType.get(unit.type) ?? new Map<string, StatusGroup>();
+    const group = typeGroups.get(unit.status) ?? { key: `status|${unit.status}`, status: unit.status, units: [] };
+    group.units.push({ id: unit.id, label: unit.label });
+    typeGroups.set(unit.status, group);
+    byType.set(unit.type, typeGroups);
+  }
+  return new Map([...byType].map(([type, map]) => [type, [...map.values()]]));
+});
+
+function statusGroupsOf(type: string): StatusGroup[] {
+  return statusOutOf.value.get(type) ?? [];
+}
+
+/** Whether anything of this type is out of use, dated or not — what the "Out of use" toggle opens. */
+function hasOutOfUse(type: string): boolean {
+  return outGroupsOf(type).length > 0 || statusGroupsOf(type).length > 0;
+}
+
+/** Types whose out-of-use table is open. Closed until opened, like the inventory's stock History. */
+const outOpen = reactive(new Set<string>());
+
+function toggleOutOfUse(type: string): void {
+  if (outOpen.has(type)) outOpen.delete(type);
+  else outOpen.add(type);
+}
+
+/** "Unit #48, Unit #49" for a group's units. */
+function unitIds(list: { id: number }[]): string {
+  return list.map((u) => `Unit #${u.id}`).join(", ");
+}
+
+/** The bold date line and the small line under it, for a dated group. */
+function whenOf(out: OutGroup): { date: string; sub: string } {
+  if (out.endDate === null) return { date: `From ${formatCardDate(out.startDate)}`, sub: "until marked usable again" };
+  return { date: `${formatCardDate(out.startDate)} – ${formatCardDate(out.endDate)}`, sub: "" };
 }
 
 const clearingKey = ref<string | null>(null);
@@ -274,6 +346,7 @@ async function confirm(): Promise<void> {
         : { text: `${head} Reserved for ${names}, but we couldn't notify every coordinator — please follow up directly.`, warning: true };
     }
     stopMarking();
+    outOpen.add(type);
     emit("changed");
     try {
       units.value = await fetchEquipmentUnits();
@@ -358,13 +431,6 @@ onMounted(async () => {
 
 <template>
   <section class="units" aria-labelledby="units-title">
-    <div>
-      <h2 id="units-title" class="h4">Equipment units</h2>
-      <p class="body-small muted">
-        Mark equipment damaged or under maintenance so it isn't offered to events. You'll see which events a change touches
-        before anything is saved.
-      </p>
-    </div>
 
     <p v-if="notice" class="body-small notice" :class="{ 'notice--warning': notice.warning }" role="status" data-testid="units-notice">
       {{ notice.text }}
@@ -374,58 +440,129 @@ onMounted(async () => {
     <p v-else-if="errorMessage" class="body-default error-text" role="alert">{{ errorMessage }}</p>
     <p v-else-if="groups.length === 0" class="body-default muted">There are no equipment units yet.</p>
 
-    <ul v-else class="type-list">
-      <li v-for="group in groups" :key="group.type" class="type" :data-testid="`type-${group.type}`">
-        <div class="type__top">
-          <button
-            type="button"
-            class="type__header"
-            :aria-expanded="open.has(group.type)"
-            :aria-controls="`units-${group.type}`"
-            @click="toggleList(group.type)"
-          >
-            <span class="type__name">{{ group.type }}</span>
-            <span class="body-small muted">
-              {{ group.units.length }} {{ group.units.length === 1 ? "unit" : "units" }}
-              <template v-if="unusableCount(group.units) > 0"> · {{ unusableCount(group.units) }} unusable now</template>
-            </span>
-          </button>
+    <DataTable
+      v-else
+      :columns="TYPE_COLUMNS"
+      :column-widths="TYPE_COLUMN_WIDTHS"
+      column-gap="var(--spacing-24)"
+      :rows="groups"
+      :row-key="(group) => group.type"
+      :row-test-id="(group) => `type-${group.type}`"
+      :row-detail="(group) => (hasOutOfUse(group.type) && outOpen.has(group.type)) || markingType === group.type || open.has(group.type)"
+    >
+      <template #cell-type="{ row: group }">
+        <button
+          type="button"
+          class="type__name-btn"
+          :aria-expanded="open.has(group.type)"
+          :aria-controls="`units-${group.type}`"
+          @click="toggleList(group.type)"
+        >
+          {{ group.type }}
+        </button>
+      </template>
+
+      <template #cell-units="{ row: group }">
+        <span class="count" data-testid="type-total">{{ group.units.length }}</span>
+      </template>
+
+      <template #cell-unusable="{ row: group }">
+        <span v-if="unusableCount(group.units) > 0" class="out-of-use-badge" data-testid="type-unusable">
+          <ExclamationTriangleIcon class="out-of-use-badge__icon" aria-hidden="true" />
+          {{ unusableCount(group.units) }}
+        </span>
+        <span v-else class="count" data-testid="type-unusable">0</span>
+      </template>
+
+      <template #cell-actions="{ row: group }">
+        <div class="type-actions">
           <AppButton
             v-if="markingType !== group.type"
             variant="outline"
             size="sm"
             type="button"
-            :aria-label="`Mark ${group.type} unusable`"
+            :aria-label="`Mark ${group.type} out of use`"
             data-testid="type-mark"
             @click="startMarking(group.type)"
           >
-            Mark unusable
+            Mark out of use
+          </AppButton>
+          <AppButton
+            v-if="hasOutOfUse(group.type)"
+            variant="ghost"
+            size="sm"
+            type="button"
+            class="out-toggle"
+            :aria-expanded="outOpen.has(group.type)"
+            :aria-label="`${outOpen.has(group.type) ? 'Hide' : 'Show'} ${group.type} out of use`"
+            data-testid="out-toggle"
+            @click="toggleOutOfUse(group.type)"
+          >
+            Out of use
+            <ChevronDownIcon class="out-toggle__icon" :class="{ 'out-toggle__icon--open': outOpen.has(group.type) }" aria-hidden="true" />
           </AppButton>
         </div>
+      </template>
 
-        <!-- What is out of use, grouped as it was marked -->
-        <ul v-if="outGroupsOf(group.type).length > 0" class="out-list" :aria-label="`${group.type} out of use`">
-          <li v-for="out in outGroupsOf(group.type)" :key="out.key" class="out body-small" data-testid="out-group">
-            <span>
-              <strong>{{ out.units.length }}× {{ out.reason }}</strong> · {{ periodText(out) }}<template v-if="out.note"> — {{ out.note }}</template>
-              <span class="muted"> ({{ out.units.map((u) => `#${u.id}`).join(", ") }})</span>
-            </span>
-            <AppButton
-              variant="ghost"
-              size="sm"
-              type="button"
-              :disabled="clearingKey === out.key"
-              :aria-label="`Mark ${out.units.length} ${group.type} usable again (${out.reason}, ${periodText(out)})`"
-              data-testid="group-usable"
-              @click="markGroupUsable(group.type, out)"
-            >
-              {{ clearingKey === out.key ? "Updating…" : "Mark usable again" }}
-            </AppButton>
-          </li>
-        </ul>
+      <template #row-detail="{ row: group }">
+        <!-- What is out of use: dated groups as they were marked, then units whose status was set outside the app -->
+        <template v-if="hasOutOfUse(group.type) && outOpen.has(group.type)">
+          <p class="out-table__title">Out of use</p>
+          <ul class="out-table" :aria-label="`${group.type} out of use`">
+            <li class="out-table__row out-table__row--header" aria-hidden="true">
+              <span class="out-table__heading">When</span>
+              <span class="out-table__heading">Change</span>
+              <span class="out-table__heading">Reason</span>
+              <span class="out-table__heading">Type</span>
+              <span class="out-table__heading"></span>
+            </li>
+            <li v-for="out in outGroupsOf(group.type)" :key="out.key" class="out-table__row" data-testid="out-group">
+              <span class="out-table__when">
+                <span class="out-table__date">{{ whenOf(out).date }}</span>
+                <span v-if="whenOf(out).sub" class="out-table__time">{{ whenOf(out).sub }}</span>
+              </span>
+              <span class="out-table__what body-small">
+                {{ out.units.length }} unit{{ out.units.length === 1 ? "" : "s" }} · {{ unitIds(out.units) }}
+              </span>
+              <span class="out-table__reason body-small">{{ out.note || "—" }}</span>
+              <span class="out-table__badge">{{ out.reason }}</span>
+              <span class="out-table__action">
+                <AppButton
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  :disabled="clearingKey === out.key"
+                  :aria-label="`Mark ${out.units.length} ${group.type} usable again (${out.reason}, ${periodText(out)})`"
+                  data-testid="group-usable"
+                  @click="markGroupUsable(group.type, out)"
+                >
+                  {{ clearingKey === out.key ? "Updating…" : "Return to use" }}
+                </AppButton>
+              </span>
+            </li>
+            <li v-for="st in statusGroupsOf(group.type)" :key="st.key" class="out-table__row" data-testid="out-group">
+              <span class="out-table__when">
+                <span class="out-table__date">No dates set</span>
+                <span class="out-table__time">Set outside the app</span>
+              </span>
+              <span class="out-table__what body-small">
+                {{ st.units.length }} unit{{ st.units.length === 1 ? "" : "s" }} · {{ unitIds(st.units) }}
+              </span>
+              <span class="out-table__reason body-small">—</span>
+              <span class="out-table__badge">{{ st.status }}</span>
+              <span class="out-table__action"></span>
+            </li>
+          </ul>
+        </template>
 
         <!-- Mark unusable: quantity, then the impact, then confirm -->
-        <form v-if="markingType === group.type" class="form" data-testid="mark-form" @submit.prevent="checkImpact">
+        <form v-if="markingType === group.type" class="form mark-card" data-testid="mark-form" @submit.prevent="checkImpact">
+          <p class="mark-card__title">Mark out of use — {{ group.type }}</p>
+          <p class="body-small muted">
+            Damaged or under maintenance units are not offered to events. You will see which events a change affects
+            before you save.
+          </p>
+
           <p v-if="form.error" class="body-small error-text" role="alert">{{ form.error }}</p>
 
           <div class="form__fields">
@@ -458,6 +595,11 @@ onMounted(async () => {
             <label :for="`note-${group.type}`" class="field-label">Note (optional)</label>
             <textarea :id="`note-${group.type}`" v-model="form.note" class="input" rows="2" maxlength="500" />
             <p v-if="form.fieldErrors.note" class="field-error" role="alert">{{ form.fieldErrors.note }}</p>
+          </div>
+
+          <div v-if="!impact" class="available-after" data-testid="available-after">
+            <span>Available after saving</span>
+            <strong>{{ availableAfterMarking(group.units) }} of {{ group.units.length }}</strong>
           </div>
 
           <div v-if="!impact" class="form__actions">
@@ -569,8 +711,8 @@ onMounted(async () => {
           </ul>
           <p v-if="visibleUnits(group.units).length === 0" class="body-small muted">No units match.</p>
         </div>
-      </li>
-    </ul>
+      </template>
+    </DataTable>
   </section>
 </template>
 
@@ -579,12 +721,20 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-16);
+  grid-column: 1 / 13;
+  box-sizing: border-box;
+}
+
+.units__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
 }
 
 .h4 {
-  font-size: 1.25rem;
+  font-size: 1.75rem;
   font-weight: 700;
-  line-height: 1.75rem;
+  line-height: 2.25rem;
   color: var(--color-grey-900);
   margin: 0;
 }
@@ -621,10 +771,8 @@ onMounted(async () => {
   color: var(--color-warning-900);
 }
 
-.type-list,
 .unit-list,
 .period-list,
-.out-list,
 .pick-list,
 .impact__events {
   list-style: none;
@@ -634,69 +782,169 @@ onMounted(async () => {
   flex-direction: column;
 }
 
-.type-list {
-  gap: var(--spacing-8);
-}
-
-.type {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-12);
-  padding: var(--spacing-12) var(--spacing-16);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-xs);
-}
-
-.type__top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--spacing-12);
-}
-
-.type__header {
-  flex: 1 1 12rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-16);
-  padding: var(--spacing-4) 0;
+.type__name-btn {
   border: none;
   background: transparent;
+  padding: 0;
   font-family: var(--font-family-lato);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
   text-align: left;
   cursor: pointer;
 }
 
-.type__header:focus-visible {
+.type__name-btn:hover {
+  color: var(--color-purple-700);
+}
+
+.type__name-btn:focus-visible {
   outline: 2px solid var(--ring-brand);
   outline-offset: 2px;
 }
 
-.type__name {
+.count {
+  font-size: 0.875rem;
+  color: var(--color-grey-900);
+}
+
+/* Out of use: a warning pill once there is at least one unit (matches the Stock table's "Out of use" column). */
+.out-of-use-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-8);
+  border-radius: var(--radius-xs);
+  background: var(--color-warning-200);
+  color: var(--color-warning-900);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.out-of-use-badge__icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* What is out of use: the same table as the inventory's stock History, with the Warning set's badge. */
+.type-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-8);
+}
+
+/* Secondary Blue relief accent (Style.md 2.8 / 3.4): this row already carries the purple "Mark out of use". */
+.type-actions .out-toggle {
+  color: var(--color-blue-600);
+}
+
+.type-actions .out-toggle:hover:not(:disabled):not(.btn--disabled) {
+  background: var(--color-blue-100);
+  color: var(--color-blue-700);
+}
+
+.out-toggle__icon {
+  width: 1rem;
+  height: 1rem;
+  transition: transform 0.15s ease;
+}
+
+.out-toggle__icon--open {
+  transform: rotate(180deg);
+}
+
+.out-table__title {
+  margin: 0 0 var(--spacing-16);
   font-size: 1rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
 
-/* What is out of use: the Warning set's "needs attention" role. */
-.out-list {
+.out-table {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.out-table li + li {
+  border-top: 1px solid var(--color-grey-100);
+}
+
+.out-table__row {
+  display: grid;
+  grid-template-columns: 14rem 1fr 1fr 10rem 9rem;
+  align-items: center;
+  column-gap: var(--spacing-16);
+  padding: var(--spacing-16);
+  background: var(--color-base-white);
+}
+
+.out-table__row--header {
+  padding: var(--spacing-12) var(--spacing-16);
+  background: var(--color-grey-75);
+}
+
+.out-table__heading {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-grey-500);
+}
+
+.out-table__when {
+  display: flex;
+  flex-direction: column;
   gap: var(--spacing-4);
 }
 
-.out,
-.period {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--spacing-8);
-  padding: var(--spacing-4) var(--spacing-8);
+.out-table__date {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+}
+
+.out-table__time {
+  font-size: 0.75rem;
+  color: var(--color-grey-500);
+}
+
+.out-table__what {
+  color: var(--color-grey-900);
+}
+
+.out-table__reason {
+  color: var(--color-grey-700);
+}
+
+.out-table__badge {
+  justify-self: start;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+  padding: var(--spacing-4) var(--spacing-12);
   border-radius: var(--radius-xs);
-  background: var(--color-warning-100);
+  background: var(--color-warning-200);
   color: var(--color-warning-900);
+}
+
+.out-table__action {
+  justify-self: end;
+}
+
+@media (max-width: 1024px) {
+  .out-table__row {
+    grid-template-columns: 1fr 1fr;
+    row-gap: var(--spacing-8);
+  }
+
+  .out-table__row--header {
+    display: none;
+  }
 }
 
 .form {
@@ -719,6 +967,31 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: var(--spacing-8);
+}
+
+.mark-card {
+  padding: var(--spacing-24);
+  border: 1px solid var(--color-purple-300);
+  border-radius: var(--radius-lg);
+  background: var(--color-base-white);
+}
+
+.mark-card__title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+}
+
+.available-after {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-12) var(--spacing-16);
+  border-radius: var(--radius-sm);
+  background: var(--color-grey-50);
+  font-size: 0.875rem;
+  color: var(--color-grey-900);
 }
 
 .field {

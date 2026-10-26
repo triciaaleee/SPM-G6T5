@@ -14,6 +14,7 @@ import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
 import TechnicalSupportView from "../views/TechnicalSupportView.vue";
 import EquipmentRequestDetailView from "../views/EquipmentRequestDetailView.vue";
 import EquipmentInventoryView from "../views/EquipmentInventoryView.vue";
+import EquipmentMaintenanceView from "../views/EquipmentMaintenanceView.vue";
 import LeadDashboardView from "../views/LeadDashboardView.vue";
 import LeadUnassignedQueueView from "../views/LeadUnassignedQueueView.vue";
 import LeadCoordinatorView from "../views/LeadCoordinatorView.vue";
@@ -150,6 +151,13 @@ export const router = createRouter({
       path: "/equipment-inventory",
       name: "equipment-inventory",
       component: EquipmentInventoryView,
+      meta: { requiresAuth: true, roles: ["technical_support"] },
+    },
+    {
+      // E5-5: mark equipment damaged or under maintenance, and return it to use.
+      path: "/equipment-maintenance",
+      name: "equipment-maintenance",
+      component: EquipmentMaintenanceView,
       meta: { requiresAuth: true, roles: ["technical_support"] },
     },
     {

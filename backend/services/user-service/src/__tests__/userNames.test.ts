@@ -53,6 +53,12 @@ describe("GET /api/users/names (E6)", () => {
     expect((await request(app).get("/api/users/names?ids=ATT-0001")).status).toBe(200);
   });
 
+  it("allows technical_support, who resolves a request's coordinator", async () => {
+    const { app } = buildApp({ id: "TS-0001", role: "technical_support" });
+
+    expect((await request(app).get("/api/users/names?ids=COORD-0001")).status).toBe(200);
+  });
+
   it("refuses attendees so they can't look each other up", async () => {
     const { app, from } = buildApp({ id: "ATT-0001", role: "attendee" });
 

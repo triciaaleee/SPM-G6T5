@@ -6,6 +6,12 @@ export interface ReservationFlag {
   reason: string | null;
 }
 
+/** A physical unit's display identity — just enough to show "which one" in the UI. */
+export interface UnitLabel {
+  id: number;
+  label: string | null;
+}
+
 /** E5-1: one line item on an equipment request — type and quantity. */
 export interface EquipmentItem {
   id: number;
@@ -17,6 +23,8 @@ export interface EquipmentItem {
   quantityFulfilled: number;
   /** E5-6 AC1/AC3: set once this item has been Arranged/Partially Fulfilled. */
   reservationFlag: ReservationFlag;
+  /** Which physical units are currently Reserved for this item, if any; absent from responses that don't carry it. */
+  reservedUnits?: UnitLabel[];
 }
 
 /** E5-2: the coordinator cancelled the whole request — kept as history, nothing is reserved against it. */
@@ -52,7 +60,9 @@ export interface EquipmentRequest {
 
 /**
  * What Technical Support may see about an event (E5-1 AC1): which event it is
- * and when and where it happens. Nothing about its people or purpose.
+ * and when and where it happens. Nothing else about its people or purpose —
+ * the one deliberate exception is `requestedBy` on each request below, so
+ * Technical Support can see which coordinator raised it.
  */
 export interface SupportEventInfo {
   id: number;
@@ -68,12 +78,17 @@ export interface EquipmentRequestWithEvent extends EquipmentRequest {
   event: SupportEventInfo | null;
 }
 
+/** Which coordinator raised a request, for `GET /event/:eventId` only. `name` is null if the lookup failed. */
+export interface EquipmentRequestWithRequester extends EquipmentRequest {
+  requestedBy: { id: string; name: string | null } | null;
+}
+
 /** E5-1 AC1: one event's equipment requests with its timing and the organiser's technical requirements. */
 export interface EventEquipmentView {
   event: SupportEventInfo;
   /** The organiser's own words on what technical support the event needs; null when none were given. */
   technicalRequirements: string | null;
-  equipmentRequests: EquipmentRequest[];
+  equipmentRequests: EquipmentRequestWithRequester[];
 }
 
 /** The fixed catalog Coordinators pick from and Technical Support's stock table reads (migration 0022). */
@@ -496,6 +511,29 @@ export async function checkEquipmentAvailability(
     throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to check equipment availability");
   }
   return body as EquipmentAvailability;
+}
+
+/** A read-only preview of which units a claim would pick right now — nothing is saved. */
+export interface UnitPreview {
+  claimedIds: number[];
+  units: UnitLabel[];
+  availableCount: number;
+  shortfall: number;
+}
+
+/**
+ * Preview which physical units arranging `quantity` of this item would
+ * claim, for the item's own event date — the same selection the backend
+ * actually makes on Save, computed without writing anything.
+ */
+export async function previewUnitsForItem(itemId: number, quantity: number): Promise<UnitPreview> {
+  const res = await fetch(`${apiBase}/items/${itemId}/unit-preview?quantity=${quantity}`, { headers: authHeader() });
+  await redirectIfUnauthenticated(res);
+  const body = await readBody(res);
+  if (!res.ok) {
+    throw new EquipmentRequestError((body.error as string | undefined) ?? "Failed to preview equipment units");
+  }
+  return body as unknown as UnitPreview;
 }
 
 /**
