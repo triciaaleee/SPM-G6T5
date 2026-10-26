@@ -72,7 +72,7 @@ test("coordinator records equipment requirements via the form; Technical Support
   // not as one combined text node, so check each cell within the item's row.
   await page.getByRole("heading", { name: eventName, level: 2 }).click();
   await expect(page).toHaveURL(new RegExp(`/equipment-requests/event/${event.id}$`));
-  const detailRow = page.locator("li.item-row", { hasText: item.name }).first();
+  const detailRow = page.locator("li.row-item", { hasText: item.name }).first();
   await expect(detailRow).toBeVisible();
   await expect(detailRow.locator(".item-name")).toHaveText(item.name);
   await expect(detailRow.locator(".item-qty").first()).toHaveText("2×");

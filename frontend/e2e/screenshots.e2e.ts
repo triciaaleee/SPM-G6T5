@@ -115,6 +115,7 @@ test("capture a screenshot of every page", async ({ browser }) => {
     { name: "equipment-requests", path: "/equipment-requests" },
     { name: "equipment-request-detail", path: `/equipment-requests/event/${event.id}` },
     { name: "equipment-inventory", path: "/equipment-inventory" },
+    { name: "equipment-maintenance", path: "/equipment-maintenance" },
   ]);
 
   await captureAll(browser, safetyOfficer, [{ name: "safety-review-queue", path: "/safety-review" }]);

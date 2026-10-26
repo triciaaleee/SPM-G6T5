@@ -19,7 +19,6 @@ import { ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
 import { PlusIcon } from "@heroicons/vue/20/solid";
 import AppButton from "../components/ui/AppButton.vue";
 import DataTable from "../components/ui/DataTable.vue";
-import EquipmentUnitsPanel from "../components/equipment/EquipmentUnitsPanel.vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import {
   EquipmentRequestError,
@@ -46,8 +45,6 @@ const loading = ref(true);
 const errorMessage = ref<string | null>(null);
 const notice = ref<string | null>(null);
 
-const activeTab = ref<"stock" | "maintenance">("stock");
-const unusableTotal = computed(() => items.value.reduce((sum, item) => sum + (item.unusableNow ?? 0), 0));
 
 /**
  * Marking or clearing units changes what is available, so re-read the numbers.
@@ -80,13 +77,6 @@ async function showDate(date: string): Promise<void> {
 
 function showToday(): Promise<void> {
   return showDate(todaySingapore());
-}
-
-function formatDay(value: string): string {
-  const date = new Date(`${value}T00:00:00`);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).replace(",", "");
 }
 
 const TABLE_COLUMNS = [
@@ -316,30 +306,18 @@ onMounted(async () => {
         <h1 class="h2">Equipment inventory</h1>
         <p class="subheading">Check what is in stock and correct the numbers when they change</p>
       </div>
-      <AppButton v-if="activeTab === 'stock'" variant="primary" size="xl" type="button" class="add-item-button"
+      <AppButton variant="primary" size="xl" type="button" class="add-item-button"
         data-testid="open-add-item" @click="openAdd">
         <PlusIcon class="add-item-button__icon" aria-hidden="true" />
         Add item
       </AppButton>
     </div>
 
-    <div class="tabs full" role="tablist">
-      <button type="button" role="tab" class="tab" :class="{ 'tab--active': activeTab === 'stock' }"
-        :aria-selected="activeTab === 'stock'" data-testid="tab-stock" @click="activeTab = 'stock'">
-        Stock
-      </button>
-      <button type="button" role="tab" class="tab" :class="{ 'tab--active': activeTab === 'maintenance' }"
-        :aria-selected="activeTab === 'maintenance'" data-testid="tab-maintenance" @click="activeTab = 'maintenance'">
-        Maintenance
-        <span v-if="unusableTotal > 0" class="tab__badge">{{ unusableTotal }}</span>
-      </button>
-    </div>
-
     <p v-if="loading" class="full body-default muted">Loading the inventory…</p>
     <p v-else-if="errorMessage" class="full body-default error-text" role="alert">{{ errorMessage }}</p>
 
     <template v-else>
-      <section v-if="activeTab === 'stock'" class="stock-card" aria-labelledby="stock-title">
+      <section class="stock-card" aria-labelledby="stock-title">
         <div class="flex flex-row justify-between items-center">
           <h2 id="stock-title" class="h4">Items</h2>
           <div class="stock-header">
@@ -446,8 +424,6 @@ onMounted(async () => {
           </template>
         </DataTable>
       </section>
-
-      <EquipmentUnitsPanel v-if="activeTab === 'maintenance'" @changed="refreshCatalog" />
     </template>
 
     <!-- Add or remove stock of an existing item. -->
@@ -632,49 +608,6 @@ onMounted(async () => {
 .add-item-button__icon {
   width: 1.25rem;
   height: 1.25rem;
-}
-
-.tabs {
-  display: flex;
-  gap: var(--spacing-24);
-  border-bottom: 1px solid var(--color-grey-100);
-}
-
-.tab {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  padding: var(--spacing-12) 0;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: none;
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-grey-600);
-  cursor: pointer;
-}
-
-.tab:hover {
-  color: var(--color-grey-900);
-}
-
-.tab--active {
-  color: var(--color-purple-700);
-  border-bottom-color: var(--color-purple-600);
-}
-
-.tab__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.25rem;
-  height: 1.25rem;
-  padding: 0 var(--spacing-4);
-  border-radius: var(--radius-full);
-  background: var(--color-purple-100);
-  color: var(--color-purple-700);
-  font-size: 0.75rem;
 }
 
 .body-default {
@@ -982,9 +915,12 @@ onMounted(async () => {
   gap: var(--spacing-16);
 }
 
+/* Lined up with the date input beside it, not the label above it: same height, and pushed down by the
+   label's line-height + gap so its top edge starts where the input's does. */
 .today-btn {
   height: var(--spacing-48);
-  margin-bottom:var(--spacing-8);
+  margin-top: calc(var(--spacing-4) + 1.125rem + var(--spacing-8));
+  margin-bottom: var(--spacing-8);
 }
 
 .stock-header__summary {

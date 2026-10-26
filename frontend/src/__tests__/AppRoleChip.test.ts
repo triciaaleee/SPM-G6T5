@@ -32,6 +32,7 @@ const router = createRouter({
       component: { render: () => h("div") },
     },
     { path: "/equipment-inventory", name: "equipment-inventory", component: { render: () => h("div") } },
+    { path: "/equipment-maintenance", name: "equipment-maintenance", component: { render: () => h("div") } },
   ],
 });
 
@@ -86,10 +87,10 @@ describe("role chip in the header", () => {
 });
 
 describe("Technical Support's nav links", () => {
-  it("offers Requests and Inventory", async () => {
+  it("offers Requests, Inventory and Maintenance", async () => {
     const wrapper = await mountAs("technical_support");
 
-    expect(wrapper.findAll(".nav__tab").map((link) => link.text())).toEqual(["Requests", "Inventory"]);
+    expect(wrapper.findAll(".nav__tab").map((link) => link.text())).toEqual(["Requests", "Inventory", "Maintenance"]);
   });
 
   it("marks only the current page's link, and keeps Requests current on a request's detail page", async () => {
@@ -98,6 +99,11 @@ describe("Technical Support's nav links", () => {
     await router.push("/equipment-inventory");
     await flushPromises();
     expect(wrapper.find(".nav__tab--active").text()).toBe("Inventory");
+    expect(wrapper.findAll(".nav__tab--active")).toHaveLength(1);
+
+    await router.push("/equipment-maintenance");
+    await flushPromises();
+    expect(wrapper.find(".nav__tab--active").text()).toBe("Maintenance");
     expect(wrapper.findAll(".nav__tab--active")).toHaveLength(1);
 
     await router.push("/equipment-requests/event/7");

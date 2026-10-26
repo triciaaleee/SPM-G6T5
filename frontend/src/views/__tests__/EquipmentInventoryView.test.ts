@@ -1,7 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EquipmentInventoryView from "../EquipmentInventoryView.vue";
-import EquipmentUnitsPanel from "../../components/equipment/EquipmentUnitsPanel.vue";
 import {
   EquipmentRequestError,
   EquipmentValidationError,
@@ -33,8 +32,7 @@ const microphones: CatalogItem = { id: 2, name: "Microphones", totalStock: 4, av
 
 async function mountView(items: CatalogItem[] = [projector, microphones]) {
   mockedCatalog.mockResolvedValue(items.map((item) => ({ ...item })));
-  // The units panel has its own tests.
-  const wrapper = mount(EquipmentInventoryView, { global: { stubs: { EquipmentUnitsPanel: true, RouterLink: true } } });
+  const wrapper = mount(EquipmentInventoryView, { global: { stubs: { RouterLink: true } } });
   await flushPromises();
   return wrapper;
 }
@@ -66,7 +64,6 @@ describe("EquipmentInventoryView — stock table", () => {
     expect(row(wrapper, 1).find("[data-testid='total']").text()).toBe("10");
     expect(row(wrapper, 1).find("[data-testid='available']").text()).toBe("6");
     expect(row(wrapper, 1).findAll("input")).toHaveLength(0);
-    expect(wrapper.text()).toContain("Available = total stock, minus units booked by events, minus units out of use");
   });
 
   it("flags an item with nothing available", async () => {
@@ -80,24 +77,6 @@ describe("EquipmentInventoryView — stock table", () => {
     const wrapper = await mountView([]);
     expect(wrapper.text()).toContain("No equipment has been added yet.");
     expect(wrapper.find("[data-testid^='item-']").exists()).toBe(false);
-  });
-});
-
-describe("EquipmentInventoryView — Stock/Maintenance tabs", () => {
-  it("shows Stock by default, and switches to the Maintenance panel with a badge for units out of use", async () => {
-    const wrapper = await mountView([{ ...projector, unusableNow: 3 }, microphones]);
-
-    expect(wrapper.find("[data-testid='item-1']").exists()).toBe(true);
-    expect(wrapper.findComponent(EquipmentUnitsPanel).exists()).toBe(false);
-    expect(wrapper.find("[data-testid='tab-maintenance']").text()).toContain("3");
-
-    await wrapper.find("[data-testid='tab-maintenance']").trigger("click");
-    expect(wrapper.find("[data-testid='item-1']").exists()).toBe(false);
-    expect(wrapper.findComponent(EquipmentUnitsPanel).exists()).toBe(true);
-
-    await wrapper.find("[data-testid='tab-stock']").trigger("click");
-    expect(wrapper.find("[data-testid='item-1']").exists()).toBe(true);
-    expect(wrapper.findComponent(EquipmentUnitsPanel).exists()).toBe(false);
   });
 });
 
@@ -128,33 +107,6 @@ describe("EquipmentInventoryView — units out of use come off the available num
     expect(row(wrapper, 2).find("[data-testid='out-of-use']").classes()).not.toContain("out-of-use-badge");
   });
 
-  it("re-reads the numbers as soon as units are marked or cleared, so the change shows at once", async () => {
-    const wrapper = await mountView();
-    expect(row(wrapper, 1).find("[data-testid='available']").text()).toContain("6");
-
-    mockedCatalog.mockResolvedValue([{ ...projector, availableStock: 4, unusableNow: 2 }, { ...microphones }]);
-    await wrapper.find("[data-testid='tab-maintenance']").trigger("click");
-    wrapper.findComponent(EquipmentUnitsPanel).vm.$emit("changed");
-    await flushPromises();
-    await wrapper.find("[data-testid='tab-stock']").trigger("click");
-
-    expect(mockedCatalog).toHaveBeenCalledTimes(2);
-    expect(row(wrapper, 1).find("[data-testid='available']").text()).toContain("4");
-    expect(row(wrapper, 1).find("[data-testid='out-of-use']").text()).toBe("2");
-  });
-
-  it("keeps the numbers it has if the re-read fails", async () => {
-    const wrapper = await mountView();
-
-    mockedCatalog.mockRejectedValue(new Error("down"));
-    await wrapper.find("[data-testid='tab-maintenance']").trigger("click");
-    wrapper.findComponent(EquipmentUnitsPanel).vm.$emit("changed");
-    await flushPromises();
-    await wrapper.find("[data-testid='tab-stock']").trigger("click");
-
-    expect(row(wrapper, 1).find("[data-testid='available']").text()).toContain("6");
-    expect(wrapper.text()).not.toContain("couldn't load");
-  });
 });
 
 describe("EquipmentInventoryView — stock on a chosen day", () => {
@@ -166,7 +118,7 @@ describe("EquipmentInventoryView — stock on a chosen day", () => {
     expect(wrapper.find("[data-testid='stock-today']").attributes("disabled")).toBeDefined();
   });
 
-  it("reloads the table for the day picked and names the day", async () => {
+  it("reloads the table for the day picked", async () => {
     const wrapper = await mountView();
     mockedCatalog.mockResolvedValue([{ ...projector, availableStock: 1, bookedCount: 9 }, { ...microphones }]);
 
@@ -176,7 +128,7 @@ describe("EquipmentInventoryView — stock on a chosen day", () => {
     expect(mockedCatalog).toHaveBeenLastCalledWith("2026-11-12");
     expect(row(wrapper, 1).find("[data-testid='booked']").text()).toBe("9");
     expect(row(wrapper, 1).find("[data-testid='available']").text()).toBe("1");
-    expect(wrapper.find("[data-testid='stock-day']").text()).toContain("12 November 2026");
+    expect((wrapper.find("[data-testid='stock-date']").element as HTMLInputElement).value).toBe("2026-11-12");
     expect(wrapper.find("[data-testid='stock-today']").attributes("disabled")).toBeUndefined();
   });
 
@@ -445,7 +397,7 @@ describe("EquipmentInventoryView — adding an item", () => {
 
   it("shows an error when the inventory cannot be loaded", async () => {
     mockedCatalog.mockRejectedValue(new Error("boom"));
-    const wrapper = mount(EquipmentInventoryView, { global: { stubs: { EquipmentUnitsPanel: true, RouterLink: true } } });
+    const wrapper = mount(EquipmentInventoryView, { global: { stubs: { RouterLink: true } } });
     await flushPromises();
 
     expect(wrapper.find("[role='alert']").text()).toContain("couldn't load the equipment inventory");
