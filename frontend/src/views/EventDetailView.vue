@@ -58,6 +58,7 @@ import SafetyReviewPanel from "../components/SafetyReviewPanel.vue";
 import { arrangementsNeedingReview } from "../lib/arrangementsReview";
 import SafetyChangesCard from "../components/SafetyChangesCard.vue";
 import RegistrationsPanel from "../components/RegistrationsPanel.vue";
+import RegistrationPeriodCard from "../components/RegistrationPeriodCard.vue";
 import {
   fetchEventSuitability,
   fetchEventVenueBookings,
@@ -322,6 +323,14 @@ const registrationStateLabel = computed(() => {
     )
   ];
 });
+
+/** The organiser's read-only view of the same period; the coordinator already has the controls card. */
+const showRegistrationPeriod = computed(
+  () =>
+    isOwnerView.value &&
+    registrationNeeded.value &&
+    ["Planning", "Safety Review", "Confirmed", "Needs Review"].includes(event.value?.status ?? ""),
+);
 
 const showRegistrationControls = computed(
   () =>
@@ -2174,11 +2183,17 @@ onMounted(async () => {
               </div>
             </div>
 
+            <!-- E6: the organiser sees when registration opens, its state and when it closes, with no controls. -->
+            <RegistrationPeriodCard v-if="showRegistrationPeriod" :status="event.status"
+              :details="event.submitted_details" :open-date="event.registration_open_date"
+              :override="event.registration_override" :registered-count="registeredCount" :now="now" />
+
             <!-- E3-1 AC3 / E3-4: what is still to settle before safety review (venues, equipment). Only the assigned
      coordinator can submit; everyone else sees the same checklist read-only. A Needs Review event is
      resubmitted from here too. -->
             <SafetyReviewPanel v-if="activeTab === 'overview' && (event.status === 'Planning' || event.status === 'Needs Review')"
               :event-id="event.id" :venue-bookings="venueBookings" :equipment-requests="equipmentRequests"
+              :equipment-requirements="asSubmittedDetails(event.submitted_details).equipment"
               :can-submit="isAssignedCoordinator" @submitted="(updated) => (event = updated)" />
 
             <!-- E3-6: a popup for the mandatory cancellation reason, same pattern as

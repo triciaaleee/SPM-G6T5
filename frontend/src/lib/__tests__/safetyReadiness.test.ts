@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { equipmentReadiness, isReadyForSafetyReview, venueReadiness } from "../safetyReadiness";
+import { equipmentIsRequired, equipmentReadiness, isReadyForSafetyReview, venueReadiness } from "../safetyReadiness";
 import type { EquipmentItem, EquipmentRequest } from "../equipmentApi";
 import type { EventVenueBooking } from "../venuesApi";
 
@@ -96,7 +96,47 @@ describe("equipmentReadiness", () => {
 
   it("counts partly reserved items as not yet reserved", () => {
     const result = equipmentReadiness([request([item(2, 2, 1), item(4, 1, 2), item(1, 0, 3)])]);
-    expect(result).toEqual({ done: false, caption: "1 of 3 items reserved", needsAction: false });
+    expect(result).toEqual({
+      done: false,
+      caption: "3 of 7 units reserved (1 of 3 items complete)",
+      needsAction: false,
+    });
+  });
+
+  it("shows the shortfall in units, so 10 of 123 chairs isn't hidden", () => {
+    expect(equipmentReadiness([request([item(123, 10)])], "123 Chairs").caption).toBe(
+      "10 of 123 units reserved (0 of 1 items complete)",
+    );
+  });
+
+  it("is not done when the organiser asked for equipment but no request is recorded yet", () => {
+    expect(equipmentReadiness([], "123 Chairs, 20 Tables")).toEqual({
+      done: false,
+      caption: "Equipment requested, not arranged yet",
+      needsAction: false,
+    });
+    expect(equipmentReadiness([request([item(2, 0)], "Cancelled")], "Projector").done).toBe(false);
+  });
+
+  it("has nothing outstanding when the organiser wrote NA or None", () => {
+    for (const requirements of ["NA", "None", "n/a", "", undefined]) {
+      expect(equipmentReadiness([], requirements)).toEqual({
+        done: true,
+        caption: "No equipment requested",
+        needsAction: false,
+      });
+    }
+  });
+
+  it("is done once the requested equipment is fully reserved", () => {
+    expect(equipmentReadiness([request([item(123, 123)])], "123 Chairs").done).toBe(true);
+  });
+});
+
+describe("equipmentIsRequired", () => {
+  it("is false for empty, NA, N/A, None, Nil and No, and true for anything else", () => {
+    for (const answer of ["", "NA", "N/A", "none", "Nil", "No", undefined, null]) expect(equipmentIsRequired(answer)).toBe(false);
+    for (const answer of ["123 Chairs, 20 Tables", "Projector"]) expect(equipmentIsRequired(answer)).toBe(true);
   });
 });
 
@@ -106,5 +146,7 @@ describe("isReadyForSafetyReview", () => {
     expect(isReadyForSafetyReview([booking("Requested")], [])).toBe(false);
     expect(isReadyForSafetyReview([booking("Approved")], [request([item(2, 1)])])).toBe(false);
     expect(isReadyForSafetyReview(undefined, [])).toBe(false);
+    expect(isReadyForSafetyReview([booking("Approved")], [], "123 Chairs")).toBe(false);
+    expect(isReadyForSafetyReview([booking("Approved")], [], "NA")).toBe(true);
   });
 });

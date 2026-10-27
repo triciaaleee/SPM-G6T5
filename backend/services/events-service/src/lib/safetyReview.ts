@@ -35,19 +35,40 @@ export interface OutstandingArrangements {
   bookings: OutstandingBooking[];
   /** AC3: requested equipment not yet fully reserved. */
   equipment: OutstandingEquipmentItem[];
+  /** The organiser asked for equipment (their text, trimmed) but none has been recorded for the event yet. */
+  equipmentNotArranged: string | null;
+}
+
+/** What an organiser writes when they need no equipment. Compared lower-case, ignoring punctuation and spacing. */
+const NO_EQUIPMENT_ANSWERS: ReadonlySet<string> = new Set(["", "na", "none", "nil", "no"]);
+
+/**
+ * Whether the organiser's Equipment Requirements text asks for any equipment.
+ * Empty, "NA", "N/A", "None", "Nil" and "No" (any case) mean it doesn't.
+ */
+export function equipmentIsRequired(requirements: string | null | undefined): boolean {
+  const answer = (requirements ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return !NO_EQUIPMENT_ANSWERS.has(answer);
 }
 
 /**
  * What stops the event entering Safety Review. Rejected, Withdrawn and
  * Expired bookings stay on record but don't block (AC2). An equipment item
  * counts as reserved once Technical Support have fulfilled its full
- * quantity; an event that requested no equipment has nothing outstanding
- * there (AC4).
+ * quantity. An event whose organiser asked for no equipment (NA / None) has
+ * nothing outstanding there (AC4); one that asked for some is outstanding
+ * until a request has been recorded, so "no request yet" is never read as
+ * "nothing requested".
  */
 export function findOutstandingArrangements(
   bookings: ArrangementBooking[],
   equipmentRequests: ArrangementEquipmentRequest[],
+  equipmentRequirements?: string | null,
 ): OutstandingArrangements {
+  const recordedItems = equipmentRequests
+    .filter((request) => request.status !== "Cancelled")
+    .reduce((count, request) => count + request.items.length, 0);
+
   return {
     noApprovedVenue: !bookings.some((booking) => booking.status === APPROVED_BOOKING_STATUS),
     bookings: bookings
@@ -63,11 +84,18 @@ export function findOutstandingArrangements(
           quantityReserved: item.quantityFulfilled,
         })),
     ),
+    equipmentNotArranged:
+      equipmentIsRequired(equipmentRequirements) && recordedItems === 0 ? (equipmentRequirements ?? "").trim() : null,
   };
 }
 
 export function hasOutstanding(outstanding: OutstandingArrangements): boolean {
-  return outstanding.noApprovedVenue || outstanding.bookings.length > 0 || outstanding.equipment.length > 0;
+  return (
+    outstanding.noApprovedVenue ||
+    outstanding.bookings.length > 0 ||
+    outstanding.equipment.length > 0 ||
+    outstanding.equipmentNotArranged !== null
+  );
 }
 
 /**
@@ -82,6 +110,9 @@ export function describeOutstanding(outstanding: OutstandingArrangements): strin
   }
   for (const item of outstanding.equipment) {
     parts.push(`${item.equipmentType}: ${item.quantityReserved} of ${item.quantity} reserved`);
+  }
+  if (outstanding.equipmentNotArranged !== null) {
+    parts.push(`the requested equipment (${outstanding.equipmentNotArranged}) hasn't been arranged yet`);
   }
   return `This event can't be submitted for safety review yet. Settle these first: ${parts.join("; ")}.`;
 }

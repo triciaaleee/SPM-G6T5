@@ -45,12 +45,31 @@ export function venueReadiness(bookings: EventVenueBooking[] | undefined): Readi
   return { done: approved > 0 && approved === counted.length, caption: parts.join(", "), needsAction };
 }
 
-/** Equipment reserved. Pass undefined while the requests are still loading. */
-export function equipmentReadiness(requests: EquipmentRequest[] | undefined): Readiness {
+/** What an organiser writes when they need no equipment. Mirrors events-service `equipmentIsRequired`. */
+const NO_EQUIPMENT_ANSWERS: ReadonlySet<string> = new Set(["", "na", "none", "nil", "no"]);
+
+/** Whether the organiser's Equipment Requirements text asks for any equipment (empty, NA, None, Nil and No don't). */
+export function equipmentIsRequired(requirements: string | null | undefined): boolean {
+  return !NO_EQUIPMENT_ANSWERS.has((requirements ?? "").toLowerCase().replace(/[^a-z0-9]/g, ""));
+}
+
+/**
+ * Equipment reserved. Pass undefined for `requests` while they are still loading.
+ * `requirements` is the organiser's Equipment Requirements text: when it asks for equipment,
+ * having no request recorded yet is not the same as nothing requested.
+ */
+export function equipmentReadiness(
+  requests: EquipmentRequest[] | undefined,
+  requirements?: string | null,
+): Readiness {
   if (!requests) return CHECKING;
 
   const items = requests.filter((request) => request.status !== "Cancelled").flatMap((request) => request.items);
-  if (items.length === 0) return { done: true, caption: "No equipment requested", needsAction: false };
+  if (items.length === 0) {
+    return equipmentIsRequired(requirements)
+      ? { done: false, caption: "Equipment requested, not arranged yet", needsAction: false }
+      : { done: true, caption: "No equipment requested", needsAction: false };
+  }
 
   const flagged = items.filter((item) => item.reservationFlag?.flagged);
   if (flagged.length > 0) {
@@ -69,12 +88,19 @@ export function equipmentReadiness(requests: EquipmentRequest[] | undefined): Re
       needsAction: false,
     };
   }
-  return { done: false, caption: `${reserved} of ${items.length} items reserved`, needsAction: false };
+  const unitsWanted = items.reduce((sum, item) => sum + item.quantity, 0);
+  const unitsReserved = items.reduce((sum, item) => sum + Math.min(item.quantityFulfilled, item.quantity), 0);
+  return {
+    done: false,
+    caption: `${unitsReserved} of ${unitsWanted} units reserved (${reserved} of ${items.length} items complete)`,
+    needsAction: false,
+  };
 }
 
 export function isReadyForSafetyReview(
   bookings: EventVenueBooking[] | undefined,
   requests: EquipmentRequest[] | undefined,
+  requirements?: string | null,
 ): boolean {
-  return venueReadiness(bookings).done && equipmentReadiness(requests).done;
+  return venueReadiness(bookings).done && equipmentReadiness(requests, requirements).done;
 }
