@@ -265,6 +265,18 @@ A pinkish purple used for exactly one thing: the Technical Support role chip in 
 **USE:** Only as the fill, border and text of the Technical Support role chip.  
 **AVOID:** Using it for status, actions, links or anything other than that chip.
 
+### 2.10 Venue Identity (Calendar Edge)
+
+Two colours that identify a venue on the venue schedule calendar, next to `Purple Primary/600` and `Secondary Blue/600` (venues 1 and 2). They exist so a venue's colour never matches a booking status colour (green, amber, red, grey).
+
+| Token | Hex | Semantic Role |
+|-------|-----|---------------|
+| `Colors/Venue/Magenta` | `#A8267D` | Venue 3: its legend bar and the 4px left edge of its calendar blocks |
+| `Colors/Venue/Slate` | `#5B6770` | Venue 4: the same |
+
+**USE:** Only as a venue's identity on the venue schedule calendar (Section 3.5, `schedule-block-*`).  
+**AVOID:** Using them for status, actions, links or text.
+
 ## 3. Colour Semantic Mapping
 
 ### 3.1 UI State Colours
@@ -321,6 +333,7 @@ Patterns for venue availability (E4-3) and in-app notifications (E7-1). Built on
 | `booking-on-hold` | Fill `Colors/Orange Warning/100` across the padded window, `Colors/Orange Warning/200` across the event time. Border 1px **dashed** `Colors/Orange Warning/300`, `spacing-4` left bar `Colors/Orange Warning/500`. Text `Colors/Orange Warning/900`, `radius-xs`. | An On Hold booking — the Warning set's "on-hold" role (Section 2.6). The dashed border says "tentative" without relying on colour alone. |
 | `pattern-closed` | Solid `Colors/Grey/75` fill, no border. Text `Colors/Grey/500`. | Time outside a venue's operating hours. Plain grey, distinct from the lock-marked `pattern-unavailable` used for recorded block-outs. |
 | `slot-available` | Fill `Colors/Green Success/100`, border 1px dashed `Colors/Green Success/300`, text `Colors/Green Success/600`, `radius-xs`. | A free slot inside the coordinator's target date and time range — highlighted so it stands out from everything unavailable. |
+| `schedule-block-*` | The **status** is the block's fill, border and text; the **venue** is only its `spacing-4` left edge (`Purple Primary/600`, `Secondary Blue/600`, `Venue/Magenta`, `Venue/Slate`). A status icon sits before the status name. `radius-xs`. **Approved:** `Green Success/200` fill, `/600` border, `/800` text, check. **On Hold:** `Orange Warning/100` fill, `/400` border, `/900` text, pause. **Requested:** `Base/White` fill, 1px dashed `Grey/600` border, `Grey/700` text, clock. **Replacement Required:** `Red Error/200` fill, `/600` border, `/800` text, warning triangle. **Unavailable** (a block-out): flat `Grey/100` fill, `Grey/300` border, `Grey/900` text, lock — no stripes. | A booking or block-out on the venue staff's schedule calendar. The legend shows a 24×20 swatch of each status (with its icon) and a 4×20 bar per venue. |
 
 **USE:** `pattern-unavailable` only for genuinely unavailable time — never as decoration.  
 **USE:** On the availability calendar, every unavailable kind has its own treatment (`booking-approved`, `booking-on-hold`, `pattern-unavailable`, `pattern-closed`) and a legend naming each — never colour alone.  

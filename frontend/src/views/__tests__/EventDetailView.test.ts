@@ -18,6 +18,7 @@ import {
   type EventSummary,
 } from "../../lib/eventsApi";
 import { fetchEventVenueBookings } from "../../lib/venuesApi";
+import { formatEventDate } from "../../lib/eventStatus";
 
 vi.mock("../../lib/eventsApi", async () => {
   const actual = await vi.importActual<typeof import("../../lib/eventsApi")>("../../lib/eventsApi");
@@ -220,6 +221,27 @@ describe("EventDetailView — Cancel event (E3-6)", () => {
     expect(mockedCancel).toHaveBeenCalledWith(7, "Venue flooded");
     expect(wrapper.text()).toContain('This event was cancelled: "Venue flooded"');
     expect(button(wrapper, "Cancel event")).toBeUndefined();
+  });
+
+  it("puts the Cancel event button top right, in the title row beside the title, not in the details card", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }), organiser);
+
+    const row = wrapper.get(".event-title-row");
+    const cancel = row.get("[data-testid='cancel-event']");
+    expect(cancel.text()).toBe("Cancel event");
+    expect(cancel.classes()).toContain("btn--danger");
+    // After the title block, so it sits at the end (right) of the row.
+    expect(
+      row.get(".event-title-row__main").element.compareDocumentPosition(cancel.element) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(wrapper.find(".details-card [data-testid='cancel-event']").exists()).toBe(false);
+  });
+
+  it("keeps the button in the title row on every tab", async () => {
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }), organiser);
+
+    await wrapper.findAll(".tab-btn").find((b) => b.text() === "History")!.trigger("click");
+    expect(wrapper.find(".event-title-row [data-testid='cancel-event']").exists()).toBe(true);
   });
 
   it("AC2: keeps the confirm button disabled until a reason is entered", async () => {
@@ -984,6 +1006,90 @@ describe("EventDetailView — past change requests move to History once supersed
     await button(wrapper, "History")!.trigger("click");
 
     expect(wrapper.text()).toContain("Past change requests");
+  });
+});
+
+describe("EventDetailView — registration date on the organiser's view", () => {
+  const organiser = { id: "ORG-0001", role: "organiser" };
+  const needsRegistration = (overrides: Partial<EventSummary> = {}) =>
+    makeEvent({
+      status: "Confirmed",
+      submitted_details: {
+        name: "Spring Gala",
+        proposedDate: "2026-11-10",
+        startTime: "10:00",
+        endTime: "18:00",
+        expectedAttendance: 200,
+        registrationNeeded: true,
+      },
+      ...overrides,
+    });
+
+  it("shows the day registration opens in a read-only Registration card, where the coordinator's card is", async () => {
+    const wrapper = await mountPage(needsRegistration({ registration_open_date: "2026-11-03" }), organiser);
+
+    const card = wrapper.get("[data-testid='registration-info-owner']");
+    expect(card.get("h2").text()).toBe("Registration");
+    expect(card.get("[data-testid='registration-open-date-owner']").text()).toBe(
+      `Registration opens on ${formatEventDate("2026-11-03")}`,
+    );
+    // Same column and slot as the coordinator's card: the right column, under the Coordinator card.
+    const rightColumn = wrapper.findAll(".detail-grid-col")[1];
+    expect(rightColumn.element.contains(card.element)).toBe(true);
+    expect(
+      wrapper.get(".coordinator-card").element.compareDocumentPosition(card.element) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Read-only: none of the coordinator's controls.
+    expect(wrapper.find("[data-testid='registration-controls']").exists()).toBe(false);
+    expect(wrapper.find("#registration-open-date").exists()).toBe(false);
+    expect(card.find("button, input").exists()).toBe(false);
+  });
+
+  it("notes a manual open or close, as the coordinator's card does", async () => {
+    const wrapper = await mountPage(
+      needsRegistration({ registration_open_date: "2026-11-03", registration_override: "FORCE_OPEN" }),
+      organiser,
+    );
+
+    expect(wrapper.get("[data-testid='registration-open-date-owner']").text()).toContain("(manually opened)");
+  });
+
+  it("says the date hasn't been set yet until the coordinator sets it", async () => {
+    const wrapper = await mountPage(needsRegistration({ registration_open_date: null }), organiser);
+
+    expect(wrapper.get("[data-testid='registration-open-date-owner']").text()).toBe(
+      "The coordinator hasn't set the registration open date yet.",
+    );
+  });
+
+  it("shows only in the statuses where the coordinator's card shows", async () => {
+    for (const status of ["Planning", "Safety Review", "Needs Review"] as const) {
+      const wrapper = await mountPage(needsRegistration({ status, registration_open_date: "2026-11-03" }), organiser);
+      expect(wrapper.find("[data-testid='registration-info-owner']").exists()).toBe(true);
+    }
+    for (const status of ["Requested", "Unassigned", "Draft"] as const) {
+      const wrapper = await mountPage(needsRegistration({ status, registration_open_date: "2026-11-03" }), organiser);
+      expect(wrapper.find("[data-testid='registration-info-owner']").exists()).toBe(false);
+    }
+  });
+
+  it("is left out when the event needs no registration", async () => {
+    const wrapper = await mountPage(
+      makeEvent({
+        status: "Confirmed",
+        submitted_details: { name: "Spring Gala", proposedDate: "2026-11-10", startTime: "10:00", endTime: "18:00", expectedAttendance: 200, registrationNeeded: false },
+        registration_open_date: "2026-11-03",
+      }),
+      organiser,
+    );
+
+    expect(wrapper.find("[data-testid='registration-info-owner']").exists()).toBe(false);
+  });
+
+  it("is not added for the coordinator, who has the editable Registration card instead", async () => {
+    const wrapper = await mountPage(needsRegistration({ registration_open_date: "2026-11-03" }));
+
+    expect(wrapper.find("[data-testid='registration-info-owner']").exists()).toBe(false);
   });
 });
 

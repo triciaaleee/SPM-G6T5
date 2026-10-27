@@ -9,7 +9,7 @@ import type { UnavailabilityPeriod } from "./unavailabilityApi";
 
 export type CalendarView = "day" | "week" | "month";
 
-/** Venues viewable at once; the view's dropdown enforces it. */
+/** Venues the calendar draws at once in day and week view (month draws every venue). */
 export const MAX_VENUES = 4;
 
 /** Booking statuses that appear on the calendar (live ones only). */

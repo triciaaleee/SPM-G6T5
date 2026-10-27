@@ -3,6 +3,8 @@ import AppButton from "../ui/AppButton.vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/vue/16/solid";
 import CalendarEntryButton from "./CalendarEntryButton.vue";
+import VenueIcon from "./VenueIcon.vue";
+import { CALENDAR_STATUSES } from "../../lib/calendarStatus";
 import { fetchVenueBookings, type StaffVenueOption } from "../../lib/venuesApi";
 import { fetchUnavailability } from "../../lib/unavailabilityApi";
 import {
@@ -10,6 +12,7 @@ import {
   bookingEntries,
   fromKey,
   layoutLanes,
+  MAX_VENUES,
   shiftAnchor,
   toKey,
   visibleRange,
@@ -20,9 +23,11 @@ import {
 /**
  * E1-5: one calendar for everything booked into the staff member's venues —
  * bookings (Requested, On Hold, Approved, Replacement Required) and block-out
- * periods, with event name, time and expected attendance. Day, week or month;
- * up to four venues at once (the page's venue filter picks them), each with
- * its own colour (the legend).
+ * periods, with event name, time and expected attendance. Day, week or month.
+ * Day and week draw at most four venues at once (a column per venue / side-by-side
+ * lanes, and only four colours); month collapses entries into chips, so it draws
+ * every venue the page's filter picks. Up to four venues each get their own
+ * colour (the legend).
  * Only the range on screen is fetched, so the date-range criterion holds.
  */
 
@@ -35,15 +40,30 @@ const STORAGE_KEY = "venue-calendar";
 const HOUR_PX = 48;
 const MONTH_CHIPS = 3;
 
-/** The venues to draw (at most four, chosen by the page's filter); `total` is how many the filter matched. */
-const props = defineProps<{ venues: StaffVenueOption[]; day?: string; total?: number; from?: string; to?: string; prompt?: string }>();
+/**
+ * The venues the page's filter picked; `total` is how many that is. Day and week draw only the first
+ * `maxVenues` (four by default); month draws all of them.
+ */
+const props = defineProps<{
+  venues: StaffVenueOption[];
+  day?: string;
+  total?: number;
+  from?: string;
+  to?: string;
+  prompt?: string;
+  maxVenues?: number;
+}>();
 /** The day on screen (or last clicked); the page uses it to pick which day its lists show. */
 const emit = defineEmits<{ "day-change": [day: string]; "show-requests": [] }>();
-const venues = computed(() => props.venues);
-
-const selectedIds = computed(() => props.venues.map((v) => v.id));
 
 const view = ref<CalendarView>("week");
+
+const venues = computed(() => (view.value === "month" ? props.venues : props.venues.slice(0, props.maxVenues ?? MAX_VENUES)));
+
+const selectedIds = computed(() => venues.value.map((v) => v.id));
+/** Venue colours only mean something while there are few enough venues to tell apart. */
+const coloured = computed(() => selectedIds.value.length <= MAX_VENUES);
+
 const anchor = ref(props.day ?? toKey(new Date()));
 const today = toKey(new Date());
 
@@ -58,7 +78,7 @@ const multi = computed(() => selectedIds.value.length > 1);
 
 const venueName = (id: number) => venues.value.find((v) => v.id === id)?.name ?? "Venue";
 /** Each shown venue's colour: its position among the venues on screen. */
-const slotOf = (id: number) => Math.max(0, selectedIds.value.indexOf(id));
+const slotOf = (id: number) => (coloured.value ? Math.max(0, selectedIds.value.indexOf(id)) : 0);
 
 // ---- Loading -------------------------------------------------------------
 
@@ -256,7 +276,7 @@ function nudge(direction: 1 | -1): void {
 
       <div class="toolbar__controls">
         <p v-if="total !== undefined && total > venues.length" class="cap-note">
-          Showing {{ venues.length }} of {{ total }} venues. Choose fewer venues in the filter to see others.
+          Showing {{ venues.length }} of {{ total }} venues in {{ view === "day" ? "Day" : "Week" }} view. Month shows all of them.
         </p>
 
         <div class="segmented" role="group" aria-label="Calendar view">
@@ -268,16 +288,21 @@ function nudge(direction: 1 | -1): void {
       </div>
     </div>
 
-    <ul class="legend" aria-label="Key">
-      <li v-for="id in selectedIds" :key="id" class="legend__item">
-        <span class="swatch" :class="`swatch--slot-${slotOf(id)}`" />{{ venueName(id) }}
-      </li>
-      <li class="legend__item legend__item--sep"><span class="key key--solid" />Approved</li>
-      <li class="legend__item"><span class="key key--hold" />On Hold</li>
-      <li class="legend__item"><span class="key key--requested" />Requested</li>
-      <li class="legend__item"><span class="key key--replace" />Replacement Required</li>
-      <li class="legend__item"><span class="key key--block" />Unavailable</li>
-    </ul>
+    <div class="legend" role="group" aria-label="Key">
+      <ul v-if="coloured" class="legend__group" aria-label="Venue">
+        <li class="legend__heading" aria-hidden="true">Venue</li>
+        <li v-for="id in selectedIds" :key="id" class="legend__item">
+          <span class="swatch" :class="`swatch--slot-${slotOf(id)}`" />{{ venueName(id) }}
+        </li>
+      </ul>
+      <span v-if="coloured" class="legend__divider" aria-hidden="true" />
+      <ul class="legend__group" aria-label="Status">
+        <li class="legend__heading" aria-hidden="true">Status</li>
+        <li v-for="status in CALENDAR_STATUSES" :key="status.key" class="legend__item">
+          <span class="key" :class="`key--${status.key}`"><VenueIcon :name="status.icon" :size="12" /></span>{{ status.label }}
+        </li>
+      </ul>
+    </div>
 
     <p v-if="loadError" class="body-small error-text" role="alert">{{ loadError }}</p>
 
@@ -495,15 +520,34 @@ function nudge(direction: 1 | -1): void {
 }
 
 /* Legend and venue swatches */
+/* Two labelled groups in one white bar: the venue's left-edge colour, then the status swatches. */
 .legend {
+  box-sizing: border-box;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-8) var(--spacing-16);
+  align-items: center;
+  gap: var(--spacing-12) var(--spacing-32);
+  padding: var(--spacing-12) var(--spacing-24);
+  background: var(--color-base-white);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-lg);
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-900);
+}
+
+.legend__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-8) var(--spacing-20);
   margin: 0;
   padding: 0;
   list-style: none;
-  font-size: 0.875rem;
-  color: var(--color-grey-700);
+}
+
+.legend__heading {
+  font-weight: 700;
 }
 
 .legend__item {
@@ -512,17 +556,24 @@ function nudge(direction: 1 | -1): void {
   gap: var(--spacing-8);
 }
 
-.legend__item--sep {
-  padding-left: var(--spacing-16);
-  border-left: 1px solid var(--color-grey-200);
+.legend__divider {
+  width: 1px;
+  height: 28px;
+  background: var(--color-grey-200);
 }
 
+/* A venue's identity: the 4px edge of its blocks. */
 .swatch {
   display: inline-block;
-  width: var(--spacing-12);
-  height: var(--spacing-12);
-  margin-right: var(--spacing-4);
-  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  width: var(--spacing-4);
+  height: var(--spacing-20);
+  border-radius: var(--spacing-2);
+}
+
+.panel__list .swatch {
+  margin-right: var(--spacing-8);
+  vertical-align: middle;
 }
 
 .swatch--slot-0 {
@@ -534,43 +585,58 @@ function nudge(direction: 1 | -1): void {
 }
 
 .swatch--slot-2 {
-  background: var(--color-success-600);
+  background: var(--color-venue-magenta);
 }
 
 .swatch--slot-3 {
-  background: var(--color-warning-800);
+  background: var(--color-venue-slate);
 }
 
+/* A status: the same fill, border and text as its calendar block (Style.md 3.5, schedule-block-*). */
 .key {
-  display: inline-block;
+  box-sizing: border-box;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
   width: var(--spacing-24);
-  height: var(--spacing-12);
-  border: 1px solid var(--color-grey-700);
+  height: var(--spacing-20);
+  border: 1px solid var(--key-border);
   border-radius: var(--radius-xs);
+  background: var(--key-bg);
+  color: var(--key-text);
 }
 
-.key--solid {
-  background: var(--color-grey-300);
+.key--approved {
+  --key-bg: var(--color-success-200);
+  --key-border: var(--color-success-600);
+  --key-text: var(--color-success-800);
 }
 
 .key--hold {
-  background: var(--color-grey-300);
-  border-style: double;
-  border-width: 3px;
+  --key-bg: var(--color-warning-100);
+  --key-border: var(--color-warning-400);
+  --key-text: var(--color-warning-900);
 }
 
 .key--requested {
+  --key-bg: var(--color-base-white);
+  --key-border: var(--color-grey-600);
+  --key-text: var(--color-grey-700);
   border-style: dashed;
-  background: var(--color-base-white);
 }
 
 .key--replace {
-  border-color: var(--color-error-600);
-  background: var(--color-error-200);
+  --key-bg: var(--color-error-200);
+  --key-border: var(--color-error-600);
+  --key-text: var(--color-error-800);
 }
 
+/* Unavailable: a flat grey, no stripes. */
 .key--block {
-  background: repeating-linear-gradient(135deg, var(--color-grey-200) 0 3px, var(--color-grey-50) 3px 6px);
+  --key-bg: var(--color-grey-100);
+  --key-border: var(--color-grey-300);
+  --key-text: var(--color-grey-900);
 }
 
 /* Calendar card */

@@ -323,12 +323,15 @@ const registrationStateLabel = computed(() => {
   ];
 });
 
-const showRegistrationControls = computed(
+/** The statuses in which the coordinator sets and runs registration, so the Registration card shows. */
+const registrationCardShown = computed(
   () =>
-    isAssignedCoordinator.value &&
     registrationNeeded.value &&
     ["Planning", "Safety Review", "Confirmed", "Needs Review"].includes(event.value?.status ?? ""),
 );
+const showRegistrationControls = computed(() => isAssignedCoordinator.value && registrationCardShown.value);
+/** The organiser sees the same card, in the same place, without the controls. */
+const showOwnerRegistration = computed(() => isOwnerView.value && registrationCardShown.value);
 
 const registrationDateInput = ref("");
 const registrationDateDirty = ref(false);
@@ -1216,15 +1219,27 @@ onMounted(async () => {
 
       <div v-else-if="event">
         <div class="event-title-row">
-          <div class="event-meta">
-            <p class="body-default muted event-id">
-              Event #{{ event.id }}
-            </p>
-            <span class="badge" :class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</span>
+          <div class="event-title-row__main">
+            <div class="event-meta">
+              <p class="body-default muted event-id">
+                Event #{{ event.id }}
+              </p>
+              <span class="badge" :class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</span>
+            </div>
+            <h1 class="event-header text-3xl">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}`
+              }}</h1>
           </div>
-          <h1 class="event-header text-3xl">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}`
-            }}</h1>
 
+          <!-- E3-6: the owning Organiser cancels their own event with a required reason. Top right, whichever tab is open. -->
+          <AppButton v-if="canCancelEvent" variant="danger" type="button" class="cancel-event-button"
+            data-testid="cancel-event" @click="openCancel">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+              stroke="currentColor" class="cancel-event-row__icon" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+            </svg>
+            Cancel event
+          </AppButton>
         </div>
 
 
@@ -1490,9 +1505,9 @@ onMounted(async () => {
                   </div>
                 </template>
 
-                <!-- E3-6: the owning Organiser cancels their own event with a required reason. -->
-                <div v-if="isOwnerView && event.status !== 'Draft'" class="cancel-event-row">
-                  <div v-if="event.status === 'Cancelled'" class="cancel-event-row__cancelled-note">
+                <!-- E3-6: once cancelled, the owner sees why here; the Cancel event button itself sits top right. -->
+                <div v-if="isOwnerView && event.status === 'Cancelled'" class="cancel-event-row">
+                  <div class="cancel-event-row__cancelled-note">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
                       stroke="currentColor" class="cancel-event-row__icon">
                       <path stroke-linecap="round" stroke-linejoin="round"
@@ -1502,15 +1517,6 @@ onMounted(async () => {
                       This event was cancelled{{ event.review_outcome ? `: "${event.review_outcome}"` : "." }}
                     </p>
                   </div>
-                  <AppButton variant="danger" v-else-if="canCancelEvent" type="button" class="cancel-event-row__button"
-                    @click="openCancel">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-                      stroke="currentColor" class="cancel-event-row__icon">
-                      <path stroke-linecap="round" stroke-linejoin="round"
-                        d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                    </svg>
-                    Cancel event
-                  </AppButton>
                 </div>
               </div>
 
@@ -2174,6 +2180,21 @@ onMounted(async () => {
               </div>
             </div>
 
+            <!-- The organiser's read-only view of the Registration card above: when registration opens. -->
+            <div v-if="showOwnerRegistration" class="details-card" data-testid="registration-info-owner">
+              <h2 class="section-title">Registration</h2>
+              <p v-if="event.registration_open_date" class="body-small muted" data-testid="registration-open-date-owner">
+                Registration opens on
+                <strong>{{ formatEventDate(event.registration_open_date) }}</strong>
+                <span v-if="event.registration_override && event.registration_override !== 'NONE'">
+                  (manually {{ event.registration_override === "FORCE_OPEN" ? "opened" : "closed" }})
+                </span>
+              </p>
+              <p v-else class="body-small muted" data-testid="registration-open-date-owner">
+                The coordinator hasn't set the registration open date yet.
+              </p>
+            </div>
+
             <!-- E3-1 AC3 / E3-4: what is still to settle before safety review (venues, equipment). Only the assigned
      coordinator can submit; everyone else sees the same checklist read-only. A Needs Review event is
      resubmitted from here too. -->
@@ -2338,7 +2359,8 @@ onMounted(async () => {
 }
 
 .body-default {
-  font-size: 18px;
+  font-size: 16px;
+  line-height: 125%;
 }
 
 .body-small {
@@ -2414,10 +2436,20 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
+/* Title block on the left, the Cancel event button top-aligned with it on the right. */
 .event-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-16);
+}
+
+.event-title-row__main {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-8);
+  min-width: 0;
 }
 
 /* The event id and the status badge share one row, above the title. */
@@ -3435,16 +3467,16 @@ onMounted(async () => {
   }
 }
 
-/* E3-6: the trigger lives at the bottom-left of the Event Details card,
-   left-aligned like the rest of that card's content rather than
-   right-aligned like a dialog's own action row. */
+/* E3-6: the Cancel event button sits top right, beside the title; once cancelled, the
+   reason note sits at the bottom-left of the Event Details card. */
 .cancel-event-row {
   margin-top: var(--spacing-24);
   display: flex;
   justify-content: flex-start;
 }
 
-.cancel-event-row__button {
+.cancel-event-button {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-8);

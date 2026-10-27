@@ -41,6 +41,10 @@ const NAV_TABS: Record<string, { name: string; label: string; alsoActiveOn?: str
     },
     { name: "all-events", label: "All events" },
   ],
+  venue_staff: [
+    { name: "venue-schedule", label: "Schedule" },
+    { name: "venue-catalogue", label: "Venue catalogue" },
+  ],
   technical_support: [
     // A request's detail page belongs to Requests, so that link stays current while it is open.
     { name: "equipment-requests", label: "Requests", alsoActiveOn: ["equipment-request-detail"] },

@@ -224,11 +224,13 @@ function formatMoment(value: string | null): string {
   background: var(--color-base-white);
 }
 
+/* Grey header row, like the app's other tables; its top corners follow the table's rounded border. */
 .rows__head {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--color-base-white);
+  background: var(--color-grey-50);
+  border-radius: calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px) 0 0;
 }
 
 .rows__head,

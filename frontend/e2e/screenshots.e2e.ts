@@ -109,7 +109,10 @@ test("capture a screenshot of every page", async ({ browser }) => {
     { name: "lead-coordinator", path: `/lead/coordinators/${coordinator.id}` },
   ]);
 
-  await captureAll(browser, venueStaff, [{ name: "venue-schedule", path: "/venue-schedule" }]);
+  await captureAll(browser, venueStaff, [
+    { name: "venue-schedule", path: "/venue-schedule" },
+    { name: "venue-schedule-calendar", path: "/venue-schedule?view=calendar" },
+  ]);
 
   await captureAll(browser, technicalSupport, [
     { name: "equipment-requests", path: "/equipment-requests" },

@@ -10,6 +10,7 @@ import SignupView from "../views/SignupView.vue";
 import VenueSearchView from "../views/VenueSearchView.vue";
 import VenueAvailabilityView from "../views/VenueAvailabilityView.vue";
 import VenueStaff from "../views/VenueStaff.vue";
+import VenueCatalogueView from "../views/VenueCatalogueView.vue";
 import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
 import TechnicalSupportView from "../views/TechnicalSupportView.vue";
 import EquipmentRequestDetailView from "../views/EquipmentRequestDetailView.vue";
@@ -130,6 +131,13 @@ export const router = createRouter({
       path: "/venue-schedule",
       name: "venue-schedule",
       component: VenueStaff,
+      meta: { requiresAuth: true, roles: ["venue_staff"] },
+    },
+    {
+      // E4-1: venue staff's catalogue of the venues they look after, and where a new one is added.
+      path: "/venue-catalogue",
+      name: "venue-catalogue",
+      component: VenueCatalogueView,
       meta: { requiresAuth: true, roles: ["venue_staff"] },
     },
     {

@@ -1,18 +1,15 @@
 <script setup lang="ts">
 import AppButton from "../components/ui/AppButton.vue";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ChevronDownIcon } from "@heroicons/vue/16/solid";
+import { CalendarDaysIcon, ListBulletIcon } from "@heroicons/vue/16/solid";
 import VenueCalendar from "../components/venues/VenueCalendar.vue";
 import VenueRequestRows from "../components/venues/VenueRequestRows.vue";
 import VenueMultiSelect from "../components/venues/VenueMultiSelect.vue";
 import BlockOutPanel from "../components/venues/BlockOutPanel.vue";
-import UnavailabilityCard from "../components/venues/UnavailabilityCard.vue";
-import VenueFormPanel from "../components/venues/VenueFormPanel.vue";
 import BufferOverlapList from "../components/venues/BufferOverlapList.vue";
 import {
   fetchBufferOverlaps,
-  fetchMyVenues,
   fetchPendingRequests,
   fetchStaffVenues,
   fetchVenueBookings,
@@ -20,11 +17,11 @@ import {
   type PendingVenueRequest,
   type StaffVenueOption,
   type VenueBooking,
-  type VenueRecord,
-  type VenueUpdateResult,
 } from "../lib/venuesApi";
+import { MAX_VENUES } from "../lib/venueCalendar";
 import {
   deleteUnavailability,
+  describeBlockOutResult,
   fetchUnavailability,
   type CreatePeriodResult,
   type UnavailabilityPeriod,
@@ -88,11 +85,16 @@ function queryDay(name: string): string {
 }
 const queryTab = queryParam("tab");
 
+/** The page shows either the calendar or the list of booking cards (the toggle); the list is the default. */
+type ViewMode = "calendar" | "list";
+const viewMode = ref<ViewMode>(queryParam("view") === "calendar" ? "calendar" : "list");
+
 const venues = ref<StaffVenueOption[]>([]);
 const venueCalendar = ref<InstanceType<typeof VenueCalendar> | null>(null);
 /**
- * Venues the calendar was filtered to, or null for "all my venues" (the default, so every request that
- * needs a decision is visible at a glance). Set only when the user changes the calendar's venues.
+ * Venues the schedule was filtered to (at most MAX_VENUES), or null for "all my venues" (the default, so
+ * every request that needs a decision is visible in the list at a glance). Set only when the user changes
+ * the venues. The calendar draws nothing for null: it needs venues chosen.
  */
 const filterIds = ref<number[] | null>(null);
 const scopeIds = computed(() => filterIds.value ?? venues.value.map((v) => v.id));
@@ -100,13 +102,11 @@ const scopeKey = computed(() => scopeIds.value.join(","));
 /** Where "Block out time" starts: the first venue in scope. */
 const venueId = computed(() => scopeIds.value[0] ?? null);
 const venueName = (id: number) => venues.value.find((v) => v.id === id)?.name ?? "Venue";
-/** The calendar stays empty until the filter names a venue or a date range. */
-const calendarActive = computed(() => filterIds.value !== null || rangeActive.value);
-/** The calendar draws at most four venues; the list below it covers every venue in scope. */
-const CALENDAR_VENUES = 4;
-const calendarVenues = computed(() =>
-  scopeIds.value.slice(0, CALENDAR_VENUES).flatMap((id) => venues.value.filter((v) => v.id === id)),
-);
+/** Every venue the filter covers. */
+const venuesInScope = computed(() => scopeIds.value.flatMap((id) => venues.value.filter((v) => v.id === id)));
+/** The calendar draws only venues the user picked; "All venues" leaves it empty with a prompt. */
+const calendarVenues = computed(() => (filterIds.value === null ? [] : venuesInScope.value));
+const CALENDAR_PROMPT = `Select up to ${MAX_VENUES} venues above to see the calendar.`;
 /** Optional date range for the lists below; empty means every booking, whenever it is. */
 const rangeFrom = ref(queryDay("from"));
 const rangeTo = ref(queryDay("to"));
@@ -231,6 +231,7 @@ function onDecided(message: string): void {
 
 /** The calendar's "Go to booking requests": open the Requests tab and bring it into view. */
 async function showRequests(): Promise<void> {
+  viewMode.value = "list";
   activeTab.value = "requested";
   await nextTick();
   document.getElementById("schedule-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -255,6 +256,16 @@ function formatLongDate(key: string): string {
 /** Times come from the event, which could in principle be missing one. */
 function formatTimeRange(start: string | null, end: string | null): string {
   return start && end ? `${start} ${end}` : "Not specified";
+}
+
+/** A block-out's days: one day, or the span of days. */
+function formatPeriodDays(period: UnavailabilityPeriod): string {
+  const { startDate, endDate } = period;
+  return startDate === endDate ? formatRowDate(startDate) : `${formatRowDate(startDate)} – ${formatRowDate(endDate)}`;
+}
+
+function formatPeriodHours(period: UnavailabilityPeriod): string {
+  return period.allDay ? "All day" : `${period.startTime} – ${period.endTime}`;
 }
 
 function formatAttendance(value: number | null): string {
@@ -373,20 +384,7 @@ function closeBlockOut(): void {
 function onBlockOutSaved(result: CreatePeriodResult): void {
   const verb = editingPeriod.value ? "Block-out updated." : "Period blocked out.";
   closeBlockOut();
-
-  const flagged = result.affected.filter((b) => b.replacementRequired).length;
-  const pending = result.affected.length - flagged;
-  if (result.affected.length === 0) {
-    notice.value = { text: `${verb} It shows as unavailable on the calendar.`, warning: false };
-  } else {
-    const parts = [];
-    if (flagged > 0) parts.push(`${flagged} booking${flagged === 1 ? "" : "s"} cancelled`);
-    if (pending > 0) parts.push(`${pending} pending request${pending === 1 ? "" : "s"} clash with it`);
-    const notified = result.notificationsFailed
-      ? "but we couldn't notify the coordinators — please let them know directly."
-      : `${result.coordinatorsNotified} coordinator${result.coordinatorsNotified === 1 ? "" : "s"} notified.`;
-    notice.value = { text: `${verb} ${parts.join("; ")}; ${notified}`, warning: result.notificationsFailed };
-  }
+  notice.value = describeBlockOutResult(result, verb);
   void loadUnavailability();
   void loadBookings();
   void venueCalendar.value?.refresh();
@@ -407,106 +405,24 @@ async function removePeriod(period: UnavailabilityPeriod): Promise<void> {
   }
 }
 
-// ---- E4-1: adding and editing venue records ----------------------------------
-
-const venueFormOpen = ref(false);
-/** The venue being edited in the drawer; null while adding a new one. */
-const editingVenue = ref<VenueRecord | null>(null);
-/** Venues this staff member looks after — the only ones they may edit. */
-const myVenues = ref<VenueRecord[]>([]);
-const myVenuesError = ref(false);
-const editMenuOpen = ref(false);
-const editMenu = ref<HTMLElement | null>(null);
-
-async function loadMyVenues(): Promise<void> {
-  try {
-    myVenues.value = await fetchMyVenues();
-    myVenuesError.value = false;
-  } catch {
-    myVenuesError.value = true;
-  }
-}
-
-function openAddVenue(): void {
-  editingVenue.value = null;
-  venueFormOpen.value = true;
-}
-
-function openEditVenue(venue: VenueRecord): void {
-  editMenuOpen.value = false;
-  editingVenue.value = venue;
-  venueFormOpen.value = true;
-}
-
-function closeVenueForm(): void {
-  venueFormOpen.value = false;
-  editingVenue.value = null;
-}
-
-/** The menu closes on Escape or a click anywhere outside it. */
-function onDocumentPointer(event: Event): void {
-  if (editMenuOpen.value && editMenu.value && !editMenu.value.contains(event.target as Node)) editMenuOpen.value = false;
-}
-
-function onMenuKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") editMenuOpen.value = false;
-}
-
-/** Reload both venue lists, then show `id`'s schedule with a notice. */
-async function afterVenueSaved(id: number, text: string, warning = false): Promise<void> {
-  closeVenueForm();
-  await Promise.all([
-    loadMyVenues(),
-    fetchStaffVenues()
-      .then((list) => {
-        venues.value = list;
-        venuesError.value = null;
-      })
-      .catch(() => undefined),
-  ]);
-  // A new venue joins the "all venues" scope on its own; a filtered view keeps its filter.
-  void id;
-  await nextTick();
-  notice.value = { text, warning };
-}
-
-function onVenueCreated(venue: VenueRecord): void {
-  void afterVenueSaved(venue.id, `${venue.name} added. Coordinators can find and book it straight away.`);
-}
-
-function onVenueUpdated(result: VenueUpdateResult): void {
-  const shortfalls = result.capacityShortfalls.length;
-  const overlaps = result.bufferOverlaps.length;
-  const parts = [];
-  if (shortfalls > 0) parts.push(`${shortfalls} confirmed event${shortfalls === 1 ? "" : "s"} no longer fit the capacity`);
-  if (overlaps > 0) parts.push(`${overlaps} pair${overlaps === 1 ? "" : "s"} of bookings now overlap`);
-  let text = `${result.venue.name} updated.`;
-  if (parts.length > 0) {
-    const notified = result.notificationsFailed
-      ? "but we couldn't notify the coordinators — please let them know directly."
-      : `${result.coordinatorsNotified} coordinator${result.coordinatorsNotified === 1 ? "" : "s"} notified.`;
-    text += ` ${parts.join("; ")}; ${notified}`;
-  }
-  void afterVenueSaved(result.venue.id, text, result.notificationsFailed);
-  // The schedule's bookings carry layouts/facilities derived from the venue.
-  void loadBookings();
-  // E4-13: the save may have changed which pairs overlap, and the scope may not change, so reload explicitly.
-  void loadBufferOverlaps();
-}
+// Adding, editing and blocking out venues now happen on the Venue catalogue page (VenueCatalogueView.vue).
 
 onMounted(() => {
-  void loadMyVenues();
   void loadPending();
-  document.addEventListener("pointerdown", onDocumentPointer);
 });
 
-onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPointer));
-
 // replace, not push: picking a date shouldn't add a history entry.
-watch([filterIds, rangeFrom, rangeTo, activeTab], ([ids, from, to, tab]) => {
-  const { venue: _venue, from: _from, to: _to, date: _date, ...rest } = route.query;
+watch([filterIds, rangeFrom, rangeTo, activeTab, viewMode], ([ids, from, to, tab, mode]) => {
+  const { venue: _venue, from: _from, to: _to, date: _date, view: _view, ...rest } = route.query;
   void router.replace({
-    query: { ...rest, ...(ids ? { venue: ids.join(",") } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}), tab },
+    query: {
+      ...rest,
+      ...(ids ? { venue: ids.join(",") } : {}),
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+      tab,
+      ...(mode === "calendar" ? { view: "calendar" } : {}),
+    },
   });
 });
 
@@ -518,7 +434,7 @@ onMounted(async () => {
       .split(",")
       .map(Number)
       .filter((id) => venues.value.some((venue) => venue.id === id));
-    if (fromQuery.length > 0) filterIds.value = fromQuery.slice(0, 4);
+    if (fromQuery.length > 0) filterIds.value = fromQuery.slice(0, MAX_VENUES);
   } catch {
     venuesError.value = "We couldn't load the venue list. Please refresh the page.";
   } finally {
@@ -530,11 +446,9 @@ onMounted(async () => {
 <template>
   <!--
     Column mapping — Venue Schedule
-    Desktop (12-col, grid-desktop-margin 80px): header col 1-12 (title left; on the right, "Add new venue" and
-      "Edit venue" and "Block out time" on one line); upcoming bookings col 1-12; calendar col 1-12;
-      block-out cards above the tabs.
-      The Block out time and Add new venue panels are overlay drawers outside this grid (mappings in
-      BlockOutPanel.vue and VenueFormPanel.vue).
+    Desktop (12-col, grid-desktop-margin 80px): header col 1-12 (title left; on the right, the "Venue catalogue"
+      link); upcoming bookings col 1-12; calendar col 1-12; block-out cards above the tabs.
+      The block-out editor is a modal outside this grid (mapping in BlockOutPanel.vue).
       Nested grid: each booking card's detail rows use a local 8-col grid (the schedule's span);
       time and attendance span 4 each, layout and facilities span 8.
     Tablet (6-col, grid-tablet-margin 32px): header, calendar and schedule each col 1-6, stacked.
@@ -547,44 +461,11 @@ onMounted(async () => {
         <h1 class="h2">Venue schedule</h1>
         <p class="subheading">Everything booked into your venues; narrow by venue or date range</p>
       </div>
-      <!-- Style.md 3.4: one solid action per view, so "Go to booking requests" is it; the rest are outline. -->
+      <!-- One link to where venues are added, edited and blocked out. -->
       <div class="header-actions">
-        <div class="venue-actions">
-        <AppButton variant="outline" type="button" @click="openAddVenue">Add new venue</AppButton>
-        <!--
-          E4-1: opens on hover (pointer devices) and on click/Enter (touch and keyboard), listing only the
-          venues this staff member looks after.
-        -->
-        <div ref="editMenu" class="edit-menu" @mouseenter="editMenuOpen = true" @mouseleave="editMenuOpen = false"
-          @keydown="onMenuKeydown">
-          <AppButton variant="outline" type="button" class="edit-menu__trigger" aria-haspopup="true"
-            :aria-expanded="editMenuOpen" aria-controls="edit-venue-menu" @click="editMenuOpen = true">
-            Edit venue
-            <ChevronDownIcon class="edit-menu__chevron" aria-hidden="true" />
-          </AppButton>
-          <div v-if="editMenuOpen" id="edit-venue-menu" class="edit-menu__popover">
-            <p class="edit-menu__heading">Your venues</p>
-            <p v-if="myVenuesError" class="edit-menu__empty">We couldn't load your venues.</p>
-            <p v-else-if="myVenues.length === 0" class="edit-menu__empty">
-              You don't look after any venues yet. Add one, or ask an admin to assign you.
-            </p>
-            <ul v-else class="edit-menu__list">
-              <li v-for="venue in myVenues" :key="venue.id">
-                <button type="button" class="edit-menu__item" @click="openEditVenue(venue)">
-                  <span class="edit-menu__name">{{ venue.name }}</span>
-                  <span class="edit-menu__meta">{{ venue.location }} · {{ venue.capacity }} people</span>
-                </button>
-              </li>
-            </ul>
-          </div>
-        </div>
-        </div>
-        <div class="main-actions">
-          <!-- E4-3: secondary action. -->
-          <AppButton variant="outline" v-if="venueId !== null" type="button" @click="openBlockOut()">
-            Block out time
-          </AppButton>
-        </div>
+        <AppButton variant="outline" :to="{ name: 'venue-catalogue' }" data-testid="venue-catalogue-link">
+          Venue catalogue
+        </AppButton>
       </div>
     </div>
 
@@ -597,14 +478,8 @@ onMounted(async () => {
 
     <template v-else>
       <section class="schedule" aria-live="polite" :aria-busy="loadingBookings">
-        <!-- Two columns: the schedule (about 70%) and a bulletin of unavailable periods (about 30%), starting level with the heading. -->
-        <div class="schedule__body">
-          <div class="schedule__main">
-        <div class="schedule__header">
-          <h2 class="h5 schedule__day">
-            {{ heading }}
-          </h2>
-          <!-- One filter for the list, the request rows and the calendar: every venue by default. -->
+        <!-- One filter for the list, the request cards and the calendar: every venue by default. -->
+        <div class="schedule__toolbar">
           <div class="range-filter" role="group" aria-label="Filter by venue and date range">
             <div class="range-filter__field">
               <span class="field-label">Venue</span>
@@ -622,12 +497,43 @@ onMounted(async () => {
               Clear dates
             </button>
           </div>
+
+          <div class="view-toggle" role="group" aria-label="Schedule view">
+            <button type="button" class="toggle-btn" :class="{ 'toggle-btn--active': viewMode === 'calendar' }"
+              :aria-pressed="viewMode === 'calendar'" data-testid="view-calendar" @click="viewMode = 'calendar'">
+              <CalendarDaysIcon class="toggle-btn__icon" aria-hidden="true" />
+              Calendar
+            </button>
+            <button type="button" class="toggle-btn" :class="{ 'toggle-btn--active': viewMode === 'list' }"
+              :aria-pressed="viewMode === 'list'" data-testid="view-list" @click="viewMode = 'list'">
+              <ListBulletIcon class="toggle-btn__icon" aria-hidden="true" />
+              List
+            </button>
+          </div>
         </div>
+
+        <!-- Where the calendar's rule is written down: it needs venues picked, up to four. -->
+        <p v-if="viewMode === 'calendar'" class="body-default muted calendar-hint" data-testid="calendar-venue-hint">
+          The calendar shows nothing for All venues, so select the venues you want to see.
+        </p>
 
         <p v-if="notice" class="notice" :class="{ 'notice--warning': notice.warning }" role="status">
           {{ notice.text }}
         </p>
         <p v-if="periodsError" class="body-default error-text">{{ periodsError }}</p>
+
+        <!-- E1-5: everything booked into the venues picked above (up to four). Nothing is drawn for "All venues". -->
+        <VenueCalendar v-if="viewMode === 'calendar'" ref="venueCalendar" :venues="calendarVenues"
+          :total="calendarVenues.length" :prompt="filterIds === null ? CALENDAR_PROMPT : undefined"
+          :day="rangeFrom || undefined" :from="rangeFrom || undefined" :to="rangeTo || undefined"
+          @show-requests="showRequests" />
+
+        <!-- List view: full-width sections, one under the other — upcoming bookings, unavailable, then (below) flagged pairs. -->
+        <div v-else class="schedule__sections">
+          <section class="schedule__section" aria-labelledby="upcoming-title">
+        <h2 id="upcoming-title" class="h5 schedule__day">
+          {{ heading }}
+        </h2>
 
         <div class="tabs" role="tablist" aria-label="Booking status">
           <button v-for="tab in TABS" :id="`tab-${tab.key}`" :key="tab.key" type="button" role="tab" class="tab"
@@ -709,29 +615,44 @@ onMounted(async () => {
           </template>
 
         </div>
-          </div>
+          </section>
 
           <!-- E4-3 AC1: block-outs, so an unavailable day is obvious whichever tab is open. -->
-          <aside class="schedule__aside" aria-label="Unavailable periods">
-            <h3 class="aside__title">Unavailable <span class="muted">({{ visiblePeriods.length }})</span></h3>
-            <ul v-if="visiblePeriods.length > 0" class="booking-list block-list">
-              <li v-for="period in visiblePeriods" :key="period.id">
-                <UnavailabilityCard compact :period="period" :venue-name="venueName(period.venueId)"
-                  :removing="removingId === period.id" @edit="openBlockOut(period)" @remove="removePeriod(period)" />
-              </li>
-            </ul>
+          <section class="schedule__section" aria-labelledby="unavailable-title">
+            <h2 id="unavailable-title" class="h5">Unavailable <span class="muted">({{ visiblePeriods.length }})</span></h2>
+            <!-- Same table as the bookings above, with a wider last column for the two buttons. -->
+            <div v-if="visiblePeriods.length > 0" class="block-list">
+              <ul class="rows rows--blocks">
+                <li class="rows__head" aria-hidden="true">
+                  <span>Dates</span><span>Hours</span><span>Venue</span><span>Reason</span><span />
+                </li>
+                <li v-for="period in visiblePeriods" :key="period.id" class="row" :data-testid="`block-${period.id}`">
+                  <div class="row__main">
+                    <span class="row__date">{{ formatPeriodDays(period) }}</span>
+                    <span class="row__time">{{ formatPeriodHours(period) }}</span>
+                    <span class="row__event">
+                      <span class="row__name">{{ venueName(period.venueId) }}</span>
+                    </span>
+                    <span class="row__people">{{ period.reason }}</span>
+                    <span class="row__actions">
+                      <AppButton variant="outline" size="sm" type="button" :disabled="removingId === period.id"
+                        :aria-label="`Edit the block-out on ${formatPeriodDays(period)}`" data-testid="edit-block"
+                        @click="openBlockOut(period)">
+                        Edit
+                      </AppButton>
+                      <AppButton variant="danger" size="sm" type="button" :disabled="removingId === period.id"
+                        :aria-label="`Remove the block-out on ${formatPeriodDays(period)}`" data-testid="remove-block"
+                        @click="removePeriod(period)">
+                        {{ removingId === period.id ? "Removing…" : "Remove" }}
+                      </AppButton>
+                    </span>
+                  </div>
+                </li>
+              </ul>
+            </div>
             <p v-else class="body-default muted">{{ filterIds === null ? "All your venues are available." : "All the selected venues are available." }}</p>
-          </aside>
+          </section>
         </div>
-      </section>
-
-      <!-- E1-5: everything booked into the staff member's venues, up to four at once. Its venue filter also narrows the lists below. -->
-      <section class="full-row" aria-label="Venue calendar">
-        <!-- Until a venue or a date range is chosen the list above covers everything and the calendar stays empty. -->
-        <VenueCalendar ref="venueCalendar" :venues="calendarActive ? calendarVenues : []" :total="scopeIds.length"
-          :day="rangeFrom || undefined" :from="rangeFrom || undefined" :to="rangeTo || undefined"
-          :prompt="calendarActive ? undefined : 'Choose a venue or a date range above to see it on the calendar.'"
-          @show-requests="showRequests" />
       </section>
 
       <!-- E4-13 AC2/AC3: persistent, self-reconciling — distinct from VenueFormPanel's one-shot edit warning. -->
@@ -743,9 +664,6 @@ onMounted(async () => {
     <BlockOutPanel v-if="panelOpen && venueId !== null" :key="editingPeriod?.id ?? 'new'" :venue-id="venueId"
       :venues="venues" :initial-date="today" :period="editingPeriod"
       @close="closeBlockOut" @saved="onBlockOutSaved" />
-
-    <VenueFormPanel v-if="venueFormOpen" :key="editingVenue?.id ?? 'new'" :venue="editingVenue"
-      @close="closeVenueForm" @created="onVenueCreated" @updated="onVenueUpdated" />
   </div>
 </template>
 
@@ -907,11 +825,13 @@ onMounted(async () => {
   background: var(--color-base-white);
 }
 
+/* Grey header row, like the app's other tables; its top corners follow the table's rounded border. */
 .rows__head {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--color-base-white);
+  background: var(--color-grey-50);
+  border-radius: calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px) 0 0;
 }
 
 .rows__head,
@@ -999,12 +919,75 @@ onMounted(async () => {
   }
 }
 
+/* Venue and dates on the left, the Calendar | List switch on the right, above whichever view is showing. */
+.schedule__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--spacing-16);
+  margin-bottom: var(--spacing-16);
+}
+
+.schedule__day {
+  margin-bottom: var(--spacing-16);
+}
+
 .range-filter {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: var(--spacing-12);
+}
+
+/* Same segmented switch as the Venue Availability page. */
+.view-toggle {
+  display: flex;
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+.toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  height: 40px;
+  padding: 0 var(--spacing-16);
+  border: none;
+  border-right: 1px solid var(--color-grey-200);
+  background: var(--color-base-white);
+  color: var(--color-grey-600);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  cursor: pointer;
+}
+
+.toggle-btn:last-child {
+  border-right: none;
+}
+
+.toggle-btn:hover:not(.toggle-btn--active) {
+  background: var(--color-grey-50);
+  color: var(--color-grey-900);
+}
+
+.toggle-btn--active {
+  background: var(--color-purple-100);
+  color: var(--color-purple-700);
+}
+
+.toggle-btn:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.toggle-btn__icon {
+  width: var(--spacing-16);
+  height: var(--spacing-16);
 }
 
 .range-filter__field {
@@ -1049,15 +1032,6 @@ onMounted(async () => {
 .is-stale {
   opacity: 0.6;
   transition: opacity 0.15s;
-}
-
-.booking-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-16);
-  list-style: none;
-  margin: 0;
-  padding: 0;
 }
 
 /* Expanded row details sit in a local 2-col grid (.row__details); mobile collapses it to 1 col. */
@@ -1139,112 +1113,8 @@ onMounted(async () => {
   gap: var(--spacing-8);
 }
 
-/* Add new venue, Edit venue and Block out time sit on one line (they wrap only when the screen is too narrow). */
-.venue-actions,
-.main-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-8);
-}
-
-/* E4-1: "Edit venue" menu of the staff member's own venues. */
-.edit-menu {
-  position: relative;
-}
-
-.edit-menu__trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--spacing-4);
-}
-
-.edit-menu__chevron {
-  width: var(--spacing-16);
-  height: var(--spacing-16);
-}
-
-/* Sits flush under the trigger (padding-top bridges the gap) so moving the pointer into it keeps it open. */
-.edit-menu__popover {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 30;
-  width: 280px;
-  max-width: calc(100vw - 2 * var(--grid-mobile-margin));
-  padding-top: var(--spacing-4);
-}
-
-.edit-menu__heading,
-.edit-menu__empty,
-.edit-menu__list {
-  margin: 0;
-  background: var(--color-base-white);
-  border-left: 1px solid var(--color-grey-100);
-  border-right: 1px solid var(--color-grey-100);
-}
-
-.edit-menu__heading {
-  padding: var(--spacing-12) var(--spacing-16) var(--spacing-4);
-  border-top: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  color: var(--color-grey-500);
-}
-
-.edit-menu__empty,
-.edit-menu__list {
-  border-bottom: 1px solid var(--color-grey-100);
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-  box-shadow: var(--shadow-popover);
-}
-
-.edit-menu__empty {
-  padding: var(--spacing-8) var(--spacing-16) var(--spacing-12);
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-  color: var(--color-grey-500);
-}
-
-.edit-menu__list {
-  max-height: 320px;
-  overflow-y: auto;
-  padding: var(--spacing-4) 0 var(--spacing-8);
-  list-style: none;
-}
-
-.edit-menu__item {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  width: 100%;
-  padding: var(--spacing-8) var(--spacing-16);
-  border: none;
-  background: transparent;
-  font-family: var(--font-family-lato);
-  text-align: left;
-  cursor: pointer;
-}
-
-.edit-menu__item:hover,
-.edit-menu__item:focus-visible {
-  background: var(--color-grey-75);
-  outline: none;
-}
-
-.edit-menu__name {
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  color: var(--color-grey-900);
-}
-
-.edit-menu__meta {
-  font-size: 0.75rem;
-  line-height: 1rem;
-  color: var(--color-grey-500);
+.calendar-hint {
+  margin: 0 0 var(--spacing-16);
 }
 
 .notice {
@@ -1264,16 +1134,30 @@ onMounted(async () => {
   color: var(--color-warning-900);
 }
 
-.schedule__body {
-  display: grid;
-  /* About 70/30: the bulletin gets room for its notes, the schedule keeps most of the width. */
-  grid-template-columns: minmax(0, 7fr) minmax(18rem, 3fr);
-  gap: var(--spacing-24);
-  align-items: start;
+/* List view: upcoming bookings, then unavailable — each section, and its table, the full width. */
+.schedule__sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-32);
 }
 
-.schedule__main {
+.schedule__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-12);
   min-width: 0;
+}
+
+/* The unavailable table is the bookings table's grid with a wider last column for Edit and Remove. */
+.rows--blocks .rows__head,
+.rows--blocks .row__main {
+  grid-template-columns: 7rem 7.5rem minmax(0, 1fr) 11rem 12rem;
+}
+
+.row__actions {
+  display: flex;
+  justify-self: end;
+  gap: var(--spacing-8);
 }
 
 .overdue-toggle {
@@ -1290,34 +1174,11 @@ onMounted(async () => {
   accent-color: var(--color-purple-600);
 }
 
-/* Both columns scroll at the same height, so the bulletin and the list stay level. */
+/* Long lists scroll inside their section instead of pushing the page. */
 .schedule__scroll,
 .block-list {
   max-height: 34rem;
   overflow-y: auto;
-}
-
-/* The bulletin keeps its own height so a long list of block-outs scrolls instead of pushing the page. */
-.schedule__aside {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-12);
-  min-width: 0;
-}
-
-.aside__title {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 2rem;
-  color: var(--color-grey-900);
-}
-
-@media (max-width: 1024px) {
-  .schedule__body {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
 }
 
 /* Style.md 3.5: Replacement Required badge. */
