@@ -119,7 +119,7 @@ describe("equipmentReadiness", () => {
   });
 
   it("has nothing outstanding when the organiser wrote NA or None", () => {
-    for (const requirements of ["NA", "None", "n/a", "", undefined]) {
+    for (const requirements of ["NA", "None", "n/a", "None required", "", undefined]) {
       expect(equipmentReadiness([], requirements)).toEqual({
         done: true,
         caption: "No equipment requested",
@@ -135,8 +135,8 @@ describe("equipmentReadiness", () => {
 
 describe("equipmentIsRequired", () => {
   it("is false for empty, NA, N/A, None, Nil and No, and true for anything else", () => {
-    for (const answer of ["", "NA", "N/A", "none", "Nil", "No", undefined, null]) expect(equipmentIsRequired(answer)).toBe(false);
-    for (const answer of ["123 Chairs, 20 Tables", "Projector"]) expect(equipmentIsRequired(answer)).toBe(true);
+    for (const answer of ["", "NA", "N/A", "none", "Nil", "No", "None required", "No equipment needed", "Not applicable", undefined, null]) expect(equipmentIsRequired(answer)).toBe(false);
+    for (const answer of ["123 Chairs, 20 Tables", "Projector", "No projector, but 10 chairs"]) expect(equipmentIsRequired(answer)).toBe(true);
   });
 });
 

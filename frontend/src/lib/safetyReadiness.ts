@@ -45,12 +45,20 @@ export function venueReadiness(bookings: EventVenueBooking[] | undefined): Readi
   return { done: approved > 0 && approved === counted.length, caption: parts.join(", "), needsAction };
 }
 
-/** What an organiser writes when they need no equipment. Mirrors events-service `equipmentIsRequired`. */
-const NO_EQUIPMENT_ANSWERS: ReadonlySet<string> = new Set(["", "na", "none", "nil", "no"]);
+/**
+ * What an organiser writes when they need no equipment: "NA", "N/A", "None", "Nil", "No", "Nothing", "Not
+ * applicable", optionally followed by filler such as "required", "needed" or "equipment" ("None required").
+ * Mirrors events-service `equipmentIsRequired`.
+ */
+const NO_EQUIPMENT_ANSWER = /^(?:|na|n a|none|nil|nothing|no|not applicable|not required)(?: (?:required|needed|equipment|requirements?|needs?))*$/;
 
-/** Whether the organiser's Equipment Requirements text asks for any equipment (empty, NA, None, Nil and No don't). */
+/** Whether the organiser's Equipment Requirements text asks for any equipment. */
 export function equipmentIsRequired(requirements: string | null | undefined): boolean {
-  return !NO_EQUIPMENT_ANSWERS.has((requirements ?? "").toLowerCase().replace(/[^a-z0-9]/g, ""));
+  const answer = (requirements ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return !NO_EQUIPMENT_ANSWER.test(answer);
 }
 
 /**

@@ -271,7 +271,7 @@ describe("POST /api/events/:id/submit-safety-review (E3-4)", () => {
   });
 
   it("AC4: allows an event whose Equipment Requirements say NA or None", async () => {
-    for (const equipment of ["NA", "n/a", "None", "  "]) {
+    for (const equipment of ["NA", "n/a", "None", "None required", "  "]) {
       const { app } = buildApp({
         event: { id: 7, status: "Planning", coordinator_id: coordinator.id, submitted_details: { equipment } },
         equipmentRequests: [],
@@ -406,13 +406,13 @@ describe("findOutstandingArrangements", () => {
 
 describe("equipmentIsRequired", () => {
   it("treats empty, NA, N/A, None, Nil and No as no equipment, in any case", () => {
-    for (const answer of ["", "  ", "NA", "n/a", "N.A.", "None", "nil", "No", undefined, null]) {
+    for (const answer of ["", "  ", "NA", "n/a", "N.A.", "None", "nil", "No", "None required", "No equipment needed", "Not applicable", "Nothing", undefined, null]) {
       expect(equipmentIsRequired(answer)).toBe(false);
     }
   });
 
   it("treats anything else as equipment", () => {
-    for (const answer of ["123 Chairs, 20 Tables", "Projector", "None of the usual, but 2 mics"]) {
+    for (const answer of ["123 Chairs, 20 Tables", "Projector", "None of the usual, but 2 mics", "No projector, but 10 chairs"]) {
       expect(equipmentIsRequired(answer)).toBe(true);
     }
   });

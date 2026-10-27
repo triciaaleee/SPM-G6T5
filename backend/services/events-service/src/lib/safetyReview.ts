@@ -39,16 +39,21 @@ export interface OutstandingArrangements {
   equipmentNotArranged: string | null;
 }
 
-/** What an organiser writes when they need no equipment. Compared lower-case, ignoring punctuation and spacing. */
-const NO_EQUIPMENT_ANSWERS: ReadonlySet<string> = new Set(["", "na", "none", "nil", "no"]);
-
 /**
- * Whether the organiser's Equipment Requirements text asks for any equipment.
- * Empty, "NA", "N/A", "None", "Nil" and "No" (any case) mean it doesn't.
+ * What an organiser writes when they need no equipment: "NA", "N/A", "None", "Nil", "No", "Nothing", "Not
+ * applicable", optionally followed by filler such as "required", "needed" or "equipment" ("None required",
+ * "No equipment needed"). Matched on the whole answer after lower-casing and dropping punctuation, so "None of the
+ * usual, but 2 mics" still counts as a request for equipment.
  */
+const NO_EQUIPMENT_ANSWER = /^(?:|na|n a|none|nil|nothing|no|not applicable|not required)(?: (?:required|needed|equipment|requirements?|needs?))*$/;
+
+/** Whether the organiser's Equipment Requirements text asks for any equipment. */
 export function equipmentIsRequired(requirements: string | null | undefined): boolean {
-  const answer = (requirements ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  return !NO_EQUIPMENT_ANSWERS.has(answer);
+  const answer = (requirements ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return !NO_EQUIPMENT_ANSWER.test(answer);
 }
 
 /**
