@@ -40,10 +40,12 @@ const props = withDefaults(
     /** This event's venue bookings and equipment requests; undefined while they are still loading. */
     venueBookings?: EventVenueBooking[];
     equipmentRequests?: EquipmentRequest[];
+    /** The organiser's Equipment Requirements text; NA / None means no equipment is needed. */
+    equipmentRequirements?: string;
     /** Only the assigned coordinator submits; everyone else sees the checklist read-only. */
     canSubmit?: boolean;
   }>(),
-  { venueBookings: undefined, equipmentRequests: undefined, canSubmit: true },
+  { venueBookings: undefined, equipmentRequests: undefined, equipmentRequirements: undefined, canSubmit: true },
 );
 
 const emit = defineEmits<{ submitted: [event: EventSummary] }>();
@@ -107,8 +109,8 @@ function formatTimestamp(value: string): string {
 }
 
 const venues = computed(() => venueReadiness(props.venueBookings));
-const equipment = computed(() => equipmentReadiness(props.equipmentRequests));
-const ready = computed(() => isReadyForSafetyReview(props.venueBookings, props.equipmentRequests));
+const equipment = computed(() => equipmentReadiness(props.equipmentRequests, props.equipmentRequirements));
+const ready = computed(() => isReadyForSafetyReview(props.venueBookings, props.equipmentRequests, props.equipmentRequirements));
 
 type CheckState = "done" | "action" | "pending";
 

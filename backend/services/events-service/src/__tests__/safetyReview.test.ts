@@ -3,7 +3,7 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
-import { findOutstandingArrangements, parseSafetyNotes } from "../lib/safetyReview.js";
+import { equipmentIsRequired, findOutstandingArrangements, parseSafetyNotes } from "../lib/safetyReview.js";
 import type { ArrangementBooking, ArrangementEquipmentRequest } from "../lib/arrangementsClient.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
@@ -49,7 +49,13 @@ afterEach(() => {
 function buildApp(
   options: {
     user?: { id: string; role: string };
-    event?: { id: number; status: string; coordinator_id: string | null; organiser_id?: string | null } | null;
+    event?: {
+      id: number;
+      status: string;
+      coordinator_id: string | null;
+      organiser_id?: string | null;
+      submitted_details?: Record<string, unknown>;
+    } | null;
     bookings?: ArrangementBooking[];
     equipmentRequests?: ArrangementEquipmentRequest[];
     venueServiceFails?: boolean;
@@ -251,6 +257,37 @@ describe("POST /api/events/:id/submit-safety-review (E3-4)", () => {
     expect((await submit(app)).status).toBe(200);
   });
 
+  it("AC3: blocks when the organiser asked for equipment but no request has been recorded", async () => {
+    const { app, rpc } = buildApp({
+      event: { id: 7, status: "Planning", coordinator_id: coordinator.id, submitted_details: { equipment: "123 Chairs, 20 Tables" } },
+      equipmentRequests: [],
+    });
+    const res = await submit(app);
+
+    expect(res.status).toBe(409);
+    expect(res.body.outstanding.equipmentNotArranged).toBe("123 Chairs, 20 Tables");
+    expect(res.body.error).toContain("the requested equipment (123 Chairs, 20 Tables) hasn't been arranged yet");
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("AC4: allows an event whose Equipment Requirements say NA or None", async () => {
+    for (const equipment of ["NA", "n/a", "None", "None required", "  "]) {
+      const { app } = buildApp({
+        event: { id: 7, status: "Planning", coordinator_id: coordinator.id, submitted_details: { equipment } },
+        equipmentRequests: [],
+      });
+      expect((await submit(app)).status).toBe(200);
+    }
+  });
+
+  it("AC3: allows an event that asked for equipment once it is fully reserved", async () => {
+    const { app } = buildApp({
+      event: { id: 7, status: "Planning", coordinator_id: coordinator.id, submitted_details: { equipment: "Chairs" } },
+      equipmentRequests: [equipmentRequest(9, [["Chairs", 123, 123]])],
+    });
+    expect((await submit(app)).status).toBe(200);
+  });
+
   it("AC5: requires every safety note, reporting each missing one", async () => {
     const { app, rpc, fetchMock } = buildApp();
     const res = await submit(app, { safetyNotes: { ...notes, crowdMovement: "  ", venueRestrictions: "" } });
@@ -355,7 +392,7 @@ describe("POST /api/events/:id/submit-safety-review (E3-4)", () => {
 describe("findOutstandingArrangements", () => {
   it("counts an event with only settled-but-not-approved bookings as having no venue", () => {
     const outstanding = findOutstandingArrangements([booking(1, "Withdrawn"), booking(2, "Expired")], []);
-    expect(outstanding).toEqual({ noApprovedVenue: true, bookings: [], equipment: [] });
+    expect(outstanding).toEqual({ noApprovedVenue: true, bookings: [], equipment: [], equipmentNotArranged: null });
   });
 
   it("checks items across every equipment request", () => {
@@ -364,6 +401,25 @@ describe("findOutstandingArrangements", () => {
       [equipmentRequest(1, [["Projector", 1, 1]]), equipmentRequest(2, [["Stage lights", 6, 3]])],
     );
     expect(outstanding.equipment).toEqual([{ requestId: 2, equipmentType: "Stage lights", quantity: 6, quantityReserved: 3 }]);
+  });
+});
+
+describe("equipmentIsRequired", () => {
+  it("treats empty, NA, N/A, None, Nil and No as no equipment, in any case", () => {
+    for (const answer of ["", "  ", "NA", "n/a", "N.A.", "None", "nil", "No", "None required", "No equipment needed", "Not applicable", "Nothing", undefined, null]) {
+      expect(equipmentIsRequired(answer)).toBe(false);
+    }
+  });
+
+  it("treats anything else as equipment", () => {
+    for (const answer of ["123 Chairs, 20 Tables", "Projector", "None of the usual, but 2 mics", "No projector, but 10 chairs"]) {
+      expect(equipmentIsRequired(answer)).toBe(true);
+    }
+  });
+
+  it("ignores cancelled requests when deciding whether any has been recorded", () => {
+    const cancelled = { ...equipmentRequest(3, [["Chairs", 5, 0]]), status: "Cancelled" };
+    expect(findOutstandingArrangements([booking(1, "Approved")], [cancelled], "Chairs").equipmentNotArranged).toBe("Chairs");
   });
 });
 

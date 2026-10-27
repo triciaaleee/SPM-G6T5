@@ -346,6 +346,46 @@ describe("EventDetailView — edit history empty state", () => {
   });
 });
 
+describe("EventDetailView — registration period for the organiser (E6)", () => {
+  const organiser = { id: "ORG-0001", role: "organiser" };
+  const asked = (overrides: Partial<EventSummary> = {}) =>
+    makeEvent({
+      status: "Confirmed",
+      registration_open_date: "2026-11-15",
+      submitted_details: {
+        name: "Spring Gala",
+        proposedDate: "2026-12-20",
+        startTime: "10:00",
+        endTime: "18:00",
+        expectedAttendance: 200,
+        registrationNeeded: true,
+      },
+      ...overrides,
+    });
+
+  it("shows the organiser when registration opens, with no controls", async () => {
+    const wrapper = await mountPage(asked(), organiser);
+    const card = wrapper.get('[data-testid="registration-period"]');
+    expect(card.text()).toContain("November 15, 2026");
+    expect(card.findAll("button, input")).toHaveLength(0);
+    expect(wrapper.find('[data-testid="registration-controls"]').exists()).toBe(false);
+  });
+
+  it("is hidden when the event doesn't need registration", async () => {
+    const event = asked();
+    const wrapper = await mountPage(
+      { ...event, submitted_details: { ...(event.submitted_details as Record<string, unknown>), registrationNeeded: false } },
+      organiser,
+    );
+    expect(wrapper.find('[data-testid="registration-period"]').exists()).toBe(false);
+  });
+
+  it("isn't shown to the coordinator, who has the controls instead", async () => {
+    const wrapper = await mountPage(asked());
+    expect(wrapper.find('[data-testid="registration-period"]').exists()).toBe(false);
+  });
+});
+
 describe("EventDetailView — registrations (E3-5 AC3)", () => {
   function withRegistration(status: string) {
     const event = makeEvent({ status });
