@@ -157,3 +157,17 @@ describe("eventsClient", () => {
     });
   });
 });
+
+describe("fetchVenueBookingInfo with nothing to ask for", () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("answers ok with no events and never calls events-service", async () => {
+    expect(await fetchVenueBookingInfo([], "Bearer t")).toEqual({ status: "ok", events: [] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

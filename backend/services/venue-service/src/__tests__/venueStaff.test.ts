@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { assignedVenueIds, isAssignedToVenue } from "../lib/venueStaff.js";
+import { createFakeDb } from "./helpers/fakeDb.js";
 
 /** Chainable supabase stub: every builder method returns itself, the chain resolves to `result`. */
 function stub(result: { data: unknown; error: unknown }) {
@@ -49,5 +50,14 @@ describe("isAssignedToVenue", () => {
     expect(await isAssignedToVenue(stub({ data: null, error: { message: "x" } }) as never, "VEN-0001", 3)).toEqual({
       status: "error",
     });
+  });
+});
+
+describe("isAssignedToVenue asks only for the venue id", () => {
+  it("selects just id, and reads assignment from the row existing", async () => {
+    const db = createFakeDb({ venues: [{ id: 1, staff_id: "S1", name: "Hall" }] });
+    expect(await isAssignedToVenue(db as never, "S1", 1)).toEqual({ status: "ok", assigned: true });
+    expect(await isAssignedToVenue(db as never, "S2", 1)).toEqual({ status: "ok", assigned: false });
+    expect(db.calls.map((c) => c.columns)).toEqual(["id", "id"]);
   });
 });

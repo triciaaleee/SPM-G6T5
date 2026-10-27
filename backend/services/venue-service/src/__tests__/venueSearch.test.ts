@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { activeCriteria, searchVenues, type VenueRow, type VenueSearchCriteria } from "../lib/venueSearch.js";
-import { occupiedWindow, periodBlocksSlot } from "../lib/unavailability.js";
+import {
+  activeCriteria,
+  isRealDate,
+  parseVenueSearch,
+  searchVenues,
+  type VenueRow,
+  type VenueSearchCriteria,
+} from "../lib/venueSearch.js";
 
 /**
- * Mutation-run follow-ups: the exact labels offered when a search finds
- * nothing, which criteria count as "active", and the seconds-tolerant time
- * handling in the block-out helpers.
+ * Venue search: which criteria count as "active", the exact labels offered
+ * when a search finds nothing, free-text matching, and how the query string
+ * is parsed (dates, times, blanks).
  */
 
 const venues: VenueRow[] = [
@@ -108,30 +114,69 @@ describe("searchVenues: what to relax when nothing matches", () => {
   });
 });
 
-describe("block-out helpers accept times with seconds", () => {
-  const buffers = { setupMinutes: 30, turnaroundMinutes: 45 };
+describe("venue search: date, time and blank handling", () => {
+  const search = (q: Record<string, unknown>) => parseVenueSearch(q);
 
-  it("occupiedWindow reads HH:MM:SS the same as HH:MM", () => {
-    expect(occupiedWindow("10:00:00", "12:00:00", buffers)).toEqual({ start: "09:30", end: "12:45" });
-    expect(occupiedWindow("10:00", "12:00", buffers)).toEqual({ start: "09:30", end: "12:45" });
+  it.each(["2026-11-10x", "x2026-11-10", "2026-1-10", "2026-11-1", "2026-11-10 ", "2026-02-30", "26-11-10"])(
+    "date %j is not a real date",
+    (date) => {
+      const trimmed = date.trim();
+      // A trailing space is trimmed by the parser, so that one is valid.
+      if (trimmed === "2026-11-10") {
+        expect(search({ date })).toEqual({ valid: true, criteria: { date: "2026-11-10" } });
+      } else {
+        expect(search({ date })).toEqual({ valid: false, fields: { date: "Date must be a valid date (YYYY-MM-DD)" } });
+      }
+    },
+  );
+
+  it("isRealDate demands the exact YYYY-MM-DD shape", () => {
+    expect(isRealDate("2026-11-10")).toBe(true);
+    for (const bad of ["2026-11-10x", "x2026-11-10", "2026-11-10T00:00", "2026-1-1", "", " 2026-11-10"]) {
+      expect(isRealDate(bad)).toBe(false);
+    }
   });
 
-  it("occupiedWindow clamps to the day and passes missing times through", () => {
-    expect(occupiedWindow("00:10", "23:50", buffers)).toEqual({ start: "00:00", end: "24:00" });
-    expect(occupiedWindow(null, "12:00", buffers)).toEqual({ start: null, end: null });
-    expect(occupiedWindow("10:00", undefined, buffers)).toEqual({ start: null, end: null });
+  it.each(["10:00x", "x10:00", "1:00", "10:0", "24:00", "10:60"])("start time %j is rejected", (startTime) => {
+    expect(search({ date: "2026-11-10", startTime, endTime: "23:00" })).toEqual({
+      valid: false,
+      fields: { startTime: "Start time must be HH:MM" },
+    });
   });
 
-  const timed = { startDate: "2026-11-10", endDate: "2026-11-10", allDay: false, startTime: "09:00", endTime: "13:00" };
+  it.each(["11:00x", "x11:00", "1:00", "11:0", "24:00", "11:60"])("end time %j is rejected", (endTime) => {
+    expect(search({ date: "2026-11-10", startTime: "10:00", endTime })).toEqual({
+      valid: false,
+      fields: { endTime: "End time must be HH:MM" },
+    });
+  });
 
-  it("periodBlocksSlot: a slot that only touches the block does not clash, with or without seconds", () => {
-    // Block 09:00-13:00; slot starts as it ends / ends as it starts.
-    expect(periodBlocksSlot(timed, "2026-11-10", "13:00", "14:00")).toBe(false);
-    expect(periodBlocksSlot(timed, "2026-11-10", "13:00:00", "14:00:00")).toBe(false);
-    expect(periodBlocksSlot(timed, "2026-11-10", "08:00", "09:00")).toBe(false);
-    expect(periodBlocksSlot(timed, "2026-11-10", "08:00:00", "09:00:00")).toBe(false);
-    // One minute of overlap on either side clashes.
-    expect(periodBlocksSlot(timed, "2026-11-10", "12:59:00", "14:00:00")).toBe(true);
-    expect(periodBlocksSlot(timed, "2026-11-10", "08:00:00", "09:01:00")).toBe(true);
+  it("a whitespace-only value is the same as not sending it", () => {
+    expect(search({ date: "   ", startTime: "  ", endTime: "\t", q: "  ", attendance: " ", locations: " , " })).toStrictEqual({
+      valid: true,
+      criteria: {},
+    });
+  });
+
+  it("an absent q or list leaves no key on the criteria at all", () => {
+    const result = search({ date: "2026-11-10" });
+    expect(result.valid && Object.keys(result.criteria)).toEqual(["date"]);
+    const withQ = search({ q: " hall ", layouts: "Theatre, Banquet" });
+    expect(withQ).toStrictEqual({ valid: true, criteria: { q: "hall", layouts: ["Theatre", "Banquet"] } });
+  });
+});
+
+describe("search text", () => {
+  const venue = (o: Partial<VenueRow>): VenueRow => ({
+    id: 1, name: "Alpha", location: "North", description: null, capacity: 10, accessibility: [], layouts: [], facilities: [], ...o,
+  });
+
+  it("a venue with no description is found by its name and location but never by filler text", () => {
+    const v = venue({});
+    const ids = (q: string) => searchVenues([v], { q }, new Set()).venues.map((x) => x.id);
+    expect(ids("alpha")).toEqual([1]);
+    expect(ids("north")).toEqual([1]);
+    expect(ids("stryker")).toEqual([]);
+    expect(ids("was here")).toEqual([]);
   });
 });

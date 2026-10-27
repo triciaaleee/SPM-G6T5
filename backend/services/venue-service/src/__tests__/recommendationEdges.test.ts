@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { extractFeatures, extractLayoutAndFacilities, extractRequirements, isNoPreference, scheduleQuery } from "../lib/venueRecommendation.js";
-import { searchVenues, type VenueRow } from "../lib/venueSearch.js";
+import {
+  extractFeatures,
+  extractLayoutAndFacilities,
+  extractRequirements,
+  isNoPreference,
+  scheduleQuery,
+  withFeatures,
+} from "../lib/venueRecommendation.js";
+import { OPTION_CATALOGUE, searchVenues, type VenueRow } from "../lib/venueSearch.js";
 
 describe("isNoPreference", () => {
   it.each(["", "   ", "n/a", "NA", "None", "no", "nope", "---", "Not applicable", "no preference", "No requirements", "not needed.", "Not required"])("%j means no preference", (v) => {
@@ -65,5 +72,347 @@ describe("searchVenues with empty feature lists", () => {
   const v = (id: number): VenueRow => ({ id, name: `V${id}`, location: "L", description: null, capacity: 10, accessibility: [], layouts: [], facilities: [], setup_minutes: 0, turnaround_minutes: 0 } as never);
   it("an empty list is no constraint, undefined too", () => {
     expect(searchVenues([v(1), v(2)], { facilities: [], layouts: undefined }, new Set()).venues.map((x) => x.id)).toEqual([1, 2]);
+  });
+});
+
+/**
+ * Mutation-run follow-ups for the free-text reader. The phrasebook is spelled
+ * out here in full, and each phrase is checked on its own, so emptying or
+ * editing any entry changes an answer.
+ */
+
+type Group = "accessibility" | "layouts" | "facilities";
+const GROUPS: Group[] = ["accessibility", "layouts", "facilities"];
+
+/** What the reader is supposed to understand: each catalogue value and the other ways people write it. */
+const PHRASEBOOK: Record<string, string[]> = {
+  "Wheelchair access": ["wheelchair accessible", "wheelchair", "wheelchairs"],
+  "Step-free entry": ["step-free", "step free", "stepless"],
+  "Ramp access": ["ramp", "ramps"],
+  "Lift access": ["lift", "lifts", "elevator", "elevators"],
+  "Accessible toilets": ["accessible toilet", "accessible restroom", "accessible washroom", "disabled toilet"],
+  "Accessible parking": ["disabled parking", "handicap parking"],
+  "Accessible seating": ["wheelchair seating", "wheelchair spaces"],
+  "Hearing loop": ["induction loop", "hearing assistance"],
+  "Braille signage": ["braille"],
+  "Quiet room": ["quiet space", "sensory room"],
+  "Service animals welcome": ["service animal", "guide dog", "assistance dog"],
+  Theatre: ["theater", "theatre-style", "theatre style", "theater-style", "theater style"],
+  Classroom: ["classroom-style", "classroom style"],
+  Banquet: ["banquet-style", "banquet style"],
+  Cabaret: ["cabaret-style", "cabaret style"],
+  Boardroom: ["boardroom-style", "boardroom style"],
+  "U-shape": ["u-shaped", "u shape", "u shaped"],
+  "Reception (standing)": ["reception", "standing reception", "standing room", "standing event", "standing only"],
+  "Open floor": ["open-floor", "open floor plan"],
+  Screen: ["projection screen", "screens"],
+  "PA system": ["public address", "p.a. system", "sound system"],
+  Microphones: ["microphone", "mic", "mics", "wireless mic"],
+  "Lighting rig": ["stage lighting", "lighting equipment"],
+  "Livestream equipment": ["livestream", "livestreaming", "live stream", "live-stream", "live streaming"],
+  "Video conferencing": ["video conference", "videoconferencing", "video call", "zoom"],
+  "Wi-Fi": ["wifi", "wi fi", "wireless internet", "internet access"],
+  "Power outlets": ["power outlet", "power socket", "power sockets", "power point", "power points"],
+  Whiteboard: ["white board"],
+  "Air conditioning": ["air-conditioned", "air conditioned", "aircon", "air-con", "air con"],
+  "Catering kitchen": ["kitchen"],
+  "Registration desk": ["registration table", "check-in desk", "check-in counter", "reception desk"],
+  Cloakroom: ["coat check"],
+  "Green room": ["greenroom"],
+  "Outdoor space": ["outdoor", "outdoors"],
+  Parking: ["car park", "carpark"],
+};
+
+const groupOf = (value: string): Group => {
+  const group = GROUPS.find((g) => (OPTION_CATALOGUE[g] as readonly string[]).includes(value));
+  if (!group) throw new Error(`${value} is not in the catalogue`);
+  return group;
+};
+const none = { accessibility: [], layouts: [], facilities: [] };
+const only = (value: string) => ({ ...none, [groupOf(value)]: [value] });
+
+const venueWith = (features: Partial<Record<Group, string[]>>): VenueRow => ({
+  id: 1,
+  name: "V",
+  location: "L",
+  description: null,
+  capacity: 10,
+  accessibility: [],
+  layouts: [],
+  facilities: [],
+  ...features,
+});
+
+describe("every phrase in the phrasebook maps to its catalogue value", () => {
+  const cases = Object.entries(PHRASEBOOK).flatMap(([value, phrases]) => [value.toLowerCase(), ...phrases].map((phrase) => [value, phrase] as const));
+
+  it.each(cases)("%s <- %j", (value, phrase) => {
+    expect(extractFeatures(`We will need ${phrase} please`)).toEqual(only(value));
+  });
+
+  it.each(cases)("%s <- %j, even in capitals and next to punctuation", (value, phrase) => {
+    expect(extractFeatures(`(${phrase.toUpperCase()}).`)).toEqual(only(value));
+  });
+
+  it("every catalogue value has a row in this phrasebook or is deliberately absent", () => {
+    const withoutAliases = Object.values(OPTION_CATALOGUE).flat().filter((value) => !(value in PHRASEBOOK));
+    // These have no alternative spellings; they are matched by their own name only.
+    expect(withoutAliases).toEqual(["Hollow square", "Projector", "Stage"]);
+  });
+
+  it("the catalogue name itself matches, with hyphen/space swaps and a plural", () => {
+    expect(extractFeatures("projectors")).toEqual(only("Projector"));
+    expect(extractFeatures("hollow-square seating")).toEqual(only("Hollow square"));
+    expect(extractFeatures("hollow  square seating")).toEqual(only("Hollow square"));
+    expect(extractFeatures("stages")).toEqual(only("Stage"));
+  });
+
+  it("does not match inside a longer word", () => {
+    expect(extractFeatures("unstaged")).toEqual(none);
+    expect(extractFeatures("projectorium")).toEqual(none);
+    expect(extractFeatures("xramp")).toEqual(none);
+    expect(extractFeatures("1ramp")).toEqual(none);
+    expect(extractFeatures("ramp9")).toEqual(none);
+  });
+});
+
+describe("longest phrase wins, so a shorter one inside it is not counted again", () => {
+  it.each([
+    ["accessible parking", only("Accessible parking")],
+    ["wheelchair seating", only("Accessible seating")],
+    ["reception desk", only("Registration desk")],
+    ["disabled parking", only("Accessible parking")],
+    ["stage lighting", only("Lighting rig")],
+    ["projection screen", only("Screen")],
+  ])("%s", (text, expected) => {
+    expect(extractFeatures(text)).toEqual(expected);
+  });
+
+  it("but still reads the short one when it stands alone", () => {
+    expect(extractFeatures("accessible parking and parking")).toEqual({ ...none, accessibility: ["Accessible parking"], facilities: ["Parking"] });
+  });
+});
+
+describe("answers that mean 'no preference'", () => {
+  it.each(["none", "None.", "N/A", "n/a", "na", "NA.", "nil", "no", "No", "nope", "-", "---", "not applicable", "no preference", "no requirement", "no requirements", "not required", "not needed", "  none  ", "", "   "])(
+    "%j is no preference",
+    (text) => {
+      expect(isNoPreference(text)).toBe(true);
+    },
+  );
+
+  it.each(["nonexistent", "no ramp", "none needed", "x none", "none x", "nope!!", "n/a ok", "no preferences", "not requiredx", "xno", "--a", "a--", "no.."])(
+    "%j is not",
+    (text) => {
+      expect(isNoPreference(text)).toBe(false);
+    },
+  );
+
+  it("anything that is not a string is no preference", () => {
+    for (const value of [undefined, null, 5, {}, [], true]) expect(isNoPreference(value)).toBe(true);
+  });
+
+  it("a no-preference answer finds nothing, a longer sentence that merely starts with one is still read", () => {
+    expect(extractFeatures("none")).toEqual(none);
+    expect(extractFeatures("no preference, but we need a ramp")).toEqual(only("Ramp access"));
+  });
+});
+
+describe("main features: only these filter the recommendations", () => {
+  const MAIN: Record<Group, string[]> = {
+    accessibility: ["Wheelchair access", "Step-free entry", "Lift access", "Accessible toilets", "Hearing loop"],
+    layouts: [...OPTION_CATALOGUE.layouts],
+    facilities: ["Projector", "Screen", "PA system", "Microphones", "Stage", "Lighting rig", "Livestream equipment", "Video conferencing", "Catering kitchen", "Outdoor space"],
+  };
+  const all = GROUPS.flatMap((group) => (OPTION_CATALOGUE[group] as readonly string[]).map((value) => [group, value] as const));
+
+  it.each(all)("%s: %s", (group, value) => {
+    const field = group === "accessibility" ? "accessibility" : group === "layouts" ? "venue" : "equipment";
+    const result = extractRequirements({ [field]: value });
+    const expected = MAIN[group].includes(value) ? [value] : [];
+    expect(result[group]).toEqual(expected);
+    for (const other of GROUPS.filter((g) => g !== group)) expect(result[other]).toEqual([]);
+  });
+
+  it("reads all four text fields and keeps the order the organiser wrote them", () => {
+    const result = extractRequirements({
+      venue: "Banquet",
+      accessibility: "ramp, lift, wheelchair access",
+      equipment: "a stage then a projector",
+      technicalSupport: "live streaming",
+    });
+    expect(result.layouts).toEqual(["Banquet"]);
+    expect(result.accessibility).toEqual(["Lift access", "Wheelchair access"]);
+    expect(result.facilities).toEqual(["Stage", "Projector", "Livestream equipment"]);
+  });
+});
+
+describe("negation", () => {
+  it.each([
+    "no projector",
+    "not projector",
+    "without a projector",
+    "except the projector",
+    "don't need a projector",
+    "dont need a projector",
+    "doesn't need a projector",
+    "doesnt need a projector",
+    "won't need a projector",
+    "wont need a projector",
+    "needn't have a projector",
+    "neednt have a projector",
+    "No Projector",
+  ])("%j finds no projector", (text) => {
+    expect(extractFeatures(text)).toEqual(none);
+  });
+
+  it("is not fooled by words that merely contain a negation word", () => {
+    for (const text of ["casino projector", "nothing but a projector", "knot projector", "notable projector", "innovation projector"]) {
+      expect(extractFeatures(text)).toEqual(only("Projector"));
+    }
+  });
+
+  it("only looks at the last four words of the clause", () => {
+    expect(extractFeatures("no a b c projector")).toEqual(none); // the negation is the 4th word back
+    expect(extractFeatures("no a b c d projector")).toEqual(only("Projector")); // the 5th: out of range
+  });
+
+  it.each([".", ",", ";", ":", "!", "?", "(", ")", "\n"])("a %j ends the negation", (mark) => {
+    expect(extractFeatures(`no stage${mark} projector`)).toEqual(only("Projector"));
+  });
+
+  it("negates one mention and still reads a later one", () => {
+    expect(extractFeatures("no projector. we do need a projector")).toEqual(only("Projector"));
+    expect(extractFeatures("no ramp, ramp needed")).toEqual(only("Ramp access"));
+  });
+
+  it("a negated feature next to a wanted one keeps only the wanted one", () => {
+    expect(extractFeatures("projector but no stage")).toEqual({ ...none, facilities: ["Projector"] });
+  });
+});
+
+describe("how the text is cleaned before it is read", () => {
+  it.each(["‐", "‑", "‒", "–", "—", "―"])("treats %j as a hyphen", (dash) => {
+    expect(extractFeatures(`ramp${dash}lift`)).toEqual({ ...none, accessibility: ["Ramp access", "Lift access"] });
+    expect(extractFeatures(`step${dash}free`)).toEqual(only("Step-free entry"));
+  });
+
+  it("does not treat the characters just outside the dash range as hyphens", () => {
+    expect(extractFeatures("ramp‏lift")).toEqual({ ...none, accessibility: ["Ramp access", "Lift access"] });
+    expect(extractFeatures("step‖free")).toEqual(none);
+  });
+
+  it.each(["step  free", "step   free", "step\tfree", "step\nfree", "step \t\n free"])("collapses whitespace in %j", (text) => {
+    expect(extractFeatures(text)).toEqual(only("Step-free entry"));
+  });
+
+  it("escapes punctuation inside a phrase, so it only matches what it says", () => {
+    expect(extractFeatures("p.a. system")).toEqual(only("PA system"));
+    expect(extractFeatures("pxax system")).toEqual(none);
+    expect(extractFeatures("reception (standing)")).toEqual(only("Reception (standing)"));
+  });
+
+  it("reports features in the order they were written, not the order they were found", () => {
+    expect(extractFeatures("stage, then a projector, then a screen")).toEqual({ ...none, facilities: ["Stage", "Projector", "Screen"] });
+    expect(extractFeatures("screen, then a projector, then a stage")).toEqual({ ...none, facilities: ["Screen", "Projector", "Stage"] });
+  });
+
+  it("lists a feature once however often it is mentioned", () => {
+    expect(extractFeatures("ramp, ramp and ramps")).toEqual(only("Ramp access"));
+  });
+});
+
+describe("features that only a venue lists", () => {
+  it("recognises a venue-specific feature, in the venue's own spelling", () => {
+    const venue = venueWith({ facilities: ["Karaoke machine"], layouts: ["Rock-pit"], accessibility: ["Signing booth"] });
+    expect(extractFeatures("karaoke machines, a rock pit and a signing booth", [venue])).toEqual({
+      accessibility: ["Signing booth"],
+      layouts: ["Rock-pit"],
+      facilities: ["Karaoke machine"],
+    });
+    // Without that venue the same words mean nothing.
+    expect(extractFeatures("karaoke machines, a rock pit and a signing booth")).toEqual(none);
+  });
+
+  it("when a venue spells a catalogue value differently the catalogue spelling is reported", () => {
+    const venue = venueWith({ accessibility: ["WHEELCHAIR ACCESS"], facilities: ["PROJECTOR"] });
+    expect(extractFeatures("wheelchair access and a projector", [venue])).toEqual({
+      accessibility: ["Wheelchair access"],
+      layouts: [],
+      facilities: ["Projector"],
+    });
+  });
+
+});
+
+describe("withFeatures", () => {
+  const requirements = { attendance: null, date: null, startTime: null, endTime: null, accessibility: ["Ramp access"], layouts: [], facilities: [] };
+
+  it("adds only the groups that have something, and leaves no empty key behind", () => {
+    const next = withFeatures({ q: "hall" }, requirements);
+    expect(next).toStrictEqual({ q: "hall", accessibility: ["Ramp access"] });
+    expect(Object.keys(next)).toEqual(["q", "accessibility"]);
+  });
+
+  it("does not change the criteria it was given", () => {
+    const criteria = { q: "hall" };
+    withFeatures(criteria, requirements);
+    expect(criteria).toStrictEqual({ q: "hall" });
+  });
+
+  it("a group with nothing leaves the caller's own filter for it alone", () => {
+    expect(withFeatures({ layouts: ["Banquet"] }, requirements)).toStrictEqual({ layouts: ["Banquet"], accessibility: ["Ramp access"] });
+  });
+});
+
+describe("free-text reader", () => {
+  it("reads a phrase split over two lines with indentation, as if it were on one", () => {
+    expect(extractFeatures("open\n      floor").layouts).toEqual(["Open floor"]);
+    expect(extractFeatures("open  \n  floor").layouts).toEqual(["Open floor"]);
+  });
+
+  it("reports features in the order they were written, even when a longer phrase is found first", () => {
+    // Long phrases are read first and blanked out; the order must still follow the text.
+    expect(extractFeatures("ramp. accessible parking. lift").accessibility).toEqual([
+      "Ramp access",
+      "Accessible parking",
+      "Lift access",
+    ]);
+  });
+
+  it("a whole-field 'no preference' answer finds nothing, even when a venue lists that very word as a feature", () => {
+    const venue: VenueRow = {
+      id: 1, name: "Hall", location: "North", description: null, capacity: 10,
+      accessibility: ["N/A"], layouts: ["None"], facilities: ["Nil"],
+    };
+    for (const text of ["n/a", "none", "nil", "No preference", "not applicable"]) {
+      expect(extractFeatures(text, [venue])).toEqual({ accessibility: [], layouts: [], facilities: [] });
+    }
+    // The same words inside a real sentence are still read.
+    expect(extractFeatures("we need nil", [venue]).facilities).toEqual(["Nil"]);
+  });
+});
+
+describe("free-text reader: odd spellings", () => {
+  const venue = (facilities: string[]): VenueRow => ({
+    id: 1, name: "Hall", location: "North", description: null, capacity: 10, accessibility: [], layouts: [], facilities,
+  });
+
+  it("a venue's own feature written with a hyphen and a space is still recognised in the same spelling", () => {
+    expect(extractFeatures("we have wi- fi here", [venue(["Wi- Fi"])]).facilities).toEqual(["Wi- Fi"]);
+    expect(extractFeatures("we have wi-fi here", [venue(["Wi- Fi"])]).facilities).toEqual(["Wi- Fi"]);
+  });
+
+  it("text that is not any feature finds nothing, whatever a feature without synonyms is called", () => {
+    expect(extractFeatures("Stryker was here")).toEqual({ accessibility: [], layouts: [], facilities: [] });
+  });
+
+  it("the '-style' spellings of a layout are read through the layout's own name", () => {
+    expect(extractFeatures("classroom-style, banquet style, cabaret-style and boardroom style").layouts).toEqual([
+      "Classroom",
+      "Banquet",
+      "Cabaret",
+      "Boardroom",
+    ]);
   });
 });

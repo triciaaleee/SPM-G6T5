@@ -319,7 +319,7 @@ describe("GET /api/venues", () => {
     expect(res.status).toBe(500);
   });
 
-  it("E4-3 AC3: keeps a venue whose block-out hours don't overlap the window", async () => {
+  it("E4-3 AC3: keeps a venue whose approved booking is on a different date", async () => {
     const { app } = buildApp({
       bookings: [{ venue_id: 1, event_id: 42, status: "Approved", hold_expires_at: null }],
       bookedEvents: [bookedEvent(42, "2026-09-01", "18:00", "21:00")],

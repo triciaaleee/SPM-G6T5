@@ -627,3 +627,109 @@ describe("GET /api/venues/staff/venue-options", () => {
     expect(res.body).not.toHaveProperty("capacity");
   });
 });
+
+/**
+ * Pins down what a mutation run showed no test noticed: the regex anchors
+ * (`^` / `$`), the trim of padded input, and what counts as "blank". Each
+ * case is a value one character away from valid, with the exact message
+ * expected, so dropping an anchor or a `.trim()` changes an answer.
+ */
+
+const venue = (o: Record<string, unknown> = {}) => ({
+  name: "Hall",
+  location: "North",
+  description: "d",
+  capacity: 10,
+  openingTime: "08:00",
+  closingTime: "22:00",
+  layouts: ["Theatre"],
+  facilities: ["Projector"],
+  accessibility: ["Ramp"],
+  ...o,
+});
+const venueFields = (body: unknown) => {
+  const r = parseVenueInput(body);
+  return r.valid ? {} : r.fields;
+};
+
+describe("venue record: whole numbers (capacity, setup, turnaround)", () => {
+  const CAPACITY_MSG = "Capacity must be a whole number of at least 1.";
+
+  it.each(["12abc", "x12", "1 2", "1.5", "1e2", "--5", "+5", "0x10", "12\n3", "abc"])("capacity %j is rejected", (capacity) => {
+    expect(venueFields(venue({ capacity }))).toEqual({ capacity: CAPACITY_MSG });
+  });
+
+  it.each([
+    ["12", 12],
+    ["  12  ", 12],
+    ["007", 7],
+    [12, 12],
+  ])("capacity %j is read as %d", (capacity, expected) => {
+    const r = parseVenueInput(venue({ capacity }));
+    expect(r.valid && r.venue.capacity).toBe(expected);
+  });
+
+  it.each(["-5", "0", -1, 0, "-0"])("capacity %j is below the minimum of 1", (capacity) => {
+    expect(venueFields(venue({ capacity }))).toEqual({ capacity: CAPACITY_MSG });
+  });
+
+  it.each(["", "   ", null, undefined])("a blank capacity %j is missing, not malformed", (capacity) => {
+    const r = parseVenueInput(venue({ capacity }));
+    expect(r).toEqual({ valid: false, fields: { capacity: "Enter the maximum capacity." }, missing: ["maximum capacity"] });
+  });
+
+  it.each([false, {}, [], true])("a non-blank non-number capacity %j is malformed, not missing", (capacity) => {
+    expect(venueFields(venue({ capacity }))).toEqual({ capacity: CAPACITY_MSG });
+  });
+
+  it.each(["x5", "5x", "5.5", "-1", "1 0"])("setup minutes %j is rejected with the exact message", (setupMinutes) => {
+    expect(venueFields(venue({ setupMinutes }))).toEqual({ setupMinutes: "Enter the setup time in whole minutes, from 0 to 1440." });
+  });
+
+  it.each([
+    ["   ", 0],
+    ["", 0],
+    [null, 0],
+    [" 45 ", 45],
+    ["240", 240],
+  ])("turnaround %j is read as %d", (turnaroundMinutes, expected) => {
+    const r = parseVenueInput(venue({ turnaroundMinutes }));
+    expect(r.valid && r.venue.turnaroundMinutes).toBe(expected);
+  });
+
+  it("a malformed turnaround names the turnaround time", () => {
+    expect(venueFields(venue({ turnaroundMinutes: "5x" }))).toEqual({
+      turnaroundMinutes: "Enter the turnaround time in whole minutes, from 0 to 1440.",
+    });
+  });
+});
+
+describe("venue record: operating hours", () => {
+  it.each(["08:00x", "x08:00", "8:00", "08:0", "08:60", "25:00", "24:01", "24:00x", "x24:00", "08-00", ""])(
+    "opening time %j is rejected",
+    (openingTime) => {
+      const expected = openingTime === "" ? "Enter an opening time." : "Enter the opening time as HH:MM.";
+      expect(venueFields(venue({ openingTime }))).toMatchObject({ openingTime: expected });
+    },
+  );
+
+  it.each(["22:00x", "x22:00", "9:00", "24:01", "24:00x", "x24:00", "23:60", ""])("closing time %j is rejected", (closingTime) => {
+    const expected = closingTime === "" ? "Enter a closing time." : "Enter the closing time as HH:MM.";
+    expect(venueFields(venue({ closingTime }))).toEqual({ closingTime: expected });
+  });
+
+  it("accepts midnight (24:00) as a closing time and 00:00 / 23:59 at the edges", () => {
+    expect(parseVenueInput(venue({ openingTime: "00:00", closingTime: "24:00" })).valid).toBe(true);
+    expect(parseVenueInput(venue({ openingTime: "23:58", closingTime: "23:59" })).valid).toBe(true);
+  });
+
+  it("one hour missing still lists 'operating hours' as missing", () => {
+    expect(parseVenueInput(venue({ openingTime: "" }))).toMatchObject({ valid: false, missing: ["operating hours"] });
+    expect(parseVenueInput(venue({ closingTime: "" }))).toMatchObject({ valid: false, missing: ["operating hours"] });
+    expect(parseVenueInput(venue({ openingTime: "", closingTime: "" }))).toMatchObject({ valid: false, missing: ["operating hours"] });
+  });
+
+  it("an empty location says where the venue is", () => {
+    expect(venueFields(venue({ location: "" }))).toEqual({ location: "Enter where the venue is." });
+  });
+});

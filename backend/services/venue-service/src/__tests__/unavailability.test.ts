@@ -581,3 +581,81 @@ describe("periodOverlapsWindow", () => {
     ).toBe(true);
   });
 });
+
+describe("period input: dates and times", () => {
+  const period = (o: Record<string, unknown> = {}) => ({
+    startDate: "2026-11-10",
+    endDate: "2026-11-12",
+    allDay: true,
+    reason: "Maintenance",
+    ...o,
+  });
+  const timed = (o: Record<string, unknown> = {}) => period({ allDay: false, startTime: "09:00", endTime: "13:00", ...o });
+  const fieldsOf = (body: unknown) => {
+    const r = parsePeriodInput(body);
+    return r.valid ? {} : r.fields;
+  };
+
+  it.each(["09:00x", "x09:00", "9:00", "09:0", "24:00", "09:60", "", "0900"])("start time %j is rejected", (startTime) => {
+    expect(fieldsOf(timed({ startTime }))).toEqual({ startTime: "Enter a start time." });
+  });
+
+  it.each(["13:00x", "x13:00", "1:00", "13:0", "24:00", "13:60", "", "1300"])("end time %j is rejected", (endTime) => {
+    expect(fieldsOf(timed({ endTime }))).toEqual({ endTime: "Enter an end time." });
+  });
+
+  it.each(["2026-11-10x", "x2026-11-10", "2026-11-1", "2026/11/10", "20261110", "2026-13-10", "2026-02-30"])(
+    "start date %j is rejected",
+    (startDate) => {
+      expect(fieldsOf(period({ startDate, endDate: undefined }))).toEqual({
+        startDate: "Enter a valid start date.",
+        endDate: "Enter a valid end date.",
+      });
+    },
+  );
+
+  it("a bad time never produces the 'must be after' message for the other, valid, time", () => {
+    // 99:99 is invalid; 09:00 is valid and sorts before it.
+    expect(fieldsOf(timed({ startTime: "99:99", endTime: "09:00" }))).toEqual({ startTime: "Enter a start time." });
+    expect(fieldsOf(timed({ startTime: "09:00", endTime: "99:99" }))).toEqual({ endTime: "Enter an end time." });
+    // Both bad: each keeps its own message, neither is overwritten.
+    expect(fieldsOf(timed({ startTime: "99:99", endTime: "88:88" }))).toEqual({
+      startTime: "Enter a start time.",
+      endTime: "Enter an end time.",
+    });
+  });
+
+  it("the 'must be after' message needs both times valid and end <= start", () => {
+    expect(fieldsOf(timed({ startTime: "13:00", endTime: "13:00" }))).toEqual({ endTime: "The end time must be after the start time." });
+    expect(fieldsOf(timed({ startTime: "13:00", endTime: "09:00" }))).toEqual({ endTime: "The end time must be after the start time." });
+    expect(fieldsOf(timed({ startTime: "09:00", endTime: "09:01" }))).toEqual({});
+  });
+});
+
+describe("block-out helpers accept times with seconds", () => {
+  const buffers = { setupMinutes: 30, turnaroundMinutes: 45 };
+
+  it("occupiedWindow reads HH:MM:SS the same as HH:MM", () => {
+    expect(occupiedWindow("10:00:00", "12:00:00", buffers)).toEqual({ start: "09:30", end: "12:45" });
+    expect(occupiedWindow("10:00", "12:00", buffers)).toEqual({ start: "09:30", end: "12:45" });
+  });
+
+  it("occupiedWindow clamps to the day and passes missing times through", () => {
+    expect(occupiedWindow("00:10", "23:50", buffers)).toEqual({ start: "00:00", end: "24:00" });
+    expect(occupiedWindow(null, "12:00", buffers)).toEqual({ start: null, end: null });
+    expect(occupiedWindow("10:00", undefined, buffers)).toEqual({ start: null, end: null });
+  });
+
+  const timed = { startDate: "2026-11-10", endDate: "2026-11-10", allDay: false, startTime: "09:00", endTime: "13:00" };
+
+  it("periodBlocksSlot: a slot that only touches the block does not clash, with or without seconds", () => {
+    // Block 09:00-13:00; slot starts as it ends / ends as it starts.
+    expect(periodBlocksSlot(timed, "2026-11-10", "13:00", "14:00")).toBe(false);
+    expect(periodBlocksSlot(timed, "2026-11-10", "13:00:00", "14:00:00")).toBe(false);
+    expect(periodBlocksSlot(timed, "2026-11-10", "08:00", "09:00")).toBe(false);
+    expect(periodBlocksSlot(timed, "2026-11-10", "08:00:00", "09:00:00")).toBe(false);
+    // One minute of overlap on either side clashes.
+    expect(periodBlocksSlot(timed, "2026-11-10", "12:59:00", "14:00:00")).toBe(true);
+    expect(periodBlocksSlot(timed, "2026-11-10", "08:00:00", "09:01:00")).toBe(true);
+  });
+});

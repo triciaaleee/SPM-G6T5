@@ -373,7 +373,7 @@ describe("POST /api/venues/bookings", () => {
     expect(supabase.from).not.toHaveBeenCalled();
   });
 
-  it("returns 404 when events-service won't show the event", async () => {
+  it("submit: returns 404 when events-service won't show the event", async () => {
     const { app } = buildApp({ eventHttpStatus: 403 });
     expect((await submit(app)).status).toBe(404);
   });
@@ -654,7 +654,7 @@ describe("GET /api/venues/events/:eventId/bookings", () => {
     expect((await request(app).get("/api/venues/events/abc/bookings")).status).toBe(400);
   });
 
-  it("returns 404 when events-service won't show the event", async () => {
+  it("read: returns 404 when events-service won't show the event", async () => {
     const { app } = buildReadApp([], { eventHttpStatus: 403 });
     expect((await request(app).get("/api/venues/events/7/bookings").set("Authorization", "Bearer t")).status).toBe(404);
   });

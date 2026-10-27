@@ -403,3 +403,43 @@ describe("GET /api/venues/suitability/:eventId", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("booking plan: blanks and whole numbers", () => {
+  const defaults: EventDefaults = { attendance: 100, requirements: { layouts: [], facilities: [], accessibility: [] } };
+  const noAttendance: EventDefaults = { attendance: null, requirements: { layouts: [], facilities: [], accessibility: [] } };
+  const fieldsOf = (raw: Record<string, unknown>, d: EventDefaults = defaults) => {
+    const r = parseBookingPlan(raw, d);
+    return r.valid ? {} : r.fields;
+  };
+  const MSG = "The headcount must be a whole number of at least 1.";
+
+  it.each(["12abc", "x12", "1 2", "1.5", "0", "-3", 0, 0.5, false, {}])("headcount %j is rejected", (headcount) => {
+    expect(fieldsOf({ headcount })).toEqual({ headcount: MSG });
+  });
+
+  it.each([
+    ["  7 ", 7],
+    ["7", 7],
+    [7, 7],
+    ["100", 100],
+  ])("headcount %j is read as %d", (headcount, expected) => {
+    const r = parseBookingPlan({ headcount }, defaults);
+    expect(r.valid && r.plan.headcount).toBe(expected);
+  });
+
+  it.each([undefined, null, "", "   ", "\t"])("a blank headcount %j falls back to the event's attendance", (headcount) => {
+    const r = parseBookingPlan({ headcount }, defaults);
+    expect(r.valid && r.plan.headcount).toBe(100);
+    expect(fieldsOf({ headcount }, noAttendance)).toEqual({ headcount: "Enter the expected headcount for this venue." });
+  });
+
+  it.each([undefined, null, "", "   "])("a blank purpose %j is the default main programme", (purpose) => {
+    const r = parseBookingPlan({ purpose }, defaults);
+    expect(r.valid && r.plan.purpose).toBe("Main programme");
+  });
+
+  it("a non-blank, non-string purpose is rejected rather than defaulted", () => {
+    expect(fieldsOf({ purpose: 5 })).toMatchObject({ purpose: expect.stringContaining("Choose one of:") });
+    expect(fieldsOf({ purpose: false })).toMatchObject({ purpose: expect.stringContaining("Choose one of:") });
+  });
+});

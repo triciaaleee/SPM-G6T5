@@ -6,6 +6,7 @@ import { venuesRouter } from "../routes/venues.js";
 import {
   bookingWindow,
   datesBetween,
+  findFreeSlots,
   freeSlotsForDay,
   subtractIntervals,
   toOperatingHours,
@@ -442,5 +443,182 @@ describe("GET /api/venues/:venueId/availability", () => {
       eventsStatus: 500,
     });
     expect((await getAvailability(app)).status).toBe(502);
+  });
+});
+
+/**
+ * Mutation-run follow-ups for the free-slot arithmetic: blocks handed over
+ * out of order, blocks that sit outside the window, a block that ends exactly
+ * where the window does, and a gap with room for setup + turnaround and
+ * nothing else.
+ */
+
+const iv = (start: string, end: string) => ({ start, end });
+const WINDOW = iv("08:00", "12:00");
+
+describe("subtractIntervals", () => {
+  it("sorts blocks given out of order", () => {
+    expect(subtractIntervals(iv("08:00", "20:00"), [iv("14:00", "15:00"), iv("10:00", "11:00")])).toEqual([
+      iv("08:00", "10:00"),
+      iv("11:00", "14:00"),
+      iv("15:00", "20:00"),
+    ]);
+  });
+
+  it("ignores a block that sits wholly after the window", () => {
+    expect(subtractIntervals(WINDOW, [iv("14:00", "15:00")])).toEqual([WINDOW]);
+  });
+
+  it("ignores a block that sits wholly before the window", () => {
+    expect(subtractIntervals(WINDOW, [iv("06:00", "07:00")])).toEqual([WINDOW]);
+  });
+
+  it("ignores blocks that only touch the window's edges", () => {
+    expect(subtractIntervals(WINDOW, [iv("07:00", "08:00"), iv("12:00", "13:00")])).toEqual([WINDOW]);
+  });
+
+  it("a block ending exactly where the window ends leaves no zero-length slot behind", () => {
+    expect(subtractIntervals(WINDOW, [iv("10:00", "12:00")])).toEqual([iv("08:00", "10:00")]);
+  });
+
+  it("a block starting exactly where the window starts leaves only the rest", () => {
+    expect(subtractIntervals(WINDOW, [iv("08:00", "09:00")])).toEqual([iv("09:00", "12:00")]);
+  });
+
+  it("clips blocks that overhang either edge", () => {
+    expect(subtractIntervals(WINDOW, [iv("07:00", "09:00")])).toEqual([iv("09:00", "12:00")]);
+    expect(subtractIntervals(WINDOW, [iv("11:00", "13:00")])).toEqual([iv("08:00", "11:00")]);
+  });
+
+  it("a block covering the whole window leaves nothing", () => {
+    expect(subtractIntervals(WINDOW, [iv("07:00", "13:00")])).toEqual([]);
+    expect(subtractIntervals(WINDOW, [iv("08:00", "12:00")])).toEqual([]);
+  });
+
+  it("merges overlapping and nested blocks, and keeps a one-minute gap between adjacent ones", () => {
+    expect(subtractIntervals(WINDOW, [iv("09:00", "11:00"), iv("10:00", "10:30"), iv("10:30", "11:30")])).toEqual([
+      iv("08:00", "09:00"),
+      iv("11:30", "12:00"),
+    ]);
+    expect(subtractIntervals(WINDOW, [iv("09:00", "10:00"), iv("10:01", "11:00")])).toEqual([
+      iv("08:00", "09:00"),
+      iv("10:00", "10:01"),
+      iv("11:00", "12:00"),
+    ]);
+  });
+
+  it("with no blocks the window is entirely free, and an empty window is empty", () => {
+    expect(subtractIntervals(WINDOW, [])).toEqual([WINDOW]);
+    expect(subtractIntervals(iv("08:00", "08:00"), [])).toEqual([]);
+  });
+});
+
+describe("freeSlotsForDay", () => {
+  const hours = { openingTime: "08:00", closingTime: "20:00" };
+  const day = (bookings: { date: string; startTime: string | null; endTime: string | null }[] = []) => ({
+    date: "2026-11-10",
+    bookings,
+    periods: [],
+  });
+  const target = { startTime: null, endTime: null };
+
+  it("a gap with room for only setup and turnaround is not a slot (event would be zero minutes long)", () => {
+    // A 09:30-19:00 booking, padded by 30/30, occupies 09:00-19:30. That leaves
+    // 08:00-09:00 (exactly setup + turnaround) and 19:30-20:00 (less than that).
+    const slots = freeSlotsForDay(day([{ date: "2026-11-10", startTime: "09:30", endTime: "19:00" }]), hours, { setupMinutes: 30, turnaroundMinutes: 30 }, target);
+    expect(slots).toEqual([]);
+  });
+
+  it("one minute more than setup + turnaround gives a one-minute event", () => {
+    const slots = freeSlotsForDay(day([{ date: "2026-11-10", startTime: "09:31", endTime: "19:00" }]), hours, { setupMinutes: 30, turnaroundMinutes: 30 }, target);
+    expect(slots).toEqual([{ date: "2026-11-10", start: "08:00", end: "09:01", eventStart: "08:30", eventEnd: "08:31" }]);
+  });
+
+  it("an event with no recorded times blocks the whole day", () => {
+    expect(freeSlotsForDay(day([{ date: "2026-11-10", startTime: null, endTime: null }]), hours, { setupMinutes: 0, turnaroundMinutes: 0 }, target)).toEqual([]);
+  });
+
+  it("ignores bookings on other days", () => {
+    const slots = freeSlotsForDay(day([{ date: "2026-11-11", startTime: "09:00", endTime: "19:00" }]), hours, { setupMinutes: 0, turnaroundMinutes: 0 }, target);
+    expect(slots).toEqual([{ date: "2026-11-10", start: "08:00", end: "20:00", eventStart: "08:00", eventEnd: "20:00" }]);
+  });
+});
+
+describe("subtractIntervals: blocks that meet", () => {
+  const window = iv("08:00", "12:00");
+
+  it("two blocks that touch leave no empty gap between them", () => {
+    expect(subtractIntervals(window, [iv("09:00", "10:00"), iv("10:00", "11:00")])).toEqual([iv("08:00", "09:00"), iv("11:00", "12:00")]);
+  });
+
+  it("a block that starts where the previous one ended does not widen the free time before it", () => {
+    expect(subtractIntervals(window, [iv("08:00", "09:00"), iv("09:00", "10:00")])).toEqual([iv("10:00", "12:00")]);
+  });
+
+  it("a gap never runs past the end of the window, whatever blocks follow it", () => {
+    expect(subtractIntervals(window, [iv("13:00", "14:00"), iv("15:00", "16:00")])).toEqual([window]);
+    expect(subtractIntervals(window, [iv("11:00", "11:30"), iv("14:00", "15:00")])).toEqual([iv("08:00", "11:00"), iv("11:30", "12:00")]);
+  });
+
+  it("a block that starts exactly where the window ends changes nothing", () => {
+    expect(subtractIntervals(window, [iv("12:00", "13:00")])).toEqual([window]);
+  });
+});
+
+describe("freeSlotsForDay: the target window", () => {
+  const hours = { openingTime: "08:00", closingTime: "20:00" };
+  const day = { date: "2026-11-10", bookings: [], periods: [] };
+  const none = { setupMinutes: 0, turnaroundMinutes: 0 };
+
+  it.each([
+    ["wholly before opening", "05:00", "07:00"],
+    ["ending exactly at opening", "06:00", "08:00"],
+    ["wholly after closing", "21:00", "22:00"],
+    ["starting exactly at closing", "20:00", "22:00"],
+    ["empty", "10:00", "10:00"],
+    ["back to front", "12:00", "10:00"],
+  ])("a target window %s has no slots", (_name, startTime, endTime) => {
+    expect(freeSlotsForDay(day, hours, none, { startTime, endTime })).toEqual([]);
+  });
+
+  it("a one-minute target window is one slot", () => {
+    expect(freeSlotsForDay(day, hours, none, { startTime: "10:00", endTime: "10:01" })).toEqual([
+      { date: "2026-11-10", start: "10:00", end: "10:01", eventStart: "10:00", eventEnd: "10:01" },
+    ]);
+  });
+
+  it("a gap that the target window only touches is skipped, not shown empty", () => {
+    const booked = { ...day, bookings: [{ date: "2026-11-10", startTime: "08:00", endTime: "12:00" }] };
+    // Free from 12:00; the target ends at 12:00 exactly.
+    expect(freeSlotsForDay(booked, hours, none, { startTime: "09:00", endTime: "12:00" })).toEqual([]);
+    expect(freeSlotsForDay(booked, hours, none, { startTime: "09:00", endTime: "12:01" })).toEqual([
+      { date: "2026-11-10", start: "12:00", end: "12:01", eventStart: "12:00", eventEnd: "12:01" },
+    ]);
+  });
+});
+
+describe("findFreeSlots: the loaded range against the target days", () => {
+  const hours = { openingTime: "08:00", closingTime: "09:00" };
+  const none = { setupMinutes: 0, turnaroundMinutes: 0 };
+  const target = (fromDate: string, toDate: string) => ({ fromDate, toDate, startTime: null, endTime: null });
+  const dates = (range: { from: string; to: string }, t: ReturnType<typeof target>) =>
+    findFreeSlots(range, t, [], [], hours, none).map((slot) => slot.date);
+  const RANGE = { from: "2026-11-10", to: "2026-11-12" };
+
+  it("keeps the later start and the earlier end", () => {
+    expect(dates(RANGE, target("2026-11-01", "2026-11-30"))).toEqual(["2026-11-10", "2026-11-11", "2026-11-12"]);
+    expect(dates(RANGE, target("2026-11-11", "2026-11-30"))).toEqual(["2026-11-11", "2026-11-12"]);
+    expect(dates(RANGE, target("2026-11-01", "2026-11-11"))).toEqual(["2026-11-10", "2026-11-11"]);
+    expect(dates(RANGE, target("2026-11-11", "2026-11-11"))).toEqual(["2026-11-11"]);
+  });
+
+  it("returns nothing when the target days and the range do not meet", () => {
+    expect(dates(RANGE, target("2026-11-01", "2026-11-09"))).toEqual([]);
+    expect(dates(RANGE, target("2026-11-13", "2026-11-20"))).toEqual([]);
+  });
+
+  it("touching at a single day is that day", () => {
+    expect(dates(RANGE, target("2026-11-01", "2026-11-10"))).toEqual(["2026-11-10"]);
+    expect(dates(RANGE, target("2026-11-12", "2026-11-20"))).toEqual(["2026-11-12"]);
   });
 });
