@@ -3,6 +3,7 @@ import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEvent, fetchEventsForRole, type EventForChat } from "../lib/eventsClient.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
+import { createRateLimiter } from "../lib/rateLimit.js";
 import { validateMessageBody } from "../lib/validateChatMessage.js";
 
 /**
@@ -27,14 +28,52 @@ chatRouter.use((req: AuthedRequest, res, next) => {
 
 /**
  * E2-15: chat only exists while there's active back-and-forth to have —
- * once the coordinator is actually planning, through confirmation. Not
- * available before that (Unassigned, Requested, Clarification Requested —
+ * once the coordinator is actually planning, through confirmation, and
+ * while a confirmed event's changed arrangements are being settled
+ * (Needs Review: the coordinator and Organiser have to talk through the
+ * replacement venue/equipment and the change request). Not available
+ * before that (Unassigned, Requested, Clarification Requested —
  * clarification already has its own dedicated Q&A thread), during Safety
  * Review, or once closed (Rejected, Completed, Cancelled). An event that
- * cycles out of these two (e.g. Planning -> Safety Review) and back keeps
- * its existing messages; the thread is just hidden while it's outside them.
+ * cycles out of these (e.g. Planning -> Safety Review) and back keeps its
+ * existing messages; the thread is just hidden while it's outside them.
  */
-const CHAT_ENABLED_STATUSES = new Set(["Planning", "Confirmed"]);
+const CHAT_ENABLED_STATUSES = new Set(["Planning", "Confirmed", "Needs Review"]);
+
+/** History is paged newest-first: a default page, and a ceiling a client can't exceed. */
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
+
+/**
+ * Per-user cap on sends. Reads the env on every hit so it can be tuned (or
+ * lowered in tests) without a restart-order dependency.
+ */
+const SEND_WINDOW_MS = 60_000;
+const DEFAULT_SENDS_PER_WINDOW = 30;
+export const sendLimiter = createRateLimiter({
+  max: () => Number(process.env.CHAT_SEND_LIMIT_PER_MINUTE) || DEFAULT_SENDS_PER_WINDOW,
+  windowMs: SEND_WINDOW_MS,
+});
+
+type PageParams = { ok: true; limit: number; before: number | null } | { ok: false; error: string };
+
+function parsePageParams(query: Record<string, unknown>): PageParams {
+  let limit = DEFAULT_PAGE_SIZE;
+  if (query.limit !== undefined) {
+    limit = Number(query.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
+      return { ok: false, error: `limit must be a whole number between 1 and ${MAX_PAGE_SIZE}` };
+    }
+  }
+  let before: number | null = null;
+  if (query.before !== undefined) {
+    before = Number(query.before);
+    if (!Number.isInteger(before) || before <= 0) {
+      return { ok: false, error: "before must be a positive message id" };
+    }
+  }
+  return { ok: true, limit, before };
+}
 
 interface MessageRow {
   id: number;
@@ -92,7 +131,7 @@ async function checkAccess(
   // receive them. The inbox hides this event entirely until one is
   // assigned; the backend enforces the same rule so a direct request
   // can't bypass it.
-  if (user.role === "organiser" && !event.coordinator_id) {
+  if (!event.coordinator_id) {
     return { ok: false, status: 409, error: "No coordinator has been assigned to this event yet." };
   }
   if (!CHAT_ENABLED_STATUSES.has(event.status)) {
@@ -134,26 +173,37 @@ chatRouter.get("/threads", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventIds = eligible.map((e) => e.id);
-  const { data: messageRows, error: messagesError } = await supabase
-    .from("chat_messages")
-    .select(MESSAGE_COLUMNS)
-    .in("event_id", eventIds)
-    .order("created_at", { ascending: false });
+  // Not the whole history of every thread: one narrow query for the unread
+  // rows (event_id only) and one single-row query per thread for the latest
+  // message. A viewer has a handful of active chats, so the fan-out is small.
+  const [unreadResult, ...latestResults] = await Promise.all([
+    supabase
+      .from("chat_messages")
+      .select("event_id")
+      .in(
+        "event_id",
+        eligible.map((e) => e.id),
+      )
+      .neq("sender_id", user.id)
+      .is("read_at", null),
+    ...eligible.map((e) =>
+      supabase.from("chat_messages").select(MESSAGE_COLUMNS).eq("event_id", e.id).order("id", { ascending: false }).limit(1),
+    ),
+  ]);
 
-  if (messagesError) {
+  if (unreadResult.error || latestResults.some((r) => r.error)) {
     res.status(500).json({ error: "Failed to load chat messages" });
     return;
   }
 
-  const rows = (messageRows ?? []) as MessageRow[];
   const lastByEvent = new Map<number, MessageRow>();
+  for (const result of latestResults) {
+    const row = ((result.data ?? []) as MessageRow[])[0];
+    if (row) lastByEvent.set(row.event_id, row);
+  }
   const unreadByEvent = new Map<number, number>();
-  for (const row of rows) {
-    if (!lastByEvent.has(row.event_id)) lastByEvent.set(row.event_id, row);
-    if (row.sender_id !== user.id && row.read_at === null) {
-      unreadByEvent.set(row.event_id, (unreadByEvent.get(row.event_id) ?? 0) + 1);
-    }
+  for (const row of (unreadResult.data ?? []) as { event_id: number }[]) {
+    unreadByEvent.set(row.event_id, (unreadByEvent.get(row.event_id) ?? 0) + 1);
   }
 
   const threads = eligible
@@ -163,7 +213,6 @@ chatRouter.get("/threads", async (req: AuthedRequest, res) => {
         eventId: e.id,
         eventName: e.name || `Event #${e.id}`,
         status: e.status,
-        canSend: true,
         otherParty: user.role === "organiser" ? e.coordinatorName : e.organiserName,
         lastMessage: last ? { body: last.body, senderId: last.sender_id, createdAt: last.created_at } : null,
         unreadCount: unreadByEvent.get(e.id) ?? 0,
@@ -194,35 +243,52 @@ chatRouter.get("/:eventId/messages", async (req: AuthedRequest, res) => {
     return;
   }
 
+  const page = parsePageParams(req.query);
+  if (!page.ok) {
+    res.status(400).json({ error: page.error });
+    return;
+  }
+
   const access = await checkAccess(eventId, user, req.headers.authorization!);
   if (!access.ok) {
     res.status(access.status).json({ error: access.error });
     return;
   }
 
-  const { data, error } = await supabase
-    .from("chat_messages")
-    .select(MESSAGE_COLUMNS)
-    .eq("event_id", eventId)
-    .order("created_at", { ascending: true });
+  // One extra row tells us whether older messages exist without a count query.
+  let pageQuery = supabase.from("chat_messages").select(MESSAGE_COLUMNS).eq("event_id", eventId);
+  if (page.before !== null) pageQuery = pageQuery.lt("id", page.before);
 
-  if (error) {
+  const [pageResult, unreadResult] = await Promise.all([
+    pageQuery.order("id", { ascending: false }).limit(page.limit + 1),
+    // Unread is a count over the whole thread, not just the page returned.
+    supabase
+      .from("chat_messages")
+      .select("id", { count: "exact", head: true })
+      .eq("event_id", eventId)
+      .neq("sender_id", user.id)
+      .is("read_at", null),
+  ]);
+
+  if (pageResult.error || unreadResult.error) {
     res.status(500).json({ error: "Failed to load messages" });
     return;
   }
 
-  const rows = (data ?? []) as MessageRow[];
-  const unreadCount = rows.filter((row) => row.sender_id !== user.id && row.read_at === null).length;
+  const fetched = (pageResult.data ?? []) as MessageRow[];
+  const hasMore = fetched.length > page.limit;
+  const rows = fetched.slice(0, page.limit).reverse(); // oldest first, as the thread reads
 
   res.json({
     event: {
       id: access.event.id,
       name: eventDisplayName(access.event, eventId),
       status: access.event.status,
-      canSend: true,
     },
     messages: rows.map((row) => toMessage(row, user.id)),
-    unreadCount,
+    unreadCount: unreadResult.count ?? 0,
+    hasMore,
+    nextBefore: hasMore ? rows[0].id : null,
   });
 });
 
@@ -277,6 +343,13 @@ chatRouter.post("/:eventId/messages", async (req: AuthedRequest, res) => {
   const eventId = Number(req.params.eventId);
   if (!Number.isInteger(eventId) || eventId <= 0) {
     res.status(400).json({ error: "A valid event id is required" });
+    return;
+  }
+
+  const limit = sendLimiter.hit(user.id);
+  if (!limit.allowed) {
+    res.set("Retry-After", String(limit.retryAfterSeconds));
+    res.status(429).json({ error: "You are sending messages too quickly. Please wait a moment and try again." });
     return;
   }
 

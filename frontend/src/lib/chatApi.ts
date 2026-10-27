@@ -15,14 +15,15 @@ export interface ChatThreadEvent {
   id: number;
   name: string;
   status: string;
-  /** False once the event is closed (Rejected/Completed/Cancelled) — history stays visible, sending doesn't. */
-  canSend: boolean;
 }
 
 export interface ChatThreadHistory {
   event: ChatThreadEvent;
   messages: ChatMessage[];
   unreadCount: number;
+  /** True when older messages exist; pass `nextBefore` as `before` to fetch them. */
+  hasMore: boolean;
+  nextBefore: number | null;
 }
 
 /** E2-15 AC1: one row in the drawer's inbox — an event this viewer has a chat for. */
@@ -30,7 +31,6 @@ export interface ChatThreadSummary {
   eventId: number;
   eventName: string;
   status: string;
-  canSend: boolean;
   /** The other party's name — the coordinator's, for an organiser; the organiser's, for a coordinator. */
   otherParty: string | null;
   lastMessage: { body: string; senderId: string; createdAt: string } | null;
