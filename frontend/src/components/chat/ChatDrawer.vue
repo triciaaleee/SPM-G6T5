@@ -283,25 +283,20 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="composer">
-              <p v-if="!history.event.canSend" class="body-small muted composer__closed">
-                This event is closed — the conversation is read-only.
-              </p>
-              <template v-else>
-                <p v-if="sendError" class="body-small error-text composer__error">{{ sendError }}</p>
-                <div class="composer__row">
-                  <textarea
-                    v-model="composerText"
-                    class="composer__input"
-                    rows="1"
-                    placeholder="Message…"
-                    :disabled="sending"
-                    @keydown.enter.exact.prevent="send"
-                  />
-                  <button type="button" class="btn-send" :disabled="sending || !composerText.trim()" @click="send">
-                    Send
-                  </button>
-                </div>
-              </template>
+              <p v-if="sendError" class="body-small error-text composer__error">{{ sendError }}</p>
+              <div class="composer__row">
+                <textarea
+                  v-model="composerText"
+                  class="composer__input"
+                  rows="1"
+                  placeholder="Message…"
+                  :disabled="sending"
+                  @keydown.enter.exact.prevent="send"
+                />
+                <button type="button" class="btn-send" :disabled="sending || !composerText.trim()" @click="send">
+                  Send
+                </button>
+              </div>
             </div>
           </template>
         </template>
@@ -606,10 +601,6 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   padding: var(--spacing-12) var(--spacing-16);
   border-top: 1px solid var(--color-grey-100);
-}
-
-.composer__closed {
-  text-align: center;
 }
 
 .composer__error {

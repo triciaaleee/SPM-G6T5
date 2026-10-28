@@ -42,6 +42,25 @@ describe("requireAuthOrInternal", () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Invalid internal token",
+      code: "invalid_internal_token",
+    });
+  });
+
+  it("treats a non-string x-internal-auth header (e.g. a repeated header) as absent, falling through to requireAuth", () => {
+    // Express gives an array when a header is sent more than once. The
+    // internal path requires a *string* token — anything else should be
+    // ignored, not handed to verifyInternalToken.
+    const req = { headers: { "x-internal-auth": ["one", "two"] } } as unknown as AuthedRequest;
+    const res = mockRes();
+    const next = vi.fn();
+
+    requireAuthOrInternal(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: "no_token" }));
   });
 
   it("falls back to normal requireAuth behaviour when there's no internal header", () => {

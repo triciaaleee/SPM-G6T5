@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { announceReschedule, scheduleChanged, scheduleOf } from "../lib/reschedule.js";
+import {
+  announceAttendanceChange,
+  announceReschedule,
+  attendanceChanged,
+  attendanceOf,
+  scheduleChanged,
+  scheduleOf,
+} from "../lib/reschedule.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
 afterEach(() => setPublisherForTest(undefined));
@@ -76,5 +83,56 @@ describe("announceReschedule", () => {
       recipients: { userIds: [], roles: [] },
       data: { eventName: "Spring Gala", coordinatorId: "COORD-0001", proposedDate: "2099-02-02", startTime: "13:00", endTime: "15:00" },
     });
+  });
+});
+
+describe("attendanceOf / attendanceChanged", () => {
+  it("reads a number, or a numeric string, and nothing else", () => {
+    expect(attendanceOf({ expectedAttendance: 120 })).toBe(120);
+    expect(attendanceOf({ expectedAttendance: "120" })).toBe(120);
+    expect(attendanceOf({ expectedAttendance: "" })).toBeNull();
+    expect(attendanceOf({ expectedAttendance: "many" })).toBeNull();
+    expect(attendanceOf({})).toBeNull();
+  });
+
+  it("is true only when the number differs", () => {
+    expect(attendanceChanged({ expectedAttendance: 100 }, { expectedAttendance: 150 })).toBe(true);
+    expect(attendanceChanged({ expectedAttendance: 100 }, { expectedAttendance: "100" })).toBe(false);
+    expect(attendanceChanged({ expectedAttendance: 100, venue: "A" }, { expectedAttendance: 100, venue: "B" })).toBe(false);
+    expect(attendanceChanged({}, { expectedAttendance: 10 })).toBe(true);
+  });
+});
+
+describe("announceAttendanceChange", () => {
+  it("publishes event.attendance_changed with the new number and no recipients", async () => {
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+    const single = vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } });
+    const supabase = { from: vi.fn(() => ({ insert: () => ({ select: () => ({ single }) }) })) } as never;
+
+    const ok = await announceAttendanceChange(supabase, {
+      id: 7,
+      actorId: "ORG-0001",
+      eventName: "Spring Gala",
+      coordinatorId: "COORD-0001",
+      details: { expectedAttendance: "250" },
+    });
+
+    expect(ok).toBe(true);
+    expect(publish).toHaveBeenCalledWith({
+      type: "event.attendance_changed",
+      eventId: 7,
+      actorId: "ORG-0001",
+      recipients: { userIds: [], roles: [] },
+      data: { eventName: "Spring Gala", coordinatorId: "COORD-0001", expectedAttendance: 250 },
+    });
+  });
+
+  it("resolves false, without throwing, when the outbox is unavailable", async () => {
+    setPublisherForTest({ publish: vi.fn() });
+    const supabase = { from: vi.fn(() => { throw new Error("no outbox"); }) } as never;
+
+    const ok = await announceAttendanceChange(supabase, { id: 7, actorId: "ORG-0001", eventName: "x", coordinatorId: null, details: {} });
+    expect(ok).toBe(false);
   });
 });

@@ -26,12 +26,14 @@ const EXCHANGE = "connectsphere.events";
 const DLX = "connectsphere.dlx";
 const QUEUE = "venue-service";
 const DLQ = "venue-service.dlq";
+const ROUTING_KEYS = ["event.cancelled", "event.rescheduled", "event.attendance_changed"];
 
 /**
  * RabbitMQ.md section 4: unlike notification-service's `#` (everything),
- * venue-service only needs `event.cancelled` (E3-6) today, so the queue
- * binds to that routing key alone rather than every message on the
- * exchange. Acks only after the handler's own DB write succeeds; a thrown
+ * venue-service only needs `event.cancelled` (E3-6), `event.rescheduled` and
+ * `event.attendance_changed` (a Planning edit that may leave a booking
+ * invalid), so the queue binds to those routing keys alone rather than every
+ * message on the exchange. Acks only after the handler's own DB write succeeds; a thrown
  * handler error nacks without requeue, so the broker's dead-letter policy
  * sends it straight to the DLQ rather than looping forever.
  */
@@ -50,13 +52,13 @@ export function connectAndConsume(url: string, handler: MessageHandler): RabbitC
     await channel.assertExchange(DLX, "topic", { durable: true });
 
     await channel.assertQueue(DLQ, { durable: true });
-    await channel.bindQueue(DLQ, DLX, "event.cancelled");
+    for (const key of ROUTING_KEYS) await channel.bindQueue(DLQ, DLX, key);
 
     await channel.assertQueue(QUEUE, {
       durable: true,
       arguments: { "x-dead-letter-exchange": DLX },
     });
-    await channel.bindQueue(QUEUE, EXCHANGE, "event.cancelled");
+    for (const key of ROUTING_KEYS) await channel.bindQueue(QUEUE, EXCHANGE, key);
 
     await channel.prefetch(1);
 

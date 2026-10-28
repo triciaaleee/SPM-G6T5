@@ -11,7 +11,7 @@ import { venuesRouter } from "./routes/venues.js";
 import { sweepExpiringHolds } from "./lib/bookingDecisions.js";
 import { supabaseAdmin } from "./lib/supabaseAdmin.js";
 import { connectAndConsume } from "./lib/rabbitConsumer.js";
-import { handleEventCancelled } from "./lib/eventCancelledHandler.js";
+import { handleMessage } from "./lib/handleMessage.js";
 
 /**
  * Fail loudly at boot instead of at the first login. A missing JWT_SECRET
@@ -85,9 +85,9 @@ async function startRabbit(): Promise<void> {
   }
 
   try {
-    const consumer = connectAndConsume(url, (msg) => handleEventCancelled(msg, { supabase: supabaseAdmin }));
+    const consumer = connectAndConsume(url, (msg) => handleMessage(msg, { supabase: supabaseAdmin }));
     await consumer.start();
-    console.log("venue-service: connected to RabbitMQ, consuming event.cancelled");
+    console.log("venue-service: connected to RabbitMQ, consuming event.cancelled, event.rescheduled and event.attendance_changed");
   } catch (err) {
     console.error("venue-service: failed to connect to RabbitMQ, consumer idle", err);
   }

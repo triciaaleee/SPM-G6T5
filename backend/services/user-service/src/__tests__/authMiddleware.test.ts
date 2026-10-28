@@ -48,7 +48,7 @@ describe("requireAuth", () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: "no_token" }));
+    expect(res.json).toHaveBeenCalledWith({ error: "Missing bearer token", code: "no_token" });
   });
 
   it("rejects a header with no Bearer prefix the same way as a missing one", () => {
@@ -59,7 +59,7 @@ describe("requireAuth", () => {
     requireAuth(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: "no_token" }));
+    expect(res.json).toHaveBeenCalledWith({ error: "Missing bearer token", code: "no_token" });
   });
 
   it("rejects an expired token with 401 token_expired, naming it apart from a bad token", () => {
@@ -74,7 +74,10 @@ describe("requireAuth", () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: "token_expired" }));
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Your session has expired. Please log in again.",
+      code: "token_expired",
+    });
     expect(req.user).toBeUndefined();
   });
 
@@ -88,7 +91,7 @@ describe("requireAuth", () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: "invalid_token" }));
+    expect(res.json).toHaveBeenCalledWith({ error: "Invalid token", code: "invalid_token" });
   });
 
   it("rejects a malformed token string as invalid_token", () => {
@@ -99,6 +102,6 @@ describe("requireAuth", () => {
     requireAuth(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: "invalid_token" }));
+    expect(res.json).toHaveBeenCalledWith({ error: "Invalid token", code: "invalid_token" });
   });
 });

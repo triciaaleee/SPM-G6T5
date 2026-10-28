@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker/master/packages/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "vitest": { "configFile": "vitest.config.ts" },
+  "mutate": [
+    "src/lib/**/*.ts",
+    "src/middleware/**/*.ts",
+    "src/routes/**/*.ts",
+    "!src/lib/env.ts",
+    "!src/lib/supabaseAdmin.ts",
+    "!src/lib/rabbitPublisher.fake.ts",
+    "!src/__tests__/**"
+  ],
+  "reporters": ["clear-text", "html", "json"],
+  "coverageAnalysis": "perTest",
+  "tempDirName": ".stryker-tmp",
+  "timeoutMS": 15000
+}

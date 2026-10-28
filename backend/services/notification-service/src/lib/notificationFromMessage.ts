@@ -10,9 +10,12 @@ export interface HandleInboundMessageDeps {
 /**
  * Messages other services act on that nobody is notified about. They reach this
  * queue because it binds every routing key, and are skipped without a warning.
- * `event.rescheduled` moves equipment-service's stored booking windows.
+ * `event.rescheduled` moves equipment-service's stored booking windows and has
+ * venue-service review the event's bookings; `event.attendance_changed` has
+ * venue-service check them against the new attendance. Whoever is affected
+ * hears about it from the follow-up message those services publish.
  */
-const NO_NOTIFICATION_TYPES = new Set(["event.rescheduled"]);
+const NO_NOTIFICATION_TYPES = new Set(["event.rescheduled", "event.attendance_changed"]);
 
 /**
  * Maps one broker message to notification row(s) and inserts them.

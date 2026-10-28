@@ -17,6 +17,17 @@ describe("signToken / verifyToken", () => {
     const expired = jwt.sign({ sub: "ORG-0001", role: "organiser" }, "test-jwt-secret", { expiresIn: -10 });
 
     expect(() => verifyToken(expired)).toThrow(TokenExpiredError);
+    expect(() => verifyToken(expired)).toThrow("Token expired");
+  });
+
+  it("signs a token that actually expires, carrying an exp claim about a day out", () => {
+    const token = signToken({ sub: "ORG-0001", role: "organiser" });
+
+    const decoded = jwt.decode(token) as { exp?: number; iat?: number };
+    expect(decoded.exp).toBeDefined();
+    // JWT_EXPIRES_IN is "1d" (86400s); allow slack for test runtime.
+    expect(decoded.exp! - decoded.iat!).toBeGreaterThan(86_000);
+    expect(decoded.exp! - decoded.iat!).toBeLessThanOrEqual(86_400);
   });
 
   it("lets any other verification failure (bad signature, malformed token) through unchanged", () => {
