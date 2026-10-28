@@ -2411,6 +2411,7 @@ interface ReviewEventRow {
   status: string;
   coordinator_id: string | null;
   organiser_id: string | null;
+  submitted_details?: Record<string, unknown> | null;
 }
 
 /**
@@ -2448,7 +2449,7 @@ async function authorizeCoordinatorReview(
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, status, coordinator_id, organiser_id")
+    .select("id, status, coordinator_id, organiser_id, submitted_details")
     .eq("id", Number(eventId))
     .maybeSingle();
 
@@ -2879,7 +2880,12 @@ eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) =
     return;
   }
 
-  const outstanding = findOutstandingArrangements(bookings.value, equipment.value);
+  const equipmentRequirements = event.submitted_details?.equipment;
+  const outstanding = findOutstandingArrangements(
+    bookings.value,
+    equipment.value,
+    typeof equipmentRequirements === "string" ? equipmentRequirements : null,
+  );
   if (hasOutstanding(outstanding)) {
     res.status(409).json({ error: describeOutstanding(outstanding), outstanding });
     return;

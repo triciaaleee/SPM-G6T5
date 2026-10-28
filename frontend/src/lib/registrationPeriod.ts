@@ -45,3 +45,36 @@ export const REGISTRATION_STATE_LABEL: Record<RegistrationState, string> = {
   open: "Open",
   closed: "Closed",
 };
+
+/** The moment registration closes by itself: the cutoff before the event starts, or null when the start can't be read. */
+export function registrationClosesAt(details: Record<string, unknown> | null | undefined): Date | null {
+  const startsAt = eventStartsAt(details);
+  return startsAt === null ? null : new Date(startsAt.getTime() - REGISTRATION_CUTOFF_DAYS * DAY_MS);
+}
+
+export type RegistrationOverview = "not_open_yet" | "open" | "full" | "closed";
+
+export const REGISTRATION_OVERVIEW_LABEL: Record<RegistrationOverview, string> = {
+  not_open_yet: "Not open yet",
+  open: "Open",
+  full: "Full",
+  closed: "Closed",
+};
+
+/**
+ * What the organiser sees: the coordinator's state, plus "full" once the registered count reaches the expected
+ * attendance. The registration-service owns that count and the backend decides; this only mirrors it for display.
+ */
+export function registrationOverview(
+  status: string,
+  details: Record<string, unknown>,
+  openDate: string | null | undefined,
+  override: RegistrationOverride | null | undefined,
+  registeredCount: number,
+  now: Date = new Date(),
+): RegistrationOverview {
+  const state = registrationState(status, details, openDate, override, now);
+  if (state !== "open") return state;
+  const capacity = Number(details.expectedAttendance);
+  return capacity > 0 && registeredCount >= capacity ? "full" : "open";
+}
