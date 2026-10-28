@@ -13,7 +13,20 @@
  * embedded join ("event_id, venues (name)") or "*" returns whole rows, so
  * tests pre-embed any joined data (e.g. `venues: { name }`) on the row.
  *
- * Failure injection: `db.failOn("venue_bookings", "update")` makes every
+ * Filters and ordering follow Postgres/PostgREST (NULL never matches, "5"
+ * equals 5, "09:00" equals 09:00:00, text sorts by the en-US collation), and
+ * integration/fakeDbContract.test.ts keeps that honest by running the same
+ * queries against the real database. What the fake does NOT model: column
+ * defaults (status, active, created_at), identity ids, and constraint errors
+ * (NOT NULL, CHECK, foreign key); a unique key is modelled only for the columns
+ * passed in `options.unique`. Seed rows with every column the code
+ * under test reads, and test constraint behaviour against the real database.
+ *
+ * Not yet compared with the real database: venue_bookings and venue_buffer_overlaps. venue_bookings.event_id
+ * is a foreign key to events-service's table, so a throwaway row there would mean writing another service's
+ * data. Those queries use the same filter, order and update code the contract test does cover.
+ *
+ * Failure injection:`db.failOn("venue_bookings", "update")` makes every
  * such call resolve `{ data: null, error }`; pass a count to fail only the
  * next N calls, or a predicate to fail selectively.
  */
@@ -40,20 +53,68 @@ type Rule = {
 
 const ERROR = { message: "injected failure", code: "XX000" };
 
+/** Postgres orders text by the database collation, not by code point: "apple" < "Apple 2" < "Banana". */
+const COLLATOR = new Intl.Collator("en-US");
+const TIME = /^\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T/;
+
+const isNull = (v: unknown) => v === null || v === undefined;
+const isNumeric = (s: string) => s.trim() !== "" && Number.isFinite(Number(s));
+const withSeconds = (t: string) => (t.length === 5 ? `${t}:00` : t);
+
+/**
+ * Put two non-NULL values on the same footing the way PostgREST does when it
+ * casts the filter value to the column's type: "5" against an integer is 5,
+ * "09:00" against a time is 09:00:00, and two timestamps are instants however
+ * they are written (Z or +00:00).
+ */
+function align(a: any, b: any): [any, any] {
+  if (typeof a === "number" && typeof b === "string" && isNumeric(b)) return [a, Number(b)];
+  if (typeof b === "number" && typeof a === "string" && isNumeric(a)) return [Number(a), b];
+  if (typeof a === "string" && typeof b === "string") {
+    if (TIME.test(a) && TIME.test(b)) return [withSeconds(a), withSeconds(b)];
+    if (TIMESTAMP.test(a) && TIMESTAMP.test(b) && !Number.isNaN(Date.parse(a)) && !Number.isNaN(Date.parse(b))) {
+      return [Date.parse(a), Date.parse(b)];
+    }
+  }
+  return [a, b];
+}
+
+/** Order of two non-NULL values: negative, 0 or positive. */
+function compare(a: any, b: any): number {
+  const [x, y] = align(a, b);
+  if (typeof x === "string" && typeof y === "string") return COLLATOR.compare(x, y);
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/** SQL equality: NULL equals nothing, not even NULL (`eq(col, null)` therefore matches no row). */
+function same(a: any, b: any): boolean {
+  if (isNull(a) || isNull(b)) return false;
+  const [x, y] = align(a, b);
+  return x === y;
+}
+
 function matches(row: Row, f: Filter): boolean {
   const v = row[f.col];
+  if (f.kind === "is") return f.value === null ? isNull(v) : v === f.value;
+  // Every other comparison with NULL is unknown in SQL, and an unknown row is not returned.
+  if (isNull(v) || (f.kind !== "in" && isNull(f.value))) return false;
   switch (f.kind) {
-    case "eq": return v === f.value;
-    case "in": return (f.value as any[]).includes(v);
-    case "lt": return v < f.value;
-    case "lte": return v <= f.value;
-    case "gt": return v > f.value;
-    case "gte": return v >= f.value;
-    case "is": return f.value === null ? v === null || v === undefined : v === f.value;
+    case "eq": return same(v, f.value);
+    case "in": return (f.value as any[]).some((x) => same(v, x));
+    case "lt": return compare(v, f.value) < 0;
+    case "lte": return compare(v, f.value) <= 0;
+    case "gt": return compare(v, f.value) > 0;
+    case "gte": return compare(v, f.value) >= 0;
   }
 }
 
-export function createFakeDb(initial: Record<string, Row[]> = {}) {
+export interface FakeDbOptions {
+  /** Columns that must be unique per table, like a primary key: a repeated value fails the insert with 23505. */
+  unique?: Record<string, string[]>;
+}
+
+export function createFakeDb(initial: Record<string, Row[]> = {}, options: FakeDbOptions = {}) {
   const tables: Record<string, Row[]> = {};
   for (const [name, rows] of Object.entries(initial)) tables[name] = rows.map((r) => ({ ...r }));
   const nextId: Record<string, number> = {};
@@ -94,6 +155,15 @@ export function createFakeDb(initial: Record<string, Row[]> = {}) {
       let out: Row[];
       if (op === "insert") {
         const incoming = Array.isArray(payload) ? payload : [payload];
+        // All or nothing, as in Postgres: one repeated key rejects the whole statement.
+        const keys = options.unique?.[table] ?? [];
+        const seen = [...rowsOf(table)];
+        for (const p of incoming) {
+          if (keys.some((k) => seen.some((r) => same(r[k], p[k])))) {
+            return done({ data: null, error: { message: `duplicate key value violates unique constraint on ${table}`, code: "23505" } });
+          }
+          seen.push(p);
+        }
         out = incoming.map((p: Row) => {
           const row = { ...p };
           if (row.id === undefined) row.id = nextId[table] = (nextId[table] ?? Math.max(0, ...rowsOf(table).map((r) => Number(r.id) || 0))) + 1;
@@ -115,7 +185,7 @@ export function createFakeDb(initial: Record<string, Row[]> = {}) {
           const bNull = b[col] === null || b[col] === undefined;
           // Where NULLs go does not depend on the direction (Postgres: last for ASC, first for DESC, unless told).
           if (aNull || bNull) return aNull && bNull ? 0 : aNull === nullsFirst ? -1 : 1;
-          return a[col] === b[col] ? 0 : (a[col] < b[col] ? -1 : 1) * (ascending ? 1 : -1);
+          return compare(a[col], b[col]) * (ascending ? 1 : -1);
         });
       }
       if (columns) {

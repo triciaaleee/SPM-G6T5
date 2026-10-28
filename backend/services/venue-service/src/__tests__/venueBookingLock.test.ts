@@ -1,61 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 import { isLockBusy, withVenueBookingLock } from "../lib/venueBookingLock.js";
+import { createFakeDb } from "./helpers/fakeDb.js";
+
+const LOCKS = "venue_booking_locks";
 
 /**
- * A minimal fake of venue_booking_locks, independent of staffDecisions.ts's
- * copy, since this module is tested on its own merits: a row's existence is
- * the lock, a second insert for a held venue_id fails, and a stale row can
- * be reclaimed.
+ * venue_booking_locks on the shared in-memory database, with the table's primary key on
+ * venue_id (a second lock for a held venue fails with 23505). integration/venueBookingLock
+ * runs the same operations on the real table. `locks` is a view of the stored rows for
+ * seeding and inspecting a venue's lock; `insertError` makes every insert fail with it.
  */
 function fakeLocksSupabase(initial: Map<number, string> = new Map(), insertError?: { code: string; message: string }) {
-  const locks = initial;
-  return {
-    locks,
-    from: (table: string) => {
-      if (table !== "venue_booking_locks") throw new Error(`unexpected table ${table}`);
-      return {
-        delete: () => {
-          const filters: Record<string, unknown> = {};
-          let before: string | undefined;
-          const q: any = {
-            eq: (column: string, value: unknown) => {
-              filters[column] = value;
-              return q;
-            },
-            lt: (column: string, value: string) => {
-              // Only a filter on the lock's age may reclaim it.
-              if (column === "locked_at") before = value;
-              return q;
-            },
-          };
-          q.then = (resolve: (value: unknown) => unknown) => {
-            const venueId = filters.venue_id as number | undefined;
-            if (venueId !== undefined) {
-              const lockedAt = locks.get(venueId);
-              const ownerMatches = filters.locked_at === undefined || filters.locked_at === lockedAt;
-              if (lockedAt !== undefined && ownerMatches && (before === undefined || lockedAt < before)) {
-                locks.delete(venueId);
-              }
-            }
-            return resolve({ data: null, error: null });
-          };
-          return q;
-        },
-        insert: (row: { venue_id: number; locked_at?: string }) => {
-          const q: any = {};
-          q.then = (resolve: (value: unknown) => unknown) => {
-            if (insertError) return resolve({ data: null, error: insertError });
-            if (locks.has(row.venue_id)) {
-              return resolve({ data: null, error: { code: "23505", message: "duplicate key" } });
-            }
-            locks.set(row.venue_id, row.locked_at ?? new Date().toISOString());
-            return resolve({ data: { venue_id: row.venue_id }, error: null });
-          };
-          return q;
-        },
-      };
+  const db = createFakeDb(
+    { [LOCKS]: [...initial].map(([venue_id, locked_at]) => ({ venue_id, locked_at })) },
+    { unique: { [LOCKS]: ["venue_id"] } },
+  );
+  if (insertError) db.mapOn(LOCKS, "insert", () => ({ data: null, error: insertError }));
+  const rows = () => db.rows(LOCKS);
+  const locks = {
+    has: (id: number) => rows().some((r) => r.venue_id === id),
+    get: (id: number) => rows().find((r) => r.venue_id === id)?.locked_at as string | undefined,
+    set: (id: number, at: string) => {
+      locks.delete(id);
+      rows().push({ venue_id: id, locked_at: at });
+    },
+    delete: (id: number) => {
+      db.tables[LOCKS] = rows().filter((r) => r.venue_id !== id);
     },
   };
+  return { locks, from: db.from };
 }
 
 describe("withVenueBookingLock (E4-11 AC5)", () => {
@@ -100,12 +73,18 @@ describe("withVenueBookingLock (E4-11 AC5)", () => {
   });
 
   it("gives up and reports busy if the lock is never released", async () => {
-    const supabase = fakeLocksSupabase();
-    supabase.locks.set(1, new Date().toISOString());
+    vi.useFakeTimers();
+    try {
+      const supabase = fakeLocksSupabase();
+      supabase.locks.set(1, new Date().toISOString());
 
-    const result = await withVenueBookingLock(supabase, 1, async () => "should not run");
+      const pending = withVenueBookingLock(supabase, 1, async () => "should not run");
+      await vi.runAllTimersAsync();
 
-    expect(isLockBusy(result)).toBe(true);
+      expect(isLockBusy(await pending)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reclaims a lock abandoned by a crashed process once it is stale", async () => {
@@ -185,8 +164,10 @@ describe("withVenueBookingLock (E4-11 AC5)", () => {
       expect(insert).toHaveBeenCalledTimes(8);
       expect(sleeps.mock.calls.map((call) => call[1])).toEqual(Array(7).fill(150));
     } finally {
-      vi.useRealTimers();
+      // Remove the spy first: it wraps the fake setTimeout, so restoring it after useRealTimers()
+      // would put the fake back and leave every later real-timer test waiting forever.
       vi.restoreAllMocks();
+      vi.useRealTimers();
     }
   });
 

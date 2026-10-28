@@ -36,7 +36,7 @@ let published: any[];
 let publishOk: boolean;
 
 function world(bookings: any[], opts: { venues?: any[]; extra?: Record<string, any[]>; events?: any[] } = {}) {
-  db = createFakeDb({ venues: opts.venues ?? [venueRow()], venue_bookings: bookings, ...opts.extra });
+  db = createFakeDb({ venues: opts.venues ?? [venueRow()], venue_bookings: bookings, ...opts.extra }, { unique: { venue_booking_locks: ["venue_id"] } });
   events = {};
   for (const b of bookings) events[b.event_id] = evt(b.event_id);
   for (const e of opts.events ?? []) events[e.id] = e;
@@ -252,8 +252,9 @@ describe.each([["On Hold"], ["Approved"]] as const)("decideBooking: %s", (decisi
     expect(rec.reconcileBufferOverlapsSafely).toHaveBeenCalledWith(db, 1, AUTH);
   });
   it("a hold in another's hands: lock busy → blocked, nothing written", async () => {
-    db.mapOn("venue_booking_locks", "insert", () => ({ data: null, error: { code: "23505", message: "duplicate key" } }));
     vi.useFakeTimers(); // let the lock's retry delays run instantly
+    // Another instance holds venue 1; the table's primary key rejects ours, as Postgres does.
+    db.rows("venue_booking_locks").push({ venue_id: 1, locked_at: new Date().toISOString() });
     const pending = decide(decision);
     await vi.runAllTimersAsync();
     expect(await pending).toEqual({ status: "blocked", message: "Another decision for this venue is still being processed — please try again." });

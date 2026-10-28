@@ -10,7 +10,8 @@ import "../../lib/env.js";
 import { randomUUID } from "node:crypto";
 import { supabaseAdmin } from "../../lib/supabaseAdmin.js";
 
-export const RUN = `${Date.now()}`;
+// Files run in parallel workers, so the clock alone can repeat; the random tail keeps two files' rows and teardowns apart.
+export const RUN = `${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, "0")}`;
 export const STAFF_ID = `ZINT-VEN-${RUN}`;
 export const COORD_ID = `ZINT-COORD-${RUN}`;
 
