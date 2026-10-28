@@ -2,30 +2,38 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
 import type { StaffVenueOption } from "../../lib/venuesApi";
+import { MAX_VENUES } from "../../lib/venueCalendar";
 
 /**
  * E1-5: the venue filter shared by the schedule list and the calendar. `null`
  * means every venue (the default, so everything that needs a decision shows
- * at a glance); otherwise the chosen venue ids. Choosing a venue while on
- * "All venues" narrows to just that one; ticking every venue, or clearing
- * the last tick, goes back to all.
+ * at a glance in the list); otherwise the chosen venue ids, at most `max`
+ * (four by default — the calendar only has four venue colours). Choosing a
+ * venue while on "All venues" narrows to just that one; clearing the last tick
+ * goes back to all. Ticking every venue stays an explicit choice: the calendar
+ * draws nothing for "All venues", so it must not turn back into it.
  */
-const props = defineProps<{ venues: StaffVenueOption[]; modelValue: number[] | null }>();
+const props = withDefaults(defineProps<{ venues: StaffVenueOption[]; modelValue: number[] | null; max?: number }>(), {
+  max: MAX_VENUES,
+});
 const emit = defineEmits<{ "update:modelValue": [value: number[] | null] }>();
 
 const open = ref(false);
 const root = ref<HTMLElement | null>(null);
 
 const label = computed(() => {
-  if (props.modelValue === null) return "All venues";
+  if (props.modelValue === null) return `All venues (${props.venues.length})`;
   if (props.modelValue.length === 1) return props.venues.find((v) => v.id === props.modelValue![0])?.name ?? "1 venue";
   return `${props.modelValue.length} venues`;
 });
 
-const isChecked = (id: number) => props.modelValue === null || props.modelValue.includes(id);
+const isChecked = (id: number) => props.modelValue !== null && props.modelValue.includes(id);
+const atLimit = computed(() => props.modelValue !== null && props.modelValue.length >= props.max);
+/** An unticked venue can't be added once the limit is reached; ticked ones can always be cleared. */
+const isLocked = (id: number) => atLimit.value && !isChecked(id);
 
 function choose(ids: number[]): void {
-  emit("update:modelValue", ids.length === 0 || ids.length === props.venues.length ? null : ids);
+  emit("update:modelValue", ids.length === 0 ? null : ids);
 }
 
 function toggle(id: number): void {
@@ -33,7 +41,11 @@ function toggle(id: number): void {
     choose([id]);
     return;
   }
-  choose(props.modelValue.includes(id) ? props.modelValue.filter((v) => v !== id) : [...props.modelValue, id]);
+  if (props.modelValue.includes(id)) {
+    choose(props.modelValue.filter((v) => v !== id));
+  } else if (!atLimit.value) {
+    choose([...props.modelValue, id]);
+  }
 }
 
 function onDocumentClick(event: MouseEvent): void {
@@ -58,11 +70,16 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocumentClick));
           @change="emit('update:modelValue', null)" />
         All venues
       </label>
-      <label v-for="venue in venues" :key="venue.id" class="picker__option">
-        <input type="checkbox" class="picker__check" :checked="modelValue !== null && isChecked(venue.id)"
+      <label v-for="venue in venues" :key="venue.id" class="picker__option"
+        :class="{ 'picker__option--locked': isLocked(venue.id) }">
+        <input type="checkbox" class="picker__check" :checked="isChecked(venue.id)" :disabled="isLocked(venue.id)"
           @change="toggle(venue.id)" />
         {{ venue.name }}
       </label>
+      <p class="picker__hint" data-testid="venue-picker-hint">
+        Choose up to {{ max }} venues.
+        <template v-if="atLimit"> You've picked {{ max }}: untick one to choose another.</template>
+      </p>
     </div>
   </div>
 </template>
@@ -132,6 +149,22 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocumentClick));
 
 .picker__option:hover {
   background: var(--color-grey-75);
+}
+
+.picker__option--locked,
+.picker__option--locked:hover {
+  background: transparent;
+  color: var(--color-grey-400);
+  cursor: not-allowed;
+}
+
+.picker__hint {
+  margin: var(--spacing-8) 0 0;
+  padding: var(--spacing-8) var(--spacing-8) 0;
+  border-top: 1px solid var(--color-grey-100);
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--color-grey-500);
 }
 
 .picker__check {

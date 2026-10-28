@@ -77,7 +77,7 @@ function announce(feed: AppNotification[], unread: number): void {
     if (unread > 0) {
       showToast(
         `You have ${unread} unread notification${unread === 1 ? "" : "s"}`,
-        "Open the bell to see what's changed.",
+        "View them on the notifications page.",
       );
     }
   } else {
@@ -133,9 +133,16 @@ async function openNotification(notification: AppNotification): Promise<void> {
   if (notification.link) await router.push(notification.link);
 }
 
+/**
+ * The toast's View button goes to the full notifications page, which marks items read one by one.
+ * (It used to open the dropdown, but the toast is removed before the document click listener runs, so
+ * that click looked like an outside click and shut the dropdown straight away.)
+ */
 async function viewFromToast(): Promise<void> {
   toast.value = null;
-  if (!open.value) await toggle();
+  window.clearTimeout(toastTimer);
+  close();
+  await router.push({ name: "notifications" });
 }
 
 async function viewAll(): Promise<void> {

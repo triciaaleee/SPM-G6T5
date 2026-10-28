@@ -58,7 +58,7 @@ test("capture a screenshot of every page", async ({ browser }) => {
   const attendee = await registerAttendee(`${TAG}-attendee`);
   const technicalSupport = await signInAsTechnicalSupport();
 
-  const { event, organiser, coordinator, lead, venueStaff, safetyOfficer } = await climbToConfirmed(
+  const { event, organiser, coordinator, lead, venueStaff, safetyOfficer, venue } = await climbToConfirmed(
     `${TAG}-organiser`,
     { name: uniqueName(`${TAG}-event`), registrationNeeded: true },
     async ({ coordinator: planningCoordinator, event: planningEvent }) => {
@@ -109,7 +109,14 @@ test("capture a screenshot of every page", async ({ browser }) => {
     { name: "lead-coordinator", path: `/lead/coordinators/${coordinator.id}` },
   ]);
 
-  await captureAll(browser, venueStaff, [{ name: "venue-schedule", path: "/venue-schedule" }]);
+  await captureAll(browser, venueStaff, [
+    { name: "venue-schedule", path: "/venue-schedule" },
+    // The calendar draws nothing for "All venues", so pick the seeded venue to show real blocks...
+    { name: "venue-schedule-calendar", path: `/venue-schedule?view=calendar&venue=${venue.id}` },
+    // ...and keep the empty "select venues" state too.
+    { name: "venue-schedule-calendar-all-venues", path: "/venue-schedule?view=calendar" },
+    { name: "venue-catalogue", path: "/venue-catalogue" },
+  ]);
 
   await captureAll(browser, technicalSupport, [
     { name: "equipment-requests", path: "/equipment-requests" },

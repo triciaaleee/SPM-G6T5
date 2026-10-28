@@ -54,8 +54,13 @@ export async function redirectIfUnauthenticated(res: Response): Promise<void> {
   throw new SessionExpiredError("Your session has expired. Please log in again.");
 }
 
-export async function fetchMyEvents(): Promise<EventSummary[]> {
-  const res = await fetch(apiBase, { headers: await authHeader() });
+/**
+ * The events this user manages. `assignedToMe` is for a coordinator's "My events": the server returns
+ * only what is assigned to them, instead of every event for the browser to filter.
+ */
+export async function fetchMyEvents(options: { assignedToMe?: boolean } = {}): Promise<EventSummary[]> {
+  const url = options.assignedToMe ? `${apiBase}?assignedTo=me` : apiBase;
+  const res = await fetch(url, { headers: await authHeader() });
   await redirectIfUnauthenticated(res);
   if (!res.ok) throw new Error("Failed to load events");
   const body = await res.json();

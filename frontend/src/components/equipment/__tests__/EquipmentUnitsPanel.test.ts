@@ -53,6 +53,40 @@ async function mountPanel(units: EquipmentUnit[]) {
 const type = (wrapper: Wrapper, name = "Projector") => wrapper.find(`[data-testid='type-${name}']`);
 const unitRow = (wrapper: Wrapper, id: number) => wrapper.find(`[data-testid='unit-${id}']`);
 
+describe("EquipmentUnitsPanel — pagination", () => {
+  /** n equipment types, one unit each. */
+  const manyTypes = (n: number) =>
+    Array.from({ length: n }, (_, i) => unit({ id: i + 1, type: `Type ${String(i + 1).padStart(2, "0")}` }));
+  const summary = (w: Wrapper) => w.find("[data-testid='pagination-summary']").text();
+  const typeRows = (w: Wrapper) => w.findAll("[data-testid^='type-Type']");
+
+  it("shows 20 types a page: 20, then 20, then 5 of 45", async () => {
+    const wrapper = await mountPanel(manyTypes(45));
+
+    expect(typeRows(wrapper)).toHaveLength(20);
+    expect(summary(wrapper)).toBe("Showing 1–20 of 45");
+
+    await wrapper.get("[aria-label='Page 3']").trigger("click");
+    expect(typeRows(wrapper)).toHaveLength(5);
+    expect(summary(wrapper)).toBe("Showing 41–45 of 45");
+  });
+
+  it("keeps the types with something out of use on the first page", async () => {
+    const units = manyTypes(45);
+    units[44] = unit({ id: 45, type: "Type 45", status: "Damaged" });
+    const wrapper = await mountPanel(units);
+
+    expect(wrapper.find("[data-testid='type-Type 45']").exists()).toBe(true);
+  });
+
+  it("shows no pagination bar at 20 types or fewer", async () => {
+    const wrapper = await mountPanel(manyTypes(20));
+
+    expect(typeRows(wrapper)).toHaveLength(20);
+    expect(wrapper.find("nav[aria-label='Pagination']").exists()).toBe(false);
+  });
+});
+
 function impactUnit(id: number, state: UnitImpact["state"], extra: Partial<UnitImpact> = {}): UnitImpact {
   return { id, label: null, state, reason: null, events: [], ...extra };
 }
