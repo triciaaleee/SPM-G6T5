@@ -37,12 +37,16 @@ const props = defineProps<{
   rowTo?: (row: T) => RouteLocationRaw;
   /** When given, extra class(es) applied to the row element (e.g. to flag a row needing attention). */
   rowClass?: (row: T) => string | Record<string, boolean>;
+  /** When given, sets `data-testid` on the row element. */
+  rowTestId?: (row: T) => string;
   /**
    * When given, groups rows under a divider rendered via the `group-header` slot,
    * right before the first row of each new group. `rows` must already be sorted so
    * each group's rows are contiguous; returning null/undefined skips the divider.
    */
   rowGroup?: (row: T) => RowGroup | null | undefined;
+  /** When given, an extra full-width `row-detail` slot renders right after a row for which this returns true. */
+  rowDetail?: (row: T) => boolean;
 }>();
 
 const gridStyle = computed(() => ({
@@ -84,16 +88,20 @@ const rowEntries = computed(() => {
           :to="rowTo?.(entry.row)"
           class="row"
           :class="[{ 'row--link': rowTo }, rowClass?.(entry.row)]"
+          :data-testid="rowTestId?.(entry.row)"
         >
           <span
             v-for="column in columns"
             :key="column.key"
             class="cell"
-            :class="{ 'cell--narrow-hidden': column.hideOnNarrow }"
+            :class="[`cell--${column.key}`, { 'cell--narrow-hidden': column.hideOnNarrow }]"
           >
             <slot :name="`cell-${column.key}`" :row="entry.row" />
           </span>
         </component>
+      </li>
+      <li v-if="rowDetail?.(entry.row)" class="row-detail">
+        <slot name="row-detail" :row="entry.row" />
       </li>
     </template>
   </ul>
@@ -169,6 +177,12 @@ const rowEntries = computed(() => {
 
 .row-group-header {
   border-top: 1px solid var(--color-grey-100);
+}
+
+.row-detail {
+  padding: var(--spacing-20) var(--spacing-24);
+  border-top: 1px solid var(--color-grey-100);
+  background: var(--color-base-white);
 }
 
 @media (max-width: 640px) {

@@ -1,8 +1,8 @@
 # Architecture Decision Record: ConnectSphere C4 model
 
-**Version 2.1** | 2026-10-10 | Tricia Lee (@triciaa-leee)
+**Version 2.2** | 2026-10-26 | Tricia Lee (@triciaa-leee)
 
-Records the significant decisions behind `c1-system-context.dsl`, `c2-containers.dsl` and `c3-components.dsl`. The diagrams show the finished Release 1 product (Week 12), including the Week 7 customer changes. Section 1 lists what the code does not do yet.
+Records the significant decisions behind `c1-system-context.dsl`, `c2-containers.dsl` and the seven component views in `c3/` (`c3-<service>.dsl`). The diagrams show the finished Release 1 product (Week 12), including the Week 7 customer changes. Section 1 lists what the code does not do yet.
 
 ## Changelog
 
@@ -11,6 +11,7 @@ Records the significant decisions behind `c1-system-context.dsl`, `c2-containers
 | 1.0 | 2026-09-11 | Tricia Lee | Initial record. Nine decisions and eight assumptions covering C1 to C3. |
 | 2.0 | 2026-10-10 | Tricia Lee | Week 7 customer changes and alignment with the built services. Seven roles in C1 and C2. Supabase Auth removed. One C2 view instead of two. Six services behind an Express gateway. C3 views for the gateway, events service and venue service. D2, D3, D5, D7 and D9 revised; D4 and D8 superseded; D10 to D13 added. A1 to A8 resolved; A9 to A15 added for Week 7. |
 | 2.1 | 2026-10-10 | Tricia Lee | RabbitMQ message catalogue moved to `RabbitMQ.md`. D6 revised: services announce their own releases on cancellation. New section 4 with the messaging rules. A16 and A17 added. |
+| 2.2 | 2026-10-26 | Tricia Lee | API gateway dropped: D5 superseded, 1.2 closed. Seven services, adding chat-service (D2). `c3-components.dsl` split into one C3 file per service in `c3/`, covering all seven (D9). D6, D7, D10, D13 and A1 aligned with the built services. |
 
 ---
 
@@ -22,9 +23,9 @@ The diagrams show the target. Each item below is a gap between the diagrams and 
 
 Every service now publishes its notification triggers to RabbitMQ (D6) and notification-service consumes them. The REST route `POST /api/notifications` and each service's `lib/notificationsClient.ts` have been removed; `GET /api/notifications` and the read endpoints remain, because the frontend reads its feed through them.
 
-### 1.2 The API gateway does not exist yet
+### 1.2 The API gateway was dropped (closed)
 
-D5 specifies it. Work: a new `backend/services/gateway-service/` on port 4000, added to `backend/package.json` and `backend/README.md`; `GATEWAY_PORT` and the six service URLs in `backend/.env.example`; and the frontend's five `VITE_*_API_URL` values replaced by one.
+D5 is superseded and no `gateway-service` will be built. The web app calls each service directly at its own base URL (the `VITE_*_API_URL` values in `frontend/.env.example`), and each service applies CORS and verifies the JWT itself.
 
 ### 1.3 Registration service and Safety Review are not built
 
@@ -54,23 +55,23 @@ Carried over from 1.0. Venue search, suitability and registration capacity all r
 | 1.2 Status vocabulary inconsistent | Postgres enums in migration `0014`; AGENTS.md section 3 is the single list. |
 | 1.4 No `UPDATE` policy on `events` | No longer relevant: services use the service-role key and enforce access in code (D4). |
 | 1.5 Lockout had nowhere to live | user-service owns login and lockout (migration `0006`). |
-| 1.7 Which services get C3 views | Gateway, events and venue (D9). |
+| 1.7 Which services get C3 views | Every service, one file each in `c3/` (D9). |
 
 ---
 
 ## 2. Decisions
 
-| ID | Decision | Status in 2.0 |
+| ID | Decision | Status |
 |---|---|---|
 | D1 | Microservices architecture rather than a modular monolith | Kept |
-| D2 | Six backend services | Revised |
+| D2 | Seven backend services | Revised (2.2) |
 | D3 | One Postgres instance; each service owns its own tables | Revised |
 | D4 | Row level security as the primary authorisation control | Superseded by D10 |
-| D5 | An Express API gateway as the single entry point | Revised |
+| D5 | An Express API gateway as the single entry point | Superseded (2.2) |
 | D6 | RabbitMQ topic exchange for asynchronous events | Revised |
 | D7 | Synchronous REST only for live cross-service reads | Revised |
 | D8 | Model the target state, tag what exists today | Superseded |
-| D9 | Component views for the gateway, events and venue services | Revised |
+| D9 | One component view per service | Revised (2.2) |
 | D10 | user-service issues the JWT; no external identity provider | New |
 | D11 | Safety Review lives in the events service | New |
 | D12 | Attendee registration is its own service | New |
@@ -82,7 +83,7 @@ Carried over from 1.0. Venue search, suitability and registration capacity all r
 
 **Consequence:** more moving parts than one service, and cross-service reads that a monolith would resolve with a join.
 
-### D2. Six backend services (revised)
+### D2. Seven backend services (revised)
 
 | Service | Epic | Port |
 |---|---|---|
@@ -91,9 +92,12 @@ Carried over from 1.0. Venue search, suitability and registration capacity all r
 | venue-service | E4 | 4003 |
 | notification-service | E7 | 4004 |
 | equipment-service | E5 | 4005 |
-| registration-service | E6 | 4006 |
+| chat-service | E2-15 | 4006 |
+| registration-service | E6 | 4007 |
 
 **Change from 1.0:** the separate event request (E2) and event lifecycle (E3) services are merged into events-service. Both acted on the same event row, and splitting the status machine across two services could not satisfy E3-3. This settles 1.0 item 1.1.
+
+**Change in 2.2:** chat-service (E2-15) is its own service because chat messages are a separate entity with their own table (AGENTS.md section 1). registration-service runs on port 4007.
 
 ### D3. One Postgres instance; each service owns its own tables (revised)
 
@@ -105,7 +109,9 @@ Each service reads and writes only its own tables and reaches other data through
 
 Services connect with the Supabase service-role key (`lib/supabaseAdmin.ts`) and enforce role and ownership checks in their own middleware and routes. Every illegal status transition is rejected by the backend with `409` (AGENTS.md section 3). See D10.
 
-### D5. An Express API gateway as the single entry point (revised)
+### D5. An Express API gateway as the single entry point (superseded)
+
+**Superseded in 2.2:** no gateway was built and none is planned. The web app calls each service directly at its own base URL, and every service applies CORS, verifies the JWT with the shared `JWT_SECRET` (D10) and checks the role it needs. The consequence is the one this decision set out to avoid: one base URL per service in the web app, and CORS and token checks repeated in every service. The original decision is kept below for the record.
 
 A small `gateway-service` (Express 5 with `http-proxy-middleware`, port 4000). It verifies the JWT once with the shared `JWT_SECRET`, lets only `/api/auth/signup`, `/api/auth/login` and `/health` through without a token, and proxies by path prefix:
 
@@ -128,7 +134,7 @@ The original `Authorization` header is forwarded, and each service still verifie
 
 ### D6. RabbitMQ topic exchange for asynchronous events (revised)
 
-Exchange `connectsphere.events`. Events, venue, equipment and registration services publish. Notification, events, venue, equipment and registration services consume. The full message catalogue, the requirement each message serves, the queue bindings and the message envelope are in [`RabbitMQ.md`](RabbitMQ.md); the rules every publisher and consumer follows are in section 4 below.
+Exchange `connectsphere.events`. Events, venue, equipment, registration and chat services publish. Notification, venue, equipment and registration services consume. events-service has no queue: venue- and equipment-service report a lost arrangement to it over REST instead (D7). The full message catalogue, the requirement each message serves, the queue bindings and the message envelope are in [`RabbitMQ.md`](RabbitMQ.md); the rules every publisher and consumer follows are in section 4 below.
 
 **Rationale:** E7-2 has notification triggers in every epic. Without a broker, every service needs a synchronous dependency on notification-service. Cancellation (E3-6) fans out to venues, equipment and registrations at once, and a venue becoming unavailable (change 2) must send the event back for re-review.
 
@@ -141,16 +147,19 @@ Exchange `connectsphere.events`. Events, venue, equipment and registration servi
 | Caller | Owner | Purpose |
 |---|---|---|
 | events | user | Active coordinators for assignment and reassignment (E2-12, E2-13) |
-| events | venue | Booking status before safety review, and change impact (E3-4, E3-10) |
-| events | equipment | Reservation status before safety review, and change impact (E3-4, E3-10) |
+| events | venue | Booking status before safety review, and change impact (E3-4, E3-10); flags bookings for rebooking after an approved change (E3-11) |
+| events | equipment | Reservation status before safety review, and change impact (E3-4, E3-10); flags requests for reassessment after an approved change (E3-11) |
 | events | registration | Registered counts against proposed capacity (E3-10) |
-| venue | events | Event date, times, attendance and status for occupied windows (E4-6 to E4-11) |
-| equipment | events | Event timing to scope availability (E5-4) |
+| venue | events | Event date, times, attendance and status for occupied windows (E4-6 to E4-11); reports a lost booking with `POST /api/events/:id/arrangements-changed` (AGENTS.md section 3) |
+| equipment | events | Event timing to scope availability (E5-4); reports a lost reservation with `POST /api/events/:id/arrangements-changed` |
+| equipment | user | Coordinator names for Technical Support's view of a request (E5-1) |
 | registration | events | Event details and status (E6-1, E6-2) |
-| registration | venue | Capacity of the approved bookings (E6-1, E6-6) |
+| registration | venue | Venue names of the approved bookings (E6-1, E6-6) |
+| registration | user | Attendee names for a roster (E3-5) |
+| chat | events | Event status, organiser and assigned coordinator for chat access (E2-15) |
 | notification | user | Role-based recipients such as coordinator leads and safety officers (E7-2) |
 
-The caller forwards the user's bearer token, so the owner's access rules apply.
+The caller forwards the user's bearer token, so the owner's access rules apply. Where there is no user token (a queue message, venue-service's expiring-hold sweep, an arrangements-changed report), the caller signs a short-lived internal token with `INTERNAL_SERVICE_SECRET` instead.
 
 **Consequence:** runtime coupling on these paths. A venue-service outage blocks submission for safety review.
 
@@ -158,13 +167,15 @@ The caller forwards the user's bearer token, so the owner's access rules apply.
 
 The diagrams now show the finished Release 1 product without Existing or Planned tags. Section 1 of this record tracks what is not built.
 
-### D9. Component views for the gateway, events and venue services (revised)
+### D9. One component view per service (revised)
 
-The gateway because it is new infrastructure; events and venue because they carry most of the Week 7 logic (unassigned queue, Safety Review, re-review, setup and turnaround, unavailability, multi-venue bookings, expiring holds). Component technology names the real file where one exists.
+Each of the seven services has its own C3 file in `c3/`, named `c3-<service>.dsl`. Each is a standalone workspace that redeclares only the neighbouring containers its service talks to (the web app, other services, the broker, the database), so it opens on its own in Structurizr. Components are logical, and each names the real source file it lives in. Where one large router holds several responsibilities, such as events-service's `routes/events.ts`, it is split into logical controllers that all name that file.
+
+**Change in 2.2:** 2.0 had one `c3-components.dsl` with views for the gateway, events and venue only. The gateway view went with D5, and user, equipment, registration, notification and chat services now have views too.
 
 ### D10. user-service issues the JWT (new)
 
-user-service signs a JWT carrying the caller's id and role; every other service, and the gateway, only verifies it with the shared `JWT_SECRET` (AGENTS.md section 5). Supabase Auth is not used, so C1 shows no external systems. Issue #63 confirms there is no integration with other tools, and E7-1 fixes notification delivery as in-app only.
+user-service signs a JWT carrying the caller's id and role; every other service only verifies it with the shared `JWT_SECRET` (AGENTS.md section 5). Supabase Auth is not used, so C1 shows no external systems. Issue #63 confirms there is no integration with other tools, and E7-1 fixes notification delivery as in-app only.
 
 ### D11. Safety Review lives in the events service (new)
 
@@ -176,7 +187,7 @@ Registrations are a separate entity with their own data and roles (attendee, org
 
 ### D13. One C2 view that includes every role (new)
 
-1.0 had two C2 views. C2-EventPath showed only the broker and services, without the people or the web app, so it did not show how anyone uses the system. 2.0 has one view: the seven roles, the web app, the gateway, the six services, the broker and the database.
+1.0 had two C2 views. C2-EventPath showed only the broker and services, without the people or the web app, so it did not show how anyone uses the system. 2.0 has one view: the seven roles, the web app, the services, the broker and the database (since 2.2, seven services and no gateway).
 
 ---
 
@@ -186,7 +197,7 @@ Registrations are a separate entity with their own data and roles (attendee, org
 
 | ID | 1.0 assumption | Now |
 |---|---|---|
-| A1 | Role resolution happens once, at the gateway | Revised. The role is a claim in the JWT (D10). The gateway verifies the token; each service checks the role it needs. |
+| A1 | Role resolution happens once, at the gateway | Revised. The role is a claim in the JWT (D10). Each service verifies the token and checks the role it needs (D5 superseded). |
 | A2 | Identity service wraps Supabase Auth | Superseded by D10. |
 | A3 | Single-session events only | Superseded by Week 7 change 3: an event can have several venue bookings, all sharing the event's date and times (AGENTS.md section 3a). |
 | A4 | Round-robin coordinator assignment | Superseded by Week 7 change 5: the coordinator lead assigns from an unassigned queue. |

@@ -34,6 +34,21 @@ export function scheduleChanged(
   return SCHEDULE_FIELDS.some((field) => a[field] !== b[field]);
 }
 
+/** The expected attendance as a whole number, or null when it is missing or not a number. */
+export function attendanceOf(details: Record<string, unknown> | null | undefined): number | null {
+  const raw = details?.expectedAttendance;
+  const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** True when the expected attendance differs. A missing value and a different one are a change. */
+export function attendanceChanged(
+  before: Record<string, unknown> | null | undefined,
+  after: Record<string, unknown> | null | undefined,
+): boolean {
+  return attendanceOf(before) !== attendanceOf(after);
+}
+
 /**
  * Tells the other services an event now happens at a different time
  * (`event.rescheduled`, RabbitMQ.md). equipment-service moves its stored
@@ -64,6 +79,36 @@ export async function announceReschedule(
     });
   } catch (err) {
     console.error(`events-service: could not announce the reschedule of event ${event.id}`, err);
+    return false;
+  }
+}
+
+/**
+ * Tells venue-service the event's expected attendance changed
+ * (`event.attendance_changed`), so it can flag a booking at a venue that is now too
+ * small. Same handling as `announceReschedule`: through the outbox, best effort for
+ * the caller (the edit is already saved), nobody notified directly.
+ */
+export async function announceAttendanceChange(
+  supabase: Supabase,
+  event: {
+    id: number;
+    actorId: string;
+    eventName: string;
+    coordinatorId: string | null;
+    details: Record<string, unknown> | null | undefined;
+  },
+): Promise<boolean> {
+  try {
+    return await publishDurably(supabase, {
+      type: "event.attendance_changed",
+      eventId: event.id,
+      actorId: event.actorId,
+      recipients: { userIds: [], roles: [] },
+      data: { eventName: event.eventName, coordinatorId: event.coordinatorId, expectedAttendance: attendanceOf(event.details) },
+    });
+  } catch (err) {
+    console.error(`events-service: could not announce the attendance change of event ${event.id}`, err);
     return false;
   }
 }

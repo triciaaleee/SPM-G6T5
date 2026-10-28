@@ -11,7 +11,13 @@ import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../lib/eventStatus.js";
 import { committedFieldValue, validateChangeRequestFields, withHeldValues } from "../lib/changeRequestFields.js";
 import { AUTO_APPLIED_REASON_PREFIX, CHANGE_REQUEST_STATUS } from "../lib/changeRequestStatus.js";
 import { publishDurably } from "../lib/outbox.js";
-import { announceReschedule, scheduleChanged, SCHEDULE_FIELDS } from "../lib/reschedule.js";
+import {
+  announceAttendanceChange,
+  announceReschedule,
+  attendanceChanged,
+  scheduleChanged,
+  SCHEDULE_FIELDS,
+} from "../lib/reschedule.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
 import { fetchCoordinators } from "../lib/usersClient.js";
 import {
@@ -974,6 +980,15 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
         details: result.value as unknown as Record<string, unknown>,
       });
     }
+    if (attendanceChanged(oldDetails, result.value as unknown as Record<string, unknown>)) {
+      await announceAttendanceChange(supabase, {
+        id: existing.id,
+        actorId: user.id,
+        eventName: eventDisplayName(data as unknown as AssignmentEventRow),
+        coordinatorId: existing.coordinator_id ?? null,
+        details: result.value as unknown as Record<string, unknown>,
+      });
+    }
 
     res.json({ event: data });
     return;
@@ -1058,15 +1073,18 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     user.id,
   );
 
-  // Equipment can only be reserved from Planning on, so an earlier edit has nothing to move.
-  if (!isDraftSubmit && !PRE_PLANNING_STATUSES.has(existing.status) && scheduleChanged(oldDetails, result.value as unknown as Record<string, unknown>)) {
-    await announceReschedule(supabase, {
+  // Equipment and venues can only be booked from Planning on, so an earlier edit has nothing to move or re-check.
+  if (!isDraftSubmit && !PRE_PLANNING_STATUSES.has(existing.status)) {
+    const newDetails = result.value as unknown as Record<string, unknown>;
+    const announced = {
       id: existing.id,
       actorId: user.id,
       eventName: eventDisplayName(data as unknown as AssignmentEventRow),
       coordinatorId: existing.coordinator_id ?? null,
-      details: result.value as unknown as Record<string, unknown>,
-    });
+      details: newDetails,
+    };
+    if (scheduleChanged(oldDetails, newDetails)) await announceReschedule(supabase, announced);
+    if (attendanceChanged(oldDetails, newDetails)) await announceAttendanceChange(supabase, announced);
   }
 
   if (isClarificationResponse) {
@@ -2184,8 +2202,12 @@ eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedR
   }
 
   const eventName = eventDisplayName(updatedEvent as unknown as AssignmentEventRow);
+  const approvedEvent = { id: event.id, actorId: user.id, eventName, coordinatorId: event.coordinator_id, details: stored };
   if (criticalFields.some((f) => (SCHEDULE_FIELDS as readonly string[]).includes(f.field))) {
-    await announceReschedule(supabase, { id: event.id, actorId: user.id, eventName, coordinatorId: event.coordinator_id, details: stored });
+    await announceReschedule(supabase, approvedEvent);
+  }
+  if (criticalFields.some((f) => f.field === "expectedAttendance")) {
+    await announceAttendanceChange(supabase, approvedEvent);
   }
   const published = await getPublisher().publish({
     type: "change.decided",
@@ -2383,6 +2405,7 @@ interface ReviewEventRow {
   status: string;
   coordinator_id: string | null;
   organiser_id: string | null;
+  submitted_details?: Record<string, unknown> | null;
 }
 
 /**
@@ -2420,7 +2443,7 @@ async function authorizeCoordinatorReview(
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, status, coordinator_id, organiser_id")
+    .select("id, status, coordinator_id, organiser_id, submitted_details")
     .eq("id", Number(eventId))
     .maybeSingle();
 
@@ -2851,7 +2874,12 @@ eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) =
     return;
   }
 
-  const outstanding = findOutstandingArrangements(bookings.value, equipment.value);
+  const equipmentRequirements = event.submitted_details?.equipment;
+  const outstanding = findOutstandingArrangements(
+    bookings.value,
+    equipment.value,
+    typeof equipmentRequirements === "string" ? equipmentRequirements : null,
+  );
   if (hasOutstanding(outstanding)) {
     res.status(409).json({ error: describeOutstanding(outstanding), outstanding });
     return;

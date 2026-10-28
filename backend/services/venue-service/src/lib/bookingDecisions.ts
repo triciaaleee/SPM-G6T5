@@ -259,11 +259,15 @@ interface BlockingBookingWindow {
   window: OccupiedWindow;
 }
 
-/** Every booking that currently blocks `venue`, with the window it occupies. */
+/**
+ * Every booking that currently blocks `venue`, with the window it occupies.
+ * Pass `null` for `authorization` when there is no end-user request to forward
+ * (a RabbitMQ handler): events-service is then asked with an internal token.
+ */
 export async function blockingWindows(
   supabase: Supabase,
   venue: VenueRow,
-  authorization: string,
+  authorization: string | null,
   exceptBookingId: number,
 ): Promise<BlockingBookingWindow[] | null> {
   const { data, error } = await supabase
@@ -279,7 +283,9 @@ export async function blockingWindows(
   );
   if (rows.length === 0) return [];
 
-  const info = await fetchVenueBookingInfo([...new Set(rows.map((r) => r.event_id))], authorization);
+  const eventIds = [...new Set(rows.map((r) => r.event_id))];
+  const info =
+    authorization === null ? await fetchVenueBookingInfoInternal(eventIds) : await fetchVenueBookingInfo(eventIds, authorization);
   if (info.status === "error") return null;
   const eventsById = new Map(info.events.map((event) => [event.id, event]));
 

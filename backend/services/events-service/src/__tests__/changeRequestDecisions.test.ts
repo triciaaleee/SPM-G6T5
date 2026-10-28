@@ -371,6 +371,23 @@ describe("POST /api/events/:id/change-requests/:requestId/approve", () => {
       ]);
     });
 
+    it("tells venue-service the attendance changed when an approved field is the expected attendance", async () => {
+      const { app } = buildApp({ fields: twoHeldFields, bookings: [] });
+      await request(app).post("/api/events/163/change-requests/5/approve").send({ fields: ["expectedAttendance"] });
+
+      const messages = publish.mock.calls.map((c) => c[0]).filter((m) => m.type === "event.attendance_changed");
+      expect(messages).toEqual([
+        expect.objectContaining({ eventId: 163, recipients: { userIds: [], roles: [] }, data: expect.objectContaining({ expectedAttendance: 110 }) }),
+      ]);
+    });
+
+    it("does not announce an attendance change when only a time was approved", async () => {
+      const { app } = buildApp({ fields: twoHeldFields, bookings: [] });
+      await request(app).post("/api/events/163/change-requests/5/approve").send({ fields: ["startTime"] });
+
+      expect(publish.mock.calls.map((c) => c[0].type)).not.toContain("event.attendance_changed");
+    });
+
     it("does not announce a reschedule when the approved field is not a date or time", async () => {
       const { app } = buildApp({ fields: twoHeldFields, bookings: [] });
       await request(app).post("/api/events/163/change-requests/5/approve").send({ fields: ["expectedAttendance"] });

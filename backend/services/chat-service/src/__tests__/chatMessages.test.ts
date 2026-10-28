@@ -2,9 +2,10 @@ import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
-import { chatRouter } from "../routes/chatMessages.js";
+import { chatRouter, sendLimiter } from "../routes/chatMessages.js";
 import { validateMessageBody } from "../lib/validateChatMessage.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
+import { createFakeSupabase } from "./helpers/fakeSupabase.js";
 
 vi.mock("../middleware/auth.js", async () => {
   return {
@@ -18,16 +19,6 @@ vi.mock("../middleware/auth.js", async () => {
 
 const organiser = { id: "ORG-0001", role: "organiser" };
 const coordinator = { id: "COORD-0001", role: "coordinator" };
-
-/** A supabase-js style query: every filter returns the query, and awaiting it yields `result`. */
-function query(result: { data: unknown; error: unknown }) {
-  const q: Record<string, any> = {};
-  for (const method of ["select", "eq", "in", "order", "neq", "is", "update"]) q[method] = vi.fn(() => q);
-  q.single = vi.fn().mockResolvedValue(result);
-  q.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
-    Promise.resolve(result).then(resolve, reject);
-  return q;
-}
 
 function eventRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -53,35 +44,22 @@ function buildApp(
     notificationsFail?: boolean;
   } = {},
 ) {
-  const messagesSelect = query({ data: options.messages ?? [], error: null });
-  const messagesUpdate = query({ data: null, error: null });
-  const messagesInsert = vi.fn(() =>
-    query({
-      data: options.insertError
-        ? null
-        : options.insertedMessage === undefined
-          ? {
-              id: 900,
-              event_id: 7,
-              sender_id: (options.user ?? organiser).id,
-              sender_role: (options.user ?? organiser).role,
-              body: "Hello",
-              read_at: null,
-              created_at: "2026-01-01T00:00:00Z",
-            }
-          : options.insertedMessage,
-      error: options.insertError ? { message: "boom" } : null,
-    }),
-  );
-
-  const supabase = {
-    from: vi.fn((table: string) => {
-      if (table === "chat_messages") {
-        return { select: messagesSelect.select, insert: messagesInsert, update: messagesUpdate.update };
-      }
-      throw new Error(`unexpected table ${table}`);
-    }),
-  };
+  const sender = options.user ?? organiser;
+  const fake = createFakeSupabase({
+    messages: options.messages ?? [],
+    insertResult: options.insertError
+      ? { data: null, error: { message: "boom" } }
+      : {
+          data:
+            options.insertedMessage === undefined
+              ? { id: 900, event_id: 7, sender_id: sender.id, sender_role: sender.role, body: "Hello", read_at: null, created_at: "2026-01-01T00:00:00Z" }
+              : options.insertedMessage,
+          error: null,
+        },
+  });
+  const { supabase } = fake;
+  const messagesInsert = fake.insert;
+  const messagesUpdate = fake.upd;
 
   const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
     if (url.includes("/api/events/") && !url.includes("/api/events?") && !url.endsWith("/api/events")) {
@@ -108,11 +86,12 @@ function buildApp(
   const app = express();
   app.use(express.json());
   app.use("/api/chat", chatRouter);
-  return { app, supabase, messagesInsert, messagesUpdate, fetchMock, publish };
+  return { app, supabase, messagesInsert, messagesUpdate, fetchMock, publish, sel: fake.sel };
 }
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  sendLimiter.reset();
 });
 
 describe("validateMessageBody", () => {
@@ -175,7 +154,7 @@ describe("GET /api/chat/:eventId/messages", () => {
     expect(res.status).toBe(409);
   });
 
-  it("returns history, unread count and canSend for the owning organiser", async () => {
+  it("returns history and unread count for the owning organiser", async () => {
     const { app } = buildApp({
       messages: [
         { id: 1, event_id: 7, sender_id: "COORD-0001", sender_role: "coordinator", body: "Hi", read_at: null, created_at: "2026-01-01T00:00:00Z" },
@@ -184,7 +163,8 @@ describe("GET /api/chat/:eventId/messages", () => {
     });
     const res = await request(app).get("/api/chat/7/messages");
     expect(res.status).toBe(200);
-    expect(res.body.event).toMatchObject({ id: 7, name: "Alumni Gala", status: "Planning", canSend: true });
+    expect(res.body.event).toMatchObject({ id: 7, name: "Alumni Gala", status: "Planning" });
+    expect(res.body.event).not.toHaveProperty("canSend");
     expect(res.body.unreadCount).toBe(1);
     expect(res.body.messages).toEqual([
       { id: 1, senderId: "COORD-0001", senderRole: "coordinator", body: "Hi", createdAt: "2026-01-01T00:00:00Z", mine: false },
@@ -196,7 +176,7 @@ describe("GET /api/chat/:eventId/messages", () => {
     const { app } = buildApp({ event: eventRow({ status: "Confirmed" }) });
     const res = await request(app).get("/api/chat/7/messages");
     expect(res.status).toBe(200);
-    expect(res.body.event).toMatchObject({ status: "Confirmed", canSend: true });
+    expect(res.body.event).toMatchObject({ status: "Confirmed" });
   });
 
   it.each(["Unassigned", "Requested", "Clarification Requested", "Safety Review", "Completed", "Rejected", "Cancelled"])(

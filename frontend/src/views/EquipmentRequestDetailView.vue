@@ -11,32 +11,57 @@
  * fulfilment (AC2). E5-4: each item's availability is checked against the
  * event's own date and time before a decision is made.
  */
+import { ChevronDownIcon, ExclamationTriangleIcon, XMarkIcon } from "@heroicons/vue/16/solid";
 import AppButton from "../components/ui/AppButton.vue";
-import { computed, onMounted, reactive, ref } from "vue";
+import DataTable from "../components/ui/DataTable.vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { getStoredUser, landingRouteForRole } from "../lib/auth";
 import {
-  EQUIPMENT_REQUEST_STATUSES,
+  CANCELLED_REQUEST_STATUS,
   EquipmentAccessDeniedError,
   EquipmentRequestError,
   EquipmentValidationError,
-  checkEquipmentAvailability,
   fetchEquipmentCatalog,
   fetchEquipmentRequestsForSupport,
   itemFulfilmentBadgeClass,
   itemFulfilmentState,
+  previewUnitsForItem,
   updateEquipmentRequestStatus,
-  type EquipmentAvailability,
   type EquipmentCatalogItem,
   type EquipmentItem,
   type EquipmentRequest,
   type EquipmentRequestStatus,
+  type EquipmentRequestWithRequester,
   type EventEquipmentView,
+  type UnitLabel,
+  type UnitPreview,
 } from "../lib/equipmentApi";
 
 const route = useRoute();
 const router = useRouter();
 const eventId = String(route.params.eventId);
+
+/** While editing: pick how many of each item is being arranged — status is a read-out, not a choice. */
+const EDIT_COLUMNS = [
+  { key: "equipment", label: "Item" },
+  { key: "qty", label: "Needed" },
+  { key: "stock", label: "Free stock" },
+  { key: "arranging", label: "Arranging now" },
+  { key: "status", label: "Status" },
+];
+/** Shared by both states, so a row's columns line up whether or not it's expanded (sized for the edit
+ * state's wider "Arranging now" cell — the stepper, "of N" and "Arrange all"). */
+const COLUMN_WIDTHS = "1fr 6rem 8rem 22rem 11rem";
+
+/** Collapsed/read-only: what was actually arranged, nothing editable. */
+const VIEW_COLUMNS = [
+  { key: "equipment", label: "Item" },
+  { key: "qty", label: "Needed" },
+  { key: "stock", label: "Available on event day" },
+  { key: "arranged", label: "Arranged" },
+  { key: "status", label: "Status" },
+];
 
 /** Back to wherever the user came from; a direct link has no history, so it falls back to the role's home page. */
 function goBack(): void {
@@ -53,13 +78,27 @@ const loading = ref(true);
 const accessDenied = ref(false);
 const errorMessage = ref<string | null>(null);
 
-const requests = computed<EquipmentRequest[]>(() => view.value?.equipmentRequests ?? []);
+const requests = computed<EquipmentRequestWithRequester[]>(() => view.value?.equipmentRequests ?? []);
+
+/** "· Requested by Priya Shah", falling back to the id if the name couldn't be resolved. Omitted if neither is known. */
+function requesterLabel(r: EquipmentRequestWithRequester): string {
+  if (!r.requestedBy) return "";
+  return ` · Requested by ${r.requestedBy.name ?? r.requestedBy.id}`;
+}
+
+/** Live requests keep the full table card; cancelled ones are history, tucked into one collapsible list. */
+const activeRequests = computed(() => requests.value.filter((r) => r.status !== CANCELLED_REQUEST_STATUS));
+const cancelledRequests = computed(() => requests.value.filter((r) => r.status === CANCELLED_REQUEST_STATUS));
+const showCancelled = ref(false);
+
+/** "Request 2": the request's place in the order it was raised, whichever list it is shown in. */
+function requestNumber(r: EquipmentRequest): number {
+  return requests.value.findIndex((candidate) => candidate.id === r.id) + 1;
+}
 
 interface EditState {
   expanded: boolean;
-  /** What Technical Support pick for each item (by item id). The request's own status follows from these. */
-  states: Record<number, EquipmentRequestStatus>;
-  /** Partially Fulfilled items only: how many of the item are arranged. */
+  /** How many of each item (by item id) Technical Support is arranging — status is derived from this, never picked. */
   quantities: Record<number, number>;
   saving: boolean;
   error: string | null;
@@ -72,7 +111,6 @@ function editFor(r: EquipmentRequest): EditState {
   if (!edits[r.id]) {
     edits[r.id] = {
       expanded: false,
-      states: {},
       quantities: {},
       saving: false,
       error: null,
@@ -82,21 +120,14 @@ function editFor(r: EquipmentRequest): EditState {
   return edits[r.id];
 }
 
-/** Opens the editor, resynced to the request's current status — discards any stale pick from last time. */
+/** Opens the editor, starting each item's stepper at what it already has — the truth, not a guess. */
 function openEditor(r: EquipmentRequest): void {
   const edit = editFor(r);
-  // Each item starts at what it already has; the number for a partial item starts at what is free now.
-  edit.states = Object.fromEntries(
-    r.items.map((item) => [
-      item.id,
-      item.quantityFulfilled <= 0 ? "Requested" : item.quantityFulfilled >= item.quantity ? "Arranged" : "Partially Fulfilled",
-    ]),
-  );
-  edit.quantities = Object.fromEntries(
-    r.items.map((item) => [item.id, item.quantityFulfilled > 0 ? item.quantityFulfilled : fulfilledQuantityFor(item)]),
-  );
+  edit.quantities = Object.fromEntries(r.items.map((item) => [item.id, item.quantityFulfilled]));
   edit.error = null;
   edit.expanded = true;
+  // An immediate read, not debounced, so the panel has something to show as soon as the editor opens.
+  for (const item of r.items) void runLivePreview(item, chosenQuantity(r, item));
 }
 
 function cancelEdit(r: EquipmentRequest): void {
@@ -111,27 +142,44 @@ async function refreshCatalog(): Promise<void> {
   }
 }
 
-interface AvailabilityCheckState {
+interface PreviewState {
   loading: boolean;
   error: string | null;
-  result: EquipmentAvailability | null;
+  result: UnitPreview | null;
 }
 
-const availabilityChecks = reactive<Record<number, AvailabilityCheckState>>({});
-
-function availabilityFor(item: EquipmentItem): AvailabilityCheckState {
-  if (!availabilityChecks[item.id]) {
-    availabilityChecks[item.id] = { loading: false, error: null, result: null };
-  }
-  return availabilityChecks[item.id];
+function emptyPreviewState(): PreviewState {
+  return { loading: false, error: null, result: null };
 }
 
-async function checkAvailability(r: EquipmentRequest, item: EquipmentItem): Promise<void> {
+/** Nothing more to claim once every unit asked for is already fulfilled. */
+function isFullyArranged(item: EquipmentItem): boolean {
+  return item.quantityFulfilled >= item.quantity;
+}
+
+/**
+ * Two independent preview tracks, both backed by the same read-only
+ * endpoint (nothing is ever reserved by either one):
+ * - `availabilityPreviews` is the static "Available" column — always
+ *   checked against the item's full requested quantity, refreshed on load
+ *   and after a save, untouched while editing.
+ * - `livePreviews` is the editor's live banner and "would also reserve"
+ *   tags — checked against whatever is currently picked, re-run (debounced)
+ *   every time a pill or the quantity changes.
+ */
+const availabilityPreviews = reactive<Record<number, PreviewState>>({});
+function availabilityFor(item: EquipmentItem): PreviewState {
+  if (!availabilityPreviews[item.id]) availabilityPreviews[item.id] = emptyPreviewState();
+  return availabilityPreviews[item.id];
+}
+
+async function refreshAvailability(item: EquipmentItem): Promise<void> {
+  if (isFullyArranged(item)) return; // nothing more to claim, so nothing to check
   const state = availabilityFor(item);
   state.loading = true;
-  state.error = null;
   try {
-    state.result = await checkEquipmentAvailability(r.eventId, item.equipmentType, item.quantity);
+    state.result = await previewUnitsForItem(item.id, item.quantity);
+    state.error = null;
   } catch (err) {
     state.error = err instanceof EquipmentRequestError ? err.message : "Couldn't check availability.";
   } finally {
@@ -139,25 +187,141 @@ async function checkAvailability(r: EquipmentRequest, item: EquipmentItem): Prom
   }
 }
 
-/** Only meaningful before a decision: once Arranged or Partially Fulfilled, the check no longer applies. */
-async function checkAllAvailability(targets: EquipmentRequest[]): Promise<void> {
-  const requested = targets.filter((r) => r.status === "Requested");
-  await Promise.all(requested.flatMap((r) => r.items.map((item) => checkAvailability(r, item))));
+function refreshAllAvailability(targets: EquipmentRequest[]): void {
+  for (const r of targets) {
+    if (r.status === "Cancelled") continue;
+    for (const item of r.items) void refreshAvailability(item);
+  }
 }
 
-/** Fulfilled = however much is free right now (the catalog's availableStock), capped at what was requested. */
-function fulfilledQuantityFor(item: EquipmentItem): number {
-  const available = catalog.value.find((c) => c.name === item.equipmentType)?.availableStock ?? 0;
-  return Math.min(item.quantity, Math.max(0, available));
+const livePreviews = reactive<Record<number, PreviewState>>({});
+function liveFor(item: EquipmentItem): PreviewState {
+  if (!livePreviews[item.id]) livePreviews[item.id] = emptyPreviewState();
+  return livePreviews[item.id];
 }
 
-/** How many of an item the pick amounts to: none, all, or the number typed (a whole number up to what was requested). */
+async function runLivePreview(item: EquipmentItem, quantity: number): Promise<void> {
+  const state = liveFor(item);
+  state.loading = true;
+  try {
+    state.result = await previewUnitsForItem(item.id, quantity);
+    state.error = null;
+  } catch (err) {
+    state.error = err instanceof EquipmentRequestError ? err.message : "Couldn't check availability.";
+  } finally {
+    state.loading = false;
+  }
+}
+
+const liveTimers: Partial<Record<number, ReturnType<typeof setTimeout>>> = {};
+
+/** Debounced so rapid pill clicks or typing don't fire a request per change. */
+function scheduleLivePreview(item: EquipmentItem, quantity: number): void {
+  const timer = liveTimers[item.id];
+  if (timer) clearTimeout(timer);
+  liveFor(item).loading = true;
+  liveTimers[item.id] = setTimeout(() => {
+    void runLivePreview(item, quantity);
+  }, 400);
+}
+
+onBeforeUnmount(() => {
+  for (const timer of Object.values(liveTimers)) {
+    if (timer) clearTimeout(timer);
+  }
+});
+
+/** Sets an item's arranging-now quantity (clamped to what's actually needed) and re-checks availability. */
+function setQty(r: EquipmentRequest, item: EquipmentItem, value: number): void {
+  const clamped = Math.min(item.quantity, Math.max(0, value));
+  editFor(r).quantities[item.id] = clamped;
+  scheduleLivePreview(item, clamped);
+}
+
+function decQty(r: EquipmentRequest, item: EquipmentItem): void {
+  setQty(r, item, chosenQuantity(r, item) - 1);
+}
+
+function incQty(r: EquipmentRequest, item: EquipmentItem): void {
+  setQty(r, item, chosenQuantity(r, item) + 1);
+}
+
+function setAllQty(r: EquipmentRequest, item: EquipmentItem): void {
+  setQty(r, item, item.quantity);
+}
+
+/** The shortfall fix button: drop straight to however many are actually free. */
+function setToFree(r: EquipmentRequest, item: EquipmentItem): void {
+  setQty(r, item, liveFor(item).result?.availableCount ?? 0);
+}
+
+/** How many short the live check against the current pick came back, if any. */
+function itemShortfall(item: EquipmentItem): number {
+  return liveFor(item).result?.shortfall ?? 0;
+}
+
+/** The quantity to judge an item's displayed status by: live while editing, committed otherwise. */
+function displayedQuantity(r: EquipmentRequest, item: EquipmentItem): number {
+  return editFor(r).expanded ? chosenQuantity(r, item) : item.quantityFulfilled;
+}
+
+/** "Needs fixing" is a purely client-side pre-save state — never sent to the backend — so a shortfall is
+ * caught here instead of only surfacing as a 409 after Save. */
+function itemStatusLabel(r: EquipmentRequest, item: EquipmentItem): string {
+  if (editFor(r).expanded && itemShortfall(item) > 0) return "Needs fixing";
+  return itemFulfilmentState(displayedQuantity(r, item), item.quantity);
+}
+
+function itemStatusClass(r: EquipmentRequest, item: EquipmentItem): string {
+  if (editFor(r).expanded && itemShortfall(item) > 0) return "status-danger";
+  return itemFulfilmentBadgeClass(displayedQuantity(r, item), item.quantity);
+}
+
+/** Whether any item currently picked would come up short — gates the banner, the row tint and Reserve stock. */
+function hasAnyShortfall(r: EquipmentRequest): boolean {
+  return r.items.some((item) => chosenQuantity(r, item) > 0 && itemShortfall(item) > 0);
+}
+
+function shortfallCount(r: EquipmentRequest): number {
+  return r.items.filter((item) => chosenQuantity(r, item) > 0 && itemShortfall(item) > 0).length;
+}
+
+/** "N of M items fully arranged" — the header summary, read in both the editing and read-only views. */
+function summaryText(r: EquipmentRequest): string {
+  const total = r.items.length;
+  const full = r.items.filter((item) => displayedQuantity(r, item) >= item.quantity).length;
+  return `${full} of ${total} item${total === 1 ? "" : "s"} fully arranged`;
+}
+
+/** Reserved units, defaulting to none for a response that didn't carry the field. */
+function reservedUnitsOf(item: EquipmentItem): UnitLabel[] {
+  return item.reservedUnits ?? [];
+}
+
+/** Which items to expand and show reserved/would-reserve units for. */
+const expandedItems = reactive<Record<number, boolean>>({});
+function toggleExpand(itemId: number): void {
+  expandedItems[itemId] = !expandedItems[itemId];
+}
+
+/** The Needed column: just the raw ask, now that Arranged/Arranging now carry the fulfilled-so-far figure. */
+function itemQuantityLabel(item: EquipmentItem): string {
+  return `${item.quantity}×`;
+}
+
+/** The read-only "Arranged" column. */
+function arrangedLabel(item: EquipmentItem): string {
+  return `${item.quantityFulfilled} of ${item.quantity}`;
+}
+
+/** Same catalog lookup as the Technical Support homepage's queue table. */
+function stockFor(equipmentType: string): number | null {
+  return catalog.value.find((c) => c.name === equipmentType)?.availableStock ?? null;
+}
+
+/** How many of an item is currently picked, clamped to what was requested. */
 function chosenQuantity(r: EquipmentRequest, item: EquipmentItem): number {
-  const edit = editFor(r);
-  const state = edit.states[item.id] ?? "Requested";
-  if (state === "Requested") return 0;
-  if (state === "Arranged") return item.quantity;
-  const value = Math.floor(Number(edit.quantities[item.id]));
+  const value = Math.floor(Number(editFor(r).quantities[item.id]));
   return Number.isFinite(value) ? Math.min(item.quantity, Math.max(0, value)) : 0;
 }
 
@@ -197,18 +361,9 @@ async function saveStatus(r: EquipmentRequest): Promise<void> {
     edit.notice = notified
       ? { text: "Status updated. The coordinator has been notified.", warning: false }
       : { text: "Status updated, but we couldn't notify the coordinator — please follow up directly.", warning: true };
-    // The save may have moved stock, so refresh it before the next outstanding preview.
+    // The save may have moved stock and changed what's reserved, so refresh both.
     await refreshCatalog();
-    if (r.status === "Requested") {
-      void checkAllAvailability([r]);
-    } else {
-      for (const item of r.items) {
-        const state = availabilityFor(item);
-        state.loading = false;
-        state.error = null;
-        state.result = null;
-      }
-    }
+    for (const item of r.items) void refreshAvailability(item);
   } catch (err) {
     if (err instanceof EquipmentValidationError) {
       edit.error = err.fields.note ?? err.fields.status ?? "Check the status and try again.";
@@ -220,14 +375,6 @@ async function saveStatus(r: EquipmentRequest): Promise<void> {
   } finally {
     edit.saving = false;
   }
-}
-
-/** Same colour convention as the requests list. */
-function statusBadgeClass(status: string): string {
-  if (status === "Arranged") return "status-success";
-  if (status === "Partially Fulfilled") return "status-warning";
-  if (status === "Cancelled") return "status-cancelled";
-  return "status-open"; // Requested
 }
 
 function formatLongDate(value: string | null): string {
@@ -247,6 +394,14 @@ function formatSubmitted(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en-GB");
 }
 
+/** "21 Oct 2026" for the compact cancelled rows. */
+function formatSubmittedLong(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
 const paragraphs = computed(() =>
   (view.value?.technicalRequirements ?? "")
     .split(/\n+/)
@@ -262,7 +417,7 @@ onMounted(async () => {
     ]);
     view.value = loaded;
     catalog.value = loadedCatalog;
-    void checkAllAvailability(loaded.equipmentRequests);
+    refreshAllAvailability(loaded.equipmentRequests);
   } catch (err) {
     if (err instanceof EquipmentAccessDeniedError) accessDenied.value = true;
     else errorMessage.value = "We couldn't load this equipment request. Please try again.";
@@ -304,31 +459,35 @@ onMounted(async () => {
       </div>
 
       <section class="details" aria-label="When and where">
-        <h2 class="h4">When and where</h2>
-
-        <div class="detail-row">
-          <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" /></svg>
-          <div class="detail-text">
-            <span class="detail-label">Date</span>
-            <span class="detail-value">{{ formatLongDate(view.event.proposedDate) }}</span>
+        <div class="details-row">
+          <div class="detail-item">
+            <span class="detail-icon-chip">
+              <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" /></svg>
+            </span>
+            <div class="detail-text">
+              <span class="detail-label">Date</span>
+              <span class="detail-value">{{ formatLongDate(view.event.proposedDate) }}</span>
+            </div>
           </div>
-        </div>
-        <hr class="divider" />
 
-        <div class="detail-row">
-          <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
-          <div class="detail-text">
-            <span class="detail-label">Time</span>
-            <span class="detail-value">{{ formatTimeRange(view.event.startTime, view.event.endTime) }}</span>
+          <div class="detail-item">
+            <span class="detail-icon-chip">
+              <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+            </span>
+            <div class="detail-text">
+              <span class="detail-label">Time</span>
+              <span class="detail-value">{{ formatTimeRange(view.event.startTime, view.event.endTime) }}</span>
+            </div>
           </div>
-        </div>
-        <hr class="divider" />
 
-        <div class="detail-row">
-          <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /><path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" /></svg>
-          <div class="detail-text">
-            <span class="detail-label">Venue</span>
-            <span class="detail-value">{{ view.event.venue || "Venue to be confirmed" }}</span>
+          <div class="detail-item">
+            <span class="detail-icon-chip">
+              <svg class="detail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /><path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" /></svg>
+            </span>
+            <div class="detail-text">
+              <span class="detail-label">Venue</span>
+              <span class="detail-value">{{ view.event.venue || "Venue to be confirmed" }}</span>
+            </div>
           </div>
         </div>
       </section>
@@ -344,121 +503,206 @@ onMounted(async () => {
       <section class="requests" aria-label="Equipment requested">
         <h2 class="h4">Equipment requested</h2>
 
+        <div v-if="activeRequests.length === 0 && requests.length > 0" class="requests-empty" data-testid="no-active-requests">
+          <p class="body-default requests-empty__title">No active equipment requests</p>
+          <p class="body-small muted">
+            {{ requests.length === 1 ? "The request was" : `All ${requests.length} requests were` }} cancelled, either by the
+            coordinator or because the event was cancelled. {{ requests.length === 1 ? "It stays" : "They stay" }} here for
+            reference.
+          </p>
+        </div>
+
         <ul class="request-list">
-          <li v-for="r in requests" :key="r.id" class="request-card">
+          <li v-for="r in activeRequests" :key="r.id" class="request-card">
             <div class="request-card__header">
               <div class="request-card__heading">
-                <h3 class="h4">Equipment request</h3>
-                <p class="body-small muted">Submitted {{ formatSubmitted(r.createdAt) }}</p>
+                <h3 class="h5">Request {{ requestNumber(r) }}</h3>
+                <p class="body-small muted">Submitted {{ formatSubmitted(r.createdAt) }}{{ requesterLabel(r) }}</p>
               </div>
-              <span class="badge" :class="statusBadgeClass(r.status)">{{ r.status }}</span>
+              <div class="request-card__header-right">
+                <span class="body-small muted" data-testid="request-summary">{{ summaryText(r) }}</span>
+                <AppButton v-if="!editFor(r).expanded" variant="outline" type="button" data-testid="edit-arrangement" @click="openEditor(r)">
+                  Edit arrangement
+                </AppButton>
+              </div>
+            </div>
+
+            <div v-if="editFor(r).expanded && hasAnyShortfall(r)" class="shortfall-banner" role="alert" data-testid="shortfall-banner">
+              <ExclamationTriangleIcon class="shortfall-banner__icon" aria-hidden="true" />
+              <span>Not enough stock for {{ shortfallCount(r) }} item{{ shortfallCount(r) === 1 ? "" : "s" }}. Fix it to reserve.</span>
             </div>
 
             <div class="table-wrap">
-              <table class="item-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Item &middot; requested quantity</th>
-                    <th scope="col">Fulfilment status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="item in r.items" :key="item.id" class="item-row">
-                    <td class="item-cell">
-                      <strong class="item-name">
-                        <template v-if="r.status === 'Partially Fulfilled' && !editFor(r).expanded">{{ item.quantityFulfilled }} of {{ item.quantity }}</template>
-                        <template v-else>{{ item.quantity }}&times;</template>
-                        {{ item.equipmentType }}
-                      </strong>
+              <DataTable
+                :columns="editFor(r).expanded ? EDIT_COLUMNS : VIEW_COLUMNS"
+                :column-widths="COLUMN_WIDTHS"
+                column-gap="120px"
+                :rows="r.items"
+                :row-key="(item) => item.id"
+                :row-class="(item) => ({ 'item-row': true, 'item-row--danger': editFor(r).expanded && chosenQuantity(r, item) > 0 && itemShortfall(item) > 0 })"
+              >
+              <template #cell-equipment="{ row: item }">
+                <div class="equipment-cell">
+                  <div class="equipment-cell__name-row">
+                    <span class="item-name">{{ item.equipmentType }}</span>
+                    <button
+                      type="button"
+                      class="expand-toggle"
+                      :aria-expanded="!!expandedItems[item.id]"
+                      :aria-label="expandedItems[item.id] ? 'Hide reserved units' : 'Show reserved units'"
+                      data-testid="expand-toggle"
+                      @click="toggleExpand(item.id)"
+                    >
+                      <ChevronDownIcon class="expand-toggle__icon" :class="{ 'expand-toggle__icon--open': expandedItems[item.id] }" aria-hidden="true" />
+                    </button>
+                  </div>
 
-                      <!-- E5-5 / E5-6 AC3: a reserved unit that is now unusable for the event needs re-arranging. -->
-                      <p v-if="item.reservationFlag?.flagged" class="body-small flag-note" data-testid="reservation-flag" role="alert">
-                        {{ item.reservationFlag.reason }}
-                      </p>
+                  <!-- E5-5 / E5-6 AC3: a reserved unit that is now unusable for the event needs re-arranging. -->
+                  <p v-if="item.reservationFlag?.flagged" class="body-small flag-note" data-testid="reservation-flag" role="alert">
+                    {{ item.reservationFlag.reason }}
+                  </p>
 
-                      <!-- E5-4: checked automatically against the event's own date and time. -->
-                      <template v-if="r.status === 'Requested'">
-                        <p v-if="availabilityFor(item).loading" class="body-small muted">Checking availability…</p>
-                        <p v-else-if="availabilityFor(item).error" class="body-small error-text">{{ availabilityFor(item).error }}</p>
-                        <p v-else-if="availabilityFor(item).result" class="body-small availability-result"
-                          :class="{ 'availability-result--short': availabilityFor(item).result!.shortfall > 0 }">
-                          <template v-if="availabilityFor(item).result!.shortfall > 0">
-                            Unavailable — need {{ availabilityFor(item).result!.shortfall }} more
-                          </template>
-                          <template v-else>Available</template>
-                        </p>
-                      </template>
-                    </td>
-
-                    <td class="status-cell">
-                      <!-- E5-3: each item is marked on its own; the request's status follows from them. -->
-                      <div v-if="editFor(r).expanded" class="item-editor">
-                        <div class="status-pills" role="radiogroup" :aria-label="`${item.equipmentType} status`">
-                          <button
-                            v-for="option in EQUIPMENT_REQUEST_STATUSES"
-                            :key="option"
-                            type="button"
-                            role="radio"
-                            :aria-checked="editFor(r).states[item.id] === option"
-                            class="status-pill"
-                            :class="{ 'status-pill--active': editFor(r).states[item.id] === option }"
-                            @click="editFor(r).states[item.id] = option"
-                          >
-                            {{ option }}
-                          </button>
-                        </div>
-                        <label v-if="editFor(r).states[item.id] === 'Partially Fulfilled'" class="body-small item-quantity">
-                          <span>Arranged</span>
-                          <input
-                            v-model.number="editFor(r).quantities[item.id]"
-                            type="number"
-                            min="0"
-                            :max="item.quantity"
-                            step="1"
-                            :aria-label="`${item.equipmentType} arranged`"
-                          />
-                          <span class="muted">of {{ item.quantity }}</span>
-                        </label>
+                  <!-- Which physical units are already reserved, and (while editing) which more would be. -->
+                  <div v-if="expandedItems[item.id]" class="unit-panel" data-testid="unit-panel">
+                    <template v-if="reservedUnitsOf(item).length > 0">
+                      <span class="unit-panel__label">Reserved units</span>
+                      <div class="unit-tags">
+                        <span v-for="unit in reservedUnitsOf(item)" :key="`r${unit.id}`" class="unit-tag unit-tag--reserved">
+                          {{ unit.label ?? `Unit #${unit.id}` }}
+                        </span>
                       </div>
-                      <span v-else-if="r.status === 'Cancelled'" class="body-small muted" data-testid="item-cancelled">&mdash;</span>
-                      <span
-                        v-else
-                        class="badge"
-                        :class="itemFulfilmentBadgeClass(item.quantityFulfilled, item.quantity)"
-                        data-testid="item-status"
-                      >{{ itemFulfilmentState(item.quantityFulfilled, item.quantity) }}</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                    </template>
+                    <template v-if="editFor(r).expanded && (liveFor(item).result?.units.length ?? 0) > 0">
+                      <span class="unit-panel__label">Would also reserve</span>
+                      <div class="unit-tags">
+                        <span v-for="unit in liveFor(item).result!.units" :key="`p${unit.id}`" class="unit-tag unit-tag--preview">
+                          {{ unit.label ?? `Unit #${unit.id}` }}
+                        </span>
+                      </div>
+                    </template>
+                    <span v-if="editFor(r).expanded && (liveFor(item).result?.shortfall ?? 0) > 0" class="unit-tag unit-tag--short">
+                      {{ liveFor(item).result!.shortfall }} short
+                    </span>
+                    <p
+                      v-if="reservedUnitsOf(item).length === 0 && !(editFor(r).expanded && (liveFor(item).result?.units.length ?? 0) > 0)"
+                      class="body-small muted"
+                    >
+                      No units reserved yet.
+                    </p>
+                  </div>
+                </div>
+              </template>
+
+              <template #cell-qty="{ row: item }">
+                <span class="item-qty">{{ itemQuantityLabel(item) }}</span>
+              </template>
+
+              <template #cell-arranged="{ row: item }">
+                <span class="item-qty">{{ arrangedLabel(item) }}</span>
+              </template>
+
+              <template #cell-stock="{ row: item }">
+                <div class="item-available">
+                  <span v-if="isFullyArranged(item)" class="item-available__count">Fully arranged</span>
+                  <template v-else>
+                    <span v-if="availabilityFor(item).loading && !availabilityFor(item).result" class="item-available__count muted">Checking…</span>
+                    <span v-else-if="availabilityFor(item).error" class="item-available__count error-text">{{ availabilityFor(item).error }}</span>
+                    <span
+                      v-else-if="availabilityFor(item).result"
+                      class="item-available__count"
+                      :class="{ 'item-available__count--short': availabilityFor(item).result!.shortfall > 0 }"
+                    >{{ availabilityFor(item).result!.availableCount }} more free</span>
+                    <span v-else class="item-available__count muted">—</span>
+                  </template>
+                  <span class="item-available__today">in stock today: {{ stockFor(item.equipmentType) ?? "—" }}</span>
+                </div>
+              </template>
+
+              <template #cell-arranging="{ row: item }">
+                <div class="arranging-cell">
+                  <div class="qty-stepper-row">
+                    <div class="qty-stepper" :class="{ 'qty-stepper--danger': chosenQuantity(r, item) > 0 && itemShortfall(item) > 0 }">
+                      <button
+                        type="button"
+                        class="qty-stepper__btn"
+                        data-testid="qty-dec"
+                        :disabled="chosenQuantity(r, item) <= 0"
+                        :aria-label="`Arrange one fewer ${item.equipmentType}`"
+                        @click="decQty(r, item)"
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8h10" /></svg>
+                      </button>
+                      <span class="qty-stepper__value" aria-live="polite" data-testid="qty-value">{{ chosenQuantity(r, item) }}</span>
+                      <button
+                        type="button"
+                        class="qty-stepper__btn"
+                        data-testid="qty-inc"
+                        :disabled="chosenQuantity(r, item) >= item.quantity"
+                        :aria-label="`Arrange one more ${item.equipmentType}`"
+                        @click="incQty(r, item)"
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8h10M8 3v10" /></svg>
+                      </button>
+                    </div>
+                    <span class="body-small muted">of {{ item.quantity }}</span>
+                    <AppButton
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      data-testid="qty-all"
+                      :disabled="chosenQuantity(r, item) >= item.quantity"
+                      @click="setAllQty(r, item)"
+                    >
+                      Arrange all
+                    </AppButton>
+                  </div>
+                  <template v-if="chosenQuantity(r, item) > 0 && itemShortfall(item) > 0">
+                    <p class="qty-stepper__warning" data-testid="qty-warning">
+                      Only {{ liveFor(item).result?.availableCount ?? 0 }} free. Arrange {{ liveFor(item).result?.availableCount ?? 0 }} or fewer.
+                    </p>
+                    <AppButton variant="outline" size="sm" type="button" data-testid="qty-set-to-free" @click="setToFree(r, item)">
+                      Set to {{ liveFor(item).result?.availableCount ?? 0 }}
+                    </AppButton>
+                  </template>
+                </div>
+              </template>
+
+              <template #cell-status="{ row: item }">
+                <span class="badge" :class="itemStatusClass(r, item)" data-testid="item-status">{{ itemStatusLabel(r, item) }}</span>
+              </template>
+            </DataTable>
             </div>
 
             <div class="request-card__footer">
               <p v-if="r.fulfillmentNote && !editFor(r).expanded" class="body-small request-card__note">Outstanding: {{ r.fulfillmentNote }}</p>
 
-              <div v-if="editFor(r).expanded && derivedStatus(r) === 'Partially Fulfilled'" class="outstanding-box">
-                <p class="body-small muted">Outstanding</p>
-                <p class="body-small outstanding-preview">{{ outstandingSummary(r) }}</p>
+              <div v-if="editFor(r).expanded" class="reserve-panels">
+                <div class="reserve-panel">
+                  <h4 class="reserve-panel__title">Still outstanding</h4>
+                  <p class="body-default" data-testid="outstanding-text">{{ outstandingSummary(r) }}</p>
+                  <p class="body-small muted">The organiser sees this after you save.</p>
+                </div>
               </div>
 
               <p v-if="editFor(r).error" class="body-small error-text" role="alert">{{ editFor(r).error }}</p>
 
-              <p v-if="r.status === 'Cancelled'" class="body-small muted" data-testid="cancelled-note">
-                This request was cancelled, either by its coordinator or because the event was cancelled. It is kept here to look back at.
-              </p>
-
-              <!-- E5-3: update this request's status as arrangements are made. -->
-              <div v-if="r.status !== 'Cancelled'" class="status-editor">
-                <AppButton variant="outline" v-if="!editFor(r).expanded" type="button" @click="openEditor(r)">
-                  Update status
-                </AppButton>
-
-                <div v-else class="status-form-actions">
-                  <AppButton variant="outline" type="button" :disabled="editFor(r).saving" @click="cancelEdit(r)">
+              <!-- Picking a quantity above is what actually reserves stock — Save/Cancel only commits or discards it. -->
+              <div v-if="editFor(r).expanded" class="status-editor">
+                <p class="body-small muted status-editor__hint">
+                  {{ hasAnyShortfall(r) ? "Reserve stock is off until every item is within free stock." : "Stock is checked as you type and only reserved when you click Reserve stock." }}
+                </p>
+                <div class="status-form-actions">
+                  <AppButton variant="outline" type="button" data-testid="cancel-arrangement" :disabled="editFor(r).saving" @click="cancelEdit(r)">
                     Cancel
                   </AppButton>
-                  <AppButton variant="primary" type="button" :disabled="editFor(r).saving" @click="saveStatus(r)">
-                    {{ editFor(r).saving ? "Saving…" : "Save" }}
+                  <AppButton
+                    variant="primary"
+                    type="button"
+                    data-testid="reserve-stock"
+                    :disabled="editFor(r).saving || hasAnyShortfall(r)"
+                    @click="saveStatus(r)"
+                  >
+                    {{ editFor(r).saving ? "Reserving…" : "Reserve stock" }}
                   </AppButton>
                 </div>
               </div>
@@ -474,6 +718,30 @@ onMounted(async () => {
             </div>
           </li>
         </ul>
+
+        <div v-if="cancelledRequests.length > 0" class="cancelled-section">
+          <button type="button" class="cancelled-toggle" :aria-expanded="showCancelled" aria-controls="cancelled-requests"
+            data-testid="cancelled-toggle" @click="showCancelled = !showCancelled">
+            <ChevronDownIcon class="cancelled-toggle__icon" :class="{ 'cancelled-toggle__icon--open': showCancelled }"
+              aria-hidden="true" />
+            Cancelled requests ({{ cancelledRequests.length }})
+          </button>
+
+          <ul v-if="showCancelled" id="cancelled-requests" class="cancelled-list" data-testid="cancelled-list">
+            <li v-for="r in cancelledRequests" :key="r.id" class="cancelled-row">
+              <div class="cancelled-row__who">
+                <p class="body-default cancelled-row__name">Request {{ requestNumber(r) }}</p>
+                <p class="body-small muted">Submitted {{ formatSubmittedLong(r.createdAt) }}{{ requesterLabel(r) }}</p>
+              </div>
+              <ul class="cancelled-row__items">
+                <li v-for="item in r.items" :key="item.id" class="body-default">
+                  <strong>{{ item.quantity }}×</strong> {{ item.equipmentType }}
+                </li>
+              </ul>
+              <span class="cancelled-pill"><XMarkIcon class="cancelled-pill__icon" aria-hidden="true" />Cancelled</span>
+            </li>
+          </ul>
+        </div>
       </section>
     </template>
   </div>
@@ -496,9 +764,13 @@ onMounted(async () => {
   grid-column: 1 / 13;
 }
 
-.requirements,
-.requests {
+.requirements {
   grid-column: 1 / 9;
+}
+
+/* The equipment tables run the full width of the page. */
+.requests {
+  grid-column: 1 / 13;
 }
 
 @media (max-width: 1024px) {
@@ -577,9 +849,18 @@ onMounted(async () => {
 }
 
 .h4 {
-  font-size: 1.25rem;
+  font-size: 1.75rem;
   font-weight: 700;
-  line-height: 1.75rem;
+  line-height: 2.25rem;
+  color: var(--color-grey-900);
+  margin: 0;
+}
+
+/* Style.md Composite Text Styles — H5: section divider title. */
+.h5 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 2rem;
   color: var(--color-grey-900);
   margin: 0;
 }
@@ -612,17 +893,16 @@ onMounted(async () => {
   border-radius: var(--radius-lg);
 }
 
-/* "When and where": the one card of event information Technical Support get. */
-.details,
+/* "When and where": a flat strip between two rules, matching AttendeeEventDetailView's pattern. */
+.details {
+  border-top: 1px solid var(--color-grey-100);
+  border-bottom: 1px solid var(--color-grey-100);
+}
+
 .requirements {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-16);
-  padding: var(--spacing-24);
-  box-sizing: border-box;
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
 }
 
 .requests {
@@ -631,41 +911,66 @@ onMounted(async () => {
   gap: var(--spacing-16);
 }
 
-.detail-row {
+.details-row {
   display: flex;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: var(--spacing-16) 200px;
+  padding: var(--spacing-24) var(--spacing-24);
+}
+
+.detail-item {
+  display: flex;
+  align-items: center;
   gap: var(--spacing-12);
+  min-width: 0;
+}
+
+/* Tinted icon chip: Style.md 2.6/2.9 — Purple Primary/100 tinted background behind Purple Primary/600 icons. */
+.detail-icon-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--spacing-40);
+  height: var(--spacing-40);
+  border-radius: var(--radius-sm);
+  background: var(--color-purple-100);
 }
 
 .detail-icon {
   flex: none;
-  color: var(--color-grey-500);
-  margin-top: var(--spacing-2);
+  color: var(--color-purple-600);
 }
 
 .detail-text {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
+  min-width: 0;
 }
 
 .detail-label {
   font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 400;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-700);
 }
 
 .detail-value {
-  font-size: 1rem;
-  line-height: 1.25rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.75rem;
   color: var(--color-grey-900);
 }
 
-.divider {
-  margin: 0;
-  border: none;
-  border-top: 1px solid var(--color-grey-100);
+@media (max-width: 640px) {
+  .details-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-16);
+    padding: var(--spacing-16);
+  }
 }
 
 .request-list {
@@ -677,14 +982,125 @@ onMounted(async () => {
   padding: 0;
 }
 
+/* Each request sits on its own card (Style.md 3.3 surfaces), like the page's other cards. */
 .request-card {
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
-  overflow: hidden;
+  gap: var(--spacing-16);
+  background: var(--color-grey-50);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-24);
+}
+
+.requests-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  padding: var(--spacing-24);
+  background: var(--color-grey-50);
+  border: 1px solid var(--color-grey-100);
+  border-radius: var(--radius-lg);
+}
+
+.requests-empty__title {
+  margin: 0;
+  font-weight: 700;
+  color: var(--color-grey-900);
+}
+
+.cancelled-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+}
+
+.cancelled-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-purple-600);
+  cursor: pointer;
+}
+
+.cancelled-toggle__icon {
+  width: 1rem;
+  height: 1rem;
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+
+.cancelled-toggle__icon--open {
+  transform: none;
+}
+
+.cancelled-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   background: var(--color-base-white);
   border: 1px solid var(--color-grey-100);
   border-radius: var(--radius-lg);
+}
+
+.cancelled-row {
+  display: grid;
+  grid-template-columns: 12rem 1fr auto;
+  align-items: center;
+  gap: var(--spacing-16);
+  padding: var(--spacing-16) var(--spacing-24);
+}
+
+.cancelled-row + .cancelled-row {
+  border-top: 1px solid var(--color-grey-100);
+}
+
+.cancelled-row__who p {
+  margin: 0;
+}
+
+.cancelled-row__name {
+  font-weight: 700;
+  color: var(--color-grey-900);
+}
+
+.cancelled-row__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  color: var(--color-grey-900);
+}
+
+.cancelled-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-12);
+  border-radius: var(--radius-xs);
+  background: var(--color-grey-100);
+  color: var(--color-grey-700);
+  font-size: 0.875rem;
+}
+
+.cancelled-pill__icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+@media (max-width: 640px) {
+  .cancelled-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .cancelled-row__items {
+    grid-column: 1 / -1;
+  }
 }
 
 .request-card__header {
@@ -692,7 +1108,6 @@ onMounted(async () => {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--spacing-12);
-  padding: var(--spacing-24) var(--spacing-24) var(--spacing-16);
 }
 
 .request-card__heading {
@@ -702,32 +1117,21 @@ onMounted(async () => {
 }
 
 .request-card .table-wrap {
-  padding: 0 var(--spacing-24);
   overflow-x: auto;
 }
 
-.item-table {
+.equipment-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
   width: 100%;
-  border-collapse: collapse;
 }
 
-.item-table th,
-.item-table td {
-  padding: var(--spacing-16) var(--spacing-8) var(--spacing-16) 0;
-  text-align: left;
-  vertical-align: middle;
-  border-bottom: 1px solid var(--color-grey-100);
-}
-
-.item-table thead th {
-  font-size: 0.875rem;
-  font-weight: 400;
-  line-height: 1.125rem;
-  color: var(--color-grey-500);
-}
-
-.item-table tbody tr:last-child td {
-  border-bottom: none;
+.equipment-cell__name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-8);
 }
 
 .item-name {
@@ -737,8 +1141,106 @@ onMounted(async () => {
   color: var(--color-grey-900);
 }
 
-.status-cell {
-  white-space: nowrap;
+.item-qty {
+  font-size: 0.875rem;
+  color: var(--color-grey-600);
+}
+
+.expand-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--spacing-24);
+  height: var(--spacing-24);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-grey-500);
+  cursor: pointer;
+}
+
+.expand-toggle__icon {
+  width: var(--spacing-16);
+  height: var(--spacing-16);
+  transition: transform 0.15s ease;
+}
+
+.expand-toggle__icon--open {
+  transform: rotate(180deg);
+}
+
+/* Which physical units are reserved (solid) or would also be reserved (dashed preview). */
+.unit-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+  padding: var(--spacing-8) var(--spacing-12);
+  background: var(--color-grey-50);
+  border-radius: var(--radius-xs);
+}
+
+.unit-panel__label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--color-grey-500);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.unit-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-8);
+}
+
+.unit-tag {
+  display: inline-flex;
+  align-items: center;
+  height: var(--spacing-24);
+  width: fit-content;
+  padding: 0 var(--spacing-12);
+  border-radius: var(--radius-xs);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.unit-tag--reserved {
+  background: var(--color-purple-100);
+  color: var(--color-purple-800);
+}
+
+.unit-tag--preview {
+  background: var(--color-base-white);
+  border: 1px dashed var(--color-purple-300);
+  color: var(--color-purple-600);
+}
+
+.unit-tag--short {
+  background: var(--color-error-200);
+  color: var(--color-error-600);
+}
+
+/* "Available" column: the event-date-aware count, with today's stock as a secondary line. */
+.item-available {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.item-available__count {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+}
+
+.item-available__count--short {
+  color: var(--color-warning-900);
+}
+
+.item-available__today {
+  font-size: 0.6875rem;
+  color: var(--color-grey-500);
 }
 
 /* The grey strip under the table that holds the actions (and what is outstanding). */
@@ -746,9 +1248,6 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-12);
-  padding: var(--spacing-16) var(--spacing-24);
-  background: var(--color-grey-50);
-  border-top: 1px solid var(--color-grey-100);
 }
 
 .badge {
@@ -777,35 +1276,20 @@ onMounted(async () => {
   color: var(--color-warning-900);
 }
 
-/* Cancelled: neutral grey, like a finished event's badge. */
-.status-cancelled {
-  background: var(--color-grey-100);
-  color: var(--color-grey-700);
+/* A shortfall is caught here, before Save — the error set's role, same tokens as .unit-tag--short. */
+.status-danger {
+  background: var(--color-error-200);
+  color: var(--color-error-600);
 }
 
 .item-row {
   color: var(--color-grey-900);
 }
 
-.availability-result {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  margin: var(--spacing-4) 0 0;
-  color: var(--color-success-700);
-}
-
-/* A coloured dot before the availability, in the same colour as the text. */
-.availability-result::before {
-  content: "";
-  width: var(--spacing-8);
-  height: var(--spacing-8);
-  border-radius: var(--radius-full);
-  background: currentColor;
-}
-
-.availability-result--short {
-  color: var(--color-error-600);
+/* An item whose current pick comes up short: a light error tint on the whole row.
+   :deep() — the row element lives in DataTable.vue's own template, not this one. */
+:deep(.item-row--danger) {
+  background: var(--color-error-200);
 }
 
 /* A reserved unit that no longer holds (E5-5): the Warning set's "needs attention" role. */
@@ -826,70 +1310,131 @@ onMounted(async () => {
 
 .status-editor {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-16);
 }
 
-.status-pills {
+.status-editor__hint {
+  margin: 0;
+}
+
+.request-card__header-right {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-12);
+}
+
+/* "Not enough stock for N items. Fix it to reserve." — above the table while editing. */
+.shortfall-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+  padding: var(--spacing-12) var(--spacing-16);
+  background: var(--color-error-200);
+  border: 1px solid var(--color-error-600);
+  border-radius: var(--radius-xs);
+  color: var(--color-error-600);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.shortfall-banner__icon {
+  flex: none;
+  width: var(--spacing-20);
+  height: var(--spacing-20);
+}
+
+/* The arranging-now cell: stepper row, plus a shortfall fix message/button when it comes up short. */
+.arranging-cell {
+  display: flex;
+  flex-direction: column;
   gap: var(--spacing-8);
 }
 
-.status-pill {
-  min-height: 44px;
-  padding: 0 var(--spacing-16);
+.qty-stepper-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+}
+
+.qty-stepper {
+  display: flex;
+  align-items: center;
   border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+.qty-stepper--danger {
+  border: 2px solid var(--color-error-600);
+}
+
+.qty-stepper__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: none;
   background: var(--color-base-white);
-  color: var(--color-grey-700);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
+  color: var(--color-purple-600);
   cursor: pointer;
 }
 
-.status-pill:hover {
-  border-color: var(--color-purple-300);
+.qty-stepper__btn:disabled {
+  background: var(--color-grey-50);
+  color: var(--color-grey-300);
+  cursor: not-allowed;
 }
 
-.status-pill--active {
-  background: var(--color-purple-600);
-  border-color: var(--color-purple-600);
-  color: var(--color-base-white);
+.qty-stepper__btn:not(:disabled):hover {
+  background: var(--color-purple-100);
 }
 
-.status-pill:focus-visible{
+.qty-stepper__btn:focus-visible {
   outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
-.item-editor {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-8);
-}
-
-.item-quantity {
+.qty-stepper__value {
   display: flex;
   align-items: center;
-  gap: var(--spacing-8);
+  justify-content: center;
+  width: var(--spacing-48);
+  height: 44px;
+  border-left: 1px solid var(--color-grey-200);
+  border-right: 1px solid var(--color-grey-200);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
 }
 
-.item-quantity input {
-  width: var(--spacing-80);
+.qty-stepper__warning {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-error-600);
 }
 
-.outstanding-box {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-8);
-  padding: var(--spacing-12);
+/* "Still outstanding", shown while editing. */
+.reserve-panels {
+  padding: var(--spacing-16);
   background: var(--color-base-white);
   border: 1px solid var(--color-grey-100);
   border-radius: var(--radius-xs);
 }
 
-.outstanding-preview {
+.reserve-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+}
+
+.reserve-panel__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
   color: var(--color-grey-900);
 }
 

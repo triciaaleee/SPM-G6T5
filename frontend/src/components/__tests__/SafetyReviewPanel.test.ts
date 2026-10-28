@@ -205,6 +205,34 @@ describe("SafetyReviewPanel — readiness checklist", () => {
     expect(equipment.text()).toContain("Done");
   });
 
+  it("shows Equipment as Pending, not Done, when equipment was asked for but none is recorded", async () => {
+    const wrapper = mountWith({
+      venueBookings: [booking("Approved", 1)],
+      equipmentRequests: [],
+      equipmentRequirements: "123 Chairs, 20 Tables",
+    });
+    await flushPromises();
+
+    const equipment = wrapper.get('[data-testid="check-equipment"]');
+    expect(equipment.text()).toContain("Equipment requested, not arranged yet");
+    expect(equipment.text()).toContain("Pending");
+    expect(wrapper.get("button").attributes("disabled")).toBeDefined();
+    expect(wrapper.get('[data-testid="submit-note"]').text()).toBe("Available once all requested equipment is reserved.");
+  });
+
+  it("shows Equipment as Done, 'No equipment requested', when the requirements say NA", async () => {
+    const wrapper = mountWith({
+      venueBookings: [booking("Approved", 1)],
+      equipmentRequests: [],
+      equipmentRequirements: "NA",
+    });
+    await flushPromises();
+
+    const equipment = wrapper.get('[data-testid="check-equipment"]');
+    expect(equipment.text()).toContain("No equipment requested");
+    expect(equipment.text()).toContain("Done");
+  });
+
   it("disables Submit, and says why, until every venue is approved", async () => {
     const wrapper = mountWith({
       venueBookings: [booking("Approved", 1), booking("Requested", 2)],

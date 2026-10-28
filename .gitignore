@@ -1,8 +1,8 @@
 node_modules/
 dist/
 coverage/
+reports/
 .stryker-tmp/
-reports/mutation/
 .env
 .env.*
 !.env.example

@@ -108,7 +108,7 @@ onMounted(loadFirstPage);
 
 <style scoped>
 .feed {
-  max-width: 720px;
+  max-width: 800px;
   margin: 0 auto;
   padding: var(--spacing-24) var(--grid-desktop-margin);
 }
@@ -144,7 +144,7 @@ onMounted(loadFirstPage);
   flex-direction: column;
   gap: var(--spacing-4);
   width: 100%;
-  padding: var(--spacing-16);
+  padding: 28px var(--spacing-24);
   border: none;
   background: var(--color-base-white);
   font-family: var(--font-family-lato);
@@ -166,10 +166,11 @@ onMounted(loadFirstPage);
 }
 
 .item__title {
-  font-size: 0.875rem;
+  font-size: 1rem;
   font-weight: 700;
   line-height: 1.125rem;
   color: var(--color-grey-900);
+  margin-bottom:4px;
 }
 
 .item__body {
