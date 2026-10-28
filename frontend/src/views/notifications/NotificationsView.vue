@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import AppButton from "../components/ui/AppButton.vue";
+import AppButton from "../../components/ui/AppButton.vue";
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import {
   fetchNotifications,
   markNotificationRead,
   type AppNotification,
-} from "../lib/notificationsApi";
+} from "../../lib/notificationsApi";
 
 /**
  * E7-1 (#61): the full notification feed, beyond the bell's 5-item

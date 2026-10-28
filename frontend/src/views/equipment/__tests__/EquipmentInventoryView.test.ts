@@ -8,10 +8,10 @@ import {
   createCatalogItem,
   fetchEquipmentCatalog,
   fetchStockHistory,
-} from "../../lib/equipmentApi";
+} from "../../../lib/equipmentApi";
 
-vi.mock("../../lib/equipmentApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/equipmentApi")>("../../lib/equipmentApi");
+vi.mock("../../../lib/equipmentApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/equipmentApi")>("../../../lib/equipmentApi");
   return {
     ...actual,
     fetchEquipmentCatalog: vi.fn(),
@@ -54,6 +54,35 @@ async function fillChange(
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("EquipmentInventoryView — pagination", () => {
+  const many = (n: number): CatalogItem[] =>
+    Array.from({ length: n }, (_, i) => ({ id: i + 1, name: `Item ${i + 1}`, totalStock: 5, availableStock: 5 }));
+  const summary = (w: Awaited<ReturnType<typeof mountView>>) => w.find("[data-testid='pagination-summary']").text();
+  const rows = (w: Awaited<ReturnType<typeof mountView>>) => w.findAll("[data-testid^='item-']");
+
+  it("shows 20 items a page: 20, then 20, then 5 of 45", async () => {
+    const wrapper = await mountView(many(45));
+
+    expect(rows(wrapper)).toHaveLength(20);
+    expect(summary(wrapper)).toBe("Showing 1–20 of 45");
+
+    await wrapper.get("[aria-label='Page 2']").trigger("click");
+    expect(rows(wrapper)).toHaveLength(20);
+    expect(rows(wrapper)[0].attributes("data-testid")).toBe("item-21");
+
+    await wrapper.get("[aria-label='Page 3']").trigger("click");
+    expect(rows(wrapper)).toHaveLength(5);
+    expect(summary(wrapper)).toBe("Showing 41–45 of 45");
+  });
+
+  it("shows no pagination bar at 20 items or fewer", async () => {
+    const wrapper = await mountView(many(20));
+
+    expect(rows(wrapper)).toHaveLength(20);
+    expect(wrapper.find("nav[aria-label='Pagination']").exists()).toBe(false);
+  });
 });
 
 describe("EquipmentInventoryView — stock table", () => {

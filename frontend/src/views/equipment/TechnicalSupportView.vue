@@ -13,10 +13,11 @@
  * whose date has passed, newest first. An unarranged event that has passed stays
  * under Requested, as overdue. History rows are read-only.
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
-import AppButton from "../components/ui/AppButton.vue";
-import DataTable from "../components/ui/DataTable.vue";
+import AppButton from "../../components/ui/AppButton.vue";
+import DataTable from "../../components/ui/DataTable.vue";
+import PaginationBar from "../../components/ui/PaginationBar.vue";
 import {
   EQUIPMENT_REQUEST_STATUSES,
   fetchAllEquipmentRequests,
@@ -24,7 +25,7 @@ import {
   type EquipmentCatalogItem,
   type EquipmentRequestStatus,
   type EquipmentRequestWithEvent,
-} from "../lib/equipmentApi";
+} from "../../lib/equipmentApi";
 
 const TABLE_COLUMNS = [
   { key: "equipment", label: "Equipment" },
@@ -237,6 +238,24 @@ const groups = computed<Group[]>(() =>
     .sort((a, b) => (activeTab.value === HISTORY_TAB ? compareRows(b, a) : compareRows(a, b))),
 );
 
+// Client-side paging: one page is PAGE_SIZE event sections. The tab counts above come from every event.
+const PAGE_SIZE = 10;
+const page = ref(1);
+const totalPages = computed(() => Math.max(1, Math.ceil(groups.value.length / PAGE_SIZE)));
+const currentPage = computed(() => Math.min(page.value, totalPages.value));
+const pagedGroups = computed(() =>
+  groups.value.slice((currentPage.value - 1) * PAGE_SIZE, currentPage.value * PAGE_SIZE),
+);
+watch([activeTab, range, equipment], () => {
+  page.value = 1;
+});
+
+const panelRoot = ref<HTMLElement | null>(null);
+function changePage(next: number) {
+  page.value = next;
+  panelRoot.value?.scrollIntoView?.({ block: "start" });
+}
+
 /** In the history tab a section says why it is there: cancelled, or an event that has passed. */
 function historyLabel(group: Group): string {
   return group.rows.every((row) => row.status === "Cancelled") ? "Cancelled" : "Past event";
@@ -326,13 +345,13 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div id="requests-panel" role="tabpanel" :aria-labelledby="`tab-${activeTab}`" class="panel">
+      <div id="requests-panel" ref="panelRoot" role="tabpanel" :aria-labelledby="`tab-${activeTab}`" class="panel">
         <div v-if="groups.length === 0" class="empty-state">
           <p class="empty-state__title">Nothing here</p>
           <p class="body-default muted">{{ emptyMessage }}</p>
         </div>
 
-        <section v-for="group in groups" :key="group.eventId" class="group" :aria-labelledby="`group-${group.eventId}`">
+        <section v-for="group in pagedGroups" :key="group.eventId" class="group" :aria-labelledby="`group-${group.eventId}`">
           <div class="group-header">
             <div class="group-header__title">
               <RouterLink :to="{ name: 'equipment-request-detail', params: { eventId: group.eventId } }"
@@ -397,6 +416,9 @@ onMounted(async () => {
             </template>
           </DataTable>
         </section>
+
+        <PaginationBar :page="currentPage" :page-size="PAGE_SIZE" :total="groups.length" noun="events"
+          @update:page="changePage" />
       </div>
     </template>
   </div>

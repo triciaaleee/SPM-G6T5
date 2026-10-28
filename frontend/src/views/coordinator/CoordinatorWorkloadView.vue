@@ -1,11 +1,20 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { CheckCircleIcon, CheckIcon, ChevronDownIcon, ClockIcon, ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
-import DataTable from "../components/ui/DataTable.vue";
-import { fetchMyEvents, getCurrentUser, type EventSummary } from "../lib/eventsApi";
-import { statusBadgeClass, statusLabel } from "../lib/eventStatus";
-import { formatCardDate, formatCardTimeRange } from "../lib/attendeeEvents";
-import { hasEventEnded } from "../lib/eventTiming";
+import {
+  CheckCircleIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ClockIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
+} from "@heroicons/vue/16/solid";
+import DataTable from "../../components/ui/DataTable.vue";
+import PaginationBar from "../../components/ui/PaginationBar.vue";
+import { fetchMyEvents, getCurrentUser, type EventSummary } from "../../lib/eventsApi";
+import { statusBadgeClass, statusLabel } from "../../lib/eventStatus";
+import { formatCardDate, formatCardTimeRange } from "../../lib/attendeeEvents";
+import { hasEventEnded } from "../../lib/eventTiming";
+import { GROUP_DEFS } from "../../lib/eventGroups";
 
 /**
  * One list for two pages: "mine" is a coordinator's own workload (/coordinator),
@@ -28,15 +37,7 @@ function isClosedStatus(status: string): boolean {
   return status === "Completed" || status === "Rejected" || status === "Cancelled";
 }
 
-/** Upcoming tab only, scope="mine" only: every status buckets into exactly one of
- * these three — who acts next. Matches the design's status-to-group mapping, except
- * Requested (here, in Needs your action) — the design's own doc flags excluding it
- * as unconfirmed, and it conflicts with this codebase's needsAction() precedent. */
-const GROUP_DEFS: { key: string; label: string; statuses: string[] }[] = [
-  { key: "action", label: "Needs your action", statuses: ["Requested", "Needs Review", "Planning"] },
-  { key: "wait", label: "Waiting on others", statuses: ["Clarification Requested", "Safety Review"] },
-  { key: "ontrack", label: "On track", statuses: ["Confirmed"] },
-];
+// GROUP_DEFS (lib/eventGroups.ts) is the who-acts-next grouping used on the Upcoming tab, on both pages.
 
 interface StatusOption {
   key: string;
@@ -104,22 +105,36 @@ const visibleEvents = computed(() => {
   return events.value;
 });
 
-// Upcoming/Past tabs, mainly by the event's own date. For "mine" only, a dead
+// Upcoming / To Complete / Past tabs, mainly by the event's own date. For "mine" only, a dead
 // request (Rejected/Cancelled) also counts as Past even before its event date.
-const timingTab = ref<"upcoming" | "past">("upcoming");
+const timingTab = ref<"upcoming" | "complete" | "past">("upcoming");
+
+/** A Confirmed event that has already run: the assigned coordinator still has to mark it Completed
+ * (AGENTS.md §3), so it is work to do, not history. */
+function isToComplete(event: EventSummary): boolean {
+  return event.status === "Confirmed" && hasEventEnded(eventDetails(event));
+}
 
 function isPast(event: EventSummary): boolean {
+  if (isToComplete(event)) return false;
   if (hasEventEnded(eventDetails(event))) return true;
   return viewMode.value === "mine" && isClosedStatus(event.status);
 }
 
-const upcomingEvents = computed(() => visibleEvents.value.filter((e) => !isPast(e)));
+const upcomingEvents = computed(() => visibleEvents.value.filter((e) => !isPast(e) && !isToComplete(e)));
+const completeEvents = computed(() => visibleEvents.value.filter(isToComplete));
 const pastEvents = computed(() => visibleEvents.value.filter((e) => isPast(e)));
 
 const timingTabs = computed(() => [
   { key: "upcoming" as const, label: "Upcoming", count: upcomingEvents.value.length },
+  { key: "complete" as const, label: "To Complete", count: completeEvents.value.length },
   { key: "past" as const, label: "Past", count: pastEvents.value.length },
 ]);
+
+const COMPLETE_HINT: Record<"mine" | "all", string> = {
+  mine: "Confirmed events whose date has passed. Open one to mark it completed.",
+  all: "Confirmed events whose date has passed, waiting for their coordinator to mark them completed.",
+};
 
 // Status dropdown: narrows whichever timing tab is active. "All statuses" (empty key) clears it.
 const ALL_STATUSES_KEY = "";
@@ -149,18 +164,17 @@ const statusOptionCounts = computed(() =>
   })).filter((option) => option.count > 0),
 );
 
-const totalStatusCount = computed(() => timingFilteredEvents.value.length);
-
 const STATUS_GROUP_ICONS: Record<string, typeof ExclamationTriangleIcon> = {
   action: ExclamationTriangleIcon,
   wait: ClockIcon,
   ontrack: CheckCircleIcon,
+  other: InformationCircleIcon,
 };
 
 /** Grouped sections (with icons) only where the chips/inline headers already group by
  * who-acts-next; otherwise one flat list, same options just without section labels. */
 const groupedStatusSections = computed(() => {
-  if (!(viewMode.value === "mine" && timingTab.value === "upcoming")) return null;
+  if (timingTab.value !== "upcoming") return null;
   return GROUP_DEFS.map((group) => ({
     key: group.key,
     label: group.label,
@@ -173,9 +187,9 @@ const statusDropdownOpen = ref(false);
 const statusFilterRoot = ref<HTMLElement | null>(null);
 
 const statusFilterTriggerLabel = computed(() => {
-  if (statusFilter.value === ALL_STATUSES_KEY) return `All statuses (${totalStatusCount.value})`;
+  if (statusFilter.value === ALL_STATUSES_KEY) return "All statuses";
   const option = statusOptionCounts.value.find((o) => o.key === statusFilter.value);
-  return option ? `${option.label} (${option.count})` : `All statuses (${totalStatusCount.value})`;
+  return option ? option.label : "All statuses";
 });
 
 function chooseStatus(key: string): void {
@@ -216,20 +230,23 @@ const chipOptions = computed(() => [
     key: group.key,
     label: group.label,
     count: upcomingEvents.value.filter((e) => group.statuses.includes(e.status)).length,
-  })),
+  })).filter((chip) => chip.key !== "other" || chip.count > 0),
 ]);
 
-const showChips = computed(() => viewMode.value === "mine" && timingTab.value === "upcoming");
+const showChips = computed(() => timingTab.value === "upcoming");
 
-const timingFilteredEvents = computed(() =>
-  (timingTab.value === "upcoming" ? upcomingEvents.value : pastEvents.value),
-);
+const timingFilteredEvents = computed(() => {
+  if (timingTab.value === "upcoming") return upcomingEvents.value;
+  if (timingTab.value === "complete") return completeEvents.value;
+  return pastEvents.value;
+});
 
 const shownEvents = computed(() => {
+  // Upcoming and To Complete read oldest first (the most overdue to complete on top); Past, newest first.
   const sorted = [...timingFilteredEvents.value].sort((a, b) => {
     const da = eventProposedDate(a);
     const db = eventProposedDate(b);
-    return timingTab.value === "upcoming" ? (da < db ? -1 : da > db ? 1 : 0) : (da > db ? -1 : da < db ? 1 : 0);
+    return timingTab.value !== "past" ? (da < db ? -1 : da > db ? 1 : 0) : (da > db ? -1 : da < db ? 1 : 0);
   });
 
   const group = GROUP_DEFS.find((g) => g.key === groupFilter.value);
@@ -241,11 +258,10 @@ const shownEvents = computed(() => {
   return sorted;
 });
 
-/** Grouped by who-acts-next only for the coordinator's own Upcoming list with
+/** Grouped by who-acts-next only for the Upcoming list (on both pages) with
  * neither narrowing applied — any narrower view already shares one status/meaning. */
 const showGroups = computed(
   () =>
-    viewMode.value === "mine" &&
     timingTab.value === "upcoming" &&
     statusFilter.value === ALL_STATUSES_KEY &&
     groupFilter.value === ALL_GROUPS_KEY,
@@ -262,6 +278,24 @@ const groupedShownEvents = computed(() =>
 // rowGroup can tell where one group ends and the next begins. Ungrouped: unchanged order.
 const tableRows = computed(() => (showGroups.value ? groupedShownEvents.value.flatMap((g) => g.events) : shownEvents.value));
 
+// Client-side paging: counts, chips and groups above use the full list; only the rows drawn are sliced.
+const PAGE_SIZE = 20;
+const page = ref(1);
+const totalPages = computed(() => Math.max(1, Math.ceil(tableRows.value.length / PAGE_SIZE)));
+const currentPage = computed(() => Math.min(page.value, totalPages.value));
+const pagedRows = computed(() =>
+  tableRows.value.slice((currentPage.value - 1) * PAGE_SIZE, currentPage.value * PAGE_SIZE),
+);
+watch([timingTab, statusFilter, groupFilter], () => {
+  page.value = 1;
+});
+
+const panelRoot = ref<HTMLElement | null>(null);
+function changePage(next: number) {
+  page.value = next;
+  panelRoot.value?.scrollIntoView?.({ block: "start" });
+}
+
 function groupInfoFor(event: EventSummary) {
   if (!showGroups.value) return null;
   const group = groupedShownEvents.value.find((g) => g.statuses.includes(event.status));
@@ -274,7 +308,10 @@ function rowClass(event: EventSummary) {
 
 onMounted(async () => {
   try {
-    const [eventsData, user] = await Promise.all([fetchMyEvents(), getCurrentUser()]);
+    const [eventsData, user] = await Promise.all([
+      fetchMyEvents({ assignedToMe: props.scope === "mine" }),
+      getCurrentUser(),
+    ]);
     events.value = eventsData;
     userId.value = user.id;
   } catch {
@@ -360,7 +397,6 @@ onMounted(async () => {
                   <CheckIcon v-if="statusFilter === ALL_STATUSES_KEY" class="status-filter__check" aria-hidden="true" />
                   All statuses
                 </span>
-                <span>{{ totalStatusCount }}</span>
               </button>
 
               <template v-if="groupedStatusSections">
@@ -380,7 +416,6 @@ onMounted(async () => {
                     @click="chooseStatus(option.key)"
                   >
                     <span>{{ option.label }}</span>
-                    <span>{{ option.count }}</span>
                   </button>
                 </template>
               </template>
@@ -396,12 +431,15 @@ onMounted(async () => {
                   @click="chooseStatus(option.key)"
                 >
                   <span>{{ option.label }}</span>
-                  <span>{{ option.count }}</span>
                 </button>
               </template>
             </div>
           </div>
         </div>
+
+        <p v-if="timingTab === 'complete'" class="body-default muted complete-hint" data-testid="complete-hint">
+          {{ COMPLETE_HINT[viewMode] }}
+        </p>
 
         <div v-if="showChips" role="group" aria-label="Quick filter" class="chips">
           <button
@@ -418,9 +456,13 @@ onMounted(async () => {
           </button>
         </div>
 
-        <div id="coordinator-panel" role="tabpanel" :aria-labelledby="`coordinator-tab-${timingTab}`">
+        <div id="coordinator-panel" ref="panelRoot" role="tabpanel" :aria-labelledby="`coordinator-tab-${timingTab}`">
           <p v-if="shownEvents.length === 0" class="body-default muted">
-            No events match this tab and filter.
+            {{
+              timingTab === "complete" && statusFilter === ALL_STATUSES_KEY && groupFilter === ALL_GROUPS_KEY
+                ? "Nothing is waiting to be completed."
+                : "No events match this tab and filter."
+            }}
           </p>
 
           <DataTable
@@ -428,7 +470,7 @@ onMounted(async () => {
             class="events-table"
             :columns="TABLE_COLUMNS"
             :column-widths="TABLE_COLUMN_WIDTHS"
-            :rows="tableRows"
+            :rows="pagedRows"
             :row-key="(event: EventSummary) => event.id"
             :row-to="(event: EventSummary) => ({ name: 'event-detail', params: { id: event.id } })"
             :row-class="rowClass"
@@ -462,6 +504,9 @@ onMounted(async () => {
               </div>
             </template>
           </DataTable>
+
+          <PaginationBar :page="currentPage" :page-size="PAGE_SIZE" :total="tableRows.length"
+            @update:page="changePage" />
         </div>
       </template>
 
@@ -694,18 +739,10 @@ onMounted(async () => {
   color: var(--color-grey-900);
 }
 
-.status-filter__option span:last-child {
-  color: var(--color-grey-500);
-}
-
 .status-filter__option--selected {
   background: var(--color-purple-100);
   color: var(--color-purple-800);
   font-weight: 700;
-}
-
-.status-filter__option--selected span:last-child {
-  color: var(--color-purple-800);
 }
 
 .status-filter__option-label {
@@ -749,8 +786,16 @@ onMounted(async () => {
   color: var(--color-success-700);
 }
 
-/* Quick-filter chips: My events, Upcoming tab only. Same "Selected" treatment as
+.status-filter__section-label--other {
+  color: var(--color-grey-500);
+}
+
+/* Quick-filter chips: Upcoming tab only, both pages. Same "Selected" treatment as
    components/venues/FilterChip.vue's active state. */
+
+.complete-hint {
+  margin: var(--spacing-16) 0 0;
+}
 
 .chips {
   display: flex;
@@ -808,7 +853,7 @@ onMounted(async () => {
   color: var(--color-purple-800);
 }
 
-/* Group dividers: "who acts next", Upcoming tab only, My events only, no status
+/* Group dividers: "who acts next", Upcoming tab only, both pages, no status
    narrowed — rendered inline inside the table (DataTable's group-header slot),
    below the shared Event/Date/Status column header, not a box of their own. */
 
@@ -855,6 +900,14 @@ onMounted(async () => {
 }
 .group-header--ontrack .group-header__badge {
   background: var(--color-success-700);
+  color: var(--color-base-white);
+}
+
+.group-header--other {
+  background: var(--color-grey-50);
+}
+.group-header--other .group-header__badge {
+  background: var(--color-grey-500);
   color: var(--color-base-white);
 }
 

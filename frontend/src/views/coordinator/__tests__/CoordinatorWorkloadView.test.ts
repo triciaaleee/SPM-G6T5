@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
 import CoordinatorWorkloadView from "../CoordinatorWorkloadView.vue";
-import * as eventsApi from "../../lib/eventsApi";
+import * as eventsApi from "../../../lib/eventsApi";
 
-vi.mock("../../lib/eventsApi", () => ({
+vi.mock("../../../lib/eventsApi", () => ({
   fetchMyEvents: vi.fn(),
   getCurrentUser: vi.fn(),
 }));
@@ -69,6 +69,11 @@ function statusFilterLabel(wrapper: Awaited<ReturnType<typeof mountView>>) {
 async function selectStatus(wrapper: Awaited<ReturnType<typeof mountView>>, label: string) {
   await wrapper.find("#status-filter").trigger("click");
   await wrapper.findAll(".status-filter__option").find((o) => o.text().startsWith(label))!.trigger("click");
+}
+
+/** Clicks the timing tab whose label starts with `label` (Upcoming, To Complete, Past). */
+async function clickTab(wrapper: Awaited<ReturnType<typeof mountView>>, label: string) {
+  await wrapper.findAll("[role='tab']").find((t) => t.text().startsWith(label))!.trigger("click");
 }
 
 beforeEach(() => {
@@ -164,7 +169,7 @@ describe("CoordinatorWorkloadView — Upcoming / Past tabs", () => {
     const wrapper = await mountView(events);
 
     const tabs = wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "));
-    expect(tabs).toEqual(["Upcoming 1", "Past 1"]);
+    expect(tabs).toEqual(["Upcoming 1", "To Complete 0", "Past 1"]);
     expect(wrapper.find(".tab--active").text()).toContain("Upcoming");
     expect(rowTitles(wrapper)).toEqual(["Future Event"]);
   });
@@ -176,7 +181,7 @@ describe("CoordinatorWorkloadView — Upcoming / Past tabs", () => {
     ];
     const wrapper = await mountView(events);
 
-    await wrapper.findAll("[role='tab']")[1].trigger("click");
+    await clickTab(wrapper, "Past");
 
     expect(wrapper.find(".tab--active").text()).toContain("Past");
     expect(rowTitles(wrapper)).toEqual(["Past Event"]);
@@ -189,7 +194,7 @@ describe("CoordinatorWorkloadView — Upcoming / Past tabs", () => {
     ];
     const wrapper = await mountView(events);
 
-    await wrapper.findAll("[role='tab']")[1].trigger("click");
+    await clickTab(wrapper, "Past");
 
     expect(rowTitles(wrapper)).toEqual(["Completed Event", "Cancelled Event"]);
   });
@@ -199,7 +204,7 @@ describe("CoordinatorWorkloadView — Upcoming / Past tabs", () => {
       makeEvent({ submitted_details: { name: "Future Event", proposedDate: FUTURE_DATE } }),
     ]);
 
-    await wrapper.findAll("[role='tab']")[1].trigger("click");
+    await clickTab(wrapper, "Past");
 
     expect(wrapper.text()).toContain("No events match this tab and filter");
   });
@@ -239,8 +244,8 @@ describe("CoordinatorWorkloadView — status filter dropdown", () => {
     const sectionLabels = wrapper.findAll(".status-filter__section-label").map((s) => s.text());
     expect(sectionLabels).toEqual(["NEEDS YOUR ACTION"]);
     expect(wrapper.findAll(".status-filter__option").map((o) => o.text().replace(/\s+/g, " "))).toEqual([
-      "All statuses 1",
-      "Planning1",
+      "All statuses",
+      "Planning",
     ]);
   });
 
@@ -250,10 +255,10 @@ describe("CoordinatorWorkloadView — status filter dropdown", () => {
     ]);
 
     await selectStatus(wrapper, "Planning");
-    expect(statusFilterLabel(wrapper)).toBe("Planning (1)");
+    expect(statusFilterLabel(wrapper)).toBe("Planning");
 
     await wrapper.find("#status-filter").trigger("click");
-    expect(wrapper.findAll(".status-filter__option--selected").map((o) => o.text())).toEqual(["Planning1"]);
+    expect(wrapper.findAll(".status-filter__option--selected").map((o) => o.text())).toEqual(["Planning"]);
   });
 
   it("closes when clicking outside, without changing the filter", async () => {
@@ -381,20 +386,57 @@ describe("CoordinatorWorkloadView — who-acts-next groups (My events, Upcoming,
     expect(rowTitles(wrapper)).toEqual(["Plan Event"]);
   });
 
-  it("never groups the Past tab or the All events page", async () => {
-    const past = await mountView([
-      makeEvent({ status: "Planning", submitted_details: { name: "Plan Event", proposedDate: FUTURE_DATE } }),
+  it("never groups the Past or To Complete tabs, on either page", async () => {
+    const events = [
+      makeEvent({ id: 1, status: "Planning", submitted_details: { name: "Plan Event", proposedDate: FUTURE_DATE } }),
       makeEvent({ id: 2, status: "Completed", submitted_details: { name: "Completed Event", proposedDate: PAST_DATE } }),
-    ]);
-    await past.findAll("[role='tab']")[1].trigger("click");
-    expect(groupHeaders(past)).toHaveLength(0);
+      makeEvent({ id: 3, status: "Confirmed", submitted_details: { name: "Ended Event", proposedDate: PAST_DATE } }),
+    ];
+    for (const scope of ["mine", "all"] as const) {
+      const wrapper = await mountView(events, "COORD-0001", scope);
+      await clickTab(wrapper, "Past");
+      expect(groupHeaders(wrapper)).toHaveLength(0);
+      await clickTab(wrapper, "To Complete");
+      expect(groupHeaders(wrapper)).toHaveLength(0);
+    }
+  });
 
-    const all = await mountView(
-      [makeEvent({ status: "Planning", submitted_details: { name: "Plan Event", proposedDate: FUTURE_DATE } })],
+  it("groups the All events page's Upcoming tab under the same sub-headers as My events", async () => {
+    const events = [
+      makeEvent({ id: 1, status: "Planning", submitted_details: { name: "Plan Event", proposedDate: FUTURE_DATE } }),
+      makeEvent({ id: 2, status: "Safety Review", submitted_details: { name: "Safety Event", proposedDate: FUTURE_DATE } }),
+      makeEvent({ id: 3, status: "Confirmed", submitted_details: { name: "Confirmed Event", proposedDate: FUTURE_DATE } }),
+    ];
+    const mine = await mountView(events);
+    const all = await mountView(events, "COORD-0001", "all");
+
+    expect(groupHeaders(all)).toEqual(["Needs your action 1", "Waiting on others 1", "On track 1"]);
+    expect(groupHeaders(all)).toEqual(groupHeaders(mine));
+    expect(rowTitles(all)).toEqual(["Plan Event", "Safety Event", "Confirmed Event"]);
+  });
+
+  it("keeps an unassigned or future-dated dead request visible on All events, under an Other sub-header", async () => {
+    const wrapper = await mountView(
+      [
+        makeEvent({ id: 1, status: "Planning", submitted_details: { name: "Plan Event", proposedDate: FUTURE_DATE } }),
+        makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, submitted_details: { name: "Unassigned Event", proposedDate: FUTURE_DATE } }),
+        makeEvent({ id: 3, status: "Rejected", submitted_details: { name: "Rejected Event", proposedDate: FUTURE_DATE } }),
+      ],
       "COORD-0001",
       "all",
     );
-    expect(groupHeaders(all)).toHaveLength(0);
+
+    expect(groupHeaders(wrapper)).toEqual(["Needs your action 1", "Other 2"]);
+    expect(rowTitles(wrapper)).toEqual(["Plan Event", "Unassigned Event", "Rejected Event"]);
+  });
+
+  it("never shows an Other sub-header on My events, where those statuses can't be Upcoming", async () => {
+    const wrapper = await mountView([
+      makeEvent({ id: 1, status: "Planning", submitted_details: { name: "Plan Event", proposedDate: FUTURE_DATE } }),
+      makeEvent({ id: 2, status: "Rejected", submitted_details: { name: "Rejected Event", proposedDate: FUTURE_DATE } }),
+    ]);
+
+    expect(groupHeaders(wrapper)).toEqual(["Needs your action 1"]);
   });
 });
 
@@ -407,7 +449,7 @@ describe("CoordinatorWorkloadView — quick-filter chips (My events, Upcoming)",
     return wrapper.find(".chip--active").text().replace(/\s+/g, " ");
   }
 
-  it("shows an All chip plus one per group, with counts, only for My events' Upcoming tab", async () => {
+  it("shows an All chip plus one per group, with counts, on the Upcoming tab", async () => {
     const events = [
       makeEvent({ id: 1, status: "Planning", submitted_details: { name: "Plan Event", proposedDate: FUTURE_DATE } }),
       makeEvent({ id: 2, status: "Confirmed", submitted_details: { name: "Confirmed Event", proposedDate: FUTURE_DATE } }),
@@ -418,19 +460,35 @@ describe("CoordinatorWorkloadView — quick-filter chips (My events, Upcoming)",
     expect(activeChip(wrapper)).toBe("All 2");
   });
 
-  it("hides the chip row on the Past tab and on the All events page", async () => {
-    const past = await mountView([
-      makeEvent({ status: "Completed", submitted_details: { name: "Completed Event", proposedDate: PAST_DATE } }),
+  it("hides the chip row on the Past and To Complete tabs", async () => {
+    const wrapper = await mountView([
+      makeEvent({ id: 1, status: "Completed", submitted_details: { name: "Completed Event", proposedDate: PAST_DATE } }),
+      makeEvent({ id: 2, status: "Confirmed", submitted_details: { name: "Ended Event", proposedDate: PAST_DATE } }),
     ]);
-    await past.findAll("[role='tab']")[1].trigger("click");
-    expect(past.findAll(".chip")).toHaveLength(0);
 
+    await clickTab(wrapper, "Past");
+    expect(wrapper.findAll(".chip")).toHaveLength(0);
+    await clickTab(wrapper, "To Complete");
+    expect(wrapper.findAll(".chip")).toHaveLength(0);
+  });
+
+  it("shows the same chips on the All events page's Upcoming tab, with an Other chip only when needed", async () => {
     const all = await mountView(
       [makeEvent({ status: "Planning", submitted_details: { name: "Plan Event", proposedDate: FUTURE_DATE } })],
       "COORD-0001",
       "all",
     );
-    expect(all.findAll(".chip")).toHaveLength(0);
+    expect(chips(all)).toEqual(["All 1", "Needs your action 1", "Waiting on others 0", "On track 0"]);
+
+    const withOther = await mountView(
+      [
+        makeEvent({ id: 1, status: "Planning", submitted_details: { name: "Plan Event", proposedDate: FUTURE_DATE } }),
+        makeEvent({ id: 2, status: "Unassigned", coordinator_id: null, submitted_details: { name: "Unassigned Event", proposedDate: FUTURE_DATE } }),
+      ],
+      "COORD-0001",
+      "all",
+    );
+    expect(chips(withOther)).toEqual(["All 2", "Needs your action 1", "Waiting on others 0", "On track 0", "Other 1"]);
   });
 
   it("clicking a chip filters to that group and hides the inline group headers", async () => {
@@ -507,7 +565,7 @@ describe("CoordinatorWorkloadView — dead requests sort into Past even before t
     expect(wrapper.find(".tab--active").text()).toContain("Upcoming");
     expect(rowTitles(wrapper)).toHaveLength(0);
 
-    await wrapper.findAll("[role='tab']")[1].trigger("click");
+    await clickTab(wrapper, "Past");
     expect(rowTitles(wrapper)).toEqual(["Rejected Event"]);
   });
 
@@ -516,7 +574,7 @@ describe("CoordinatorWorkloadView — dead requests sort into Past even before t
       makeEvent({ status: "Cancelled", submitted_details: { name: "Cancelled Event", proposedDate: FUTURE_DATE } }),
     ]);
 
-    await wrapper.findAll("[role='tab']")[1].trigger("click");
+    await clickTab(wrapper, "Past");
     expect(rowTitles(wrapper)).toEqual(["Cancelled Event"]);
   });
 
@@ -529,6 +587,191 @@ describe("CoordinatorWorkloadView — dead requests sort into Past even before t
 
     expect(wrapper.find(".tab--active").text()).toContain("Upcoming");
     expect(rowTitles(wrapper)).toEqual(["Rejected Event"]);
+  });
+});
+
+describe("CoordinatorWorkloadView — To Complete tab (Confirmed events that have ended)", () => {
+  const ended = (id: number, name: string, overrides: Partial<EventSummary> = {}) =>
+    makeEvent({ id, status: "Confirmed", submitted_details: { name, proposedDate: PAST_DATE }, ...overrides });
+
+  it.each(["mine", "all"] as const)("on %s: a Confirmed event whose date has passed is under To Complete, not Past", async (scope) => {
+    const wrapper = await mountView(
+      [
+        makeEvent({ id: 1, status: "Confirmed", submitted_details: { name: "Future Event", proposedDate: FUTURE_DATE } }),
+        ended(2, "Ended Event"),
+        makeEvent({ id: 3, status: "Completed", submitted_details: { name: "Done Event", proposedDate: PAST_DATE } }),
+      ],
+      "COORD-0001",
+      scope,
+    );
+
+    expect(wrapper.findAll("[role='tab']").map((t) => t.text().replace(/\s+/g, " "))).toEqual([
+      "Upcoming 1",
+      "To Complete 1",
+      "Past 1",
+    ]);
+    expect(rowTitles(wrapper)).toEqual(["Future Event"]);
+
+    await clickTab(wrapper, "To Complete");
+    expect(wrapper.find(".tab--active").text()).toContain("To Complete");
+    expect(rowTitles(wrapper)).toEqual(["Ended Event"]);
+
+    await clickTab(wrapper, "Past");
+    expect(rowTitles(wrapper)).toEqual(["Done Event"]);
+  });
+
+  it.each(["mine", "all"] as const)("on %s: only Confirmed events go there — other past statuses stay in Past", async (scope) => {
+    const wrapper = await mountView(
+      [
+        makeEvent({ id: 1, status: "Planning", submitted_details: { name: "Planning Event", proposedDate: PAST_DATE } }),
+        makeEvent({ id: 2, status: "Rejected", submitted_details: { name: "Rejected Event", proposedDate: PAST_DATE } }),
+        makeEvent({ id: 3, status: "Needs Review", submitted_details: { name: "Review Event", proposedDate: PAST_DATE } }),
+      ],
+      "COORD-0001",
+      scope,
+    );
+
+    await clickTab(wrapper, "To Complete");
+    expect(rowTitles(wrapper)).toHaveLength(0);
+    await clickTab(wrapper, "Past");
+    expect(rowTitles(wrapper)).toHaveLength(3);
+  });
+
+  it("lists the most overdue first", async () => {
+    const wrapper = await mountView([
+      ended(1, "Recent", { submitted_details: { name: "Recent", proposedDate: "2024-05-01" } }),
+      ended(2, "Oldest", { submitted_details: { name: "Oldest", proposedDate: "2001-01-01" } }),
+      ended(3, "Middle", { submitted_details: { name: "Middle", proposedDate: "2015-03-01" } }),
+    ]);
+
+    await clickTab(wrapper, "To Complete");
+    expect(rowTitles(wrapper)).toEqual(["Oldest", "Middle", "Recent"]);
+  });
+
+  it("shows a hint worded for the page, only on that tab", async () => {
+    const mine = await mountView([ended(1, "Ended Event")]);
+    expect(mine.find("[data-testid='complete-hint']").exists()).toBe(false);
+    await clickTab(mine, "To Complete");
+    expect(mine.get("[data-testid='complete-hint']").text()).toBe(
+      "Confirmed events whose date has passed. Open one to mark it completed.",
+    );
+    await clickTab(mine, "Past");
+    expect(mine.find("[data-testid='complete-hint']").exists()).toBe(false);
+
+    const all = await mountView([ended(1, "Ended Event")], "COORD-0001", "all");
+    await clickTab(all, "To Complete");
+    expect(all.get("[data-testid='complete-hint']").text()).toBe(
+      "Confirmed events whose date has passed, waiting for their coordinator to mark them completed.",
+    );
+  });
+
+  it("says so when nothing is waiting to be completed", async () => {
+    const wrapper = await mountView([
+      makeEvent({ status: "Confirmed", submitted_details: { name: "Future Event", proposedDate: FUTURE_DATE } }),
+    ]);
+
+    await clickTab(wrapper, "To Complete");
+    expect(wrapper.text()).toContain("Nothing is waiting to be completed.");
+  });
+
+  it("only counts the coordinator's own events on My events, but every event on All events", async () => {
+    const events = [ended(1, "Mine"), ended(2, "Someone else's", { coordinator_id: "COORD-0002" })];
+
+    const mine = await mountView(events);
+    expect(mine.findAll("[role='tab']")[1].text()).toContain("1");
+    const all = await mountView(events, "COORD-0001", "all");
+    expect(all.findAll("[role='tab']")[1].text()).toContain("2");
+  });
+});
+
+describe("CoordinatorWorkloadView — what it asks the server for", () => {
+  it("asks for only the coordinator's own events on My events", async () => {
+    await mountView([makeEvent()], "COORD-0001", "mine");
+
+    expect(eventsApi.fetchMyEvents).toHaveBeenCalledWith({ assignedToMe: true });
+  });
+
+  it("asks for every event on All events", async () => {
+    await mountView([makeEvent()], "COORD-0001", "all");
+
+    expect(eventsApi.fetchMyEvents).toHaveBeenCalledWith({ assignedToMe: false });
+  });
+});
+
+describe.each([["mine"], ["all"]] as const)("CoordinatorWorkloadView — pagination (%s)", (scope) => {
+  const many = (count: number, overrides: Partial<EventSummary> = {}) =>
+    Array.from({ length: count }, (_, i) =>
+      makeEvent({
+        id: i + 1,
+        status: "Planning",
+        submitted_details: { name: `Event ${String(i + 1).padStart(2, "0")}`, proposedDate: FUTURE_DATE },
+        ...overrides,
+      }),
+    );
+  const summary = (w: Awaited<ReturnType<typeof mountView>>) =>
+    w.find("[data-testid='pagination-summary']").text();
+  const goTo = (w: Awaited<ReturnType<typeof mountView>>, page: number) =>
+    w.get(`[aria-label='Page ${page}']`).trigger("click");
+
+  it("shows 20 rows a page: 20, then 20, then 5 of 45", async () => {
+    const wrapper = await mountView(many(45), "COORD-0001", scope);
+
+    expect(rowTitles(wrapper)).toHaveLength(20);
+    expect(summary(wrapper)).toBe("Showing 1–20 of 45");
+
+    await goTo(wrapper, 2);
+    expect(rowTitles(wrapper)).toHaveLength(20);
+    expect(summary(wrapper)).toBe("Showing 21–40 of 45");
+
+    await goTo(wrapper, 3);
+    expect(rowTitles(wrapper)).toHaveLength(5);
+    expect(summary(wrapper)).toBe("Showing 41–45 of 45");
+  });
+
+  it("shows no pagination bar at 20 events or fewer", async () => {
+    const wrapper = await mountView(many(20), "COORD-0001", scope);
+
+    expect(rowTitles(wrapper)).toHaveLength(20);
+    expect(wrapper.find("nav[aria-label='Pagination']").exists()).toBe(false);
+  });
+
+  it("returns to page 1 when the tab changes", async () => {
+    const wrapper = await mountView(
+      [...many(45), makeEvent({ id: 100, status: "Planning", submitted_details: { name: "Old", proposedDate: PAST_DATE } })],
+      "COORD-0001",
+      scope,
+    );
+    await goTo(wrapper, 3);
+
+    await clickTab(wrapper, "Past");
+    await clickTab(wrapper, "Upcoming");
+
+    expect(summary(wrapper)).toBe("Showing 1–20 of 45");
+  });
+
+  it("returns to page 1 when the status filter changes", async () => {
+    const events = [...many(45), ...many(3).map((e, i) => ({ ...e, id: 200 + i, status: "Requested" as const }))];
+    const wrapper = await mountView(events, "COORD-0001", scope);
+    await goTo(wrapper, 3);
+
+    await selectStatus(wrapper, "Planning");
+
+    expect(summary(wrapper)).toBe("Showing 1–20 of 45");
+  });
+
+  it("keeps the tab counts for the whole list, not the page", async () => {
+    const wrapper = await mountView(many(45), "COORD-0001", scope);
+
+    const upcoming = wrapper.findAll("[role='tab']").find((t) => t.text().startsWith("Upcoming"))!;
+    expect(upcoming.text()).toContain("45");
+  });
+
+  it("repeats a split group's header on the next page with the group's full count", async () => {
+    const wrapper = await mountView(many(45), "COORD-0001", scope);
+
+    expect(wrapper.findAll(".group-header__badge").map((b) => b.text())).toEqual(["45"]);
+    await goTo(wrapper, 2);
+    expect(wrapper.findAll(".group-header__badge").map((b) => b.text())).toEqual(["45"]);
   });
 });
 

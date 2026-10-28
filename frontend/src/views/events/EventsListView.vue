@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import AppButton from "../components/ui/AppButton.vue";
-import EventCard, { type CardFact } from "../components/ui/EventCard.vue";
-import { computed, onMounted, ref } from "vue";
+import AppButton from "../../components/ui/AppButton.vue";
+import EventCard, { type CardFact } from "../../components/ui/EventCard.vue";
+import PaginationBar from "../../components/ui/PaginationBar.vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { deleteDraft, fetchMyEvents, getCurrentUser, type EventSummary } from "../lib/eventsApi";
-import { statusBadgeClass, statusLabel } from "../lib/eventStatus";
-import { eventThumbnail, formatCardDate, formatCardTimeRange } from "../lib/attendeeEvents";
+import { deleteDraft, fetchMyEvents, getCurrentUser, type EventSummary } from "../../lib/eventsApi";
+import { statusBadgeClass, statusLabel } from "../../lib/eventStatus";
+import { eventThumbnail, formatCardDate, formatCardTimeRange } from "../../lib/attendeeEvents";
 
 const route = useRoute();
 const events = ref<EventSummary[]>([]);
@@ -34,6 +35,23 @@ const filteredEvents = computed(() => {
   if (activeTab.value === "drafts") return events.value.filter((event) => event.status === "Draft");
   return events.value.filter((event) => event.status !== "Draft");
 });
+
+// Client-side paging: 12 cards a page divides evenly into the grid's 3, 2 and 1 columns.
+const PAGE_SIZE = 12;
+const page = ref(1);
+const currentPage = computed(() => Math.min(page.value, Math.max(1, Math.ceil(filteredEvents.value.length / PAGE_SIZE))));
+const pagedEvents = computed(() =>
+  filteredEvents.value.slice((currentPage.value - 1) * PAGE_SIZE, currentPage.value * PAGE_SIZE),
+);
+watch(activeTab, () => {
+  page.value = 1;
+});
+
+const cardsRoot = ref<HTMLElement | null>(null);
+function changePage(next: number) {
+  page.value = next;
+  cardsRoot.value?.scrollIntoView?.({ block: "start" });
+}
 
 function isRegistrationRequired(event: EventSummary): boolean {
   return event.submitted_details?.registrationNeeded === true;
@@ -138,8 +156,6 @@ onMounted(async () => {
     errorMessage.value = "We couldn't load your events. Please try again.";
   } finally {
     loading.value = false;
-
-    console.log(events);
   }
 });
 
@@ -187,8 +203,9 @@ onMounted(async () => {
         {{ activeTab === "drafts" ? "You don't have any drafts." : "You don't have any submitted requests." }}
       </p>
 
-      <div v-else class="card-grid">
-        <div v-for="event in filteredEvents" :key="event.id" class="card-cell">
+      <div v-else ref="cardsRoot">
+      <div class="card-grid">
+        <div v-for="event in pagedEvents" :key="event.id" class="card-cell">
           <EventCard
             :to="eventLink(event)"
             :thumbnail="eventThumbnail(event.id)"
@@ -211,6 +228,10 @@ onMounted(async () => {
             </template>
           </EventCard>
         </div>
+      </div>
+
+      <PaginationBar :page="currentPage" :page-size="PAGE_SIZE" :total="filteredEvents.length" noun="events"
+        @update:page="changePage" />
       </div>
     </div>
 

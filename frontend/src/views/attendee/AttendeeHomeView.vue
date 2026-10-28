@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { getStoredUser } from "../lib/auth.ts";
-import { fetchMyRegistrations, type MyRegistration } from "../lib/registrationApi.ts";
-import { registrationBadgeClass } from "../lib/registrationStatus.ts";
-import EventCard, { type CardFact } from "../components/ui/EventCard.vue";
-import { eventThumbnail, formatCardDate, formatCardTimeRange, isPastRegistration } from "../lib/attendeeEvents.ts";
+import { getStoredUser } from "../../lib/auth.ts";
+import { fetchMyRegistrations, type MyRegistration } from "../../lib/registrationApi.ts";
+import { registrationBadgeClass } from "../../lib/registrationStatus.ts";
+import EventCard, { type CardFact } from "../../components/ui/EventCard.vue";
+import { eventThumbnail, formatCardDate, formatCardTimeRange, isPastRegistration } from "../../lib/attendeeEvents.ts";
 
 /**
  * Attendee homepage: the events this attendee has registered for, split into

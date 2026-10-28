@@ -10,10 +10,10 @@ import {
   previewUnitsForItem,
   updateEquipmentRequestStatus,
   type EventEquipmentView,
-} from "../../lib/equipmentApi";
+} from "../../../lib/equipmentApi";
 
-vi.mock("../../lib/equipmentApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/equipmentApi")>("../../lib/equipmentApi");
+vi.mock("../../../lib/equipmentApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/equipmentApi")>("../../../lib/equipmentApi");
   return {
     ...actual,
     fetchEquipmentRequestsForSupport: vi.fn(),

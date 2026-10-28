@@ -7,10 +7,10 @@ import {
   fetchAllEquipmentRequests,
   fetchEquipmentCatalog,
   type EquipmentRequestWithEvent,
-} from "../../lib/equipmentApi";
+} from "../../../lib/equipmentApi";
 
-vi.mock("../../lib/equipmentApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/equipmentApi")>("../../lib/equipmentApi");
+vi.mock("../../../lib/equipmentApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/equipmentApi")>("../../../lib/equipmentApi");
   return {
     ...actual,
     fetchAllEquipmentRequests: vi.fn(),
@@ -380,6 +380,76 @@ describe("TechnicalSupportView", () => {
     expect(wrapper.find("[role='alert']").text()).toContain("couldn't load equipment requests");
   });
 
+});
+
+describe("TechnicalSupportView: pagination", () => {
+  /** n events, each due on a different day inside the default "Next 30 days" range. */
+  const events = (n: number, overrides: Options = {}) =>
+    Array.from({ length: n }, (_, i) =>
+      makeRequest({ id: i + 1, name: `Event ${String(i + 1).padStart(2, "0")}`, offset: i + 1, ...overrides }),
+    );
+  const summary = (w: Awaited<ReturnType<typeof mountView>>) =>
+    w.find("[data-testid='pagination-summary']").text();
+  const goTo = (w: Awaited<ReturnType<typeof mountView>>, page: number) =>
+    w.get(`[aria-label='Page ${page}']`).trigger("click");
+
+  it("shows 10 events a page: 10, then 10, then 5 of 25", async () => {
+    const wrapper = await mountView(events(25));
+
+    expect(groupTitles(wrapper)).toHaveLength(10);
+    expect(groupTitles(wrapper)[0]).toBe("Event 01");
+    expect(summary(wrapper)).toBe("Showing 1–10 of 25 events");
+
+    await goTo(wrapper, 2);
+    expect(groupTitles(wrapper)[0]).toBe("Event 11");
+    expect(summary(wrapper)).toBe("Showing 11–20 of 25 events");
+
+    await goTo(wrapper, 3);
+    expect(groupTitles(wrapper)).toHaveLength(5);
+    expect(summary(wrapper)).toBe("Showing 21–25 of 25 events");
+  });
+
+  it("shows no pagination bar at 10 events or fewer", async () => {
+    const wrapper = await mountView(events(10));
+
+    expect(groupTitles(wrapper)).toHaveLength(10);
+    expect(wrapper.find("nav[aria-label='Pagination']").exists()).toBe(false);
+  });
+
+  it("keeps the tab count for every event, not the page", async () => {
+    const wrapper = await mountView(events(25));
+
+    expect(wrapper.find("#tab-Requested .tab-count").text()).toBe("25");
+  });
+
+  it("still offers Make arrangements on a later page", async () => {
+    const wrapper = await mountView(events(25));
+    await goTo(wrapper, 3);
+
+    expect(wrapper.findAll("[data-testid='make-arrangements']")).toHaveLength(5);
+  });
+
+  it("returns to page 1 when the date range or the equipment filter changes", async () => {
+    const wrapper = await mountView(events(25));
+
+    await goTo(wrapper, 3);
+    await wrapper.find("select[aria-label='Date range']").setValue("all");
+    expect(summary(wrapper)).toMatch(/^Showing 1–10 of/);
+
+    await goTo(wrapper, 2);
+    await wrapper.find("select[aria-label='Equipment']").setValue("Projector");
+    expect(summary(wrapper)).toMatch(/^Showing 1–10 of/);
+  });
+
+  it("returns to page 1 when the tab changes", async () => {
+    const wrapper = await mountView([...events(25), makeRequest({ id: 99, name: "Old", offset: -5, status: "Cancelled" })]);
+    await goTo(wrapper, 3);
+
+    await wrapper.find("[id='tab-Cancelled / Past']").trigger("click");
+    await wrapper.find("#tab-Requested").trigger("click");
+
+    expect(summary(wrapper)).toBe("Showing 1–10 of 25 events");
+  });
 });
 
 describe("TechnicalSupportView: Cancelled / Past tab", () => {

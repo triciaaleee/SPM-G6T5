@@ -2,14 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createMemoryHistory, createRouter } from "vue-router";
 import LeadDashboardView from "../LeadDashboardView.vue";
-import * as eventsApi from "../../lib/eventsApi";
-import * as usersApi from "../../lib/usersApi";
+import * as eventsApi from "../../../lib/eventsApi";
+import * as usersApi from "../../../lib/usersApi";
 
-vi.mock("../../lib/eventsApi", () => ({
+vi.mock("../../../lib/eventsApi", () => ({
   fetchUnassignedQueue: vi.fn(),
   fetchMyEvents: vi.fn(),
 }));
-vi.mock("../../lib/usersApi", () => ({ fetchCoordinators: vi.fn() }));
+vi.mock("../../../lib/usersApi", () => ({ fetchCoordinators: vi.fn() }));
 
 const router = createRouter({
   history: createMemoryHistory(),

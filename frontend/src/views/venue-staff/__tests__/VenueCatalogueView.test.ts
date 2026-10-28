@@ -1,13 +1,13 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import VenueCatalogueView from "../VenueCatalogueView.vue";
-import VenueFormPanel from "../../components/venues/VenueFormPanel.vue";
-import BlockOutPanel from "../../components/venues/BlockOutPanel.vue";
-import { fetchMyVenues, type VenueRecord } from "../../lib/venuesApi";
-import type { CreatePeriodResult } from "../../lib/unavailabilityApi";
+import VenueFormPanel from "../../../components/venues/VenueFormPanel.vue";
+import BlockOutPanel from "../../../components/venues/BlockOutPanel.vue";
+import { fetchMyVenues, type VenueRecord } from "../../../lib/venuesApi";
+import type { CreatePeriodResult } from "../../../lib/unavailabilityApi";
 
-vi.mock("../../lib/venuesApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/venuesApi")>("../../lib/venuesApi");
+vi.mock("../../../lib/venuesApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/venuesApi")>("../../../lib/venuesApi");
   return { ...actual, fetchMyVenues: vi.fn() };
 });
 

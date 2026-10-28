@@ -8,10 +8,10 @@ import {
   SafetyReviewRejectError,
   type EventSummary,
   type SafetyReviewQueueItem,
-} from "../../lib/eventsApi";
+} from "../../../lib/eventsApi";
 
-vi.mock("../../lib/eventsApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/eventsApi")>("../../lib/eventsApi");
+vi.mock("../../../lib/eventsApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/eventsApi")>("../../../lib/eventsApi");
   return {
     MAX_SAFETY_REJECT_REASON_LENGTH: actual.MAX_SAFETY_REJECT_REASON_LENGTH,
     SafetyReviewApproveError: actual.SafetyReviewApproveError,

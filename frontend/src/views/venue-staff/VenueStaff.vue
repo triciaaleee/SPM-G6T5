@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import AppButton from "../components/ui/AppButton.vue";
+import AppButton from "../../components/ui/AppButton.vue";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { CalendarDaysIcon, ListBulletIcon } from "@heroicons/vue/16/solid";
-import VenueCalendar from "../components/venues/VenueCalendar.vue";
-import VenueRequestRows from "../components/venues/VenueRequestRows.vue";
-import VenueMultiSelect from "../components/venues/VenueMultiSelect.vue";
-import BlockOutPanel from "../components/venues/BlockOutPanel.vue";
-import BufferOverlapList from "../components/venues/BufferOverlapList.vue";
+import VenueCalendar from "../../components/venues/VenueCalendar.vue";
+import VenueRequestRows from "../../components/venues/VenueRequestRows.vue";
+import VenueMultiSelect from "../../components/venues/VenueMultiSelect.vue";
+import BlockOutPanel from "../../components/venues/BlockOutPanel.vue";
+import BufferOverlapList from "../../components/venues/BufferOverlapList.vue";
 import {
   fetchBufferOverlaps,
   fetchPendingRequests,
@@ -17,15 +17,15 @@ import {
   type PendingVenueRequest,
   type StaffVenueOption,
   type VenueBooking,
-} from "../lib/venuesApi";
-import { MAX_VENUES } from "../lib/venueCalendar";
+} from "../../lib/venuesApi";
+import { MAX_VENUES } from "../../lib/venueCalendar";
 import {
   deleteUnavailability,
   describeBlockOutResult,
   fetchUnavailability,
   type CreatePeriodResult,
   type UnavailabilityPeriod,
-} from "../lib/unavailabilityApi";
+} from "../../lib/unavailabilityApi";
 
 
 // Current EVENTS  as of 1/10

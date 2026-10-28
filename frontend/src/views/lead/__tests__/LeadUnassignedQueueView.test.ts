@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createMemoryHistory, createRouter } from "vue-router";
 import LeadUnassignedQueueView from "../LeadUnassignedQueueView.vue";
-import * as eventsApi from "../../lib/eventsApi";
+import * as eventsApi from "../../../lib/eventsApi";
 
-vi.mock("../../lib/eventsApi", () => ({ fetchUnassignedQueue: vi.fn() }));
+vi.mock("../../../lib/eventsApi", () => ({ fetchUnassignedQueue: vi.fn() }));
 
 const router = createRouter({
   history: createMemoryHistory(),
@@ -48,18 +48,26 @@ describe("LeadUnassignedQueueView (E1-8)", () => {
   it("shows each request's event name, event date and submission date (AC1)", async () => {
     const wrapper = await mountView([makeEvent()]);
 
-    const card = wrapper.find(".event-card");
-    expect(card.text()).toContain("Robotics Demo Day");
-    expect(card.text()).toContain("Event date");
-    expect(card.text()).toContain("September 28, 2099");
-    expect(card.text()).toContain("Submitted");
-    expect(card.text()).toContain("October 8, 2026");
+    const row = wrapper.get("[data-testid='queue-row-1']");
+    expect(row.text()).toContain("Robotics Demo Day");
+    expect(row.get(".cell--date").text()).toBe("September 28, 2099");
+    expect(row.get(".cell--submitted").text()).toBe("October 8, 2026");
+    expect(row.get(".cell--organiser").text()).toBe("Organiser Two");
+    expect(row.get(".cell--status").text()).toBe("Unassigned");
+    expect(wrapper.text()).toContain("Event date");
+    expect(wrapper.text()).toContain("Submitted");
+  });
+
+  it("says Unknown when the requester isn't known", async () => {
+    const wrapper = await mountView([makeEvent({ organiser: null })]);
+
+    expect(wrapper.get(".cell--organiser").text()).toBe("Unknown");
   });
 
   it("links each request to its detail page (AC2)", async () => {
     const wrapper = await mountView([makeEvent({ id: 6 })]);
 
-    expect(wrapper.find(".event-card").attributes("href")).toBe("/events/6");
+    expect(wrapper.get("[data-testid='queue-row-6']").attributes("href")).toBe("/events/6");
   });
 
   it("keeps the backend's oldest-first order", async () => {
@@ -68,9 +76,10 @@ describe("LeadUnassignedQueueView (E1-8)", () => {
       makeEvent({ id: 2, submitted_details: { name: "Second in" } }),
     ]);
 
-    const cards = wrapper.findAll(".event-card");
-    expect(cards[0].text()).toContain("First in");
-    expect(cards[1].text()).toContain("Second in");
+    const rows = wrapper.findAll("a.row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].text()).toContain("First in");
+    expect(rows[1].text()).toContain("Second in");
   });
 
   it("says so when nothing is waiting", async () => {

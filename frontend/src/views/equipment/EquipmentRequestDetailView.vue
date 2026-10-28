@@ -12,11 +12,11 @@
  * event's own date and time before a decision is made.
  */
 import { ChevronDownIcon, ExclamationTriangleIcon, XMarkIcon } from "@heroicons/vue/16/solid";
-import AppButton from "../components/ui/AppButton.vue";
-import DataTable from "../components/ui/DataTable.vue";
+import AppButton from "../../components/ui/AppButton.vue";
+import DataTable from "../../components/ui/DataTable.vue";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { getStoredUser, landingRouteForRole } from "../lib/auth";
+import { getStoredUser, landingRouteForRole } from "../../lib/auth";
 import {
   CANCELLED_REQUEST_STATUS,
   EquipmentAccessDeniedError,
@@ -36,7 +36,7 @@ import {
   type EventEquipmentView,
   type UnitLabel,
   type UnitPreview,
-} from "../lib/equipmentApi";
+} from "../../lib/equipmentApi";
 
 const route = useRoute();
 const router = useRouter();

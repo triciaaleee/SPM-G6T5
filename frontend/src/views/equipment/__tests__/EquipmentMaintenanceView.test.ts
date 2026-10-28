@@ -1,7 +1,7 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import EquipmentMaintenanceView from "../EquipmentMaintenanceView.vue";
-import EquipmentUnitsPanel from "../../components/equipment/EquipmentUnitsPanel.vue";
+import EquipmentUnitsPanel from "../../../components/equipment/EquipmentUnitsPanel.vue";
 
 describe("EquipmentMaintenanceView", () => {
   it("is its own page: a title, and the out-of-use panel", () => {

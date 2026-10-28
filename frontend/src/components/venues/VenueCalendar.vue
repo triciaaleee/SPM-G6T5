@@ -4,7 +4,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/vue/16/solid";
 import CalendarEntryButton from "./CalendarEntryButton.vue";
 import VenueIcon from "./VenueIcon.vue";
-import { CALENDAR_STATUSES } from "../../lib/calendarStatus";
+import { CALENDAR_STATUSES, type CalendarStatusKey } from "../../lib/calendarStatus";
 import { fetchVenueBookings, type StaffVenueOption } from "../../lib/venuesApi";
 import { fetchUnavailability } from "../../lib/unavailabilityApi";
 import {
@@ -44,15 +44,45 @@ const MONTH_CHIPS = 3;
  * The venues the page's filter picked; `total` is how many that is. Day and week draw only the first
  * `maxVenues` (four by default); month draws all of them.
  */
-const props = defineProps<{
-  venues: StaffVenueOption[];
-  day?: string;
-  total?: number;
-  from?: string;
-  to?: string;
-  prompt?: string;
-  maxVenues?: number;
-}>();
+const props = withDefaults(
+  defineProps<{
+    venues: StaffVenueOption[];
+    day?: string;
+    total?: number;
+    from?: string;
+    to?: string;
+    prompt?: string;
+    maxVenues?: number;
+    /** Where the entries come from. Venue staff's own bookings and block-outs by default. */
+    loadEntries?: LoadEntries;
+    /** The statuses the legend lists; all of them by default. */
+    statuses?: CalendarStatusKey[];
+    /** Whether the viewer can act on requests. Off hides "Review in Requests" and the attendance row. */
+    reviewable?: boolean;
+  }>(),
+  { reviewable: true },
+);
+
+/** `failed` means part of it didn't load; what did is still drawn. A loader that throws loads nothing. */
+type LoadEntries = (
+  venueId: number,
+  from: string,
+  to: string,
+) => Promise<{ bookings: CalendarEntry[]; blocks: CalendarEntry[]; failed?: boolean }>;
+
+/** Venue staff's own venues: every live booking (with event detail) and block-out period. */
+const loadStaffEntries: LoadEntries = async (id, from, to) => {
+  const [b, p] = await Promise.allSettled([fetchVenueBookings(id, from, to), fetchUnavailability(id, from, to)]);
+  return {
+    bookings: b.status === "fulfilled" ? bookingEntries(id, b.value) : [],
+    blocks: p.status === "fulfilled" ? blockEntries(p.value, from, to) : [],
+    failed: b.status === "rejected" || p.status === "rejected",
+  };
+};
+
+const legendStatuses = computed(() =>
+  CALENDAR_STATUSES.filter((s) => !props.statuses || props.statuses.includes(s.key)),
+);
 /** The day on screen (or last clicked); the page uses it to pick which day its lists show. */
 const emit = defineEmits<{ "day-change": [day: string]; "show-requests": [] }>();
 
@@ -95,10 +125,16 @@ async function load(): Promise<void> {
   const failed: string[] = [];
   await Promise.all(
     selectedIds.value.map(async (id) => {
-      const [b, p] = await Promise.allSettled([fetchVenueBookings(id, from, to), fetchUnavailability(id, from, to)]);
-      bookings[id] = b.status === "fulfilled" ? bookingEntries(id, b.value) : [];
-      blocks[id] = p.status === "fulfilled" ? blockEntries(p.value, from, to) : [];
-      if (b.status === "rejected" || p.status === "rejected") failed.push(venueName(id));
+      try {
+        const loaded = await (props.loadEntries ?? loadStaffEntries)(id, from, to);
+        bookings[id] = loaded.bookings;
+        blocks[id] = loaded.blocks;
+        if (loaded.failed) failed.push(venueName(id));
+      } catch {
+        bookings[id] = [];
+        blocks[id] = [];
+        failed.push(venueName(id));
+      }
     }),
   );
   if (seq !== loadSeq) return;
@@ -298,7 +334,7 @@ function nudge(direction: 1 | -1): void {
       <span v-if="coloured" class="legend__divider" aria-hidden="true" />
       <ul class="legend__group" aria-label="Status">
         <li class="legend__heading" aria-hidden="true">Status</li>
-        <li v-for="status in CALENDAR_STATUSES" :key="status.key" class="legend__item">
+        <li v-for="status in legendStatuses" :key="status.key" class="legend__item">
           <span class="key" :class="`key--${status.key}`"><VenueIcon :name="status.icon" :size="12" /></span>{{ status.label }}
         </li>
       </ul>
@@ -380,8 +416,10 @@ function nudge(direction: 1 | -1): void {
           <template v-if="picked.kind === 'booking'">
             <dt>Status</dt>
             <dd>{{ picked.status }}</dd>
-            <dt>Expected attendance</dt>
-            <dd>{{ picked.attendance ?? "Not specified" }}</dd>
+            <template v-if="reviewable || picked.attendance !== undefined">
+              <dt>Expected attendance</dt>
+              <dd>{{ picked.attendance ?? "Not specified" }}</dd>
+            </template>
           </template>
           <template v-else>
             <dt>Type</dt>
@@ -389,7 +427,7 @@ function nudge(direction: 1 | -1): void {
           </template>
         </dl>
         <div class="panel__actions">
-          <AppButton v-if="picked.kind === 'booking' && picked.status === 'Requested'" variant="primary" type="button"
+          <AppButton v-if="reviewable && picked.kind === 'booking' && picked.status === 'Requested'" variant="primary" type="button"
             @click="picked = null; emit('show-requests')">
             Review in Requests
           </AppButton>

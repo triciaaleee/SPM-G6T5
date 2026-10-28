@@ -39,6 +39,76 @@ beforeEach(() => {
   mockedBlocks.mockResolvedValue([]);
 });
 
+describe("VenueCalendar — a coordinator's read-only use", () => {
+  const entry = {
+    id: "booking-1",
+    kind: "booking" as const,
+    venueId: 1,
+    date: "2026-10-10",
+    startMin: 600,
+    endMin: 720,
+    title: "Gala Dinner",
+    status: "Approved" as const,
+    startTime: "10:00",
+    endTime: "12:00",
+    allDay: false,
+  };
+
+  it("takes its entries from loadEntries and leaves the staff endpoints alone", async () => {
+    const loadEntries = vi.fn().mockResolvedValue({ bookings: [entry], blocks: [] });
+    const wrapper = await mountCalendar({ venues: venues.slice(0, 1), day: "2026-10-10", loadEntries });
+
+    expect(loadEntries).toHaveBeenCalledWith(1, "2026-10-05", "2026-10-11");
+    expect(mockedBookings).not.toHaveBeenCalled();
+    expect(mockedBlocks).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("Gala Dinner");
+  });
+
+  it("reports a venue whose loader fails, and still draws the rest", async () => {
+    const loadEntries = vi.fn(async (id: number) => {
+      if (id === 2) throw new Error("boom");
+      return { bookings: [{ ...entry, venueId: id }], blocks: [] };
+    });
+    const wrapper = await mountCalendar({ venues: venues.slice(0, 2), day: "2026-10-10", loadEntries });
+
+    expect(wrapper.find("[role='alert']").text()).toContain("Venue 2");
+    expect(wrapper.text()).toContain("Gala Dinner");
+  });
+
+  it("lists only the statuses it is given in the key", async () => {
+    const wrapper = await mountCalendar({ statuses: ["approved", "hold", "block"] });
+
+    expect(wrapper.findAll("ul[aria-label='Status'] .legend__item").map((li) => li.text())).toEqual([
+      "Approved",
+      "On Hold",
+      "Unavailable",
+    ]);
+  });
+
+  it("lists all five statuses by default", async () => {
+    const wrapper = await mountCalendar();
+
+    expect(wrapper.findAll("ul[aria-label='Status'] .legend__item")).toHaveLength(5);
+  });
+
+  it("hides Review in Requests and the attendance row when not reviewable", async () => {
+    const requested = { ...entry, status: "Requested" as const };
+    const loadEntries = vi.fn().mockResolvedValue({ bookings: [requested], blocks: [] });
+    const wrapper = await mountCalendar({
+      venues: venues.slice(0, 1),
+      day: "2026-10-10",
+      loadEntries,
+      reviewable: false,
+    });
+
+    await wrapper.find(".entry").trigger("click");
+
+    expect(wrapper.find("[role='dialog']").exists()).toBe(true);
+    expect(wrapper.text()).not.toContain("Review in Requests");
+    expect(wrapper.text()).not.toContain("Expected attendance");
+  });
+});
+
 describe("VenueCalendar — how many venues it draws", () => {
   it("draws only the first four venues in Week view, and says the rest are there in Month", async () => {
     const wrapper = await mountCalendar();

@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { fetchOpenEvents, type OpenEvent } from "../lib/registrationApi";
-import { registrationBadgeClass, registrationStateBadge } from "../lib/registrationStatus";
-import EventCard, { type CardFact } from "../components/ui/EventCard.vue";
-import { eventThumbnail, formatCardDate, formatCardTimeRange, slotsLabel } from "../lib/attendeeEvents";
+import { fetchOpenEvents, type OpenEvent } from "../../lib/registrationApi";
+import { registrationBadgeClass, registrationStateBadge } from "../../lib/registrationStatus";
+import EventCard, { type CardFact } from "../../components/ui/EventCard.vue";
+import { eventThumbnail, formatCardDate, formatCardTimeRange, slotsLabel } from "../../lib/attendeeEvents";
 
 /**
  * Attendee "Discover events": every event open for registration. Each card

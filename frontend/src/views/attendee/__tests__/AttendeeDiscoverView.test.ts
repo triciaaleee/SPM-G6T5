@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { h } from "vue";
 import AttendeeDiscoverView from "../AttendeeDiscoverView.vue";
-import { fetchOpenEvents, type OpenEvent } from "../../lib/registrationApi";
+import { fetchOpenEvents, type OpenEvent } from "../../../lib/registrationApi";
 
-vi.mock("../../lib/registrationApi", () => ({ fetchOpenEvents: vi.fn() }));
+vi.mock("../../../lib/registrationApi", () => ({ fetchOpenEvents: vi.fn() }));
 
 const mockedOpen = vi.mocked(fetchOpenEvents);
 

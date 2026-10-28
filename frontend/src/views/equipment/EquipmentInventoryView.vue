@@ -17,8 +17,9 @@
  */
 import { ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
 import { PlusIcon } from "@heroicons/vue/20/solid";
-import AppButton from "../components/ui/AppButton.vue";
-import DataTable from "../components/ui/DataTable.vue";
+import AppButton from "../../components/ui/AppButton.vue";
+import DataTable from "../../components/ui/DataTable.vue";
+import PaginationBar from "../../components/ui/PaginationBar.vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import {
   EquipmentRequestError,
@@ -29,7 +30,7 @@ import {
   fetchStockHistory,
   type EquipmentCatalogItem,
   type StockChange,
-} from "../lib/equipmentApi";
+} from "../../lib/equipmentApi";
 
 /** Today's calendar date in Singapore (UTC+8), YYYY-MM-DD — the same reading events use. */
 function todaySingapore(): string {
@@ -37,6 +38,17 @@ function todaySingapore(): string {
 }
 
 const items = ref<EquipmentCatalogItem[]>([]);
+
+// Client-side paging: every item is loaded, one page of them is drawn.
+const PAGE_SIZE = 20;
+const page = ref(1);
+const currentPage = computed(() => Math.min(page.value, Math.max(1, Math.ceil(items.value.length / PAGE_SIZE))));
+const pagedItems = computed(() => items.value.slice((currentPage.value - 1) * PAGE_SIZE, currentPage.value * PAGE_SIZE));
+const stockCard = ref<HTMLElement | null>(null);
+function changePage(next: number) {
+  page.value = next;
+  stockCard.value?.scrollIntoView?.({ block: "start" });
+}
 const selectedDate = ref(todaySingapore());
 const dateLoading = ref(false);
 const dateError = ref<string | null>(null);
@@ -317,7 +329,7 @@ onMounted(async () => {
     <p v-else-if="errorMessage" class="full body-default error-text" role="alert">{{ errorMessage }}</p>
 
     <template v-else>
-      <section class="stock-card" aria-labelledby="stock-title">
+      <section ref="stockCard" class="stock-card" aria-labelledby="stock-title">
         <div class="flex flex-row justify-between items-center">
           <h2 id="stock-title" class="h4">Items</h2>
           <div class="stock-header">
@@ -341,7 +353,7 @@ onMounted(async () => {
         <p v-if="notice" class="body-small notice" role="status" data-testid="stock-notice">{{ notice }}</p>
 
         <DataTable v-if="items.length > 0" :columns="TABLE_COLUMNS" :column-widths="TABLE_COLUMN_WIDTHS"
-          column-gap="var(--spacing-48)" :rows="items" :row-key="(item) => item.id" :row-detail="isRowDetailOpen"
+          column-gap="var(--spacing-48)" :rows="pagedItems" :row-key="(item) => item.id" :row-detail="isRowDetailOpen"
           :row-test-id="(item) => `item-${item.id}`">
           <template #cell-equipment="{ row: item }">
             <span class="item-name">{{ item.name }}</span>
@@ -423,6 +435,8 @@ onMounted(async () => {
             </template>
           </template>
         </DataTable>
+
+        <PaginationBar :page="currentPage" :page-size="PAGE_SIZE" :total="items.length" @update:page="changePage" />
       </section>
     </template>
 

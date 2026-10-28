@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import AppButton from "../components/ui/AppButton.vue";
+import AppButton from "../../components/ui/AppButton.vue";
+import AuthSplitLayout from "../../components/auth/AuthSplitLayout.vue";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -8,13 +9,13 @@ import {
   signup,
   type SignupField,
   type SignupRole,
-} from "../lib/auth";
+} from "../../lib/auth";
 import {
   PASSWORD_MAX_BYTES,
   PASSWORD_RULE,
   passwordRequirements,
   passwordTooLong,
-} from "../lib/passwordPolicy";
+} from "../../lib/passwordPolicy";
 
 /**
  * E1-1: only the two self-service roles. Internal staff accounts are
@@ -121,13 +122,12 @@ async function handleSubmit() {
 <template>
   <!--
     Column mapping — Signup
-    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); form card col 5-8, centred.
-    Tablet (6-col): form card col 2-5, centred, grid-tablet-margin 32px.
-    Mobile (4-col): form card col 1-4, full width, grid-mobile-margin 6px.
-    Account-type tabs span the full card width; the form below is their shared tab panel.
+    Laid out by AuthSplitLayout: graphic 30% on the left, form (no card) centred in the right 70%.
+    Mobile (4-col): graphic hidden; form col 1-4, full width, grid-mobile-margin 6px.
+    Account-type tabs span the full form width; the form below is their shared tab panel.
   -->
-  <div class="page">
-    <form class="form-card" novalidate @submit.prevent="handleSubmit">
+  <AuthSplitLayout>
+    <form class="form" novalidate @submit.prevent="handleSubmit">
       <h1 class="h3">Create an account</h1>
       <p class="subheading">Sign up to join events or organise your own.</p>
 
@@ -226,48 +226,14 @@ async function handleSubmit() {
         Already have an account? <RouterLink :to="loginLink">Sign in</RouterLink>
       </p>
     </form>
-  </div>
+  </AuthSplitLayout>
 </template>
 
 <style scoped>
-.page {
-  display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  gap: var(--grid-desktop-gutter);
-  padding: var(--spacing-80) var(--grid-desktop-margin);
-  align-content: start;
-  min-height: 100vh;
-}
-
-.form-card {
-  grid-column: 5 / 9;
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-32);
+.form {
   display: flex;
   flex-direction: column;
-  align-self: start;
-}
-
-@media (max-width: 1024px) {
-  .page {
-    grid-template-columns: repeat(6, 1fr);
-    padding: var(--spacing-40) var(--grid-tablet-margin);
-  }
-  .form-card {
-    grid-column: 2 / 6;
-  }
-}
-
-@media (max-width: 640px) {
-  .page {
-    grid-template-columns: repeat(4, 1fr);
-    padding: var(--spacing-24) var(--grid-mobile-margin);
-  }
-  .form-card {
-    grid-column: 1 / 5;
-  }
+  width: 100%;
 }
 
 .h3 {

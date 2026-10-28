@@ -1,8 +1,9 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { fetchUnassignedQueue, type EventSummary } from "../lib/eventsApi";
-import { formatEventDate, statusBadgeClass, statusLabel } from "../lib/eventStatus";
-import { eventName } from "../lib/leadAssignments";
+import { fetchUnassignedQueue, type EventSummary } from "../../lib/eventsApi";
+import { formatEventDate, statusBadgeClass, statusLabel } from "../../lib/eventStatus";
+import { eventName, eventOrganiser } from "../../lib/leadAssignments";
+import DataTable from "../../components/ui/DataTable.vue";
 
 /**
  * E1-8: the Event Coordinator Lead's unassigned queue — every submitted
@@ -17,6 +18,17 @@ function eventDate(event: EventSummary): string | null {
   const date = (event.submitted_details as Record<string, unknown>)?.proposedDate;
   return typeof date === "string" && date ? date : null;
 }
+
+const COLUMNS = [
+  { key: "event", label: "Event" },
+  { key: "date", label: "Event date", hideOnNarrow: true },
+  { key: "submitted", label: "Submitted", hideOnNarrow: true },
+  { key: "organiser", label: "Requested by", hideOnNarrow: true },
+  { key: "status", label: "Status" },
+];
+
+// Same proportions approach as LeadEventTable: shrinkable fractions, fixed Status so rows line up.
+const COLUMN_WIDTHS = "minmax(0, 18fr) minmax(0, 10fr) minmax(0, 10fr) minmax(0, 12fr) 10rem";
 
 onMounted(async () => {
   try {
@@ -35,8 +47,8 @@ onMounted(async () => {
     Desktop (12-col): outer container col 1-12, grid-desktop-margin 80px; back link, heading and card list col 1-12.
     Tablet (6-col):   content col 1-6, full width, grid-tablet-margin 32px.
     Mobile (4-col):   content col 1-4, full width, grid-mobile-margin 6px.
-    Nested grid: card list uses a local 12-col grid (desktop, cards span 4), 6-col (tablet, span 3),
-    4-col (mobile, span 4).
+    The request list is a DataTable filling the content width; it drops the date and requester columns on
+    narrow screens and shows the dates under the event name.
   -->
   <div class="page">
     <div class="content">
@@ -58,29 +70,34 @@ onMounted(async () => {
       <p v-else-if="queue.length === 0" class="body-default muted">No requests are waiting for a coordinator.</p>
 
       <!-- E1-8 AC1: event name, event date and submission date for each request -->
-      <div v-else class="card-grid">
-        <RouterLink
-          v-for="event in queue"
-          :key="event.id"
-          :to="{ name: 'event-detail', params: { id: event.id } }"
-          class="event-card"
-        >
-          <span class="badge" :class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</span>
-          <p class="card-title">{{ eventName(event) }}</p>
-          <dl class="card-facts">
-            <div>
-              <dt class="small-text muted">Event date</dt>
-              <dd class="body-small">{{ formatEventDate(eventDate(event)) }}</dd>
-            </div>
-            <div>
-              <dt class="small-text muted">Submitted</dt>
-              <dd class="body-small">{{ formatEventDate(event.created_at) }}</dd>
-            </div>
-          </dl>
-          <hr class="card-divider" />
-          <p class="body-small muted">Requested by: {{ event.organiser?.name ?? "Unknown" }}</p>
-        </RouterLink>
-      </div>
+      <DataTable
+        v-else
+        :columns="COLUMNS"
+        :column-widths="COLUMN_WIDTHS"
+        column-gap="var(--spacing-80)"
+        :rows="queue"
+        :row-key="(event) => event.id"
+        :row-to="(event) => ({ name: 'event-detail', params: { id: event.id } })"
+        :row-test-id="(event) => `queue-row-${event.id}`"
+      >
+        <template #cell-event="{ row }">
+          <span class="cell-event">
+            <span class="cell-event__name">{{ eventName(row) }}</span>
+            <!-- Narrow screens drop the date columns; the dates sit under the name instead. -->
+            <span class="cell-event__sub">
+              Event {{ formatEventDate(eventDate(row)) }} · Submitted {{ formatEventDate(row.created_at) }}
+            </span>
+          </span>
+        </template>
+        <template #cell-date="{ row }">{{ formatEventDate(eventDate(row)) }}</template>
+        <template #cell-submitted="{ row }">{{ formatEventDate(row.created_at) }}</template>
+        <template #cell-organiser="{ row }">
+          <span :class="{ 'cell--empty': !eventOrganiser(row) }">{{ eventOrganiser(row) ?? "Unknown" }}</span>
+        </template>
+        <template #cell-status="{ row }">
+          <span class="badge" :class="statusBadgeClass(row.status)">{{ statusLabel(row.status) }}</span>
+        </template>
+      </DataTable>
     </div>
   </div>
 </template>
@@ -190,84 +207,35 @@ onMounted(async () => {
   color: var(--color-error-600);
 }
 
-/* Cards */
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  gap: var(--grid-desktop-gutter);
-  align-content: start;
+/* Table cells, same treatment as LeadEventTable */
+.cell--empty {
+  color: var(--color-grey-500);
 }
 
-@media (max-width: 1024px) {
-  .card-grid {
-    grid-template-columns: repeat(6, 1fr);
-  }
-}
-
-@media (max-width: 640px) {
-  .card-grid {
-    grid-template-columns: repeat(4, 1fr);
-    gap: var(--grid-mobile-gutter);
-  }
-}
-
-.event-card {
-  grid-column: span 4;
-  display: block;
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-24);
-  color: inherit;
-  text-decoration: none;
-}
-
-@media (max-width: 1024px) {
-  .event-card {
-    grid-column: span 3;
-  }
-}
-
-@media (max-width: 640px) {
-  .event-card {
-    grid-column: span 4;
-  }
-}
-
-.event-card:hover {
-  background: var(--color-grey-75);
-  border-color: var(--color-grey-200);
-}
-
-.event-card:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-/* H6 */
-.card-title {
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.75rem;
-  color: var(--color-grey-900);
-  margin: var(--spacing-12) 0 var(--spacing-8);
-}
-
-.card-facts {
+.cell-event {
   display: flex;
-  gap: var(--spacing-24);
-  margin: 0;
+  flex-direction: column;
+  gap: var(--spacing-2);
 }
 
-.card-facts dd {
-  margin: var(--spacing-4) 0 0;
-  color: var(--color-grey-700);
+.cell-event__name {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  color: var(--color-grey-900);
 }
 
-.card-divider {
-  border: none;
-  border-top: 1px solid var(--color-grey-100);
-  margin: var(--spacing-16) 0;
+.cell-event__sub {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .cell-event__sub {
+    display: block;
+    font-size: 0.875rem;
+    line-height: 1.125rem;
+    color: var(--color-grey-600);
+  }
 }
 
 /* Small Text / Tag */

@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { fetchMyEvents, fetchUnassignedQueue, type EventSummary } from "../lib/eventsApi";
-import { fetchCoordinators, type CoordinatorOption } from "../lib/usersApi";
-import { activeEventsLabel, groupByCoordinator, initials } from "../lib/leadAssignments";
-import LeadEventList from "../components/LeadEventList.vue";
+import { fetchMyEvents, fetchUnassignedQueue, type EventSummary } from "../../lib/eventsApi";
+import { fetchCoordinators, type CoordinatorOption } from "../../lib/usersApi";
+import { activeEventsLabel, groupByCoordinator, initials } from "../../lib/leadAssignments";
+import LeadEventList from "../../components/LeadEventList.vue";
 
 /**
  * The Event Coordinator Lead's landing page (Week 7 change 5): every

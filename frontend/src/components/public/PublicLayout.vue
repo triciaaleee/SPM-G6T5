@@ -186,6 +186,8 @@ const year = new Date().getFullYear();
   grid-column: 1 / 7;
   display: flex;
   flex-direction: column;
+  /* Keep the logo at its own width, left-aligned with the tagline, rather than stretched across the column. */
+  align-items: flex-start;
   gap: var(--spacing-12);
 }
 

@@ -3,18 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { h } from "vue";
 import VenueStaff from "../VenueStaff.vue";
-import VenueCalendar from "../../components/venues/VenueCalendar.vue";
+import VenueCalendar from "../../../components/venues/VenueCalendar.vue";
 import {
   fetchBufferOverlaps,
   fetchPendingRequests,
   fetchStaffVenues,
   fetchVenueBookings,
-} from "../../lib/venuesApi";
-import BlockOutPanel from "../../components/venues/BlockOutPanel.vue";
-import { deleteUnavailability, fetchUnavailability, type UnavailabilityPeriod } from "../../lib/unavailabilityApi";
+} from "../../../lib/venuesApi";
+import BlockOutPanel from "../../../components/venues/BlockOutPanel.vue";
+import { deleteUnavailability, fetchUnavailability, type UnavailabilityPeriod } from "../../../lib/unavailabilityApi";
 
-vi.mock("../../lib/venuesApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/venuesApi")>("../../lib/venuesApi");
+vi.mock("../../../lib/venuesApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/venuesApi")>("../../../lib/venuesApi");
   return {
     ...actual,
     fetchStaffVenues: vi.fn(),
@@ -23,8 +23,8 @@ vi.mock("../../lib/venuesApi", async () => {
     fetchBufferOverlaps: vi.fn(),
   };
 });
-vi.mock("../../lib/unavailabilityApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/unavailabilityApi")>("../../lib/unavailabilityApi");
+vi.mock("../../../lib/unavailabilityApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/unavailabilityApi")>("../../../lib/unavailabilityApi");
   return { ...actual, fetchUnavailability: vi.fn(), deleteUnavailability: vi.fn() };
 });
 

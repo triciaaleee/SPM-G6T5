@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { fetchMyEvents, type EventSummary } from "../lib/eventsApi";
-import { fetchCoordinators, type CoordinatorOption } from "../lib/usersApi";
-import { activeEventsLabel, groupByCoordinator, initials } from "../lib/leadAssignments";
-import LeadEventTable from "../components/LeadEventTable.vue";
+import { fetchMyEvents, type EventSummary } from "../../lib/eventsApi";
+import { fetchCoordinators, type CoordinatorOption } from "../../lib/usersApi";
+import { activeEventsLabel, groupByCoordinator, initials } from "../../lib/leadAssignments";
+import LeadEventTable from "../../components/LeadEventTable.vue";
+import PaginationBar from "../../components/ui/PaginationBar.vue";
+import { GROUP_DEFS } from "../../lib/eventGroups";
 
 /**
  * Every active event of one coordinator, for the Event Coordinator Lead —
@@ -22,6 +24,60 @@ const errorMessage = ref<string | null>(null);
 const group = computed(
   () => groupByCoordinator(coordinators.value, events.value).find((g) => g.id === coordinatorId) ?? null,
 );
+
+// Who acts next. The groups are the coordinator's, so the first is relabelled for the Lead's point of view.
+// A Lead's active list holds no Unassigned / Rejected / Cancelled / Completed, so "Other" never has events.
+const LEAD_GROUP_LABELS: Record<string, string> = { action: "Needs coordinator action" };
+const GROUPS = GROUP_DEFS.filter((g) => g.key !== "other").map((g) => ({
+  ...g,
+  label: LEAD_GROUP_LABELS[g.key] ?? g.label,
+}));
+
+const ALL_GROUPS_KEY = "";
+const groupFilter = ref(ALL_GROUPS_KEY);
+
+// Chip counts always cover the coordinator's whole list, so they don't shift as one is chosen.
+const chipOptions = computed(() => [
+  { key: ALL_GROUPS_KEY, label: "All", count: group.value?.events.length ?? 0 },
+  ...GROUPS.map((g) => ({
+    key: g.key,
+    label: g.label,
+    count: group.value?.events.filter((e) => g.statuses.includes(e.status)).length ?? 0,
+  })).filter((chip) => chip.count > 0),
+]);
+
+const groupedEvents = computed(() =>
+  GROUPS.map((g) => ({ ...g, events: (group.value?.events ?? []).filter((e) => g.statuses.includes(e.status)) })).filter(
+    (g) => g.events.length > 0,
+  ),
+);
+
+// All: group by group (each already soonest first) with subheaders. A chosen chip: that group, flat.
+const rows = computed(() => {
+  if (groupFilter.value === ALL_GROUPS_KEY) return groupedEvents.value.flatMap((g) => g.events);
+  return groupedEvents.value.find((g) => g.key === groupFilter.value)?.events ?? [];
+});
+
+function groupOf(event: EventSummary) {
+  if (groupFilter.value !== ALL_GROUPS_KEY) return null;
+  const g = groupedEvents.value.find((x) => x.statuses.includes(event.status));
+  return g ? { key: g.key, label: g.label, count: g.events.length } : null;
+}
+
+// Client-side paging, as on the Coordinator dashboard: counts and subheaders use the full list.
+const PAGE_SIZE = 20;
+const page = ref(1);
+const currentPage = computed(() => Math.min(page.value, Math.max(1, Math.ceil(rows.value.length / PAGE_SIZE))));
+const pagedRows = computed(() => rows.value.slice((currentPage.value - 1) * PAGE_SIZE, currentPage.value * PAGE_SIZE));
+watch(groupFilter, () => {
+  page.value = 1;
+});
+
+const listRoot = ref<HTMLElement | null>(null);
+function changePage(next: number) {
+  page.value = next;
+  listRoot.value?.scrollIntoView?.({ block: "start" });
+}
 
 onMounted(async () => {
   try {
@@ -68,7 +124,20 @@ onMounted(async () => {
       <p v-if="group.events.length === 0" class="list body-default muted">
         No active events assigned. Available for new work.
       </p>
-      <LeadEventTable v-else class="list" :events="group.events" />
+      <div v-else ref="listRoot" class="list">
+        <div role="group" aria-label="Quick filter" class="chips">
+          <button v-for="chip in chipOptions" :key="chip.key" type="button" class="chip"
+            :class="{ 'chip--active': groupFilter === chip.key }" :aria-pressed="groupFilter === chip.key"
+            @click="groupFilter = chip.key">
+            {{ chip.label }}
+            <span class="chip__count">{{ chip.count }}</span>
+          </button>
+        </div>
+
+        <LeadEventTable :events="pagedRows" :group-of="groupOf" />
+
+        <PaginationBar :page="currentPage" :page-size="PAGE_SIZE" :total="rows.length" @update:page="changePage" />
+      </div>
     </template>
   </div>
 </template>
@@ -146,6 +215,63 @@ onMounted(async () => {
   align-items: center;
   gap: var(--spacing-16);
   min-width: 0;
+}
+
+/* Quick-filter chips: same treatment as the Coordinator dashboard's. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-8);
+  margin-bottom: var(--spacing-16);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  min-height: 40px;
+  padding: 0 var(--spacing-16);
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-full);
+  background: var(--color-base-white);
+  color: var(--color-grey-700);
+  font-family: var(--font-family-lato);
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--color-grey-75);
+  color: var(--color-grey-800);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
+}
+
+.chip--active,
+.chip--active:hover {
+  background: var(--color-purple-100);
+  border-color: var(--color-purple-300);
+  color: var(--color-purple-800);
+}
+
+.chip__count {
+  padding: 2px var(--spacing-6);
+  border-radius: var(--radius-full);
+  background: var(--color-grey-100);
+  color: var(--color-grey-600);
+  font-size: 0.75rem;
+  min-width: 20px;
+  text-align: center;
+}
+
+.chip--active .chip__count {
+  background: var(--color-base-white);
+  color: var(--color-purple-800);
 }
 
 /* Initials avatar: same as the overview's cards. */

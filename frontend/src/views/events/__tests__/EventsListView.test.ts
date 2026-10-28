@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { h } from "vue";
 import EventsListView from "../EventsListView.vue";
-import { deleteDraft, fetchMyEvents, getCurrentUser, type EventSummary } from "../../lib/eventsApi";
+import { deleteDraft, fetchMyEvents, getCurrentUser, type EventSummary } from "../../../lib/eventsApi";
 
-vi.mock("../../lib/eventsApi", () => ({
+vi.mock("../../../lib/eventsApi", () => ({
   fetchMyEvents: vi.fn(),
   getCurrentUser: vi.fn(),
   deleteDraft: vi.fn(),
@@ -59,6 +59,73 @@ async function mountView(events: EventSummary[], role = "organiser") {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "log").mockImplementation(() => {});
+});
+
+describe("EventsListView — pagination", () => {
+  const submitted = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      makeEvent({ id: i + 1, submitted_details: { name: `Event ${i + 1}`, proposedDate: "2099-06-15" } }),
+    );
+  const drafts = (n: number, firstId = 1000) =>
+    Array.from({ length: n }, (_, i) =>
+      makeEvent({ id: firstId + i, status: "Draft", submitted_details: { name: `Draft ${i + 1}` } }),
+    );
+  const summary = (w: Awaited<ReturnType<typeof mountView>>) => w.find("[data-testid='pagination-summary']").text();
+  const cards = (w: Awaited<ReturnType<typeof mountView>>) => w.findAll(".event-card");
+  const goTo = (w: Awaited<ReturnType<typeof mountView>>, p: number) => w.get(`[aria-label='Page ${p}']`).trigger("click");
+
+  it("shows 12 cards a page: 12, then 12, then 6 of 30", async () => {
+    const wrapper = await mountView(submitted(30));
+
+    expect(cards(wrapper)).toHaveLength(12);
+    expect(summary(wrapper)).toBe("Showing 1–12 of 30 events");
+
+    await goTo(wrapper, 2);
+    expect(cards(wrapper)).toHaveLength(12);
+    expect(summary(wrapper)).toBe("Showing 13–24 of 30 events");
+
+    await goTo(wrapper, 3);
+    expect(cards(wrapper)).toHaveLength(6);
+  });
+
+  it("shows no pagination bar at 12 events or fewer", async () => {
+    const wrapper = await mountView(submitted(12));
+
+    expect(cards(wrapper)).toHaveLength(12);
+    expect(wrapper.find("nav[aria-label='Pagination']").exists()).toBe(false);
+  });
+
+  it("returns to page 1 when the tab changes, and pages the Drafts tab by its own count", async () => {
+    const wrapper = await mountView([...submitted(30), ...drafts(14)]);
+    await goTo(wrapper, 3);
+
+    await wrapper.findAll("[role='tab']")[1].trigger("click");
+    expect(summary(wrapper)).toBe("Showing 1–12 of 14 events");
+
+    await wrapper.findAll("[role='tab']")[0].trigger("click");
+    expect(summary(wrapper)).toBe("Showing 1–12 of 30 events");
+  });
+
+  it("falls back a page when deleting the last draft on the last page", async () => {
+    mockedDelete.mockResolvedValue(undefined);
+    const wrapper = await mountView(drafts(13));
+    await wrapper.findAll("[role='tab']")[1].trigger("click");
+    await goTo(wrapper, 2);
+    expect(cards(wrapper)).toHaveLength(1);
+
+    await wrapper.find(".delete-draft-action").trigger("click");
+    await wrapper.find(".btn--danger-solid").trigger("click");
+    await flushPromises();
+
+    expect(cards(wrapper)).toHaveLength(12);
+    expect(wrapper.find("nav[aria-label='Pagination']").exists()).toBe(false);
+  });
+
+  it("does not log the events to the console on load", async () => {
+    await mountView(submitted(1));
+
+    expect(console.log).not.toHaveBeenCalled();
+  });
 });
 
 describe("EventsListView", () => {

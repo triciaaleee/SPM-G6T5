@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
-import AppButton from "../components/ui/AppButton.vue";
+import AppButton from "../../components/ui/AppButton.vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import {
   fetchEventById,
@@ -10,7 +10,7 @@ import {
   updateEventDetails,
   ValidationError,
   type EventRequestPayload,
-} from "../lib/eventsApi";
+} from "../../lib/eventsApi";
 
 const route = useRoute();
 const router = useRouter();

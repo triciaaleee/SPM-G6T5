@@ -6,14 +6,14 @@
  * bookable by coordinators straight away (E4-1).
  */
 import { PlusIcon } from "@heroicons/vue/20/solid";
-import AppButton from "../components/ui/AppButton.vue";
-import DataTable from "../components/ui/DataTable.vue";
-import BlockOutPanel from "../components/venues/BlockOutPanel.vue";
-import VenueFormPanel from "../components/venues/VenueFormPanel.vue";
+import AppButton from "../../components/ui/AppButton.vue";
+import DataTable from "../../components/ui/DataTable.vue";
+import BlockOutPanel from "../../components/venues/BlockOutPanel.vue";
+import VenueFormPanel from "../../components/venues/VenueFormPanel.vue";
 import { onMounted, ref } from "vue";
-import { fetchMyVenues, type VenueRecord, type VenueUpdateResult } from "../lib/venuesApi";
-import { describeBlockOutResult, type CreatePeriodResult } from "../lib/unavailabilityApi";
-import { toKey } from "../lib/venueCalendar";
+import { fetchMyVenues, type VenueRecord, type VenueUpdateResult } from "../../lib/venuesApi";
+import { describeBlockOutResult, type CreatePeriodResult } from "../../lib/unavailabilityApi";
+import { toKey } from "../../lib/venueCalendar";
 
 const TABLE_COLUMNS = [
   { key: "venue", label: "Venue" },

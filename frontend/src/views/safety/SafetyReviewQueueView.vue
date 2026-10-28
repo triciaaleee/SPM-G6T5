@@ -10,7 +10,7 @@
  * change request shows which of those flags were addressed (AC3).
  * Matches VenueRequestQueue.vue's layout and styling.
  */
-import AppButton from "../components/ui/AppButton.vue";
+import AppButton from "../../components/ui/AppButton.vue";
 import { computed, onMounted, ref } from "vue";
 import {
   approveSafetyReview,
@@ -23,7 +23,7 @@ import {
   SafetyReviewRejectError,
   type SafetyArrangementOption,
   type SafetyReviewQueueItem,
-} from "../lib/eventsApi";
+} from "../../lib/eventsApi";
 
 const events = ref<SafetyReviewQueueItem[]>([]);
 const loading = ref(true);

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import AppButton from "../components/ui/AppButton.vue";
+import AppButton from "../../components/ui/AppButton.vue";
+import AuthSplitLayout from "../../components/auth/AuthSplitLayout.vue";
 import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { LockedOutError, landingRouteForRole, login } from "../lib/auth";
+import { LockedOutError, landingRouteForRole, login } from "../../lib/auth";
 
 const email = ref("");
 const password = ref("");
@@ -49,12 +50,11 @@ async function handleSubmit() {
 <template>
   <!--
     Column mapping — Login
-    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); form card col 5-8, centred.
-    Tablet (6-col): form card col 2-5, centred, grid-tablet-margin 32px.
-    Mobile (4-col): form card col 1-4, full width, grid-mobile-margin 6px.
+    Laid out by AuthSplitLayout: graphic 30% on the left, form (no card) centred in the right 70%.
+    Mobile (4-col): graphic hidden; form col 1-4, full width, grid-mobile-margin 6px.
   -->
-  <div class="page">
-    <form class="form-card" @submit.prevent="handleSubmit">
+  <AuthSplitLayout>
+    <form class="form" @submit.prevent="handleSubmit">
       <h1 class="h3">Sign in</h1>
       <p class="subheading">Sign in to view the events you've submitted.</p>
 
@@ -88,48 +88,14 @@ async function handleSubmit() {
         No account yet? <RouterLink :to="signupLink">Sign up</RouterLink>
       </p>
     </form>
-  </div>
+  </AuthSplitLayout>
 </template>
 
 <style scoped>
-.page {
-  display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  gap: var(--grid-desktop-gutter);
-  padding: var(--spacing-80) var(--grid-desktop-margin);
-  align-content: start;
-  min-height: 100vh;
-}
-
-.form-card {
-  grid-column: 5 / 9;
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-32);
+.form {
   display: flex;
   flex-direction: column;
-  align-self: start;
-}
-
-@media (max-width: 1024px) {
-  .page {
-    grid-template-columns: repeat(6, 1fr);
-    padding: var(--spacing-40) var(--grid-tablet-margin);
-  }
-  .form-card {
-    grid-column: 2 / 6;
-  }
-}
-
-@media (max-width: 640px) {
-  .page {
-    grid-template-columns: repeat(4, 1fr);
-    padding: var(--spacing-24) var(--grid-mobile-margin);
-  }
-  .form-card {
-    grid-column: 1 / 5;
-  }
+  width: 100%;
 }
 
 .h3 {

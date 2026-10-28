@@ -16,12 +16,12 @@ import {
   submitChangeRequest,
   type ChangeRequestEntry,
   type EventSummary,
-} from "../../lib/eventsApi";
-import { fetchEventVenueBookings } from "../../lib/venuesApi";
-import { formatEventDate } from "../../lib/eventStatus";
+} from "../../../lib/eventsApi";
+import { fetchEventVenueBookings } from "../../../lib/venuesApi";
+import { formatEventDate } from "../../../lib/eventStatus";
 
-vi.mock("../../lib/eventsApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/eventsApi")>("../../lib/eventsApi");
+vi.mock("../../../lib/eventsApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/eventsApi")>("../../../lib/eventsApi");
   return {
     ...actual,
     fetchEventById: vi.fn(),
@@ -36,13 +36,13 @@ vi.mock("../../lib/eventsApi", async () => {
   };
 });
 
-vi.mock("../../lib/venuesApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/venuesApi")>("../../lib/venuesApi");
+vi.mock("../../../lib/venuesApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/venuesApi")>("../../../lib/venuesApi");
   return { ...actual, fetchEventVenueBookings: vi.fn() };
 });
 
-vi.mock("../../lib/equipmentApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/equipmentApi")>("../../lib/equipmentApi");
+vi.mock("../../../lib/equipmentApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/equipmentApi")>("../../../lib/equipmentApi");
   return { ...actual, fetchEquipmentRequestsForEvent: vi.fn().mockResolvedValue([]) };
 });
 

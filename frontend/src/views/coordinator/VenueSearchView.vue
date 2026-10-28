@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import AppButton from "../components/ui/AppButton.vue";
+import AppButton from "../../components/ui/AppButton.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { fetchEventById, type EventSummary } from "../lib/eventsApi";
+import { fetchEventById, type EventSummary } from "../../lib/eventsApi";
 import {
   describeBookingFailure,
   emptyVenueFilters,
@@ -19,11 +19,11 @@ import {
   type Venue,
   type VenueAvailability,
   type VenueFilterOptions,
-} from "../lib/venuesApi";
-import { fromKey } from "../lib/availabilityCalendar";
-import VenueFilterBar from "../components/venues/VenueFilterBar.vue";
-import VenueIcon from "../components/venues/VenueIcon.vue";
-import VenueTimeSlotGrid from "../components/venues/VenueTimeSlotGrid.vue";
+} from "../../lib/venuesApi";
+import { fromKey } from "../../lib/availabilityCalendar";
+import VenueFilterBar from "../../components/venues/VenueFilterBar.vue";
+import VenueIcon from "../../components/venues/VenueIcon.vue";
+import VenueTimeSlotGrid from "../../components/venues/VenueTimeSlotGrid.vue";
 
 interface EventScheduleDetails {
   name?: string;

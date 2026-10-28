@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import AppButton from "../components/ui/AppButton.vue";
+import AppButton from "../../components/ui/AppButton.vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -9,11 +9,11 @@ import {
   register,
   withdraw,
   type AttendeeEventView,
-} from "../lib/registrationApi";
-import { registrationBadgeClass } from "../lib/registrationStatus";
-import { eventThumbnail, formatCardTimeRange, formatLongDate, slotsLabel } from "../lib/attendeeEvents";
-import { getStoredUser, landingRouteForRole } from "../lib/auth";
-import { requestNotificationsRefresh } from "../lib/notificationsApi";
+} from "../../lib/registrationApi";
+import { registrationBadgeClass } from "../../lib/registrationStatus";
+import { eventThumbnail, formatCardTimeRange, formatLongDate, slotsLabel } from "../../lib/attendeeEvents";
+import { getStoredUser, landingRouteForRole } from "../../lib/auth";
+import { requestNotificationsRefresh } from "../../lib/notificationsApi";
 
 /**
  * One event as an attendee sees it: name, description, date, time, venues,

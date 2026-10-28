@@ -10,11 +10,11 @@ import {
   register,
   withdraw,
   type AttendeeEventView,
-} from "../../lib/registrationApi";
-import { NOTIFICATIONS_REFRESH_EVENT } from "../../lib/notificationsApi";
+} from "../../../lib/registrationApi";
+import { NOTIFICATIONS_REFRESH_EVENT } from "../../../lib/notificationsApi";
 
-vi.mock("../../lib/registrationApi", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/registrationApi")>("../../lib/registrationApi");
+vi.mock("../../../lib/registrationApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/registrationApi")>("../../../lib/registrationApi");
   return {
     AccessDeniedError: actual.AccessDeniedError,
     RegistrationRequestError: actual.RegistrationRequestError,

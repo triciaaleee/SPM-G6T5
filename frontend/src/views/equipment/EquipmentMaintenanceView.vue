@@ -6,7 +6,7 @@
  * the navbar. The stock numbers on the Inventory page re-read themselves when
  * that page is opened, so nothing here needs to tell it about a change.
  */
-import EquipmentUnitsPanel from "../components/equipment/EquipmentUnitsPanel.vue";
+import EquipmentUnitsPanel from "../../components/equipment/EquipmentUnitsPanel.vue";
 </script>
 
 <template>

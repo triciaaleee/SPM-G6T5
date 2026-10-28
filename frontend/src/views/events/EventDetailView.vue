@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import AppButton from "../components/ui/AppButton.vue";
+import AppButton from "../../components/ui/AppButton.vue";
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import {
   ArrowPathIcon,
@@ -10,7 +10,7 @@ import {
   PlusIcon,
 } from "@heroicons/vue/20/solid";
 import { useRoute, useRouter } from "vue-router";
-import { landingRouteForRole } from "../lib/auth";
+import { landingRouteForRole } from "../../lib/auth";
 import {
   AccessDeniedError,
   AssignmentError,
@@ -44,20 +44,20 @@ import {
   type EventSummary,
   type ChangeRequestResult,
   type ChangeRequestEntry,
-} from "../lib/eventsApi";
-import { formatEventDate, statusBadgeClass, statusLabel, statusLastChangedAt } from "../lib/eventStatus";
-import { hasEventEnded } from "../lib/eventTiming";
-import { REGISTRATION_STATE_LABEL, registrationState } from "../lib/registrationPeriod";
-import EventStatusTracker from "../components/EventStatusTracker.vue";
-import ClarificationPanel from "../components/ClarificationPanel.vue";
-import VenueRecommendations from "../components/venues/VenueRecommendations.vue";
-import EquipmentRequestPanel from "../components/equipment/EquipmentRequestPanel.vue";
-import VenueRequestsPanel from "../components/venues/VenueRequestsPanel.vue";
-import BookingPlanForm from "../components/venues/BookingPlanForm.vue";
-import SafetyReviewPanel from "../components/SafetyReviewPanel.vue";
-import { arrangementsNeedingReview } from "../lib/arrangementsReview";
-import SafetyChangesCard from "../components/SafetyChangesCard.vue";
-import RegistrationsPanel from "../components/RegistrationsPanel.vue";
+} from "../../lib/eventsApi";
+import { formatEventDate, statusBadgeClass, statusLabel, statusLastChangedAt } from "../../lib/eventStatus";
+import { hasEventEnded } from "../../lib/eventTiming";
+import { REGISTRATION_STATE_LABEL, registrationState } from "../../lib/registrationPeriod";
+import EventStatusTracker from "../../components/EventStatusTracker.vue";
+import ClarificationPanel from "../../components/ClarificationPanel.vue";
+import VenueRecommendations from "../../components/venues/VenueRecommendations.vue";
+import EquipmentRequestPanel from "../../components/equipment/EquipmentRequestPanel.vue";
+import VenueRequestsPanel from "../../components/venues/VenueRequestsPanel.vue";
+import BookingPlanForm from "../../components/venues/BookingPlanForm.vue";
+import SafetyReviewPanel from "../../components/SafetyReviewPanel.vue";
+import { arrangementsNeedingReview } from "../../lib/arrangementsReview";
+import SafetyChangesCard from "../../components/SafetyChangesCard.vue";
+import RegistrationsPanel from "../../components/RegistrationsPanel.vue";
 import {
   fetchEventSuitability,
   fetchEventVenueBookings,
@@ -67,9 +67,9 @@ import {
   type EventSuitability,
   type EventVenueBooking,
   type VenueFilterOptions,
-} from "../lib/venuesApi";
-import { fetchEquipmentRequestsForEvent, type EquipmentRequest } from "../lib/equipmentApi";
-import { fetchCoordinators, type CoordinatorOption } from "../lib/usersApi";
+} from "../../lib/venuesApi";
+import { fetchEquipmentRequestsForEvent, type EquipmentRequest } from "../../lib/equipmentApi";
+import { fetchCoordinators, type CoordinatorOption } from "../../lib/usersApi";
 
 
 interface SubmittedEventDetails {

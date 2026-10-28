@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { h } from "vue";
 import AttendeeEventsView from "../AttendeeHomeView.vue";
-import { fetchMyRegistrations, type MyRegistration } from "../../lib/registrationApi";
+import { fetchMyRegistrations, type MyRegistration } from "../../../lib/registrationApi";
 
-vi.mock("../../lib/registrationApi", () => ({ fetchMyRegistrations: vi.fn() }));
-vi.mock("../../lib/auth", () => ({
+vi.mock("../../../lib/registrationApi", () => ({ fetchMyRegistrations: vi.fn() }));
+vi.mock("../../../lib/auth", () => ({
   getStoredUser: () => ({ id: "ATT-0001", name: "Attendee One", email: "a@example.com", role: "attendee" }),
 }));
 
