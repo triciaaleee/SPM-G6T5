@@ -12,6 +12,7 @@ Records the significant decisions behind `c1-system-context.dsl`, `c2-containers
 | 2.0 | 2026-10-10 | Tricia Lee | Week 7 customer changes and alignment with the built services. Seven roles in C1 and C2. Supabase Auth removed. One C2 view instead of two. Six services behind an Express gateway. C3 views for the gateway, events service and venue service. D2, D3, D5, D7 and D9 revised; D4 and D8 superseded; D10 to D13 added. A1 to A8 resolved; A9 to A15 added for Week 7. |
 | 2.1 | 2026-10-10 | Tricia Lee | RabbitMQ message catalogue moved to `RabbitMQ.md`. D6 revised: services announce their own releases on cancellation. New section 4 with the messaging rules. A16 and A17 added. |
 | 2.2 | 2026-10-26 | Tricia Lee | API gateway dropped: D5 superseded, 1.2 closed. Seven services, adding chat-service (D2). `c3-components.dsl` split into one C3 file per service in `c3/`, covering all seven (D9). D6, D7, D10, D13 and A1 aligned with the built services. |
+| 2.3 | 2026-10-29 | Tricia Lee | events-service's `routes/events.ts` split into one file per C3 controller under `routes/events/`; `c3-events-service.dsl` and D9 point at the new files. No endpoint or behaviour change. |
 
 ---
 
@@ -169,7 +170,7 @@ The diagrams now show the finished Release 1 product without Existing or Planned
 
 ### D9. One component view per service (revised)
 
-Each of the seven services has its own C3 file in `c3/`, named `c3-<service>.dsl`. Each is a standalone workspace that redeclares only the neighbouring containers its service talks to (the web app, other services, the broker, the database), so it opens on its own in Structurizr. Components are logical, and each names the real source file it lives in. Where one large router holds several responsibilities, such as events-service's `routes/events.ts`, it is split into logical controllers that all name that file.
+Each of the seven services has its own C3 file in `c3/`, named `c3-<service>.dsl`. Each is a standalone workspace that redeclares only the neighbouring containers its service talks to (the web app, other services, the broker, the database), so it opens on its own in Structurizr. Components are logical, and each names the real source file it lives in. events-service's controllers each have their own file under `routes/events/`, and `routes/events.ts` only mounts them; helpers they share are in `routes/events/shared.ts`.
 
 **Change in 2.2:** 2.0 had one `c3-components.dsl` with views for the gateway, events and venue only. The gateway view went with D5, and user, equipment, registration, notification and chat services now have views too.
 

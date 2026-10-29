@@ -90,7 +90,7 @@ export async function fetchEventEquipmentRequests(
  * E3-11 AC2: flags a booking for rebooking after a coordinator approves a
  * held change that actually invalidated it (events-service decided that
  * using the same capacity/availability check E3-10 already runs — see
- * loadChangeRequestImpact in routes/events.ts). venue-service owns the
+ * loadChangeRequestImpact in routes/events/changeRequests.ts). venue-service owns the
  * write and its own venue-staff notification; this just calls it.
  */
 export async function flagBookingForRebooking(
