@@ -1,4 +1,8 @@
 import jwt from "jsonwebtoken";
+import { clock } from "./clock.js";
+
+/** The injected clock as the seconds-since-epoch jsonwebtoken expects, so token issue and expiry follow it. */
+const nowSeconds = (): number => Math.floor(clock.now().getTime() / 1000);
 
 const JWT_EXPIRES_IN = "1d";
 
@@ -28,7 +32,7 @@ function getSecret(): string {
 }
 
 export function signToken(payload: { sub: string; role: string }): string {
-  return jwt.sign(payload, getSecret(), { expiresIn: JWT_EXPIRES_IN });
+  return jwt.sign({ ...payload, iat: nowSeconds() }, getSecret(), { expiresIn: JWT_EXPIRES_IN });
 }
 
 /**
@@ -37,7 +41,7 @@ export function signToken(payload: { sub: string; role: string }): string {
  */
 export function verifyToken(token: string): AppTokenPayload {
   try {
-    return jwt.verify(token, getSecret()) as AppTokenPayload;
+    return jwt.verify(token, getSecret(), { clockTimestamp: nowSeconds() }) as AppTokenPayload;
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) {
       throw new TokenExpiredError("Token expired");

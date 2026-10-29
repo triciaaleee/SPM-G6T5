@@ -3,7 +3,7 @@ import type { Response } from "express";
 import type { AuthedRequest } from "../../middleware/auth.js";
 import type { ValidatedEventRequest } from "../../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../../lib/validation.js";
-import { EVENT_STATUS } from "../../lib/eventStatus.js";
+import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../../lib/eventStatus.js";
 import { committedFieldValue, validateChangeRequestFields, withHeldValues } from "../../lib/changeRequestFields.js";
 import { AUTO_APPLIED_REASON_PREFIX, CHANGE_REQUEST_STATUS } from "../../lib/changeRequestStatus.js";
 import { announceAttendanceChange, announceReschedule, SCHEDULE_FIELDS } from "../../lib/reschedule.js";
@@ -18,12 +18,14 @@ import {
 import type { ArrangementEquipmentItem } from "../../lib/arrangementsClient.js";
 import { fetchEventRegistrations } from "../../lib/registrationsClient.js";
 import {
+  routeParam,
   recordAccessDenial,
   recordEventHistory,
   EVENT_COLUMNS,
   type AssignmentEventRow,
   eventDisplayName,
 } from "./shared.js";
+import { clock } from "../../lib/clock.js";
 
 /**
  * Change request controller (E3-8 to E3-11): the organiser asks to change a
@@ -53,7 +55,7 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
     return;
@@ -118,6 +120,7 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
       res.status(500).json({ error: "Failed to load the event's open change request" });
       return;
     }
+    // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder row is not critical, so it is filtered out below
     openFields = data ?? [];
   }
   const heldCritical = openFields.filter((field) => field.is_critical);
@@ -151,21 +154,24 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
   const upsertedCritical: { field: string; oldValue: string | null; newValue: string }[] = [];
   for (const change of result.changes.filter((c) => c.isCritical)) {
     const trueBaseline = committedFieldValue(current, change.field);
-    const wasHeld = heldCritical.some((field) => field.field === change.field);
-    if (wasHeld && change.newValue === (trueBaseline ?? "")) {
+    // A change to a field that isn't held always differs from its committed value (the diff above is against it),
+    // and a submitted value is never empty, so only a held field can come back equal to the committed one.
+    if (change.newValue === trueBaseline) {
       revertedFields.push(change.field);
     } else {
       upsertedCritical.push({ field: change.field, oldValue: trueBaseline, newValue: change.newValue });
     }
   }
 
-  const willHoldSomething = upsertedCritical.length > 0 || heldCritical.some((f) => !revertedFields.includes(f.field));
+  // Whether any held field is left once the reverted ones are dropped; only read when nothing new is being held.
+  const willHoldSomething = heldCritical.some((f) => !revertedFields.includes(f.field));
 
   // Create a row only if nothing's open yet and this submission needs
   // one — a Pending request if it's holding anything, else an already-
   // resolved Approved one for a purely non-critical/pure-revert touch.
   let targetRequestId = openRequest?.id ?? null;
-  if (!targetRequestId && (upsertedCritical.length > 0 || nonCriticalChanges.length > 0)) {
+  // With nothing open there is nothing held to revert, so a submission that got this far changes something.
+  if (!targetRequestId) {
     const isAutoApplied = upsertedCritical.length === 0;
     const { data: created, error: createError } = await supabase
       .from("change_requests")
@@ -173,7 +179,7 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
         event_id: existing.id,
         organiser_id: user.id,
         status: isAutoApplied ? CHANGE_REQUEST_STATUS.Approved : CHANGE_REQUEST_STATUS.Pending,
-        decided_at: isAutoApplied ? new Date().toISOString() : null,
+        decided_at: isAutoApplied ? clock.now().toISOString() : null,
         // E3-8 AC3: nothing critical was touched, so there's nothing for a
         // coordinator to review — flagged as automatic (not a coordinator's
         // decision) so both sides can tell it apart from a real approval.
@@ -255,38 +261,35 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
   // above in change_request_fields; just the pending-review event_history
   // entry is left to do here. E3-11 is what later writes decided_by/
   // decided_at/decision_reason and applies these values.
-  if (upsertedCritical.length > 0) {
-    // Logged as a pending request, not a value change — nothing has been
-    // applied yet, so the old value hasn't moved. Covers both a fresh
-    // hold and an overwrite of an already-held value — same wording,
-    // since either way the committed value is unchanged until decided.
-    await recordEventHistory(
-      supabase,
-      existing.id,
-      upsertedCritical.map((change) => ({
-        field: change.field,
-        oldValue: change.oldValue,
-        newValue: `requested: ${change.newValue} (pending coordinator review)`,
-      })),
-      user.id,
-    );
-  }
+  // Logged as a pending request, not a value change — nothing has been
+  // applied yet, so the old value hasn't moved. Covers both a fresh
+  // hold and an overwrite of an already-held value — same wording,
+  // since either way the committed value is unchanged until decided.
+  // (recordEventHistory writes nothing for an empty list.)
+  await recordEventHistory(
+    supabase,
+    existing.id,
+    upsertedCritical.map((change) => ({
+      field: change.field,
+      oldValue: change.oldValue,
+      newValue: `requested: ${change.newValue} (pending coordinator review)`,
+    })),
+    user.id,
+  );
 
-  if (revertedFields.length > 0) {
-    await recordEventHistory(
-      supabase,
-      existing.id,
-      revertedFields.map((field) => {
-        const discarded = heldCritical.find((f) => f.field === field)!;
-        return {
-          field,
-          oldValue: discarded.new_value,
-          newValue: `reverted to ${committedFieldValue(current, field) ?? "—"} (no longer pending)`,
-        };
-      }),
-      user.id,
-    );
-  }
+  await recordEventHistory(
+    supabase,
+    existing.id,
+    revertedFields.map((field) => {
+      const discarded = heldCritical.find((f) => f.field === field)!;
+      return {
+        field,
+        oldValue: discarded.new_value,
+        newValue: `reverted to ${committedFieldValue(current, field)} (no longer pending)`,
+      };
+    }),
+    user.id,
+  );
 
   const eventName = eventDisplayName(existing as unknown as AssignmentEventRow);
   let notificationsFailed = false;
@@ -326,7 +329,7 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
       .from("change_requests")
       .update({
         status: CHANGE_REQUEST_STATUS.AutoWithdrawn,
-        decided_at: new Date().toISOString(),
+        decided_at: clock.now().toISOString(),
         decided_by: null,
         decision_reason: `The requested change to ${revertedFields.join(", ")} was reverted before it was reviewed.`,
       })
@@ -415,7 +418,7 @@ function deriveImpactInputs(
 } {
   const attendanceField = fields.find((field) => field.field === "expectedAttendance");
   const requestedAttendanceRaw = attendanceField ? Number(attendanceField.new_value) : null;
-  const requestedAttendance = requestedAttendanceRaw !== null && Number.isFinite(requestedAttendanceRaw) ? requestedAttendanceRaw : null;
+  const requestedAttendance = Number.isFinite(requestedAttendanceRaw) ? requestedAttendanceRaw : null;
 
   const heldScheduleField = (field: string) => fields.find((f) => f.field === field)?.new_value;
   const hasScheduleChange = ["proposedDate", "startTime", "endTime"].some((field) =>
@@ -461,6 +464,7 @@ async function loadChangeRequestImpact(
   const activeBookings = bookings.filter((booking) => booking.status === "Approved");
 
   let capacityConflict: ChangeRequestImpact["capacityConflict"] = null;
+  // Stryker disable next-line ConditionalExpression: equivalent - without the check `capacity < null` is `capacity < 0`, still false
   if (requestedAttendance !== null) {
     const overCapacity = activeBookings.find(
       (booking) => typeof booking.venue?.capacity === "number" && booking.venue.capacity < requestedAttendance,
@@ -530,7 +534,7 @@ changeRequestsRouter.get("/:id/change-requests", async (req: AuthedRequest, res)
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
     return;
@@ -582,6 +586,7 @@ changeRequestsRouter.get("/:id/change-requests", async (req: AuthedRequest, res)
   }
 
   const fieldsByRequest = new Map<number, typeof fieldRows>();
+  // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder row has no request_id, so nothing ever reads its entry
   for (const field of fieldRows ?? []) {
     const list = fieldsByRequest.get(field.request_id) ?? [];
     list.push(field);
@@ -591,11 +596,13 @@ changeRequestsRouter.get("/:id/change-requests", async (req: AuthedRequest, res)
   const authorization = req.headers.authorization!;
   const committedDetails = (event.submitted_details ?? {}) as Record<string, unknown>;
   const impactByRequest = new Map<number, ChangeRequestImpact | null>();
+  // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder has no status, so it is skipped as not Pending
   for (const request of requests ?? []) {
     if (request.status !== CHANGE_REQUEST_STATUS.Pending) continue;
     // Only the still-open fields count as "requested" for the impact
     // check — one already applied in an earlier partial decision is
     // already reflected in committedDetails itself.
+    // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder has no field name, so it asks for no check
     const fields = (fieldsByRequest.get(request.id) ?? []).filter((f) => !f.applied_at);
     const { requestedAttendance, proposedSchedule } = deriveImpactInputs(fields, committedDetails);
 
@@ -696,6 +703,7 @@ async function loadPendingChangeRequest(
     return null;
   }
 
+  // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder row is not critical, so approve sees nothing held either way
   return { id: changeRequest.id, fields: fieldRows ?? [] };
 }
 
@@ -771,12 +779,19 @@ async function loadEventForDecision(
  * failure is reported back, not retried or rolled back into.
  */
 changeRequestsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForDecision(req, res, eventId);
   if (!event) return;
 
+  // Approving writes the event's status back (statusAfterApproval), so it must never
+  // run on an event that is closed or hasn't entered the process: that would reopen it.
+  if (CHANGE_REQUEST_BLOCKED_STATUSES.has(event.status)) {
+    res.status(409).json({ error: `A change request can't be approved while the event is ${event.status}.` });
+    return;
+  }
+
   const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
-  const requestId = Array.isArray(req.params.requestId) ? req.params.requestId[0] : req.params.requestId;
+  const requestId = routeParam(req.params.requestId);
   const changeRequest = await loadPendingChangeRequest(supabase, res, event.id, requestId);
   if (!changeRequest) return;
 
@@ -841,16 +856,14 @@ changeRequestsRouter.post("/:id/change-requests/:requestId/approve", async (req:
         safety_approval_stale: event.safety_approval_stale ?? false,
       })
       .eq("id", event.id);
-    if (criticalFields.length > 0) {
-      await supabase
-        .from("change_request_fields")
-        .update({ applied_at: null })
-        .eq("request_id", changeRequest.id)
-        .in(
-          "field",
-          criticalFields.map((f) => f.field),
-        );
-    }
+    await supabase
+      .from("change_request_fields")
+      .update({ applied_at: null })
+      .eq("request_id", changeRequest.id)
+      .in(
+        "field",
+        criticalFields.map((f) => f.field),
+      );
   };
 
   // A field only counts as applied once the stored event actually holds the
@@ -873,26 +886,25 @@ changeRequestsRouter.post("/:id/change-requests/:requestId/approve", async (req:
   // for the request's own history, instead of being deleted. Whatever's
   // left unstamped stays open, so the status update below only ever
   // closes the request out when nothing remains.
-  if (criticalFields.length > 0) {
-    const { error: applyError } = await supabase
-      .from("change_request_fields")
-      .update({ applied_at: new Date().toISOString() })
-      .eq("request_id", changeRequest.id)
-      .in(
-        "field",
-        criticalFields.map((f) => f.field),
-      );
-    if (applyError) {
-      await rollback();
-      res.status(500).json({ error: "Failed to record the decision" });
-      return;
-    }
+  // criticalFields is never empty here: an empty selection was refused above.
+  const { error: applyError } = await supabase
+    .from("change_request_fields")
+    .update({ applied_at: clock.now().toISOString() })
+    .eq("request_id", changeRequest.id)
+    .in(
+      "field",
+      criticalFields.map((f) => f.field),
+    );
+  if (applyError) {
+    await rollback();
+    res.status(500).json({ error: "Failed to record the decision" });
+    return;
   }
 
   if (remainingFieldNames.length === 0) {
     const { error: decideError } = await supabase
       .from("change_requests")
-      .update({ status: CHANGE_REQUEST_STATUS.Approved, decided_by: user.id, decided_at: new Date().toISOString() })
+      .update({ status: CHANGE_REQUEST_STATUS.Approved, decided_by: user.id, decided_at: clock.now().toISOString() })
       .eq("id", changeRequest.id);
     if (decideError) {
       await rollback();
@@ -977,12 +989,12 @@ changeRequestsRouter.post("/:id/change-requests/:requestId/approve", async (req:
  * the now-terminal Rejected row as a historical record, event untouched.
  */
 changeRequestsRouter.post("/:id/change-requests/:requestId/reject", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForDecision(req, res, eventId);
   if (!event) return;
 
   const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
-  const requestId = Array.isArray(req.params.requestId) ? req.params.requestId[0] : req.params.requestId;
+  const requestId = routeParam(req.params.requestId);
   const changeRequest = await loadPendingChangeRequest(supabase, res, event.id, requestId);
   if (!changeRequest) return;
 
@@ -998,7 +1010,7 @@ changeRequestsRouter.post("/:id/change-requests/:requestId/reject", async (req: 
       status: CHANGE_REQUEST_STATUS.Rejected,
       decision_reason: reason,
       decided_by: user.id,
-      decided_at: new Date().toISOString(),
+      decided_at: clock.now().toISOString(),
     })
     .eq("id", changeRequest.id)
     .select("id, status, decided_at, decision_reason")
@@ -1043,11 +1055,11 @@ changeRequestsRouter.post("/:id/change-requests/:requestId/reject", async (req: 
     .select(`${EVENT_COLUMNS}, organiser_id`)
     .eq("id", event.id)
     .maybeSingle();
-  const eventName = eventRow ? eventDisplayName(eventRow as unknown as AssignmentEventRow) : `Event #${event.id}`;
   const organiserId = (eventRow as { organiser_id?: string } | null)?.organiser_id;
 
   let notificationsFailed = false;
   if (organiserId) {
+    const eventName = eventDisplayName(eventRow as unknown as AssignmentEventRow);
     const published = await getPublisher().publish({
       type: "change.decided",
       eventId: event.id,
@@ -1060,6 +1072,13 @@ changeRequestsRouter.post("/:id/change-requests/:requestId/reject", async (req: 
 
   res.json({ changeRequest: updated, returnedToConfirmed, notificationsFailed });
 });
+
+/** Statuses a change request can't be approved in: not yet in the process, or already over. */
+const CHANGE_REQUEST_BLOCKED_STATUSES: ReadonlySet<string> = new Set([
+  EVENT_STATUS.Draft,
+  EVENT_STATUS.Unassigned,
+  ...CLOSED_EVENT_STATUSES,
+]);
 
 /**
  * Where an event goes when its coordinator approves a held change: a

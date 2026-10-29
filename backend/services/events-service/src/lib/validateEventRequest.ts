@@ -1,3 +1,4 @@
+import { clock } from "./clock.js";
 // E2-1: validation for POST /api/events, driven by the story's acceptance
 // criteria (mandatory fields, no past dates, positive attendance, end > start).
 //
@@ -63,7 +64,7 @@ function toMinutes(time: string): number {
 }
 
 function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return clock.now().toISOString().slice(0, 10);
 }
 
 /**

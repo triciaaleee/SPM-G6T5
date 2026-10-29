@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { clock } from "./clock.js";
 
 /**
  * Verifies the short-lived token a sibling service signs when it calls us
@@ -19,5 +20,5 @@ export interface InternalTokenPayload {
 }
 
 export function verifyInternalToken(token: string): InternalTokenPayload {
-  return jwt.verify(token, getSecret()) as InternalTokenPayload;
+  return jwt.verify(token, getSecret(), { clockTimestamp: Math.floor(clock.now().getTime() / 1000) }) as InternalTokenPayload;
 }

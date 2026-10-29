@@ -6,7 +6,7 @@ import { requireInternal } from "../../middleware/internal.js";
 import { isPositiveInteger } from "../../lib/validation.js";
 import { EVENT_STATUS } from "../../lib/eventStatus.js";
 import { getPublisher } from "../../lib/rabbitPublisher.js";
-import { recordAccessDenial, EVENT_COLUMNS, type AssignmentEventRow, eventDisplayName } from "./shared.js";
+import { routeParam, recordAccessDenial, EVENT_COLUMNS, type AssignmentEventRow, eventDisplayName } from "./shared.js";
 
 /**
  * Routes other services call, mounted ahead of requireAuth: event timing and
@@ -95,7 +95,8 @@ async function venueBookingInfoHandler(req: AuthedRequest, res: Response): Promi
   }
 
   const idStrings = rawIds.split(",").map((id) => id.trim());
-  if (rawIds === "" || !idStrings.every(isPositiveInteger) || idStrings.length > MAX_VENUE_BOOKING_INFO_IDS) {
+  // An absent or empty list splits to [""], which is not a positive integer, so it is refused here too.
+  if (!idStrings.every(isPositiveInteger) || idStrings.length > MAX_VENUE_BOOKING_INFO_IDS) {
     res.status(400).json({ error: `ids must be 1–${MAX_VENUE_BOOKING_INFO_IDS} comma-separated event ids` });
     return;
   }
@@ -147,7 +148,7 @@ async function venueBookingInfoHandler(req: AuthedRequest, res: Response): Promi
 async function arrangementsChangedHandler(req: AuthedRequest, res: Response): Promise<void> {
   // Loaded on use: this is the one route with no end-user request to carry a client.
   const { supabaseAdmin: supabase } = await import("../../lib/supabaseAdmin.js");
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
     return;

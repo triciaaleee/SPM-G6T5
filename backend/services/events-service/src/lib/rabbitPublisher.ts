@@ -1,5 +1,6 @@
 import amqp from "amqplib";
 import { randomUUID } from "node:crypto";
+import { clock } from "./clock.js";
 
 /**
  * The envelope every publisher on `connectsphere.events` uses
@@ -56,7 +57,7 @@ function createRealPublisher(url: string): EventPublisher {
         const envelope = {
           messageId: msg.messageId ?? randomUUID(),
           type: msg.type,
-          occurredAt: msg.occurredAt ?? new Date().toISOString(),
+          occurredAt: msg.occurredAt ?? clock.now().toISOString(),
           publisher: "events-service",
           actorId: msg.actorId,
           eventId: msg.eventId,

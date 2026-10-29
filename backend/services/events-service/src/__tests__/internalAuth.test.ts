@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import jwt from "jsonwebtoken";
 import type { Response } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuthOrInternal } from "../middleware/auth.js";
+import { signWithClock } from "./tokens.js";
 
 vi.mock("../lib/supabaseAdmin.js", () => ({ supabaseAdmin: {} }));
 
@@ -20,7 +20,7 @@ describe("requireAuthOrInternal", () => {
   });
 
   it("accepts a valid internal token without requiring req.user", () => {
-    const token = jwt.sign({ svc: "venue-service" }, "test-internal-secret", { expiresIn: "60s" });
+    const token = signWithClock({ svc: "venue-service" }, "test-internal-secret", { expiresIn: "60s" });
     const req = { headers: { "x-internal-auth": token } } as unknown as AuthedRequest;
     const res = mockRes();
     const next = vi.fn();

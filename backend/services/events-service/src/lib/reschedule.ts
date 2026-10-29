@@ -38,7 +38,8 @@ export function scheduleChanged(
 export function attendanceOf(details: Record<string, unknown> | null | undefined): number | null {
   const raw = details?.expectedAttendance;
   const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  // Number.isFinite is false for anything that is not a finite number (null, objects, booleans).
+  return Number.isFinite(value) ? (value as number) : null;
 }
 
 /** True when the expected attendance differs. A missing value and a different one are a change. */

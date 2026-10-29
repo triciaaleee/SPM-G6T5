@@ -70,9 +70,7 @@ export function findOutstandingArrangements(
   equipmentRequests: ArrangementEquipmentRequest[],
   equipmentRequirements?: string | null,
 ): OutstandingArrangements {
-  const recordedItems = equipmentRequests
-    .filter((request) => request.status !== "Cancelled")
-    .reduce((count, request) => count + request.items.length, 0);
+  const hasRecordedItem = equipmentRequests.some((request) => request.status !== "Cancelled" && request.items.length > 0);
 
   return {
     noApprovedVenue: !bookings.some((booking) => booking.status === APPROVED_BOOKING_STATUS),
@@ -90,7 +88,7 @@ export function findOutstandingArrangements(
         })),
     ),
     equipmentNotArranged:
-      equipmentIsRequired(equipmentRequirements) && recordedItems === 0 ? (equipmentRequirements ?? "").trim() : null,
+      equipmentIsRequired(equipmentRequirements) && !hasRecordedItem ? (equipmentRequirements as string).trim() : null,
   };
 }
 
@@ -150,8 +148,9 @@ export type SafetyNotesResult = { valid: true; notes: SafetyNotes } | { valid: f
  * problem is reported at once, keyed by field.
  */
 export function parseSafetyNotes(body: unknown): SafetyNotesResult {
-  const raw = body && typeof body === "object" ? (body as Record<string, unknown>).safetyNotes : undefined;
-  const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  // Optional chaining covers null/undefined; a primitive has no safetyNotes, so every note reads as missing.
+  const raw = (body as { safetyNotes?: unknown } | null | undefined)?.safetyNotes;
+  const source = (raw ?? {}) as Record<string, unknown>;
 
   const notes = {} as SafetyNotes;
   const fields: Record<string, string> = {};

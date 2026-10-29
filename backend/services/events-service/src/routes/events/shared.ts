@@ -16,6 +16,11 @@ import { EVENT_STATUS } from "../../lib/eventStatus.js";
  */
 export const COORDINATOR_LEAD_ROLE = "coordinator_lead";
 
+/** A route parameter as a single string (Express types a repeated one as an array). */
+export function routeParam(value: string | string[]): string {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 export async function recordAccessDenial(
   supabase: NonNullable<AuthedRequest["supabase"]>,
   userId: string,
@@ -161,7 +166,7 @@ export async function hasSafetySubmission(supabase: NonNullable<AuthedRequest["s
     .eq("event_id", eventId)
     .limit(1)
     .maybeSingle();
-  return data !== null && data !== undefined;
+  return data !== null;
 }
 
 /**
