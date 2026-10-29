@@ -17,7 +17,8 @@ import express from "express";
 import { dispatch, type InjectedResponse } from "./inject.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
-import { eventsRouter, routeParam } from "../routes/events.js";
+import { eventsRouter } from "../routes/events.js";
+import { routeParam } from "../routes/events/shared.js";
 import { publicEventsRouter } from "../routes/publicEvents.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 import { EVENT_STATUS } from "../lib/eventStatus.js";
@@ -396,10 +397,16 @@ interface RouteDef {
   badSubId: string;
 }
 
+/** Every route layer under a router, descending into the sub-routers events.ts mounts with `use()`. */
+function routeLayers(router: any): any[] {
+  return router.stack.flatMap((layer: any) =>
+    layer.route ? [layer] : layer.handle?.stack ? routeLayers(layer.handle) : [],
+  );
+}
+
 function listRoutes(): RouteDef[] {
   const out: RouteDef[] = [];
-  for (const layer of (eventsRouter as any).stack) {
-    if (!layer.route) continue;
+  for (const layer of routeLayers(eventsRouter)) {
     for (const method of Object.keys(layer.route.methods)) {
       const path = layer.route.path as string;
       out.push({

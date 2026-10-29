@@ -2206,7 +2206,7 @@ describe("GET /api/events — E3-2 coordinator workload view", () => {
     expect(res.body.events[0].coordinator).toBeNull();
   });
 
-  it("does not filter by coordinator_id — My vs All scoping is handled client-side", async () => {
+  it("by default does not filter by coordinator_id — that is All events, and the Lead's call", async () => {
     const eq = vi.fn();
     const neq = vi.fn().mockResolvedValue({ data: [], error: null });
     const select = vi.fn().mockReturnValue({ eq, neq });
@@ -2216,6 +2216,67 @@ describe("GET /api/events — E3-2 coordinator workload view", () => {
     await request(app).get("/api/events");
 
     expect(eq).not.toHaveBeenCalledWith("coordinator_id", expect.anything());
+  });
+
+  describe("?assignedTo=me (My events)", () => {
+    /** .from("events").select(...).neq("status", "Draft").eq("coordinator_id", id) — each step chains. */
+    function buildMineSupabase(rows: Record<string, unknown>[]) {
+      const eq = vi.fn().mockResolvedValue({ data: rows, error: null });
+      const neq = vi.fn().mockReturnValue({ eq });
+      const select = vi.fn().mockReturnValue({ neq });
+      const from = vi.fn().mockReturnValue({ select });
+      return { from, select, neq, eq };
+    }
+
+    it("asks only for the coordinator's own events, still leaving drafts out", async () => {
+      const mine = { id: 4, status: "Planning", coordinator_id: coordinator.id };
+      const supabase = buildMineSupabase([mine]);
+
+      const app = buildApp(supabase, coordinator);
+      const res = await request(app).get("/api/events?assignedTo=me");
+
+      expect(res.status).toBe(200);
+      expect(res.body.events).toEqual([mine]);
+      expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
+      expect(supabase.eq).toHaveBeenCalledWith("coordinator_id", coordinator.id);
+    });
+
+    it("ignores any other value, so it can't be used to widen or guess at the filter", async () => {
+      const eq = vi.fn();
+      const neq = vi.fn().mockResolvedValue({ data: [], error: null });
+      const select = vi.fn().mockReturnValue({ eq, neq });
+      const from = vi.fn().mockReturnValue({ select });
+
+      const app = buildApp({ from }, coordinator);
+      const res = await request(app).get("/api/events?assignedTo=COORD-0002");
+
+      expect(res.status).toBe(200);
+      expect(eq).not.toHaveBeenCalled();
+    });
+
+    it("is not applied for the Event Coordinator Lead, who has no assigned events of their own", async () => {
+      const eq = vi.fn();
+      const neq = vi.fn().mockResolvedValue({ data: [], error: null });
+      const select = vi.fn().mockReturnValue({ eq, neq });
+      const from = vi.fn().mockReturnValue({ select });
+
+      const app = buildApp({ from }, { id: "LEAD-0001", role: "coordinator_lead" });
+      await request(app).get("/api/events?assignedTo=me");
+
+      expect(eq).not.toHaveBeenCalled();
+    });
+
+    it("leaves an organiser's own list as it was", async () => {
+      const eq = vi.fn().mockResolvedValue({ data: [], error: null });
+      const select = vi.fn().mockReturnValue({ eq });
+      const from = vi.fn().mockReturnValue({ select });
+
+      const app = buildApp({ from }, { id: "ORG-0001", role: "organiser" });
+      await request(app).get("/api/events?assignedTo=me");
+
+      expect(eq).toHaveBeenCalledTimes(1);
+      expect(eq).toHaveBeenCalledWith("organiser_id", "ORG-0001");
+    });
   });
 });
 

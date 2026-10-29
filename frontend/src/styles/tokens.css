@@ -76,6 +76,10 @@
   --color-blue-800: #1A2868;
   --color-blue-900: #0F173A;
 
+  /* Venue identity — calendar edge for venues 3 and 4 (Style.md Section 2.10) */
+  --color-venue-magenta: #A8267D;
+  --color-venue-slate: #5B6770;
+
   /* Typography */
   --font-family-lato: "Lato", sans-serif;
 

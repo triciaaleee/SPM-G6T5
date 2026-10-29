@@ -7,7 +7,7 @@ import {
   attendeeAccessibility,
   attendeeOrganiserName,
   registrationInfo,
-} from "./events.js";
+} from "./events/registration.js";
 import { clock } from "../lib/clock.js";
 
 /**

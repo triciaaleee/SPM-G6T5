@@ -265,6 +265,18 @@ A pinkish purple used for exactly one thing: the Technical Support role chip in 
 **USE:** Only as the fill, border and text of the Technical Support role chip.  
 **AVOID:** Using it for status, actions, links or anything other than that chip.
 
+### 2.10 Venue Identity (Calendar Edge)
+
+Two colours that identify a venue on the venue schedule calendar, next to `Purple Primary/600` and `Secondary Blue/600` (venues 1 and 2). They exist so a venue's colour never matches a booking status colour (green, amber, red, grey).
+
+| Token | Hex | Semantic Role |
+|-------|-----|---------------|
+| `Colors/Venue/Magenta` | `#A8267D` | Venue 3: its legend bar and the 4px left edge of its calendar blocks |
+| `Colors/Venue/Slate` | `#5B6770` | Venue 4: the same |
+
+**USE:** Only as a venue's identity on the venue schedule calendar (Section 3.5, `schedule-block-*`).  
+**AVOID:** Using them for status, actions, links or text.
+
 ## 3. Colour Semantic Mapping
 
 ### 3.1 UI State Colours
@@ -321,9 +333,11 @@ Patterns for venue availability (E4-3) and in-app notifications (E7-1). Built on
 | `booking-on-hold` | Fill `Colors/Orange Warning/100` across the padded window, `Colors/Orange Warning/200` across the event time. Border 1px **dashed** `Colors/Orange Warning/300`, `spacing-4` left bar `Colors/Orange Warning/500`. Text `Colors/Orange Warning/900`, `radius-xs`. | An On Hold booking — the Warning set's "on-hold" role (Section 2.6). The dashed border says "tentative" without relying on colour alone. |
 | `pattern-closed` | Solid `Colors/Grey/75` fill, no border. Text `Colors/Grey/500`. | Time outside a venue's operating hours. Plain grey, distinct from the lock-marked `pattern-unavailable` used for recorded block-outs. |
 | `slot-available` | Fill `Colors/Green Success/100`, border 1px dashed `Colors/Green Success/300`, text `Colors/Green Success/600`, `radius-xs`. | A free slot inside the coordinator's target date and time range — highlighted so it stands out from everything unavailable. |
+| `schedule-block-*` | The **status** is the block's fill, border and text; the **venue** is only its `spacing-4` left edge (`Purple Primary/600`, `Secondary Blue/600`, `Venue/Magenta`, `Venue/Slate`). A status icon sits before the status name. `radius-xs`. **Approved:** `Green Success/200` fill, `/600` border, `/800` text, check. **On Hold:** `Orange Warning/100` fill, `/400` border, `/900` text, pause. **Requested:** `Base/White` fill, 1px dashed `Grey/600` border, `Grey/700` text, clock. **Replacement Required:** `Red Error/200` fill, `/600` border, `/800` text, warning triangle. **Unavailable** (a block-out): flat `Grey/100` fill, `Grey/300` border, `Grey/900` text, lock — no stripes. | A booking or block-out on the venue staff's schedule calendar. The legend shows a 24×20 swatch of each status (with its icon) and a 4×20 bar per venue. |
 
 **USE:** `pattern-unavailable` only for genuinely unavailable time — never as decoration.  
-**USE:** On the availability calendar, every unavailable kind has its own treatment (`booking-approved`, `booking-on-hold`, `pattern-unavailable`, `pattern-closed`) and a legend naming each — never colour alone.  
+**USE:** The coordinator's Venue availability page draws the same calendar and legend as the venue staff's schedule (`schedule-block-*`), limited to the three statuses a coordinator can see: Approved, On Hold and Unavailable. Free slots in a target are listed as `slot-available` chips under the venue summary, not drawn on the grid. `booking-approved`, `booking-on-hold` and `pattern-closed` above are no longer used on that page.  
+**USE:** Every status on a calendar has its own treatment and a legend naming each (colour and icon) — never colour alone.  
 **AVOID:** Red for unavailability — it isn't an error (Section 2.5). Reserve Orange Warning for bookings that need action (Replacement Required), not for the block itself.
 
 ### 3.4 Button Hierarchy
@@ -370,6 +384,12 @@ Every button in the app is the one `AppButton` component (`frontend/src/componen
 
 Events are shown as one `EventCard` component (`frontend/src/components/ui/EventCard.vue`) on the organiser list and the attendee pages. Structure, top to bottom: a 3:1 thumbnail; a status badge with a leading dot (and any extra badge, e.g. "Registration Required"); the title; an optional description clamped to two lines; the facts, each an icon and text, with date and time on separate lines (the time with a clock icon) and 16px (`spacing-16`) between the facts; a `Grey/100` divider; the footer, which holds the person line (avatar and "Coordinator: name" or "Organiser: name"), an optional meta line (e.g. "Submitted: 12/10/2026") and an optional actions area. The whole card is the link: `Base/White` fill, 1px `Grey/100` border, `radius-lg`, `shadow-card`; hover draws a `Purple Primary/300` border; focus draws the `ring-brand` outline.  
 **RULE:** Status badges on a card use the event or registration status colours (Section 3.5) and the exact status names from AGENTS.md section 3; "Clarification Requested" reads as "Awaiting Clarification".
+
+#### Pagination bar (`PaginationBar`)
+
+A table or list too long for one screen is paged by `PaginationBar` (`frontend/src/components/ui/PaginationBar.vue`), placed directly under it. Left: "Showing 21–40 of 47" in Small Text, `Grey/500`. Right: **Previous** and **Next** as `AppButton` `outline` `sm` (disabled at either end, Section 3.1), and between them the page numbers, each a 36px (`spacing-12` × 3) square, `radius-xs`, `0.875rem` / 700 text: `Grey/700` text with a `Grey/75` hover fill; the current page `Purple Primary/100` fill, 1px `Purple Primary/300` border, `Purple Primary/800` text, and `aria-current="page"`. Long ranges collapse to `1 … 4 5 6 … 12` with a `Grey/500` ellipsis. Focus is the 2px `ring-brand` outline. Nothing renders when everything fits on one page.  
+**RULE:** Changing a tab, filter or sort returns to page 1, and changing page scrolls the top of the table back into view.  
+**USE:** 20 rows per page for a table of events or requests (about two screens at the table row height of `spacing-20` padding). Where each unit is a tall section rather than a row (equipment requests: one event, with its own small table, per section), 10 per page, and the bar names the unit: "Showing 11–20 of 24 events" (`noun`). A card grid pages 12 at a time, which divides evenly into the 3, 2 and 1 columns it uses (organiser's My events).
 
 ---
 

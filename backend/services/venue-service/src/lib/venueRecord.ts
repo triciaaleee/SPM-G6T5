@@ -62,8 +62,9 @@ function stringList(value: unknown): string[] | null {
 /** A whole number given as a number or a plain digit string; null for anything else ("abc", "1.5", "1e2"). */
 function wholeNumber(value: unknown): number | null {
   if (typeof value === "number") return Number.isInteger(value) ? value : null;
-  if (typeof value === "string" && /^-?\d+$/.test(value.trim())) return Number(value.trim());
-  return null;
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return /^-?\d+$/.test(text) ? Number(text) : null;
 }
 
 export function parseVenueInput(body: unknown): ParsedVenueInput {
@@ -132,14 +133,17 @@ export function parseVenueInput(body: unknown): ParsedVenueInput {
   const noAccessibilityFeatures = raw.noAccessibilityFeatures === true;
   for (const key of ["layouts", "facilities", "accessibility"] as const) {
     const list = stringList(raw[key]);
-    if (list === null) fields[key] = "Send a list of options.";
-    else if (key === "accessibility" && noAccessibilityFeatures) {
+    if (list === null) {
+      fields[key] = "Send a list of options.";
+      continue;
+    }
+    if (key === "accessibility" && noAccessibilityFeatures) {
       if (list.length > 0) fields[key] = "Choose accessibility features or \"No accessibility features\", not both.";
     } else if (list.length === 0) {
       fields[key] = LIST_LABELS[key][1];
       missing.push(LIST_LABELS[key][0]);
     }
-    lists[key] = list ?? [];
+    lists[key] = list;
   }
 
   if (Object.keys(fields).length > 0) return { valid: false, fields, missing };

@@ -281,14 +281,14 @@ onBeforeUnmount(() => {
 
 <template>
   <!--
-    Column mapping — Add / Edit venue panel
-    An overlay drawer outside the page grid: desktop and tablet it docks to the right edge at a fixed
-    440px; mobile (≤640px) it spans the full width.
+    Column mapping — Add / Edit venue modal
+    A centered modal over a scrim, outside the page grid: up to 640px wide, shrinking with the viewport
+    (24px of scrim around it), and scrolling inside itself when the form is taller than the screen.
     Nested grid: the form uses a local 2-col grid — location/capacity, opening/closing and
     setup/turnaround pairs span 1 col each; every other field spans both.
   -->
   <div class="overlay" @click.self="!saving && emit('close')">
-    <aside class="panel" role="dialog" aria-modal="true" aria-labelledby="venue-form-title">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="venue-form-title">
       <header class="panel__header">
         <div>
           <h2 id="venue-form-title" class="h6">{{ editing ? "Edit venue" : "Add new venue" }}</h2>
@@ -441,7 +441,7 @@ onBeforeUnmount(() => {
           <AppButton variant="primary" type="submit" :disabled="saving">{{ submitLabel }}</AppButton>
         </div>
       </form>
-    </aside>
+    </div>
   </div>
 </template>
 
@@ -451,25 +451,23 @@ onBeforeUnmount(() => {
   inset: 0;
   z-index: 40;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-24);
+  box-sizing: border-box;
   background: var(--color-grey-alpha-40-dark);
 }
 
-.panel {
+.modal {
   display: flex;
   flex-direction: column;
-  width: 440px;
-  max-width: 100%;
-  height: 100%;
+  width: 100%;
+  max-width: 850px;
+  max-height: 100%;
   overflow-y: auto;
   background: var(--color-base-white);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-popover);
-}
-
-@media (max-width: 640px) {
-  .panel {
-    width: 100%;
-  }
 }
 
 .panel__header {
@@ -487,9 +485,9 @@ onBeforeUnmount(() => {
 
 .h6 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 1.5rem;
   font-weight: 700;
-  line-height: 1.75rem;
+  line-height: 2rem;
   color: var(--color-grey-900);
 }
 
@@ -537,14 +535,14 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   align-content: start;
-  gap: var(--spacing-16);
+  gap: var(--spacing-24) var(--spacing-16);
   padding: var(--spacing-24);
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
+  gap: var(--spacing-8);
   min-width: 0;
 }
 
@@ -560,14 +558,14 @@ onBeforeUnmount(() => {
 
 .group legend {
   padding: 0;
-  margin-bottom: var(--spacing-4);
+  margin-bottom: var(--spacing-8);
 }
 
 .field__label {
-  font-size: 0.875rem;
+  font-size: 1rem;
   font-weight: 700;
-  line-height: 1.125rem;
-  color: var(--color-grey-600);
+  line-height: 1.25rem;
+  color: var(--color-grey-900);
 }
 
 .field__optional {
@@ -583,7 +581,7 @@ onBeforeUnmount(() => {
 }
 
 .buffers-hint {
-  margin: calc(-1 * var(--spacing-8)) 0 0;
+  margin: calc(-1 * var(--spacing-12)) 0 0;
 }
 
 .field__error {

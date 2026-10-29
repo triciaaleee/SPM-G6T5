@@ -25,6 +25,8 @@ const router = createRouter({
     { path: "/lead/unassigned", name: "lead-unassigned", component: { render: () => h("div") } },
     { path: "/lead/coordinators/:id", name: "lead-coordinator", component: { render: () => h("div") } },
     { path: "/venue-availability", name: "venue-availability", component: { render: () => h("div") } },
+    { path: "/venue-schedule", name: "venue-schedule", component: { render: () => h("div") } },
+    { path: "/venue-catalogue", name: "venue-catalogue", component: { render: () => h("div") } },
     { path: "/equipment-requests", name: "equipment-requests", component: { render: () => h("div") } },
     {
       path: "/equipment-requests/event/:eventId",
@@ -138,5 +140,10 @@ describe("top navigation for the coordinator roles", () => {
   it("gives the Coordinator Lead a Dashboard and an All events tab", async () => {
     const wrapper = await mountAs("coordinator_lead");
     expect(tabLabels(wrapper)).toEqual(["Dashboard", "All events"]);
+  });
+
+  it("gives venue staff a Schedule and a Venue catalogue tab", async () => {
+    const wrapper = await mountAs("venue_staff");
+    expect(tabLabels(wrapper)).toEqual(["Schedule", "Venue catalogue"]);
   });
 });

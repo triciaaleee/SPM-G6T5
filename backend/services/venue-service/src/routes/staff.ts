@@ -338,7 +338,7 @@ staffRouter.get("/venues/:venueId/buffer-overlaps", async (req: AuthedRequest, r
     .from("venue_buffer_overlaps")
     .select("id, booking_id_a, booking_id_b, window_a, window_b, detected_at")
     .eq("venue_id", venueId)
-    .order("detected_at", { ascending: true });
+    .order("detected_at");
   if (error) {
     res.status(500).json({ error: "Failed to load flagged bookings" });
     return;
@@ -368,7 +368,7 @@ staffRouter.get("/venues/:venueId/buffer-overlaps", async (req: AuthedRequest, r
 
   function side(bookingId: number, window: string) {
     const eventId = eventIdByBookingId.get(bookingId) ?? null;
-    const event = eventId !== null ? eventsById.get(eventId) : undefined;
+    const event = eventsById.get(eventId);
     return { bookingId, eventId, eventName: event?.name ?? null, window };
   }
 

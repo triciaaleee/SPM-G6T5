@@ -144,13 +144,24 @@ cd backend/services/notification-service && npm test
 cd backend/services/registration-service && npm test
 ```
 
+`user-service` and `venue-service` also have coverage, real-database integration tests and (venue-service) mutation testing:
+
+```bash
+cd backend/services/venue-service
+npm run test:coverage      # unit tests + v8 coverage report (text, coverage/index.html, lcov)
+npm run test:integration   # hits the real (shared dev) Supabase project; never part of `npm test`
+npm run test:mutation      # Stryker: mutates src/ and checks the unit tests notice (slow; report in reports/mutation/)
+```
+
+The integration tests seed throwaway rows under a `ZINT-` prefix and delete them in `afterAll`, so they are safe to run against the dev database. They need `backend/.env` to be filled in.
+
 `events-service` (like `user-service` and `chat-service`) also has coverage, real-database integration and mutation testing. Run these from `backend/services/events-service`:
 
 | Command | What it does |
 |---|---|
 | `npm run test:coverage` | `npm test` with v8 coverage; report in `coverage/` (text, html, lcov). Fails below 100% statements, branches, functions and lines (`src/index.ts`, which only boots the server, is excluded and covered by the CI smoke test). |
 | `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. It creates `ZEVT-` throwaway users and events and deletes them in `afterAll` (and sweeps any a crashed run left behind). RabbitMQ is replaced by an in-memory publisher, so only Supabase is needed. |
-| `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Sets `MUTATION_RUN=1`, which leaves out `routeMatrix.test.ts` (the route sweep) so each mutant runs fast. The TypeScript checker drops mutants that could never compile. A full run takes about 20 minutes; add `-- --mutate 'src/lib/**/*.ts'` for a quicker run on the pure modules, or `--mutate 'src/routes/events.ts:100-200'` for a line range. Run only one Stryker at a time per folder, or give a second run its own `--tempDirName`. Mutants that cannot change behaviour are marked `// Stryker disable next-line <Mutator>: <why>` in the source. |
+| `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Sets `MUTATION_RUN=1`, which leaves out `routeMatrix.test.ts` (the route sweep) so each mutant runs fast. The TypeScript checker drops mutants that could never compile. A full run takes about 20 minutes; add `-- --mutate 'src/lib/**/*.ts'` for a quicker run on the pure modules, or `--mutate 'src/routes/events/review.ts:100-200'` for a line range. Run only one Stryker at a time per folder, or give a second run its own `--tempDirName`. Mutants that cannot change behaviour are marked `// Stryker disable next-line <Mutator>: <why>` in the source. |
 
 ### How the tests stay deterministic
 

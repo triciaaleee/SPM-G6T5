@@ -133,6 +133,31 @@ function toggle(): void {
   expanded.value = !expanded.value;
 }
 
+/** Clicking anywhere outside the drawer (its icon counts as inside, so it keeps its own toggle) or
+ * pressing Escape closes it, like the account menu and the notification bell. */
+const drawerRoot = ref<HTMLElement | null>(null);
+const tabButton = ref<HTMLButtonElement | null>(null);
+
+function onDocumentPointerDown(e: PointerEvent): void {
+  if (drawerRoot.value && !drawerRoot.value.contains(e.target as Node)) expanded.value = false;
+}
+
+function onDocumentKeydown(e: KeyboardEvent): void {
+  if (e.key !== "Escape") return;
+  expanded.value = false;
+  tabButton.value?.focus();
+}
+
+watch(expanded, (isOpen) => {
+  if (isOpen) {
+    document.addEventListener("pointerdown", onDocumentPointerDown);
+    document.addEventListener("keydown", onDocumentKeydown);
+  } else {
+    document.removeEventListener("pointerdown", onDocumentPointerDown);
+    document.removeEventListener("keydown", onDocumentKeydown);
+  }
+});
+
 function formatWhen(iso: string): string {
   const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
   if (minutes < 1) return "Just now";
@@ -189,14 +214,17 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", onDocumentPointerDown);
+  document.removeEventListener("keydown", onDocumentKeydown);
   window.clearInterval(threadsTimer);
   window.clearInterval(activeTimer);
 });
 </script>
 
 <template>
-  <div class="chat-drawer">
+  <div ref="drawerRoot" class="chat-drawer">
     <button
+      ref="tabButton"
       type="button"
       class="tab"
       :aria-expanded="expanded"

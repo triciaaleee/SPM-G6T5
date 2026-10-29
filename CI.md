@@ -152,7 +152,7 @@ The service still needs everything in the AGENTS.md §1 checklist. In particular
 | K2 | Frontend `npm run build` failed on 5 type errors (4 unused symbols + `vite.config.ts` importing `defineConfig` from `vite` instead of `vitest/config`). | Fixed in `cc7eeef`. |
 | K3 | `user-service` depended on `"backend": "file:../.."` (unused; a symlink back to its own parent folder). | Removed in `cc7eeef`. |
 | K4 | Venue search's **"Try relaxing one filter"** suggestions were removed from the page in `8083f46` (the API still returns them). Its handler `relaxFilter` was then dead code and removed for the lint. | **Open:** confirm with the venue search owner whether E4-6 still needs it. If so, restore the template block from `3e8933a`. |
-| K5 | `frontend/src/views/EventsListView.vue` logs `console.log(events)` on every load. | **Open:** leftover debug output; not a lint error under the current rules. |
+| K5 | `frontend/src/views/events/EventsListView.vue` logs `console.log(events)` on every load. | **Fixed:** the `console.log` was removed. |
 | K6 | Root `README.md` doesn't mention `equipment-service` (4005) or `chat-service` (4006) in its setup, health-check and test lists. | **Open:** docs only. |
 | K7 | **Frontend tests depended on a local `frontend/.env`.** `eventsApi.ts`, `auth.ts` and `unavailabilityApi.ts` read their URL with no fallback; `venuesApi.ts` and `usersApi.ts` call `.replace` on one, which throws on import when it's unset. This failed the first CI run. Also, `venuesApi.ts`'s fallback derives the venues URL from the **events** URL (`:4001/api/venues`), but venues are served by venue-service on `:4003`, so the fallback would hit the wrong service. | **Worked around** in CI (D19). Code fix open, see Q9. |
 

@@ -8,7 +8,11 @@ import DataTable from "./ui/DataTable.vue";
  * A coordinator's active events as a table: event, date, venue and status.
  * Each row opens the event, where the Lead reassigns it (E2-12).
  */
-defineProps<{ events: EventSummary[] }>();
+defineProps<{
+  events: EventSummary[];
+  /** Which who-acts-next group a row sits under, with that group's full count; none for a flat list. */
+  groupOf?: (event: EventSummary) => { key: string; label: string; count: number } | null;
+}>();
 
 const COLUMNS = [
   { key: "event", label: "Event" },
@@ -32,6 +36,7 @@ const COLUMN_WIDTHS = "minmax(0, 18fr) minmax(0, 6fr) minmax(0, 9.5fr) minmax(0,
     :rows="events"
     :row-key="(event) => event.id"
     :row-to="(event) => ({ name: 'event-detail', params: { id: event.id } })"
+    :row-group="groupOf"
   >
     <template #cell-event="{ row }">
       <span class="cell-event">
@@ -50,6 +55,12 @@ const COLUMN_WIDTHS = "minmax(0, 18fr) minmax(0, 6fr) minmax(0, 9.5fr) minmax(0,
     </template>
     <template #cell-status="{ row }">
       <span class="badge" :class="statusBadgeClass(row.status)">{{ statusLabel(row.status) }}</span>
+    </template>
+    <template #group-header="{ group }">
+      <div class="group-header" :class="`group-header--${group.key}`">
+        <span class="group-header__title">{{ group.label }}</span>
+        <span class="group-header__badge">{{ group.count }}</span>
+      </div>
     </template>
   </DataTable>
 </template>
@@ -104,6 +115,53 @@ const COLUMN_WIDTHS = "minmax(0, 18fr) minmax(0, 6fr) minmax(0, 9.5fr) minmax(0,
 .status-info {
   background: var(--color-warning-100);
   color: var(--color-warning-800);
+}
+
+/* Who-acts-next subheaders, inline in the table; same treatment as the Coordinator dashboard. */
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+  padding: var(--spacing-12) var(--spacing-20);
+}
+
+.group-header__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-grey-900);
+}
+
+.group-header__badge {
+  padding: 2px var(--spacing-8);
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+}
+
+.group-header--action {
+  background: var(--color-warning-100);
+}
+.group-header--action .group-header__badge {
+  background: var(--color-warning-900);
+  color: var(--color-base-white);
+}
+
+.group-header--wait {
+  background: var(--color-grey-50);
+}
+.group-header--wait .group-header__badge {
+  background: var(--color-grey-700);
+  color: var(--color-base-white);
+}
+
+.group-header--ontrack {
+  background: var(--color-success-100);
+}
+.group-header--ontrack .group-header__badge {
+  background: var(--color-success-700);
+  color: var(--color-base-white);
 }
 
 @media (max-width: 640px) {
