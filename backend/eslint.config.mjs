@@ -6,7 +6,7 @@ import tseslint from "typescript-eslint";
 // services still never import code from each other (AGENTS.md §1).
 // Bug-catching rules only; formatting is not linted. See CI.md for why.
 export default tseslint.config(
-  { ignores: ["**/dist/", "**/node_modules/", "**/coverage/"] },
+  { ignores: ["**/dist/", "**/node_modules/", "**/coverage/", "**/.stryker-tmp*/"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
