@@ -55,6 +55,7 @@ import {
   resolveFlags,
   type StoredFlag,
 } from "../lib/safetyChanges.js";
+import { clock } from "../lib/clock.js";
 
 /**
  * Week 7 change 5: the Event Coordinator Lead oversees incoming requests,
@@ -62,6 +63,11 @@ import {
  * itself: the Lead never edits, approves or rejects (E1-8 AC2).
  */
 const COORDINATOR_LEAD_ROLE = "coordinator_lead";
+
+/** A route parameter as a single string (Express types a repeated one as an array). */
+export function routeParam(value: string | string[]): string {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 async function recordAccessDenial(
   supabase: NonNullable<AuthedRequest["supabase"]>,
@@ -173,6 +179,7 @@ const EVENT_COLUMNS =
  * lookup to the organiser role (see LISTABLE_ROLES_BY_CALLER in
  * user-service's users.ts).
  */
+// Stryker disable next-line StringLiteral: equivalent - the router treats the path "" exactly like "/"
 eventsRouter.post("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
   if (!supabase || !user) {
@@ -263,7 +270,7 @@ eventsRouter.patch("/:id/draft", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
 
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
@@ -319,7 +326,7 @@ eventsRouter.delete("/:id/draft", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
 
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
@@ -368,6 +375,7 @@ eventsRouter.delete("/:id/draft", async (req: AuthedRequest, res) => {
  * both). Since the service-role client bypasses RLS, this filter is the
  * actual enforcement, not just defense-in-depth.
  */
+// Stryker disable next-line StringLiteral: equivalent - the router treats the path "" exactly like "/"
 eventsRouter.get("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
   if (!supabase || !user) {
@@ -466,7 +474,8 @@ async function venueBookingInfoHandler(req: AuthedRequest, res: Response): Promi
   }
 
   const idStrings = rawIds.split(",").map((id) => id.trim());
-  if (rawIds === "" || !idStrings.every(isPositiveInteger) || idStrings.length > MAX_VENUE_BOOKING_INFO_IDS) {
+  // An absent or empty list splits to [""], which is not a positive integer, so it is refused here too.
+  if (!idStrings.every(isPositiveInteger) || idStrings.length > MAX_VENUE_BOOKING_INFO_IDS) {
     res.status(400).json({ error: `ids must be 1–${MAX_VENUE_BOOKING_INFO_IDS} comma-separated event ids` });
     return;
   }
@@ -570,7 +579,7 @@ interface RegistrationRowFields {
  * re-derive it. Times are Singapore time (lib/eventTiming.ts); the rules are
  * in lib/registrationPeriod.ts.
  */
-export function registrationInfo(row: RegistrationRowFields, details: Record<string, unknown>, now: Date = new Date()) {
+export function registrationInfo(row: RegistrationRowFields, details: Record<string, unknown>, now: Date = clock.now()) {
   const inputs = {
     status: row.status,
     details,
@@ -611,7 +620,8 @@ eventsRouter.get("/attendee-info", async (req: AuthedRequest, res) => {
   }
 
   const idStrings = rawIds.split(",").map((id) => id.trim());
-  if (rawIds === "" || !idStrings.every(isPositiveInteger) || idStrings.length > MAX_ATTENDEE_INFO_IDS) {
+  // An absent or empty list splits to [""], which is not a positive integer, so it is refused here too.
+  if (!idStrings.every(isPositiveInteger) || idStrings.length > MAX_ATTENDEE_INFO_IDS) {
     res.status(400).json({ error: `ids must be 1–${MAX_ATTENDEE_INFO_IDS} comma-separated event ids` });
     return;
   }
@@ -675,6 +685,7 @@ eventsRouter.get("/open-for-registration", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder row has no status, so it is never listed
   const events = (data ?? [])
     .map((row) => ({ row, details: (row.submitted_details ?? {}) as Record<string, unknown> }))
     .filter(({ row, details }) => registrationInfo(row, details).listed)
@@ -846,7 +857,7 @@ eventsRouter.get("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
 
   if (!isPositiveInteger(eventId)) {
     await recordAccessDenial(supabase, user.id, eventId, "invalid_id_format");
@@ -902,7 +913,7 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
 
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
@@ -976,7 +987,7 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
         id: existing.id,
         actorId: user.id,
         eventName: eventDisplayName(data as unknown as AssignmentEventRow),
-        coordinatorId: existing.coordinator_id ?? null,
+        coordinatorId: existing.coordinator_id, // the assigned coordinator: checked equal to the caller above
         details: result.value as unknown as Record<string, unknown>,
       });
     }
@@ -985,7 +996,7 @@ eventsRouter.patch("/:id", async (req: AuthedRequest, res) => {
         id: existing.id,
         actorId: user.id,
         eventName: eventDisplayName(data as unknown as AssignmentEventRow),
-        coordinatorId: existing.coordinator_id ?? null,
+        coordinatorId: existing.coordinator_id, // the assigned coordinator: checked equal to the caller above
         details: result.value as unknown as Record<string, unknown>,
       });
     }
@@ -1202,7 +1213,7 @@ eventsRouter.post("/:id/cancel", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
     return;
@@ -1249,7 +1260,7 @@ eventsRouter.post("/:id/cancel", async (req: AuthedRequest, res) => {
     .update({
       status: EVENT_STATUS.Cancelled,
       review_outcome: reason,
-      decided_at: new Date().toISOString(),
+      decided_at: clock.now().toISOString(),
       decided_by: user.id,
     })
     .eq("id", existing.id)
@@ -1317,7 +1328,7 @@ eventsRouter.post("/:id/change-requests", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
     return;
@@ -1382,6 +1393,7 @@ eventsRouter.post("/:id/change-requests", async (req: AuthedRequest, res) => {
       res.status(500).json({ error: "Failed to load the event's open change request" });
       return;
     }
+    // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder row is not critical, so it is filtered out below
     openFields = data ?? [];
   }
   const heldCritical = openFields.filter((field) => field.is_critical);
@@ -1415,21 +1427,24 @@ eventsRouter.post("/:id/change-requests", async (req: AuthedRequest, res) => {
   const upsertedCritical: { field: string; oldValue: string | null; newValue: string }[] = [];
   for (const change of result.changes.filter((c) => c.isCritical)) {
     const trueBaseline = committedFieldValue(current, change.field);
-    const wasHeld = heldCritical.some((field) => field.field === change.field);
-    if (wasHeld && change.newValue === (trueBaseline ?? "")) {
+    // A change to a field that isn't held always differs from its committed value (the diff above is against it),
+    // and a submitted value is never empty, so only a held field can come back equal to the committed one.
+    if (change.newValue === trueBaseline) {
       revertedFields.push(change.field);
     } else {
       upsertedCritical.push({ field: change.field, oldValue: trueBaseline, newValue: change.newValue });
     }
   }
 
-  const willHoldSomething = upsertedCritical.length > 0 || heldCritical.some((f) => !revertedFields.includes(f.field));
+  // Whether any held field is left once the reverted ones are dropped; only read when nothing new is being held.
+  const willHoldSomething = heldCritical.some((f) => !revertedFields.includes(f.field));
 
   // Create a row only if nothing's open yet and this submission needs
   // one — a Pending request if it's holding anything, else an already-
   // resolved Approved one for a purely non-critical/pure-revert touch.
   let targetRequestId = openRequest?.id ?? null;
-  if (!targetRequestId && (upsertedCritical.length > 0 || nonCriticalChanges.length > 0)) {
+  // With nothing open there is nothing held to revert, so a submission that got this far changes something.
+  if (!targetRequestId) {
     const isAutoApplied = upsertedCritical.length === 0;
     const { data: created, error: createError } = await supabase
       .from("change_requests")
@@ -1437,7 +1452,7 @@ eventsRouter.post("/:id/change-requests", async (req: AuthedRequest, res) => {
         event_id: existing.id,
         organiser_id: user.id,
         status: isAutoApplied ? CHANGE_REQUEST_STATUS.Approved : CHANGE_REQUEST_STATUS.Pending,
-        decided_at: isAutoApplied ? new Date().toISOString() : null,
+        decided_at: isAutoApplied ? clock.now().toISOString() : null,
         // E3-8 AC3: nothing critical was touched, so there's nothing for a
         // coordinator to review — flagged as automatic (not a coordinator's
         // decision) so both sides can tell it apart from a real approval.
@@ -1519,38 +1534,35 @@ eventsRouter.post("/:id/change-requests", async (req: AuthedRequest, res) => {
   // above in change_request_fields; just the pending-review event_history
   // entry is left to do here. E3-11 is what later writes decided_by/
   // decided_at/decision_reason and applies these values.
-  if (upsertedCritical.length > 0) {
-    // Logged as a pending request, not a value change — nothing has been
-    // applied yet, so the old value hasn't moved. Covers both a fresh
-    // hold and an overwrite of an already-held value — same wording,
-    // since either way the committed value is unchanged until decided.
-    await recordEventHistory(
-      supabase,
-      existing.id,
-      upsertedCritical.map((change) => ({
-        field: change.field,
-        oldValue: change.oldValue,
-        newValue: `requested: ${change.newValue} (pending coordinator review)`,
-      })),
-      user.id,
-    );
-  }
+  // Logged as a pending request, not a value change — nothing has been
+  // applied yet, so the old value hasn't moved. Covers both a fresh
+  // hold and an overwrite of an already-held value — same wording,
+  // since either way the committed value is unchanged until decided.
+  // (recordEventHistory writes nothing for an empty list.)
+  await recordEventHistory(
+    supabase,
+    existing.id,
+    upsertedCritical.map((change) => ({
+      field: change.field,
+      oldValue: change.oldValue,
+      newValue: `requested: ${change.newValue} (pending coordinator review)`,
+    })),
+    user.id,
+  );
 
-  if (revertedFields.length > 0) {
-    await recordEventHistory(
-      supabase,
-      existing.id,
-      revertedFields.map((field) => {
-        const discarded = heldCritical.find((f) => f.field === field)!;
-        return {
-          field,
-          oldValue: discarded.new_value,
-          newValue: `reverted to ${committedFieldValue(current, field) ?? "—"} (no longer pending)`,
-        };
-      }),
-      user.id,
-    );
-  }
+  await recordEventHistory(
+    supabase,
+    existing.id,
+    revertedFields.map((field) => {
+      const discarded = heldCritical.find((f) => f.field === field)!;
+      return {
+        field,
+        oldValue: discarded.new_value,
+        newValue: `reverted to ${committedFieldValue(current, field)} (no longer pending)`,
+      };
+    }),
+    user.id,
+  );
 
   const eventName = eventDisplayName(existing as unknown as AssignmentEventRow);
   let notificationsFailed = false;
@@ -1590,7 +1602,7 @@ eventsRouter.post("/:id/change-requests", async (req: AuthedRequest, res) => {
       .from("change_requests")
       .update({
         status: CHANGE_REQUEST_STATUS.AutoWithdrawn,
-        decided_at: new Date().toISOString(),
+        decided_at: clock.now().toISOString(),
         decided_by: null,
         decision_reason: `The requested change to ${revertedFields.join(", ")} was reverted before it was reviewed.`,
       })
@@ -1679,7 +1691,7 @@ function deriveImpactInputs(
 } {
   const attendanceField = fields.find((field) => field.field === "expectedAttendance");
   const requestedAttendanceRaw = attendanceField ? Number(attendanceField.new_value) : null;
-  const requestedAttendance = requestedAttendanceRaw !== null && Number.isFinite(requestedAttendanceRaw) ? requestedAttendanceRaw : null;
+  const requestedAttendance = Number.isFinite(requestedAttendanceRaw) ? requestedAttendanceRaw : null;
 
   const heldScheduleField = (field: string) => fields.find((f) => f.field === field)?.new_value;
   const hasScheduleChange = ["proposedDate", "startTime", "endTime"].some((field) =>
@@ -1725,6 +1737,7 @@ async function loadChangeRequestImpact(
   const activeBookings = bookings.filter((booking) => booking.status === "Approved");
 
   let capacityConflict: ChangeRequestImpact["capacityConflict"] = null;
+  // Stryker disable next-line ConditionalExpression: equivalent - without the check `capacity < null` is `capacity < 0`, still false
   if (requestedAttendance !== null) {
     const overCapacity = activeBookings.find(
       (booking) => typeof booking.venue?.capacity === "number" && booking.venue.capacity < requestedAttendance,
@@ -1794,7 +1807,7 @@ eventsRouter.get("/:id/change-requests", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
     return;
@@ -1846,6 +1859,7 @@ eventsRouter.get("/:id/change-requests", async (req: AuthedRequest, res) => {
   }
 
   const fieldsByRequest = new Map<number, typeof fieldRows>();
+  // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder row has no request_id, so nothing ever reads its entry
   for (const field of fieldRows ?? []) {
     const list = fieldsByRequest.get(field.request_id) ?? [];
     list.push(field);
@@ -1855,11 +1869,13 @@ eventsRouter.get("/:id/change-requests", async (req: AuthedRequest, res) => {
   const authorization = req.headers.authorization!;
   const committedDetails = (event.submitted_details ?? {}) as Record<string, unknown>;
   const impactByRequest = new Map<number, ChangeRequestImpact | null>();
+  // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder has no status, so it is skipped as not Pending
   for (const request of requests ?? []) {
     if (request.status !== CHANGE_REQUEST_STATUS.Pending) continue;
     // Only the still-open fields count as "requested" for the impact
     // check — one already applied in an earlier partial decision is
     // already reflected in committedDetails itself.
+    // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder has no field name, so it asks for no check
     const fields = (fieldsByRequest.get(request.id) ?? []).filter((f) => !f.applied_at);
     const { requestedAttendance, proposedSchedule } = deriveImpactInputs(fields, committedDetails);
 
@@ -1960,6 +1976,7 @@ async function loadPendingChangeRequest(
     return null;
   }
 
+  // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder row is not critical, so approve sees nothing held either way
   return { id: changeRequest.id, fields: fieldRows ?? [] };
 }
 
@@ -2035,12 +2052,19 @@ async function loadEventForDecision(
  * failure is reported back, not retried or rolled back into.
  */
 eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForDecision(req, res, eventId);
   if (!event) return;
 
+  // Approving writes the event's status back (statusAfterApproval), so it must never
+  // run on an event that is closed or hasn't entered the process: that would reopen it.
+  if (CHANGE_REQUEST_BLOCKED_STATUSES.has(event.status)) {
+    res.status(409).json({ error: `A change request can't be approved while the event is ${event.status}.` });
+    return;
+  }
+
   const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
-  const requestId = Array.isArray(req.params.requestId) ? req.params.requestId[0] : req.params.requestId;
+  const requestId = routeParam(req.params.requestId);
   const changeRequest = await loadPendingChangeRequest(supabase, res, event.id, requestId);
   if (!changeRequest) return;
 
@@ -2105,16 +2129,14 @@ eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedR
         safety_approval_stale: event.safety_approval_stale ?? false,
       })
       .eq("id", event.id);
-    if (criticalFields.length > 0) {
-      await supabase
-        .from("change_request_fields")
-        .update({ applied_at: null })
-        .eq("request_id", changeRequest.id)
-        .in(
-          "field",
-          criticalFields.map((f) => f.field),
-        );
-    }
+    await supabase
+      .from("change_request_fields")
+      .update({ applied_at: null })
+      .eq("request_id", changeRequest.id)
+      .in(
+        "field",
+        criticalFields.map((f) => f.field),
+      );
   };
 
   // A field only counts as applied once the stored event actually holds the
@@ -2137,26 +2159,25 @@ eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedR
   // for the request's own history, instead of being deleted. Whatever's
   // left unstamped stays open, so the status update below only ever
   // closes the request out when nothing remains.
-  if (criticalFields.length > 0) {
-    const { error: applyError } = await supabase
-      .from("change_request_fields")
-      .update({ applied_at: new Date().toISOString() })
-      .eq("request_id", changeRequest.id)
-      .in(
-        "field",
-        criticalFields.map((f) => f.field),
-      );
-    if (applyError) {
-      await rollback();
-      res.status(500).json({ error: "Failed to record the decision" });
-      return;
-    }
+  // criticalFields is never empty here: an empty selection was refused above.
+  const { error: applyError } = await supabase
+    .from("change_request_fields")
+    .update({ applied_at: clock.now().toISOString() })
+    .eq("request_id", changeRequest.id)
+    .in(
+      "field",
+      criticalFields.map((f) => f.field),
+    );
+  if (applyError) {
+    await rollback();
+    res.status(500).json({ error: "Failed to record the decision" });
+    return;
   }
 
   if (remainingFieldNames.length === 0) {
     const { error: decideError } = await supabase
       .from("change_requests")
-      .update({ status: CHANGE_REQUEST_STATUS.Approved, decided_by: user.id, decided_at: new Date().toISOString() })
+      .update({ status: CHANGE_REQUEST_STATUS.Approved, decided_by: user.id, decided_at: clock.now().toISOString() })
       .eq("id", changeRequest.id);
     if (decideError) {
       await rollback();
@@ -2241,12 +2262,12 @@ eventsRouter.post("/:id/change-requests/:requestId/approve", async (req: AuthedR
  * the now-terminal Rejected row as a historical record, event untouched.
  */
 eventsRouter.post("/:id/change-requests/:requestId/reject", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForDecision(req, res, eventId);
   if (!event) return;
 
   const { supabase, user } = req as Required<Pick<AuthedRequest, "supabase" | "user">>;
-  const requestId = Array.isArray(req.params.requestId) ? req.params.requestId[0] : req.params.requestId;
+  const requestId = routeParam(req.params.requestId);
   const changeRequest = await loadPendingChangeRequest(supabase, res, event.id, requestId);
   if (!changeRequest) return;
 
@@ -2262,7 +2283,7 @@ eventsRouter.post("/:id/change-requests/:requestId/reject", async (req: AuthedRe
       status: CHANGE_REQUEST_STATUS.Rejected,
       decision_reason: reason,
       decided_by: user.id,
-      decided_at: new Date().toISOString(),
+      decided_at: clock.now().toISOString(),
     })
     .eq("id", changeRequest.id)
     .select("id, status, decided_at, decision_reason")
@@ -2307,11 +2328,11 @@ eventsRouter.post("/:id/change-requests/:requestId/reject", async (req: AuthedRe
     .select(`${EVENT_COLUMNS}, organiser_id`)
     .eq("id", event.id)
     .maybeSingle();
-  const eventName = eventRow ? eventDisplayName(eventRow as unknown as AssignmentEventRow) : `Event #${event.id}`;
   const organiserId = (eventRow as { organiser_id?: string } | null)?.organiser_id;
 
   let notificationsFailed = false;
   if (organiserId) {
+    const eventName = eventDisplayName(eventRow as unknown as AssignmentEventRow);
     const published = await getPublisher().publish({
       type: "change.decided",
       eventId: event.id,
@@ -2331,7 +2352,7 @@ eventsRouter.post("/:id/change-requests/:requestId/reject", async (req: AuthedRe
  * any coordinator.
  */
 eventsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForClarification(req, res, eventId);
   if (!event) return;
 
@@ -2357,7 +2378,7 @@ eventsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
  * the notification. Same visibility as the edit history.
  */
 eventsRouter.get("/:id/safety-reviews", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForClarification(req, res, eventId);
   if (!event) return;
 
@@ -2486,7 +2507,7 @@ async function authorizeCoordinatorReview(
  * authorizeCoordinatorReview). Sets status to "Planning".
  */
 eventsRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -2519,7 +2540,7 @@ eventsRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
     .from("events")
     .update({
       status: "Planning",
-      decided_at: new Date().toISOString(),
+      decided_at: clock.now().toISOString(),
       decided_by: user.id,
     })
     .eq("id", event.id)
@@ -2552,7 +2573,7 @@ eventsRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
  * authorizeCoordinatorReview per AC5).
  */
 eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -2573,7 +2594,7 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
     .update({
       status: "Rejected",
       review_outcome: reason,
-      decided_at: new Date().toISOString(),
+      decided_at: clock.now().toISOString(),
       decided_by: user.id,
     })
     .eq("id", event.id)
@@ -2615,7 +2636,7 @@ eventsRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
  * re-review between the checks and the write makes it a 409 instead.
  */
 eventsRouter.post("/:id/complete", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -2698,7 +2719,7 @@ async function loadRegistrationRow(
 }
 
 eventsRouter.put("/:id/registration", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -2765,7 +2786,7 @@ eventsRouter.put("/:id/registration", async (req: AuthedRequest, res) => {
 /** open / close / auto: the manual override on registration (Confirmed events only). */
 function registrationOverrideRoute(action: string, override: RegistrationOverride) {
   eventsRouter.post(`/:id/registration/${action}`, async (req: AuthedRequest, res) => {
-    const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const eventId = routeParam(req.params.id);
     const event = await authorizeCoordinatorReview(req, res, eventId);
     if (!event) return;
 
@@ -2784,8 +2805,9 @@ function registrationOverrideRoute(action: string, override: RegistrationOverrid
       res.status(409).json({ error: "This event doesn't need registration" });
       return;
     }
-    const startsAt = eventStartsAt(row.submitted_details ?? {});
-    if (override === REGISTRATION_OVERRIDE.ForceOpen && startsAt !== null && startsAt.getTime() <= Date.now()) {
+    // The guard above already refused a missing submitted_details.
+    const startsAt = eventStartsAt(row.submitted_details!);
+    if (override === REGISTRATION_OVERRIDE.ForceOpen && startsAt !== null && startsAt.getTime() <= clock.now().getTime()) {
       res.status(409).json({ error: "This event has already started, so registration can't be opened" });
       return;
     }
@@ -2836,7 +2858,7 @@ registrationOverrideRoute("auto", REGISTRATION_OVERRIDE.None);
  * AC9: every Safety Officer and the Organiser are notified (#105 row 1).
  */
 eventsRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -2988,7 +3010,7 @@ async function authorizeSafetyOfficerReview(
  * blocks the already-committed decision.
  */
 eventsRouter.post("/:id/safety-review/approve", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeSafetyOfficerReview(req, res, eventId);
   if (!event) return;
 
@@ -3047,7 +3069,7 @@ eventsRouter.post("/:id/safety-review/approve", async (req: AuthedRequest, res) 
  * never blocks the already-committed decision.
  */
 eventsRouter.post("/:id/safety-review/reject", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeSafetyOfficerReview(req, res, eventId);
   if (!event) return;
 
@@ -3115,7 +3137,7 @@ eventsRouter.post("/:id/safety-review/reject", async (req: AuthedRequest, res) =
  * failure to notify never blocks the already-committed decision.
  */
 eventsRouter.post("/:id/safety-review/request-changes", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeSafetyOfficerReview(req, res, eventId);
   if (!event) return;
 
@@ -3198,7 +3220,7 @@ async function hasSafetySubmission(supabase: NonNullable<AuthedRequest["supabase
     .eq("event_id", eventId)
     .limit(1)
     .maybeSingle();
-  return data !== null && data !== undefined;
+  return data !== null;
 }
 
 interface SafetyChangeRequestView {
@@ -3253,7 +3275,7 @@ async function loadChangeRequest(
     const states = currentArrangements(bookings.value, equipment.value);
     const changed = flags.filter((flag) => !flag.cleared_at && hasChanged(flag, states));
     if (changed.length > 0) {
-      const clearedAt = new Date().toISOString();
+      const clearedAt = clock.now().toISOString();
       const { error: clearError } = await supabase
         .from("event_safety_review_flags")
         .update({ cleared_at: clearedAt })
@@ -3302,7 +3324,7 @@ eventsRouter.get("/:id/safety-changes", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
     return;
@@ -3344,7 +3366,7 @@ const CLARIFICATION_REQUESTABLE_STATUSES = new Set<string>([...COORDINATOR_REVIE
  * that leaves approval blocked (AC1's "no outstanding clarification").
  */
 eventsRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -3366,7 +3388,7 @@ eventsRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) 
       status: "Clarification Requested",
       status_before_clarification: event.status,
       review_outcome: message,
-      decided_at: new Date().toISOString(),
+      decided_at: clock.now().toISOString(),
       decided_by: user.id,
     })
     .eq("id", event.id)
@@ -3467,7 +3489,7 @@ async function loadEventForClarification(
 
 /** AC3: the full exchange, chronological, for anyone with access to the event. */
 eventsRouter.get("/:id/clarifications", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForClarification(req, res, eventId);
   if (!event) return;
 
@@ -3494,7 +3516,7 @@ eventsRouter.get("/:id/clarifications", async (req: AuthedRequest, res) => {
  * asking without a way to re-open a request that's already flagged.
  */
 eventsRouter.post("/:id/clarifications", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -3526,7 +3548,7 @@ eventsRouter.post("/:id/clarifications", async (req: AuthedRequest, res) => {
 
 /** Either party replies within a question's thread. */
 eventsRouter.post("/:id/clarifications/:questionId/replies", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForClarification(req, res, eventId);
   if (!event) return;
 
@@ -3545,7 +3567,7 @@ eventsRouter.post("/:id/clarifications/:questionId/replies", async (req: AuthedR
     return;
   }
 
-  const questionId = Array.isArray(req.params.questionId) ? req.params.questionId[0] : req.params.questionId;
+  const questionId = routeParam(req.params.questionId);
   if (!isPositiveInteger(questionId)) {
     res.status(404).json({ error: "Question not found" });
     return;
@@ -3598,7 +3620,7 @@ eventsRouter.post("/:id/clarifications/:questionId/replies", async (req: AuthedR
  * on the event is resolved, /approve unblocks (see its status check).
  */
 eventsRouter.post("/:id/clarifications/:questionId/resolve", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -3607,7 +3629,7 @@ eventsRouter.post("/:id/clarifications/:questionId/resolve", async (req: AuthedR
     return;
   }
 
-  const questionId = Array.isArray(req.params.questionId) ? req.params.questionId[0] : req.params.questionId;
+  const questionId = routeParam(req.params.questionId);
   if (!isPositiveInteger(questionId)) {
     res.status(404).json({ error: "Question not found" });
     return;
@@ -3742,7 +3764,7 @@ function eventDisplayName(event: AssignmentEventRow): string {
  * or failing notification-service never undoes an assignment.
  */
 eventsRouter.post("/:id/assign", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const authorized = await authorizeLeadAssignment(req, res, eventId);
   if (!authorized) return;
   const { event, coordinator } = authorized;
@@ -3827,7 +3849,7 @@ eventsRouter.post("/:id/assign", async (req: AuthedRequest, res) => {
  * assigned one, so two simultaneous reassignments can't both apply.
  */
 eventsRouter.post("/:id/reassign", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const authorized = await authorizeLeadAssignment(req, res, eventId);
   if (!authorized) return;
   const { event, coordinator } = authorized;
@@ -3907,6 +3929,12 @@ eventsRouter.post("/:id/reassign", async (req: AuthedRequest, res) => {
  * and re-checked; a Safety Review event returns to Planning (AGENTS.md
  * section 3); Planning stays in Planning.
  */
+const CHANGE_REQUEST_BLOCKED_STATUSES: ReadonlySet<string> = new Set([
+  EVENT_STATUS.Draft,
+  EVENT_STATUS.Unassigned,
+  ...CLOSED_EVENT_STATUSES,
+]);
+
 function statusAfterApproval(current: string): string {
   if (current === EVENT_STATUS.Confirmed || current === EVENT_STATUS.NeedsReview) return EVENT_STATUS.NeedsReview;
   return EVENT_STATUS.Planning;
@@ -3924,7 +3952,7 @@ function statusAfterApproval(current: string): string {
 async function arrangementsChangedHandler(req: AuthedRequest, res: Response): Promise<void> {
   // Loaded on use: this is the one route with no end-user request to carry a client.
   const { supabaseAdmin: supabase } = await import("../lib/supabaseAdmin.js");
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
     return;

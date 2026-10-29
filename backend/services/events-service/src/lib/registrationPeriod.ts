@@ -1,5 +1,6 @@
 import { EVENT_STATUS } from "./eventStatus.js";
 import { eventEndsAt, eventStartsAt, localDateStart } from "./eventTiming.js";
+import { clock } from "./clock.js";
 
 /**
  * Registration period. The coordinator stores an open date and an optional
@@ -76,10 +77,9 @@ function takesRegistration({ status, details }: RegistrationInputs, now: Date): 
  */
 export function getRegistrationState(
   inputs: RegistrationInputs,
-  now: Date = new Date(),
+  now: Date = clock.now(),
   fullness?: { registeredCount: number; capacity: number | null },
 ): RegistrationState {
-  if (inputs.details.registrationNeeded !== true) return REGISTRATION_STATE.Closed;
   if (!takesRegistration(inputs, now)) return REGISTRATION_STATE.Closed;
 
   const override = parseOverride(inputs.override);
@@ -109,7 +109,7 @@ export function getRegistrationState(
  * event takes registration. Closed and full events stay listed. The listing
  * route filters with this; keep them the same.
  */
-export function isListed(inputs: RegistrationInputs, now: Date = new Date()): boolean {
+export function isListed(inputs: RegistrationInputs, now: Date = clock.now()): boolean {
   if (!takesRegistration(inputs, now)) return false;
   const override = parseOverride(inputs.override);
   if (override === REGISTRATION_OVERRIDE.ForceOpen) return true;

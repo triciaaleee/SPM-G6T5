@@ -3,6 +3,7 @@ import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
+import { setClockForTest } from "../lib/clock.js";
 
 vi.mock("../middleware/auth.js", async () => {
   const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
@@ -21,13 +22,7 @@ const AFTER_END = new Date("2026-11-10T10:30:00.000Z");
 const BEFORE_END = new Date("2026-11-10T09:30:00.000Z");
 
 beforeEach(() => {
-  // Only the clock is faked, so supertest's own timers still run.
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(AFTER_END);
-});
-
-afterEach(() => {
-  vi.useRealTimers();
+  setClockForTest(AFTER_END);
 });
 
 function buildApp(
@@ -131,7 +126,7 @@ describe("POST /api/events/:id/complete (E3-5)", () => {
   });
 
   it("AC2: blocks an event that hasn't ended yet and says when it ends", async () => {
-    vi.setSystemTime(BEFORE_END);
+    setClockForTest(BEFORE_END);
     const { app, update } = buildApp();
     const res = await complete(app);
 
@@ -141,14 +136,14 @@ describe("POST /api/events/:id/complete (E3-5)", () => {
   });
 
   it("AC2: blocks an event that is still running", async () => {
-    vi.setSystemTime(new Date("2026-11-10T05:00:00.000Z"));
+    setClockForTest("2026-11-10T05:00:00.000Z");
     const { app, update } = buildApp();
     expect((await complete(app)).status).toBe(409);
     expect(update).not.toHaveBeenCalled();
   });
 
   it("allows it from the end minute itself", async () => {
-    vi.setSystemTime(new Date("2026-11-10T10:00:00.000Z"));
+    setClockForTest("2026-11-10T10:00:00.000Z");
     const { app } = buildApp();
     expect((await complete(app)).status).toBe(200);
   });

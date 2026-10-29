@@ -1,5 +1,6 @@
 import type { supabaseAdmin } from "./supabaseAdmin.js";
 import { getPublisher, type OutboundMessage } from "./rabbitPublisher.js";
+import { clock } from "./clock.js";
 
 type Supabase = typeof supabaseAdmin;
 
@@ -46,7 +47,7 @@ function toMessage(row: OutboxRow): OutboundMessage {
 async function markPublished(supabase: Supabase, id: number): Promise<void> {
   const { error } = await supabase
     .from("event_outbox")
-    .update({ published_at: new Date().toISOString() })
+    .update({ published_at: clock.now().toISOString() })
     .eq("id", id);
   // Left unmarked, the relay will publish it again; a consumer skips the repeat.
   if (error) console.error(`events-service: could not mark outbox row ${id} published`, error);

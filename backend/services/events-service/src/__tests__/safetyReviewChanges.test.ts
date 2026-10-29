@@ -61,11 +61,12 @@ function buildApp(options: Options = {}) {
     },
     event_safety_reviews: {
       select: () => ({
-        eq: () => ({ order: () => ({ limit: () => ({ maybeSingle: resolved(options.latestReview ?? null) }) }) }),
+        eq: () => ({ order: () => ({ limit: () => ({ maybeSingle: resolved(structuredClone(options.latestReview ?? null)) }) }) }),
       }),
     },
     event_safety_review_flags: {
-      select: () => ({ eq: () => ({ order: resolved(options.flags ?? []) }) }),
+      // the route stamps cleared_at onto the rows it reads, so each app gets its own copy
+      select: () => ({ eq: () => ({ order: resolved(structuredClone(options.flags ?? [])) }) }),
       update: vi.fn(() => flagUpdate),
     },
     event_safety_submissions: {

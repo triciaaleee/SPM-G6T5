@@ -1,0 +1,2507 @@
+// @ts-nocheck
+// 
+import express from "express";
+import request from "supertest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthedRequest } from "../middleware/auth.js";
+import { eventsRouter } from "../routes/events.js";
+import { setPublisherForTest } from "../lib/rabbitPublisher.js";
+
+vi.mock("../middleware/auth.js", async () => {
+  const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
+    // Simulates requireAuthOrInternal's internal path: req.user stays
+    // unset, same as a trusted sibling-service call with no end-user token.
+    if ((globalThis as any).__mockInternalCall) {
+      req.supabase = (globalThis as any).__mockSupabase;
+      next();
+      return;
+    }
+    req.user = (globalThis as any).__mockUser ?? { id: "user-1", role: "organiser" };
+    req.supabase = (globalThis as any).__mockSupabase;
+    next();
+  };
+  return { requireAuth: applyMock, requireAuthOrInternal: applyMock };
+});
+
+const publish = vi.fn().mockResolvedValue(true);
+
+beforeEach(() => {
+  publish.mockReset().mockResolvedValue(true);
+  setPublisherForTest({ publish });
+  (globalThis as any).__mockInternalCall = false;
+});
+
+const validPayload = {
+  name: "Freshman Orientation",
+  purpose: "Welcome new students",
+  description: "Campus tour and icebreakers",
+  proposedDate: "2099-01-01",
+  startTime: "09:00",
+  endTime: "11:00",
+  expectedAttendance: 50,
+  venue: "Main Hall",
+  accessibility: "Wheelchair ramp access",
+  equipment: "Projector and 100 chairs",
+  technicalSupport: "AV technician on-site",
+};
+
+function buildApp(mockSupabase: unknown, user: { id: string; role: string } = { id: "user-1", role: "organiser" }) {
+  (globalThis as any).__mockSupabase = mockSupabase;
+  (globalThis as any).__mockUser = user;
+  const app = express();
+  app.use(express.json());
+  app.use("/api/events", eventsRouter);
+  return app;
+}
+
+const coordinator = { id: "COORD-0001", role: "coordinator" };
+
+/** Builds a mock supabase client covering the two `.from("events")` calls
+ * every decision route makes (the authorizeCoordinatorReview lookup, then
+ * the update), plus `.from("access_denials")` for the mismatch case. */
+function buildReviewSupabase(options: {
+  event: { id: number; status: string; coordinator_id: string | null; organiser_id?: string | null } | null;
+  updatedEvent?: Record<string, unknown>;
+  updateError?: { message: string } | null;
+  /** Top-level questions /approve checks when status is "Clarification
+   * Requested" — defaults to one unresolved question, so callers that
+   * don't care about this still exercise the "still outstanding" path. */
+  openQuestions?: { id: number; resolved: boolean }[];
+  /** The question /resolve looks up before updating it. */
+  question?: { id: number; event_id: number; parent_id: number | null } | null;
+  resolvedQuestion?: Record<string, unknown>;
+}) {
+  const {
+    event,
+    updatedEvent,
+    updateError = null,
+    openQuestions = [{ id: 1, resolved: false }],
+    question,
+    resolvedQuestion,
+  } = options;
+
+  const maybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+  const lookupEq = vi.fn().mockReturnValue({ maybeSingle });
+  const lookupSelect = vi.fn().mockReturnValue({ eq: lookupEq });
+
+  const single = vi.fn().mockResolvedValue({ data: updatedEvent ?? null, error: updateError });
+  const updateSelect = vi.fn().mockReturnValue({ single });
+  const updateEq = vi.fn().mockReturnValue({ select: updateSelect });
+  const update = vi.fn().mockReturnValue({ eq: updateEq });
+
+  const denialInsert = vi.fn().mockResolvedValue({ error: null });
+
+  // request-clarification writes the thread's first question row via a
+  // bare `await ...insert(...)` (no `.select()`); the new-question route
+  // chains `.select().single()` off the same call. A real Promise with a
+  // `.select` property attached satisfies both shapes.
+  const clarificationInsert = vi.fn().mockImplementation(() => {
+    const result = Promise.resolve({ error: null }) as Promise<{ error: null }> & {
+      select: ReturnType<typeof vi.fn>;
+    };
+    result.select = vi.fn().mockReturnValue({
+      single: vi.fn().mockResolvedValue({ data: { id: 99 }, error: null }),
+    });
+    return result;
+  });
+
+  // /approve's "any question still unresolved?" check:
+  // .select("id, resolved").eq("event_id", id).is("parent_id", null)
+  const clarificationIs = vi.fn().mockResolvedValue({ data: openQuestions, error: null });
+  const clarificationEq = vi.fn().mockReturnValue({ is: clarificationIs });
+  const clarificationListSelect = vi.fn().mockReturnValue({ eq: clarificationEq });
+
+  // /resolve's question lookup: .select("id, event_id, parent_id").eq("id", id).maybeSingle()
+  const questionMaybeSingle = vi.fn().mockResolvedValue({ data: question ?? null, error: null });
+  const questionEq = vi.fn().mockReturnValue({ maybeSingle: questionMaybeSingle });
+  const clarificationSelect = vi.fn().mockImplementation((columns: string) => {
+    if (columns === "id, event_id, parent_id") return { eq: questionEq };
+    return clarificationListSelect(columns);
+  });
+
+  // /resolve's write: .update({resolved:true}).eq("id", id).select(...).single()
+  const resolveSingle = vi.fn().mockResolvedValue({ data: resolvedQuestion ?? null, error: null });
+  const resolveSelect = vi.fn().mockReturnValue({ single: resolveSingle });
+  const resolveEq = vi.fn().mockReturnValue({ select: resolveSelect });
+  const clarificationUpdate = vi.fn().mockReturnValue({ eq: resolveEq });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "access_denials") return { insert: denialInsert };
+    if (table === "event_clarifications") {
+      return { insert: clarificationInsert, select: clarificationSelect, update: clarificationUpdate };
+    }
+    return { select: lookupSelect, update };
+  });
+
+  return {
+    from,
+    update,
+    updateEq,
+    updateSelect,
+    denialInsert,
+    clarificationInsert,
+    clarificationListSelect,
+    clarificationUpdate,
+  };
+}
+
+describe("GET /api/events", () => {
+  it("returns only the caller's events", async () => {
+    const eq = vi.fn().mockResolvedValue({
+      data: [{ id: "e1", status: "submitted" }],
+      error: null,
+    });
+    const select = vi.fn().mockReturnValue({ eq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from });
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(1);
+    expect(eq).toHaveBeenCalledWith("organiser_id", "user-1");
+  });
+
+  it("returns all events for a coordinator without filtering by organiser (E1-4.1)", async () => {
+    const nonDraftEvents = [
+      { id: 1, status: "Requested", organiser_id: "user-1" },
+      { id: 2, status: "Planning", organiser_id: "user-2" },
+    ];
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: nonDraftEvents, error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(2);
+    expect(eq).not.toHaveBeenCalledWith("organiser_id", expect.anything());
+  });
+
+  it("excludes drafts from a coordinator's list (E2-5.1 AC2)", async () => {
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: [], error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(neq).toHaveBeenCalledWith("status", "Draft");
+  });
+
+  it("does not exclude drafts from an organiser's own list (E2-5.1 AC1)", async () => {
+    const eq = vi.fn().mockResolvedValue({
+      data: [{ id: "d1", status: "Draft" }],
+      error: null,
+    });
+    const select = vi.fn().mockReturnValue({ eq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from });
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(1);
+    expect(res.body.events[0].status).toBe("Draft");
+  });
+});
+
+describe("GET /api/events/:id", () => {
+  const otherUsersEventId = "42";
+
+  it("denies access and logs when the event isn't owned by the caller", async () => {
+    const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const select = vi.fn().mockReturnValue({ eq });
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert };
+      return { select };
+    });
+
+    const app = buildApp({ from });
+    const res = await request(app).get(`/api/events/${otherUsersEventId}`);
+
+    expect(res.status).toBe(403);
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: "user-1", event_id: otherUsersEventId }),
+    );
+  });
+
+  it("denies access and logs when the id is not a valid integer, without querying the DB", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const select = vi.fn();
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert };
+      return { select };
+    });
+
+    const app = buildApp({ from });
+    const res = await request(app).get("/api/events/abc");
+
+    expect(res.status).toBe(403);
+    expect(select).not.toHaveBeenCalled();
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: "user-1", reason: "invalid_id_format" }),
+    );
+  });
+
+  it("logs server-side but still returns 403 if the audit insert itself fails", async () => {
+    const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const select = vi.fn().mockReturnValue({ eq });
+    const insert = vi.fn().mockResolvedValue({ error: { message: "insert failed" } });
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert };
+      return { select };
+    });
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const app = buildApp({ from });
+    const res = await request(app).get(`/api/events/${otherUsersEventId}`);
+
+    expect(res.status).toBe(403);
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it("allows a coordinator to access an event they did not organise (E1-4.1)", async () => {
+    const eventId = "5";
+    const maybeSingle = vi.fn().mockResolvedValue({
+      data: {
+        id: Number(eventId),
+        status: "Requested",
+        submitted_details: {},
+        coordinator_id: null,
+        review_outcome: null,
+        created_at: "2026-01-01",
+        organiser_id: "someone-else",
+      },
+      error: null,
+    });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const select = vi.fn().mockReturnValue({ eq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get(`/api/events/${eventId}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.id).toBe(Number(eventId));
+    expect(res.body.event.organiser_id).toBe("someone-else");
+  });
+
+  it("denies a coordinator an organiser's draft, and logs it (AGENTS.md §3: drafts sit outside the process)", async () => {
+    const eventId = "6";
+    const maybeSingle = vi.fn().mockResolvedValue({
+      data: {
+        id: Number(eventId),
+        status: "Draft",
+        submitted_details: {},
+        coordinator_id: null,
+        review_outcome: null,
+        created_at: "2026-01-01",
+        organiser_id: "someone-else",
+      },
+      error: null,
+    });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const select = vi.fn().mockReturnValue({ eq });
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert };
+      return { select };
+    });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get(`/api/events/${eventId}`);
+
+    expect(res.status).toBe(403);
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ event_id: eventId }));
+  });
+
+  it("returns the event when the caller owns it", async () => {
+    const ownedEventId = "1";
+    const maybeSingle = vi.fn().mockResolvedValue({
+      data: {
+        id: Number(ownedEventId),
+        status: "approved",
+        submitted_details: {},
+        coordinator_id: "coord-1",
+        review_outcome: "approved",
+        created_at: "2026-01-01",
+        organiser_id: "user-1",
+      },
+      error: null,
+    });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const select = vi.fn().mockReturnValue({ eq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from });
+    const res = await request(app).get(`/api/events/${ownedEventId}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.id).toBe(Number(ownedEventId));
+    expect(res.body.event.organiser_id).toBe("user-1");
+  });
+});
+
+/**
+ * E2-14: mocks the events.insert(...) submission writes. There's no
+ * coordinator lookup on this path any more — every submission lands
+ * Unassigned with no coordinator.
+ */
+function buildSubmitSupabase(options: {
+  insertedEvent?: Record<string, unknown> | null;
+  insertError?: { message: string } | null;
+}) {
+  const { insertedEvent = null, insertError = null } = options;
+
+  const insertSingle = vi.fn().mockResolvedValue({ data: insertedEvent, error: insertError });
+  const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
+  const insert = vi.fn().mockReturnValue({ select: insertSelect });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "events") return { insert };
+    return {};
+  });
+
+  return { from, insert };
+}
+
+describe("POST /api/events", () => {
+  it("creates the request Unassigned with no coordinator (E2-14)", async () => {
+    const { from, insert } = buildSubmitSupabase({
+      insertedEvent: {
+        id: "e2",
+        status: "Unassigned",
+        submitted_details: validPayload,
+        coordinator_id: null,
+        review_outcome: null,
+        created_at: "2026-01-01",
+      },
+    });
+
+    const app = buildApp({ from });
+    const res = await request(app).post("/api/events").send(validPayload);
+
+    expect(res.status).toBe(201);
+    expect(res.body.event.status).toBe("Unassigned");
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organiser_id: "user-1",
+        status: "Unassigned",
+        coordinator_id: null,
+      }),
+    );
+  });
+
+  it("notifies every Event Coordinator Lead on submission (E2-14)", async () => {
+    const { from } = buildSubmitSupabase({
+      insertedEvent: {
+        id: "e2",
+        status: "Unassigned",
+        submitted_details: validPayload,
+        coordinator_id: null,
+        review_outcome: null,
+        created_at: "2026-01-01",
+      },
+    });
+
+    const app = buildApp({ from });
+    const res = await request(app).post("/api/events").send(validPayload);
+
+    expect(res.status).toBe(201);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.submitted",
+        recipients: { userIds: ["user-1"], roles: ["coordinator_lead"] },
+      }),
+    );
+  });
+
+  it.each(["coordinator", "coordinator_lead", "attendee", "venue_staff"])(
+    "blocks a %s from submitting (E2-14)",
+    async (role) => {
+      const from = vi.fn();
+      const app = buildApp({ from }, { id: "X-0001", role });
+
+      const res = await request(app).post("/api/events").send(validPayload);
+
+      expect(res.status).toBe(403);
+      expect(from).not.toHaveBeenCalled();
+    },
+  );
+
+  it("blocks submission and identifies every missing mandatory field", async () => {
+    const from = vi.fn();
+    const app = buildApp({ from });
+
+    const res = await request(app).post("/api/events").send({});
+
+    expect(res.status).toBe(400);
+    expect(Object.keys(res.body.fields)).toEqual(
+      expect.arrayContaining([
+        "name",
+        "purpose",
+        "description",
+        "proposedDate",
+        "startTime",
+        "endTime",
+        "expectedAttendance",
+        "venue",
+        "accessibility",
+        "equipment",
+        "technicalSupport",
+      ]),
+    );
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("blocks submission when the proposed date is in the past", async () => {
+    const from = vi.fn();
+    const app = buildApp({ from });
+
+    const res = await request(app)
+      .post("/api/events")
+      .send({ ...validPayload, proposedDate: "2000-01-01" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields.proposedDate).toBeDefined();
+  });
+
+  it("blocks submission when expected attendance is zero or less", async () => {
+    const from = vi.fn();
+    const app = buildApp({ from });
+
+    const res = await request(app)
+      .post("/api/events")
+      .send({ ...validPayload, expectedAttendance: 0 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields.expectedAttendance).toBeDefined();
+  });
+
+  it("blocks submission when end time is at or before start time", async () => {
+    const from = vi.fn();
+    const app = buildApp({ from });
+
+    const res = await request(app)
+      .post("/api/events")
+      .send({ ...validPayload, startTime: "10:00", endTime: "10:00" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields.endTime).toBeDefined();
+  });
+
+  it.each(["venue", "accessibility", "equipment", "technicalSupport"])(
+    "blocks submission when %s is left blank",
+    async (field) => {
+      const from = vi.fn();
+      const app = buildApp({ from });
+
+      const res = await request(app)
+        .post("/api/events")
+        .send({ ...validPayload, [field]: "" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.fields[field]).toBeDefined();
+      expect(from).not.toHaveBeenCalled();
+    },
+  );
+
+  it("records requirement fields and the registration flag when provided", async () => {
+    const { from, insert } = buildSubmitSupabase({
+      insertedEvent: {
+        id: "e6",
+        status: "Unassigned",
+        submitted_details: {},
+        coordinator_id: null,
+        review_outcome: null,
+        created_at: "2026-01-01",
+      },
+    });
+
+    const app = buildApp({ from });
+    const res = await request(app)
+      .post("/api/events")
+      .send({ ...validPayload, registrationNeeded: true });
+
+    expect(res.status).toBe(201);
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        submitted_details: expect.objectContaining({
+          venue: "Main Hall",
+          accessibility: "Wheelchair ramp access",
+          equipment: "Projector and 100 chairs",
+          technicalSupport: "AV technician on-site",
+          registrationNeeded: true,
+        }),
+      }),
+    );
+  });
+});
+
+describe("POST /api/events/:id/approve", () => {
+  it("rejects non-coordinators", async () => {
+    const { from } = buildReviewSupabase({ event: null });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/approve");
+
+    expect(res.status).toBe(403);
+  });
+
+  it("returns 404 when the event doesn't exist", async () => {
+    const { from } = buildReviewSupabase({ event: null });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/999/approve");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("blocks and audits when the event is assigned to another coordinator", async () => {
+    const { from, denialInsert } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: "COORD-0002" },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/approve");
+
+    expect(res.status).toBe(403);
+    expect(denialInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: coordinator.id, event_id: "1", reason: "coordinator_mismatch" }),
+    );
+  });
+
+  it("blocks approval while a Rejected request", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Rejected", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/approve");
+
+    expect(res.status).toBe(409);
+  });
+
+  it("blocks approval while clarification is outstanding", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/approve");
+
+    expect(res.status).toBe(409);
+  });
+
+  it("approves once every clarification question has been resolved", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Planning" },
+      openQuestions: [
+        { id: 1, resolved: true },
+        { id: 2, resolved: true },
+      ],
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/approve");
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: "Planning" }));
+  });
+
+  it("approves a Requested event as its assigned coordinator", async () => {
+    const { from, update, updateEq } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Planning", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/approve");
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.status).toBe("Planning");
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Planning", decided_by: coordinator.id }),
+    );
+    expect(updateEq).toHaveBeenCalledWith("id", 1);
+  });
+
+  it("publishes request.decided (approved) to the organiser (#104 row 7)", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id, organiser_id: "ORG-0001" },
+      updatedEvent: { id: 1, status: "Planning", submitted_details: { name: "Spring Gala" } },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/approve");
+
+    expect(res.status).toBe(200);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.decided",
+        eventId: 1,
+        recipients: { userIds: ["ORG-0001"], roles: [] },
+        data: expect.objectContaining({ decision: "approved" }),
+      }),
+    );
+  });
+
+  it("blocks and audits approval of an event with no coordinator — the Lead assigns it (E2-13)", async () => {
+    const { from, update, denialInsert } = buildReviewSupabase({
+      event: { id: 2, status: "Unassigned", coordinator_id: null },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/2/approve");
+
+    expect(res.status).toBe(403);
+    expect(update).not.toHaveBeenCalled();
+    expect(denialInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: coordinator.id, event_id: "2", reason: "coordinator_not_assigned" }),
+    );
+  });
+
+  it("does not let a coordinator claim an unassigned event by rejecting it", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 2, status: "Unassigned", coordinator_id: null },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/2/reject").send({ reason: "Not a fit" });
+
+    expect(res.status).toBe(403);
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/events/:id/reject", () => {
+  it("requires a reason", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/reject").send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("blocks rejection once an event has moved into Planning", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Planning", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/reject").send({ reason: "No venue available" });
+
+    expect(res.status).toBe(409);
+  });
+
+  it("rejects a request with a reason, recording it as the review outcome", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Rejected", review_outcome: "No venue available" },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/reject").send({ reason: "No venue available" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.status).toBe("Rejected");
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Rejected", review_outcome: "No venue available" }),
+    );
+  });
+
+  it("publishes request.decided (rejected) with the reason to the organiser (#104 row 7)", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id, organiser_id: "ORG-0001" },
+      updatedEvent: { id: 1, status: "Rejected", submitted_details: { name: "Spring Gala" } },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/reject").send({ reason: "No venue available" });
+
+    expect(res.status).toBe(200);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.decided",
+        eventId: 1,
+        recipients: { userIds: ["ORG-0001"], roles: [] },
+        data: expect.objectContaining({ decision: "rejected", reason: "No venue available" }),
+      }),
+    );
+  });
+
+  it("allows rejecting a request that has an outstanding clarification (AC3)", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Rejected" },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/reject").send({ reason: "No venue found at all" });
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("POST /api/events/:id/request-clarification", () => {
+  it("requires a message", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/request-clarification").send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("only allows requesting clarification while pending review", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app)
+      .post("/api/events/1/request-clarification")
+      .send({ message: "What time will setup start?" });
+
+    expect(res.status).toBe(409);
+  });
+
+  it("sets status to Clarification Requested with the message as the review outcome", async () => {
+    const { from, update, clarificationInsert } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Clarification Requested" },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app)
+      .post("/api/events/1/request-clarification")
+      .send({ message: "What time will setup start?" });
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "Clarification Requested",
+        review_outcome: "What time will setup start?",
+      }),
+    );
+    // AC3: this first ask seeds the thread the clarification popup renders.
+    expect(clarificationInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_id: 1,
+        author_id: coordinator.id,
+        author_role: "coordinator",
+        message: "What time will setup start?",
+      }),
+    );
+  });
+
+  it("publishes clarification.requested with the message to the organiser (#104 row 5)", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id, organiser_id: "ORG-0001" },
+      updatedEvent: { id: 1, status: "Clarification Requested", submitted_details: { name: "Spring Gala" } },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app)
+      .post("/api/events/1/request-clarification")
+      .send({ message: "What time will setup start?" });
+
+    expect(res.status).toBe(200);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "clarification.requested",
+        eventId: 1,
+        recipients: { userIds: ["ORG-0001"], roles: [] },
+        data: expect.objectContaining({ message: "What time will setup start?" }),
+      }),
+    );
+  });
+
+  it("allows a post-approval follow-up question from Planning, remembering the prior status", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 1, status: "Planning", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Clarification Requested" },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app)
+      .post("/api/events/1/request-clarification")
+      .send({ message: "Actually, can you confirm the headcount?" });
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "Clarification Requested",
+        status_before_clarification: "Planning",
+      }),
+    );
+  });
+});
+
+/** Builds a mock supabase client for the clarification-thread routes: a
+ * lookup on "events" (organiser_id/coordinator_id/status), plus an
+ * "event_clarifications" table supporting select().eq().order() (list),
+ * insert().select().single() (new question/reply), and a plain select
+ * ().eq().maybeSingle() lookup (finding the parent question for a reply). */
+function buildClarificationSupabase(options: {
+  event: { id: number; status: string; organiser_id: string; coordinator_id: string | null } | null;
+  list?: unknown[];
+  listError?: { message: string } | null;
+  question?: { id: number; event_id: number; parent_id: number | null; resolved?: boolean } | null;
+  inserted?: Record<string, unknown>;
+  insertError?: { message: string } | null;
+}) {
+  const { event, list = [], listError = null, question, inserted, insertError = null } = options;
+
+  const eventMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+  const eventEq = vi.fn().mockReturnValue({ maybeSingle: eventMaybeSingle });
+  const eventSelect = vi.fn().mockReturnValue({ eq: eventEq });
+
+  const order = vi.fn().mockResolvedValue({ data: list, error: listError });
+  const listEq = vi.fn().mockReturnValue({ order });
+
+  const questionMaybeSingle = vi.fn().mockResolvedValue({ data: question ?? null, error: null });
+  const questionEq = vi.fn().mockReturnValue({ maybeSingle: questionMaybeSingle });
+
+  const clarificationSelect = vi.fn().mockImplementation((columns: string) => {
+    if (columns === "id, event_id, parent_id, resolved") return { eq: questionEq };
+    return { eq: listEq };
+  });
+
+  const insertSingle = vi.fn().mockResolvedValue({ data: inserted ?? null, error: insertError });
+  const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
+  const insert = vi.fn().mockReturnValue({ select: insertSelect });
+
+  const denialInsert = vi.fn().mockResolvedValue({ error: null });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "access_denials") return { insert: denialInsert };
+    if (table === "event_clarifications") return { select: clarificationSelect, insert };
+    return { select: eventSelect };
+  });
+
+  return { from, insert, denialInsert };
+}
+
+describe("GET /api/events/:id/clarifications", () => {
+  it("returns the thread in chronological order for the organiser who owns it", async () => {
+    const thread = [
+      { id: 1, parent_id: null, author_id: coordinator.id, author_role: "coordinator", message: "Q1", created_at: "2026-01-01" },
+      { id: 2, parent_id: 1, author_id: "user-1", author_role: "organiser", message: "A1", created_at: "2026-01-02" },
+    ];
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "user-1", coordinator_id: coordinator.id },
+      list: thread,
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).get("/api/events/1/clarifications");
+
+    expect(res.status).toBe(200);
+    expect(res.body.clarifications).toEqual(thread);
+  });
+
+  it("denies a non-owning organiser", async () => {
+    const { from, denialInsert } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "someone-else", coordinator_id: null },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).get("/api/events/1/clarifications");
+
+    expect(res.status).toBe(403);
+    expect(denialInsert).toHaveBeenCalled();
+  });
+
+  it("allows any coordinator to view, even one not assigned", async () => {
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "user-1", coordinator_id: "COORD-0002" },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).get("/api/events/1/clarifications");
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("POST /api/events/:id/clarifications", () => {
+  it("rejects non-coordinators", async () => {
+    const { from } = buildReviewSupabase({ event: null });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications").send({ message: "Any AV needs?" });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("requires clarification to already be outstanding", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications").send({ message: "Any AV needs?" });
+
+    expect(res.status).toBe(409);
+  });
+
+  it("requires a message", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications").send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("adds a follow-up question while clarification is outstanding", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications").send({ message: "Any AV needs?" });
+
+    expect(res.status).toBe(201);
+    // Adding a follow-up question doesn't itself redecide the event.
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/events/:id/clarifications/:questionId/replies", () => {
+  it("allows the owning organiser to reply", async () => {
+    const { from, insert } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "user-1", coordinator_id: coordinator.id },
+      question: { id: 5, event_id: 1, parent_id: null },
+      inserted: { id: 9, parent_id: 5, author_id: "user-1", author_role: "organiser", message: "9am", created_at: "2026-01-03" },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/replies").send({ message: "9am" });
+
+    expect(res.status).toBe(201);
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ event_id: 1, parent_id: 5, author_id: "user-1", author_role: "organiser", message: "9am" }),
+    );
+  });
+
+  it("denies an organiser who doesn't own the event", async () => {
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "someone-else", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/replies").send({ message: "9am" });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("blocks replies once the request is no longer awaiting clarification", async () => {
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Planning", organiser_id: "user-1", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/replies").send({ message: "9am" });
+
+    expect(res.status).toBe(409);
+  });
+
+  it("404s when the question doesn't belong to this event", async () => {
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "user-1", coordinator_id: coordinator.id },
+      question: { id: 5, event_id: 2, parent_id: null },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/replies").send({ message: "9am" });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("blocks replies once the question itself has been resolved", async () => {
+    const { from } = buildClarificationSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: "user-1", coordinator_id: coordinator.id },
+      question: { id: 5, event_id: 1, parent_id: null, resolved: true },
+    });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/replies").send({ message: "9am" });
+
+    expect(res.status).toBe(409);
+  });
+});
+
+describe("POST /api/events/:id/clarifications/:questionId/resolve", () => {
+  it("rejects non-coordinators", async () => {
+    const { from } = buildReviewSupabase({ event: null });
+    const app = buildApp({ from }, { id: "user-1", role: "organiser" });
+
+    const res = await request(app).post("/api/events/1/clarifications/5/resolve");
+
+    expect(res.status).toBe(403);
+  });
+
+  it("requires clarification to be outstanding", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications/5/resolve");
+
+    expect(res.status).toBe(409);
+  });
+
+  it("404s when the question doesn't belong to this event", async () => {
+    const { from } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+      question: { id: 5, event_id: 2, parent_id: null },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications/5/resolve");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("marks the question resolved", async () => {
+    const { from, clarificationUpdate } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+      question: { id: 5, event_id: 1, parent_id: null },
+      resolvedQuestion: { id: 5, parent_id: null, resolved: true },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/clarifications/5/resolve");
+
+    expect(res.status).toBe(200);
+    expect(res.body.clarification.resolved).toBe(true);
+    expect(clarificationUpdate).toHaveBeenCalledWith({ resolved: true });
+  });
+});
+
+/**
+ * E2-10: mocks the lookup on "events" (status/organiser_id/submitted_details),
+ * the update().select().single() that saves the response, the "find the open
+ * question to reply to" lookup, and the event_clarifications insert.
+ */
+function buildPatchSupabase(options: {
+  event:
+    | {
+        id: number;
+        status: string;
+        organiser_id: string;
+        coordinator_id?: string | null;
+        submitted_details: Record<string, unknown>;
+        status_before_clarification?: string | null;
+      }
+    | null;
+  updatedEvent?: Record<string, unknown>;
+  openQuestion?: { id: number } | null;
+}) {
+  const { event, updatedEvent, openQuestion = null } = options;
+
+  const lookupMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+  const lookupEq = vi.fn().mockReturnValue({ maybeSingle: lookupMaybeSingle });
+  const lookupSelect = vi.fn().mockReturnValue({ eq: lookupEq });
+
+  const updateSingle = vi.fn().mockResolvedValue({ data: updatedEvent ?? null, error: null });
+  const updateSelect = vi.fn().mockReturnValue({ single: updateSingle });
+  const updateEq = vi.fn().mockReturnValue({ select: updateSelect });
+  const update = vi.fn().mockReturnValue({ eq: updateEq });
+
+  const openQuestionMaybeSingle = vi.fn().mockResolvedValue({ data: openQuestion, error: null });
+  const openQuestionLimit = vi.fn().mockReturnValue({ maybeSingle: openQuestionMaybeSingle });
+  const openQuestionOrder = vi.fn().mockReturnValue({ limit: openQuestionLimit });
+  const openQuestionEqResolved = vi.fn().mockReturnValue({ order: openQuestionOrder });
+  const openQuestionIs = vi.fn().mockReturnValue({ eq: openQuestionEqResolved });
+  const openQuestionEqEventId = vi.fn().mockReturnValue({ is: openQuestionIs });
+  const openQuestionSelect = vi.fn().mockReturnValue({ eq: openQuestionEqEventId });
+
+  const clarificationInsert = vi.fn().mockResolvedValue({ error: null });
+  const denialInsert = vi.fn().mockResolvedValue({ error: null });
+  const historyInsert = vi.fn().mockResolvedValue({ error: null });
+  // The outbox (migration 0045) stores a message before it is published; echo the stored row back.
+  const outboxInsert = vi.fn().mockImplementation((payload: Record<string, unknown>) => ({
+    select: () => ({
+      single: () =>
+        Promise.resolve({
+          data: { id: 1, message_id: "00000000-0000-0000-0000-000000000001", occurred_at: "2099-01-01T00:00:00Z", ...payload },
+          error: null,
+        }),
+    }),
+  }));
+  const outboxUpdate = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "event_clarifications") return { select: openQuestionSelect, insert: clarificationInsert };
+    if (table === "access_denials") return { insert: denialInsert };
+    if (table === "event_history") return { insert: historyInsert };
+    if (table === "event_outbox") return { insert: outboxInsert, update: outboxUpdate };
+    return { select: lookupSelect, update };
+  });
+
+  return { from, update, clarificationInsert, historyInsert, denialInsert, outboxInsert };
+}
+
+describe("POST /api/events/draft", () => {
+  it("saves an incomplete draft without validating mandatory fields (E2-4 AC1)", async () => {
+    const insertSingle = vi.fn().mockResolvedValue({
+      data: { id: "d1", status: "Draft", submitted_details: { name: "Half-planned mixer" } },
+      error: null,
+    });
+    const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
+    const insert = vi.fn().mockReturnValue({ select: insertSelect });
+    const from = vi.fn().mockReturnValue({ insert });
+
+    const app = buildApp({ from });
+    const res = await request(app).post("/api/events/draft").send({ name: "Half-planned mixer" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.event.status).toBe("Draft");
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organiser_id: "user-1",
+        status: "Draft",
+        submitted_details: expect.objectContaining({ name: "Half-planned mixer", venue: "" }),
+      }),
+    );
+    // A draft hasn't reached the review pipeline yet — no coordinator lookup.
+    expect(from).not.toHaveBeenCalledWith("users");
+  });
+
+  it("saves a completely empty draft", async () => {
+    const insertSingle = vi.fn().mockResolvedValue({ data: { id: "d2", status: "Draft" }, error: null });
+    const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
+    const insert = vi.fn().mockReturnValue({ select: insertSelect });
+    const from = vi.fn().mockReturnValue({ insert });
+
+    const app = buildApp({ from });
+    const res = await request(app).post("/api/events/draft").send({});
+
+    expect(res.status).toBe(201);
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "Draft",
+        submitted_details: expect.objectContaining({ name: "", expectedAttendance: null }),
+      }),
+    );
+  });
+});
+
+/** Builds a mock supabase client for PATCH /api/events/:id/draft: a lookup
+ * on "events" (id/status/organiser_id) plus the update().eq().select().single(). */
+function buildDraftPatchSupabase(options: {
+  event: { id: number; status: string; organiser_id: string } | null;
+  updatedEvent?: Record<string, unknown>;
+}) {
+  const { event, updatedEvent } = options;
+
+  const lookupMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+  const lookupEq = vi.fn().mockReturnValue({ maybeSingle: lookupMaybeSingle });
+  const lookupSelect = vi.fn().mockReturnValue({ eq: lookupEq });
+
+  const updateSingle = vi.fn().mockResolvedValue({ data: updatedEvent ?? null, error: null });
+  const updateSelect = vi.fn().mockReturnValue({ single: updateSingle });
+  const updateEq = vi.fn().mockReturnValue({ select: updateSelect });
+  const update = vi.fn().mockReturnValue({ eq: updateEq });
+
+  const denialInsert = vi.fn().mockResolvedValue({ error: null });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "access_denials") return { insert: denialInsert };
+    return { select: lookupSelect, update };
+  });
+
+  return { from, update, denialInsert };
+}
+
+describe("PATCH /api/events/:id/draft", () => {
+  const owner = { id: "ORG-0001", role: "organiser" };
+
+  it("saves progress on an owned draft without validating it (E2-4 AC1/AC2)", async () => {
+    const { from, update } = buildDraftPatchSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id },
+      updatedEvent: { id: 1, status: "Draft" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1/draft").send({ name: "Still deciding" });
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith({
+      submitted_details: expect.objectContaining({ name: "Still deciding", venue: "" }),
+    });
+  });
+
+  it("denies a non-owner", async () => {
+    const { from, denialInsert } = buildDraftPatchSupabase({
+      event: { id: 1, status: "Draft", organiser_id: "someone-else" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1/draft").send({ name: "Snooping" });
+
+    expect(res.status).toBe(403);
+    expect(denialInsert).toHaveBeenCalled();
+  });
+
+  it("refuses to touch a request that's already been submitted", async () => {
+    const { from } = buildDraftPatchSupabase({
+      event: { id: 1, status: "Requested", organiser_id: owner.id },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1/draft").send({ name: "Too late" });
+
+    expect(res.status).toBe(409);
+  });
+});
+
+/** Builds a mock supabase client for DELETE /api/events/:id/draft: a lookup
+ * on "events" (id/status/organiser_id) plus delete().eq(). */
+function buildDraftDeleteSupabase(options: {
+  event: { id: number; status: string; organiser_id: string } | null;
+  deleteError?: { message: string } | null;
+}) {
+  const { event, deleteError = null } = options;
+
+  const lookupMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+  const lookupEq = vi.fn().mockReturnValue({ maybeSingle: lookupMaybeSingle });
+  const lookupSelect = vi.fn().mockReturnValue({ eq: lookupEq });
+
+  const deleteEq = vi.fn().mockResolvedValue({ error: deleteError });
+  const del = vi.fn().mockReturnValue({ eq: deleteEq });
+
+  const denialInsert = vi.fn().mockResolvedValue({ error: null });
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === "access_denials") return { insert: denialInsert };
+    return { select: lookupSelect, delete: del };
+  });
+
+  return { from, delete: del, deleteEq, denialInsert };
+}
+
+describe("DELETE /api/events/:id/draft", () => {
+  const owner = { id: "ORG-0001", role: "organiser" };
+
+  it("deletes an owned draft (E2-5.2 AC1)", async () => {
+    const { from, delete: del, deleteEq } = buildDraftDeleteSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).delete("/api/events/1/draft");
+
+    expect(res.status).toBe(204);
+    expect(del).toHaveBeenCalled();
+    expect(deleteEq).toHaveBeenCalledWith("id", 1);
+  });
+
+  it("denies a non-owner", async () => {
+    const { from, denialInsert } = buildDraftDeleteSupabase({
+      event: { id: 1, status: "Draft", organiser_id: "someone-else" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).delete("/api/events/1/draft");
+
+    expect(res.status).toBe(403);
+    expect(denialInsert).toHaveBeenCalled();
+  });
+
+  it("refuses to delete a request that's already been submitted", async () => {
+    const { from } = buildDraftDeleteSupabase({
+      event: { id: 1, status: "Requested", organiser_id: owner.id },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).delete("/api/events/1/draft");
+
+    expect(res.status).toBe(409);
+  });
+
+  it("denies access to a non-existent draft", async () => {
+    const { from } = buildDraftDeleteSupabase({ event: null });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).delete("/api/events/999/draft");
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("PATCH /api/events/:id (submitting a draft)", () => {
+  const owner = { id: "ORG-0001", role: "organiser" };
+
+  function buildDraftSubmitSupabase(options: {
+    event: { id: number; status: string; organiser_id: string; submitted_details: Record<string, unknown> };
+    updatedEvent?: Record<string, unknown>;
+  }) {
+    const { event, updatedEvent } = options;
+
+    const lookupMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+    const lookupEq = vi.fn().mockReturnValue({ maybeSingle: lookupMaybeSingle });
+    const eventsSelect = vi.fn().mockReturnValue({ eq: lookupEq });
+
+    const updateSingle = vi.fn().mockResolvedValue({ data: updatedEvent ?? null, error: null });
+    const updateSelect = vi.fn().mockReturnValue({ single: updateSingle });
+    const updateEq = vi.fn().mockReturnValue({ select: updateSelect });
+    const update = vi.fn().mockReturnValue({ eq: updateEq });
+
+    const historyInsert = vi.fn().mockResolvedValue({ error: null });
+
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "event_history") return { insert: historyInsert };
+      return { select: eventsSelect, update };
+    });
+
+    return { from, update };
+  }
+
+  it("still enforces E2-1 validation when submitting a draft (AC3)", async () => {
+    const { from } = buildDraftSubmitSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id, submitted_details: {} },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("moves a valid draft to Unassigned with no coordinator (E2-14)", async () => {
+    const { from, update } = buildDraftSubmitSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id, submitted_details: {} },
+      updatedEvent: { id: 1, status: "Unassigned", coordinator_id: null },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.status).toBe("Unassigned");
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Unassigned", coordinator_id: null }),
+    );
+  });
+
+  it("notifies every Event Coordinator Lead when a draft is submitted (E2-14)", async () => {
+    const { from } = buildDraftSubmitSupabase({
+      event: { id: 1, status: "Draft", organiser_id: owner.id, submitted_details: {} },
+      updatedEvent: { id: 1, status: "Unassigned", coordinator_id: null },
+    });
+    const app = buildApp({ from }, owner);
+
+    await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.submitted",
+        recipients: { userIds: ["ORG-0001"], roles: ["coordinator_lead"] },
+      }),
+    );
+  });
+
+  it("blocks a non-organiser from submitting their own draft (E2-14)", async () => {
+    const attendeeOwner = { id: "ATT-0001", role: "attendee" };
+    const { from, update } = buildDraftSubmitSupabase({
+      event: { id: 1, status: "Draft", organiser_id: attendeeOwner.id, submitted_details: {} },
+    });
+    const app = buildApp({ from }, attendeeOwner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(403);
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/events/:id", () => {
+  const owner = { id: "ORG-0001", role: "organiser" };
+
+  it("requires the caller to be the owning organiser", async () => {
+    const { from } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Clarification Requested",
+        organiser_id: "ORG-0002",
+        submitted_details: {},
+      },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("blocks direct edits once the request has been rejected (AC2)", async () => {
+    const { from } = buildPatchSupabase({
+      event: { id: 1, status: "Rejected", organiser_id: owner.id, submitted_details: {} },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(409);
+  });
+
+  it("allows a direct edit while still in Planning (AGENTS.md: only Confirmed locks it down)", async () => {
+    const oldDetails = { ...validPayload, venue: "Old Hall" };
+    const { from, update, historyInsert } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Planning",
+        organiser_id: owner.id,
+        coordinator_id: coordinator.id,
+        submitted_details: oldDetails,
+      },
+      updatedEvent: { id: 1, status: "Planning" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith({
+      submitted_details: expect.objectContaining({ venue: validPayload.venue }),
+    });
+    expect(historyInsert).toHaveBeenCalled();
+  });
+
+  describe("announcing a reschedule to equipment-service", () => {
+    const rescheduled = () => publish.mock.calls.map((c) => c[0]).filter((m) => m.type === "event.rescheduled");
+
+    it("publishes event.rescheduled, with no recipients, when a Planning edit moves the date or time", async () => {
+      const { from } = buildPatchSupabase({
+        event: { id: 1, status: "Planning", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, owner);
+
+      const res = await request(app).patch("/api/events/1").send({ ...validPayload, proposedDate: "2099-02-02", startTime: "13:00", endTime: "15:00" });
+
+      expect(res.status).toBe(200);
+      expect(rescheduled()).toEqual([
+        expect.objectContaining({
+          type: "event.rescheduled",
+          eventId: 1,
+          recipients: { userIds: [], roles: [] },
+          data: expect.objectContaining({ coordinatorId: coordinator.id, proposedDate: "2099-02-02", startTime: "13:00", endTime: "15:00" }),
+        }),
+      ]);
+    });
+
+    const attendanceMessages = () => publish.mock.calls.map((c) => c[0]).filter((m) => m.type === "event.attendance_changed");
+
+    it("publishes event.attendance_changed, with the new number, when a Planning edit changes the expected attendance", async () => {
+      const { from } = buildPatchSupabase({
+        event: { id: 1, status: "Planning", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, owner);
+
+      const res = await request(app).patch("/api/events/1").send({ ...validPayload, expectedAttendance: 500 });
+
+      expect(res.status).toBe(200);
+      expect(attendanceMessages()).toEqual([
+        expect.objectContaining({
+          eventId: 1,
+          recipients: { userIds: [], roles: [] },
+          data: expect.objectContaining({ coordinatorId: coordinator.id, expectedAttendance: 500 }),
+        }),
+      ]);
+      expect(rescheduled()).toHaveLength(0);
+    });
+
+    it("does not publish it when the attendance is unchanged, or before Planning", async () => {
+      const planning = buildPatchSupabase({
+        event: { id: 1, status: "Planning", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      await request(buildApp({ from: planning.from }, owner)).patch("/api/events/1").send({ ...validPayload, venue: "Another Hall" });
+
+      const requested = buildPatchSupabase({
+        event: { id: 1, status: "Requested", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Requested" },
+      });
+      await request(buildApp({ from: requested.from }, owner)).patch("/api/events/1").send({ ...validPayload, expectedAttendance: 500 });
+
+      expect(attendanceMessages()).toHaveLength(0);
+    });
+
+    it("does not publish it when the edit leaves the date and time alone", async () => {
+      const { from } = buildPatchSupabase({
+        event: { id: 1, status: "Planning", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, owner);
+
+      await request(app).patch("/api/events/1").send({ ...validPayload, venue: "Another Hall" });
+
+      expect(rescheduled()).toHaveLength(0);
+    });
+
+    it("does not publish it before Planning, when nothing can be reserved yet", async () => {
+      const { from } = buildPatchSupabase({
+        event: { id: 1, status: "Requested", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
+        updatedEvent: { id: 1, status: "Requested" },
+      });
+      const app = buildApp({ from }, owner);
+
+      await request(app).patch("/api/events/1").send({ ...validPayload, startTime: "13:00", endTime: "15:00" });
+
+      expect(rescheduled()).toHaveLength(0);
+    });
+  });
+
+  it("validates the payload like a fresh submission", async () => {
+    const { from } = buildPatchSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: owner.id, submitted_details: {} },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("saves the response, clears the flag, and posts the diff as a reply to the open question", async () => {
+    const oldDetails = { ...validPayload, venue: "Old Hall" };
+    const { from, update, clarificationInsert } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Clarification Requested",
+        organiser_id: owner.id,
+        coordinator_id: coordinator.id,
+        submitted_details: oldDetails,
+      },
+      updatedEvent: { id: 1, status: "Requested" },
+      openQuestion: { id: 9 },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.status).toBe("Requested");
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Requested", submitted_details: expect.objectContaining({ venue: "Main Hall" }) }),
+    );
+    expect(clarificationInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_id: 1,
+        parent_id: 9,
+        author_id: owner.id,
+        author_role: "organiser",
+        message: expect.stringContaining("Venue changed from 'Old Hall' to 'Main Hall'"),
+      }),
+    );
+    // #104 row 6: the currently assigned coordinator is notified of the answer.
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "clarification.answered",
+        eventId: 1,
+        recipients: { userIds: [coordinator.id], roles: [] },
+      }),
+    );
+  });
+
+  it("skips posting a reply when nothing actually changed", async () => {
+    const { from, clarificationInsert } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Clarification Requested",
+        organiser_id: owner.id,
+        submitted_details: { ...validPayload, registrationNeeded: false },
+      },
+      updatedEvent: { id: 1, status: "Requested" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(clarificationInsert).not.toHaveBeenCalled();
+  });
+
+  it("posts a new top-level entry when there's no open question to reply to", async () => {
+    const oldDetails = { ...validPayload, venue: "Old Hall" };
+    const { from, clarificationInsert } = buildPatchSupabase({
+      event: { id: 1, status: "Clarification Requested", organiser_id: owner.id, submitted_details: oldDetails },
+      updatedEvent: { id: 1, status: "Requested" },
+      openQuestion: null,
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(clarificationInsert).toHaveBeenCalledWith(expect.objectContaining({ parent_id: null }));
+  });
+
+  it("restores status to Planning when the clarification was a post-approval follow-up", async () => {
+    const { from, update } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Clarification Requested",
+        organiser_id: owner.id,
+        submitted_details: validPayload,
+        status_before_clarification: "Planning",
+      },
+      updatedEvent: { id: 1, status: "Planning" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.event.status).toBe("Planning");
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Planning", status_before_clarification: null }),
+    );
+  });
+
+  it("saves a direct edit from Requested immediately, with no status change or clarification post (E2-7 AC1)", async () => {
+    const oldDetails = { ...validPayload, venue: "Old Hall" };
+    const { from, update, clarificationInsert, historyInsert } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Requested",
+        organiser_id: owner.id,
+        coordinator_id: coordinator.id,
+        submitted_details: oldDetails,
+      },
+      updatedEvent: { id: 1, status: "Requested", submitted_details: validPayload },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith({ submitted_details: expect.objectContaining({ venue: "Main Hall" }) });
+    expect(clarificationInsert).not.toHaveBeenCalled();
+    expect(historyInsert).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_id: 1,
+          field: "Venue",
+          old_value: "Old Hall",
+          new_value: "Main Hall",
+          changed_by: owner.id,
+        }),
+      ]),
+    );
+    // #104 row 2: the assigned coordinator is notified of the edit.
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.edited",
+        eventId: 1,
+        recipients: { userIds: [coordinator.id], roles: [] },
+      }),
+    );
+  });
+
+  it("allows a direct edit from Unassigned too (E2-7 AC1)", async () => {
+    const { from } = buildPatchSupabase({
+      event: { id: 1, status: "Unassigned", organiser_id: owner.id, submitted_details: validPayload },
+      updatedEvent: { id: 1, status: "Unassigned" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    // #104 row 2 / AC4: no coordinator yet, so every Lead is notified instead
+    // — resolved by notification-service, not fetched here via REST.
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "request.edited",
+        eventId: 1,
+        recipients: { userIds: [], roles: ["coordinator_lead"] },
+      }),
+    );
+  });
+
+  it("doesn't write history when a direct edit changes nothing", async () => {
+    const { from, historyInsert } = buildPatchSupabase({
+      event: {
+        id: 1,
+        status: "Requested",
+        organiser_id: owner.id,
+        submitted_details: { ...validPayload, registrationNeeded: false },
+      },
+      updatedEvent: { id: 1, status: "Requested" },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).patch("/api/events/1").send(validPayload);
+
+    expect(res.status).toBe(200);
+    expect(historyInsert).not.toHaveBeenCalled();
+  });
+
+  describe("coordinator edits during Planning (E3-7, issue #32)", () => {
+    const coordinator = { id: "COORD-0001", role: "coordinator" };
+
+    it("lets the assigned coordinator edit a field", async () => {
+      const oldDetails = { ...validPayload, equipment: "Old equipment list" };
+      const { from, update, historyInsert } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: oldDetails,
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(200);
+      expect(update).toHaveBeenCalledWith({
+        submitted_details: expect.objectContaining({ equipment: validPayload.equipment }),
+      });
+      expect(historyInsert).toHaveBeenCalled();
+    });
+
+    it("lets the assigned coordinator edit a formerly-critical field (venue/schedule/capacity)", async () => {
+      const oldDetails = { ...validPayload, venue: "Old Hall" };
+      const { from, update, historyInsert } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: oldDetails,
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(200);
+      expect(update).toHaveBeenCalledWith({
+        submitted_details: expect.objectContaining({ venue: validPayload.venue }),
+      });
+      expect(historyInsert).toHaveBeenCalled();
+    });
+
+    it("blocks a coordinator who isn't the assigned one (AC3)", async () => {
+      const { from, denialInsert } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: "COORD-0002",
+          submitted_details: validPayload,
+        },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(403);
+      expect(denialInsert).toHaveBeenCalled();
+    });
+
+    it("blocks the assigned coordinator outside Planning", async () => {
+      const { from, update } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Confirmed",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: validPayload,
+        },
+      });
+      const app = buildApp({ from }, coordinator);
+
+      const res = await request(app).patch("/api/events/1").send(validPayload);
+
+      expect(res.status).toBe(409);
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it("accepts repeated edits, recording history each time (AC4)", async () => {
+      const first = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: { ...validPayload, equipment: "v1" },
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app1 = buildApp({ from: first.from }, coordinator);
+      const res1 = await request(app1).patch("/api/events/1").send({ ...validPayload, equipment: "v2" });
+      expect(res1.status).toBe(200);
+      expect(first.historyInsert).toHaveBeenCalledTimes(1);
+
+      const second = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Planning",
+          organiser_id: "ORG-0001",
+          coordinator_id: coordinator.id,
+          submitted_details: { ...validPayload, equipment: "v2" },
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app2 = buildApp({ from: second.from }, coordinator);
+      const res2 = await request(app2).patch("/api/events/1").send({ ...validPayload, equipment: "v3" });
+      expect(res2.status).toBe(200);
+      expect(second.historyInsert).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe("GET /api/events/:id/history", () => {
+  const owner = { id: "ORG-0001", role: "organiser" };
+
+  function buildHistorySupabase(options: {
+    event: { id: number; status: string; organiser_id: string; coordinator_id: string | null } | null;
+    history?: unknown[];
+  }) {
+    const { event, history = [] } = options;
+
+    const eventMaybeSingle = vi.fn().mockResolvedValue({ data: event, error: null });
+    const eventEq = vi.fn().mockReturnValue({ maybeSingle: eventMaybeSingle });
+    const eventSelect = vi.fn().mockReturnValue({ eq: eventEq });
+
+    const historyOrder = vi.fn().mockResolvedValue({ data: history, error: null });
+    const historyEq = vi.fn().mockReturnValue({ order: historyOrder });
+    const historySelect = vi.fn().mockReturnValue({ eq: historyEq });
+
+    const denialInsert = vi.fn().mockResolvedValue({ error: null });
+
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "event_history") return { select: historySelect };
+      if (table === "access_denials") return { insert: denialInsert };
+      return { select: eventSelect };
+    });
+
+    return { from };
+  }
+
+  it("returns the history for the owning organiser", async () => {
+    const { from } = buildHistorySupabase({
+      event: { id: 1, status: "Requested", organiser_id: owner.id, coordinator_id: null },
+      history: [{ id: 1, field: "Venue", old_value: "Old Hall", new_value: "Main Hall" }],
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).get("/api/events/1/history");
+
+    expect(res.status).toBe(200);
+    expect(res.body.history).toHaveLength(1);
+  });
+
+  it("denies access to a non-owner, non-coordinator", async () => {
+    const { from } = buildHistorySupabase({
+      event: { id: 1, status: "Requested", organiser_id: "ORG-0002", coordinator_id: null },
+    });
+    const app = buildApp({ from }, owner);
+
+    const res = await request(app).get("/api/events/1/history");
+
+    expect(res.status).toBe(403);
+  });
+
+  it("is visible to any coordinator", async () => {
+    const { from } = buildHistorySupabase({
+      event: { id: 1, status: "Requested", organiser_id: owner.id, coordinator_id: null },
+      history: [],
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).get("/api/events/1/history");
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("GET /api/events/venue-booking-info (E1-5)", () => {
+  const venueStaff = { id: "VEN-0001", role: "venue_staff" };
+
+  /** .from("events").select(...).in("id", ids).neq("status", "Draft") */
+  function buildVenueInfoSupabase(rows: Record<string, unknown>[]) {
+    const neq = vi.fn().mockResolvedValue({ data: rows, error: null });
+    const inFilter = vi.fn().mockReturnValue({ neq });
+    const select = vi.fn().mockReturnValue({ in: inFilter });
+    const denialInsert = vi.fn().mockResolvedValue({ error: null });
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert: denialInsert };
+      return { select };
+    });
+    return { from, select, inFilter, neq, denialInsert };
+  }
+
+  it("returns only the booking-relevant fields to venue staff", async () => {
+    const supabase = buildVenueInfoSupabase([
+      { id: 3, status: "Planning", submitted_details: validPayload, coordinator_id: "COORD-0001" },
+    ]);
+    const app = buildApp(supabase, venueStaff);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toEqual([
+      {
+        id: 3,
+        status: "Planning",
+        coordinatorId: "COORD-0001",
+        name: validPayload.name,
+        proposedDate: validPayload.proposedDate,
+        startTime: validPayload.startTime,
+        endTime: validPayload.endTime,
+        expectedAttendance: validPayload.expectedAttendance,
+        venue: validPayload.venue,
+        accessibility: validPayload.accessibility,
+        equipment: validPayload.equipment,
+        technicalSupport: validPayload.technicalSupport,
+      },
+    ]);
+    const [event] = res.body.events;
+    expect(event).not.toHaveProperty("purpose");
+    expect(event).not.toHaveProperty("description");
+    expect(event).not.toHaveProperty("coordinator");
+    expect(supabase.select).toHaveBeenCalledWith("id, status, submitted_details, coordinator_id");
+  });
+
+  it("E4-10 AC2: carries the lifecycle status, which venue staff cannot read any other way", async () => {
+    // Without this, venue-service reads event.status as undefined and
+    // refuses every hold and approval with "This event is undefined".
+    // It was dropped once already in a merge — hence this test.
+    const supabase = buildVenueInfoSupabase([
+      { id: 3, status: "Planning", submitted_details: validPayload, coordinator_id: "COORD-0001" },
+    ]);
+    const app = buildApp(supabase, venueStaff);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.body.events[0].status).toBe("Planning");
+  });
+
+  it("never returns drafts and de-duplicates the ids", async () => {
+    const supabase = buildVenueInfoSupabase([]);
+    const app = buildApp(supabase, venueStaff);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=4,2,4");
+
+    expect(res.status).toBe(200);
+    expect(supabase.inFilter).toHaveBeenCalledWith("id", [4, 2]);
+    expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
+  });
+
+  it("also serves coordinators, who need booked events' schedules for venue availability", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, coordinator);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0]).toMatchObject({ id: 3, proposedDate: validPayload.proposedDate });
+    expect(res.body.events[0]).not.toHaveProperty("purpose");
+  });
+
+  it("serves a trusted internal caller (venue-service's sweep) with no role check", async () => {
+    const supabase = buildVenueInfoSupabase([
+      { id: 3, status: "Planning", submitted_details: validPayload, coordinator_id: "COORD-0001" },
+    ]);
+    const app = buildApp(supabase);
+    (globalThis as any).__mockInternalCall = true;
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].coordinatorId).toBe("COORD-0001");
+    expect(supabase.denialInsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an organiser", { id: "user-1", role: "organiser" }],
+    ["an attendee", { id: "ATT-0001", role: "attendee" }],
+  ])("rejects %s with 403 and records the attempt", async (_label, user) => {
+    const supabase = buildVenueInfoSupabase([]);
+    const app = buildApp(supabase, user);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=1");
+
+    expect(res.status).toBe(403);
+    expect(supabase.select).not.toHaveBeenCalled();
+    expect(supabase.denialInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: user.id, reason: "venue_booking_info_role_not_allowed" }),
+    );
+  });
+
+  // E5-1: equipment-service reuses this lookup for Technical Support's
+  // equipment request list (event name/date/time + the Organiser's
+  // original equipment note as reference text).
+  it("also serves technical support, who need the event's equipment note and schedule", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, { id: "TS-0001", role: "technical_support" });
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0]).toMatchObject({ id: 3, equipment: validPayload.equipment });
+  });
+
+  it("allows a coordinator too, for resolving booking timing during venue search", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, coordinator);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(1);
+  });
+
+  it("allows a coordinator too, for resolving booking timing during venue search", async () => {
+    const supabase = buildVenueInfoSupabase([{ id: 3, submitted_details: validPayload }]);
+    const app = buildApp(supabase, coordinator);
+
+    const res = await request(app).get("/api/events/venue-booking-info?ids=3");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(1);
+  });
+
+  it.each([
+    ["missing", ""],
+    ["non-numeric", "?ids=abc"],
+    ["zero", "?ids=0"],
+    ["an empty entry", "?ids=1,,2"],
+    ["over the limit", `?ids=${Array.from({ length: 101 }, (_, i) => i + 1).join(",")}`],
+  ])("returns 400 when ids are %s", async (_label, query) => {
+    const supabase = buildVenueInfoSupabase([]);
+    const app = buildApp(supabase, venueStaff);
+
+    const res = await request(app).get(`/api/events/venue-booking-info${query}`);
+
+    expect(res.status).toBe(400);
+    expect(supabase.select).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/events — E3-2 coordinator workload view", () => {
+  it("returns events across all active statuses without any extra status filter", async () => {
+    const multiStatusEvents = [
+      { id: 1, status: "Requested",              organiser: { name: "Alice" }, coordinator: null },
+      { id: 2, status: "Unassigned",             organiser: { name: "Bob" },   coordinator: null },
+      { id: 3, status: "Clarification Requested", organiser: { name: "Carol" }, coordinator: { name: "COORD" } },
+      { id: 4, status: "Planning",               organiser: { name: "Dave" },  coordinator: { name: "COORD" } },
+      { id: 5, status: "Confirmed",              organiser: { name: "Eve" },   coordinator: { name: "COORD" } },
+      { id: 6, status: "Completed",              organiser: { name: "Frank" }, coordinator: { name: "COORD" } },
+      { id: 7, status: "Rejected",               organiser: { name: "Grace" }, coordinator: { name: "COORD" } },
+    ];
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: multiStatusEvents, error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(7);
+    const statuses = res.body.events.map((e: { status: string }) => e.status);
+    expect(statuses).toContain("Unassigned");
+    expect(statuses).toContain("Clarification Requested");
+    expect(statuses).toContain("Planning");
+    expect(statuses).toContain("Confirmed");
+    expect(statuses).toContain("Completed");
+    expect(statuses).toContain("Rejected");
+  });
+
+  it("passes through embedded organiser name for the workload view's 'Requested by' field", async () => {
+    const event = {
+      id: 1,
+      status: "Requested",
+      submitted_details: { name: "Tech Conference" },
+      coordinator_id: "COORD-0001",
+      coordinator: { name: "Alice Coordinator" },
+      organiser: { name: "Bob Organiser" },
+      review_outcome: null,
+      created_at: "2026-01-01",
+    };
+    const neq = vi.fn().mockResolvedValue({ data: [event], error: null });
+    const select = vi.fn().mockReturnValue({ neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].organiser).toEqual({ name: "Bob Organiser" });
+  });
+
+  it("passes through embedded coordinator name for the all-events view", async () => {
+    const event = {
+      id: 2,
+      status: "Planning",
+      submitted_details: {},
+      coordinator_id: "COORD-0001",
+      coordinator: { name: "Alice Coordinator" },
+      organiser: { name: "Bob Organiser" },
+      review_outcome: null,
+      created_at: "2026-01-01",
+    };
+    const neq = vi.fn().mockResolvedValue({ data: [event], error: null });
+    const select = vi.fn().mockReturnValue({ neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].coordinator).toEqual({ name: "Alice Coordinator" });
+  });
+
+  it("includes Unassigned events so coordinators can pick them up from the workload view", async () => {
+    const unassignedEvent = {
+      id: 3,
+      status: "Unassigned",
+      submitted_details: { name: "Hackathon" },
+      coordinator_id: null,
+      coordinator: null,
+      organiser: { name: "Sam Organiser" },
+      review_outcome: null,
+      created_at: "2026-01-01",
+    };
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: [unassignedEvent], error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    const res = await request(app).get("/api/events");
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0].status).toBe("Unassigned");
+    expect(res.body.events[0].coordinator).toBeNull();
+  });
+
+  it("does not filter by coordinator_id — My vs All scoping is handled client-side", async () => {
+    const eq = vi.fn();
+    const neq = vi.fn().mockResolvedValue({ data: [], error: null });
+    const select = vi.fn().mockReturnValue({ eq, neq });
+    const from = vi.fn().mockReturnValue({ select });
+
+    const app = buildApp({ from }, coordinator);
+    await request(app).get("/api/events");
+
+    expect(eq).not.toHaveBeenCalledWith("coordinator_id", expect.anything());
+  });
+});
+
+describe("attendee access (E6)", () => {
+  const attendee = { id: "ATT-0001", role: "attendee" };
+
+  const confirmedDetails = {
+    ...validPayload,
+    description: "Campus tour and icebreakers",
+    proposedDate: "2099-01-01",
+    endTime: "11:00",
+    registrationNeeded: true,
+    purpose: "INTERNAL purpose",
+    equipment: "INTERNAL equipment",
+  };
+
+  /** .from("events").select(...).in("id", ids).neq("status", "Draft") */
+  function buildAttendeeInfoSupabase(rows: Record<string, unknown>[]) {
+    const neq = vi.fn().mockResolvedValue({ data: rows, error: null });
+    const inFilter = vi.fn().mockReturnValue({ neq });
+    const select = vi.fn().mockReturnValue({ in: inFilter });
+    const denialInsert = vi.fn().mockResolvedValue({ error: null });
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table === "access_denials") return { insert: denialInsert };
+      return { select };
+    });
+    return { from, select, inFilter, neq, denialInsert };
+  }
+
+  it("blocks attendees from creating events, drafts and listing events", async () => {
+    const supabase = buildAttendeeInfoSupabase([]);
+    const app = buildApp(supabase, attendee);
+
+    expect((await request(app).post("/api/events").send(validPayload)).status).toBe(403);
+    expect((await request(app).post("/api/events/draft").send({})).status).toBe(403);
+    expect((await request(app).get("/api/events")).status).toBe(403);
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  describe("GET /api/events/attendee-info", () => {
+    it("returns only the whitelisted attendee-facing fields", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        {
+          id: 1,
+          status: "Confirmed",
+          registration_open_date: "2020-01-01",
+          submitted_details: confirmedDetails,
+          organiser: { name: "Pat Organiser", email: "pat@example.com", id: "ORG-0001" },
+        },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1");
+
+      expect(res.status).toBe(200);
+      expect(res.body.events).toEqual([
+        {
+          id: 1,
+          registrationNeeded: true,
+          registrationState: "OPEN",
+          listed: true,
+          open: true,
+          accessibility: validPayload.accessibility,
+          capacity: 50,
+          organiserName: "Pat Organiser",
+          hasStarted: false,
+          name: validPayload.name,
+          description: "Campus tour and icebreakers",
+          proposedDate: "2099-01-01",
+          startTime: validPayload.startTime,
+          endTime: "11:00",
+        },
+      ]);
+      expect(JSON.stringify(res.body)).not.toContain("INTERNAL");
+      // Of the organiser only the display name is returned: never their id or email.
+      expect(JSON.stringify(res.body)).not.toMatch(/pat@example\.com|ORG-0001/);
+      expect(supabase.neq).toHaveBeenCalledWith("status", "Draft");
+    });
+
+    it("marks an event that has already started (E6-4: attendees can withdraw only before this)", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1");
+
+      expect(res.body.events[0].hasStarted).toBe(true);
+    });
+
+    it("returns the organiser's name, tolerating an embedded array and a missing or blank organiser", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails, organiser: [{ name: "  Array Organiser " }] },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails, organiser: null },
+        { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails, organiser: { name: "   " } },
+        { id: 4, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1,2,3,4");
+
+      expect(res.body.events.map((e: { organiserName: string | null }) => e.organiserName)).toEqual([
+        "Array Organiser",
+        null,
+        null,
+        null,
+      ]);
+    });
+
+    it("returns the accessibility note trimmed, and null for blank or NA/None answers", async () => {
+      const withNote = (accessibility: unknown) => ({ ...confirmedDetails, accessibility });
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withNote("  Step-free entry and a hearing loop.  ") },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withNote("   ") },
+        { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withNote("NA") },
+        { id: 4, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withNote("None.") },
+        { id: 5, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withNote(undefined) },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1,2,3,4,5");
+
+      expect(res.body.events.map((e: { accessibility: string | null }) => e.accessibility)).toEqual([
+        "Step-free entry and a hearing loop.",
+        null,
+        null,
+        null,
+        null,
+      ]);
+    });
+
+    it("returns the expected attendance as capacity, and null when it is missing or not a positive whole number", async () => {
+      const withAttendance = (expectedAttendance: unknown) => ({ ...confirmedDetails, expectedAttendance });
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance(120) },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance("80") },
+        { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance(null) },
+        { id: 4, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance(0) },
+        { id: 5, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance(2.5) },
+        { id: 6, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: withAttendance(undefined) },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1,2,3,4,5,6");
+
+      expect(res.body.events.map((e: { capacity: number | null }) => e.capacity)).toEqual([
+        120,
+        80,
+        null,
+        null,
+        null,
+        null,
+      ]);
+    });
+
+    it("marks an event not open unless Confirmed, registration is needed, and it has not ended", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Planning", submitted_details: confirmedDetails },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, registrationNeeded: false } },
+        { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
+        { id: 4, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1,2,3,4");
+
+      expect(res.body.events.map((e: { id: number; open: boolean }) => [e.id, e.open])).toEqual([
+        [1, false],
+        [2, false],
+        [3, false],
+        [4, true],
+      ]);
+    });
+
+    it("refuses every other role and records the denial", async () => {
+      const supabase = buildAttendeeInfoSupabase([]);
+      const app = buildApp(supabase, coordinator);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1");
+
+      expect(res.status).toBe(403);
+      expect(supabase.denialInsert).toHaveBeenCalled();
+    });
+
+    it("rejects missing or malformed ids", async () => {
+      const app = buildApp(buildAttendeeInfoSupabase([]), attendee);
+
+      expect((await request(app).get("/api/events/attendee-info")).status).toBe(400);
+      expect((await request(app).get("/api/events/attendee-info?ids=abc")).status).toBe(400);
+    });
+  });
+
+  describe("GET /api/events/open-for-registration", () => {
+    function buildOpenSupabase(rows: Record<string, unknown>[]) {
+      const eq = vi.fn().mockResolvedValue({ data: rows, error: null });
+      const select = vi.fn().mockReturnValue({ eq });
+      const denialInsert = vi.fn().mockResolvedValue({ error: null });
+      const from = vi.fn().mockImplementation((table: string) =>
+        table === "access_denials" ? { insert: denialInsert } : { select },
+      );
+      return { from, eq };
+    }
+
+    it("includes the accessibility note on open events", async () => {
+      const supabase = buildOpenSupabase([{ id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails }]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.body.events[0].accessibility).toBe(validPayload.accessibility);
+    });
+
+    it("includes the organiser's name, and nothing else about the organiser, on open events", async () => {
+      const supabase = buildOpenSupabase([
+        {
+          id: 1,
+          status: "Confirmed",
+          registration_open_date: "2020-01-01",
+          submitted_details: confirmedDetails,
+          organiser: { name: "Pat Organiser", email: "pat@example.com" },
+        },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.body.events[0].organiserName).toBe("Pat Organiser");
+      expect(JSON.stringify(res.body)).not.toContain("pat@example.com");
+    });
+
+    it("includes the capacity on open events", async () => {
+      const supabase = buildOpenSupabase([{ id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails }]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.body.events[0].capacity).toBe(50);
+    });
+
+    it("lists only open events, with the whitelisted fields", async () => {
+      const supabase = buildOpenSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
+        { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, registrationNeeded: false } },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.status).toBe(200);
+      expect(res.body.events.map((e: { id: number }) => e.id)).toEqual([1]);
+      expect(JSON.stringify(res.body)).not.toContain("INTERNAL");
+      expect(supabase.eq).toHaveBeenCalledWith("status", "Confirmed");
+    });
+
+    it("lists events that haven't been forced closed or ended with their state, including closed ones, but not unopened ones", async () => {
+      const supabase = buildOpenSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails },
+        {
+          id: 2,
+          status: "Confirmed",
+          registration_open_date: "2020-01-01",
+          registration_override: "FORCE_CLOSED",
+          submitted_details: confirmedDetails,
+        },
+        { id: 3, status: "Confirmed", registration_open_date: "2999-01-01", submitted_details: confirmedDetails },
+        { id: 4, status: "Confirmed", submitted_details: confirmedDetails },
+        { id: 5, status: "Confirmed", registration_override: "FORCE_OPEN", submitted_details: confirmedDetails },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.body.events.map((e: { id: number; registrationState: string }) => [e.id, e.registrationState])).toEqual([
+        [1, "OPEN"],
+        [2, "CLOSED"],
+        [5, "OPEN"],
+      ]);
+    });
+
+    it("refuses non-attendees", async () => {
+      const app = buildApp(buildOpenSupabase([]), coordinator);
+
+      expect((await request(app).get("/api/events/open-for-registration")).status).toBe(403);
+    });
+  });
+});

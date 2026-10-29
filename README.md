@@ -144,6 +144,23 @@ cd backend/services/notification-service && npm test
 cd backend/services/registration-service && npm test
 ```
 
+`events-service` (like `user-service` and `chat-service`) also has coverage, real-database integration and mutation testing. Run these from `backend/services/events-service`:
+
+| Command | What it does |
+|---|---|
+| `npm run test:coverage` | `npm test` with v8 coverage; report in `coverage/` (text, html, lcov). Fails below 100% statements, branches, functions and lines (`src/index.ts`, which only boots the server, is excluded and covered by the CI smoke test). |
+| `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. It creates `ZEVT-` throwaway users and events and deletes them in `afterAll` (and sweeps any a crashed run left behind). RabbitMQ is replaced by an in-memory publisher, so only Supabase is needed. |
+| `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Sets `MUTATION_RUN=1`, which leaves out `routeMatrix.test.ts` (the route sweep) so each mutant runs fast. The TypeScript checker drops mutants that could never compile. A full run takes about 20 minutes; add `-- --mutate 'src/lib/**/*.ts'` for a quicker run on the pure modules, or `--mutate 'src/routes/events.ts:100-200'` for a line range. Run only one Stryker at a time per folder, or give a second run its own `--tempDirName`. Mutants that cannot change behaviour are marked `// Stryker disable next-line <Mutator>: <why>` in the source. |
+
+### How the tests stay deterministic
+
+`events-service` follows these rules, so a test never depends on when or where it runs:
+
+- **Time is injected.** Code reads the current time from `lib/clock.ts` (`clock.now()`), never `new Date()` / `Date.now()`. Every test starts with the clock pinned (`src/__tests__/setup.ts`); a test that needs another instant calls `setClockForTest("2026-11-10T10:00:00Z")`. JWT issue and expiry follow the same clock, so sign test tokens with the helper in `src/__tests__/tokens.ts` (events-service).
+- **No sockets.** `supertest` is aliased to an in-process stand-in (`src/__tests__/supertestInProcess.ts`, built on `light-my-request`), so requests go straight to the Express app: no ports, no connection reuse, nothing another app on the machine can collide with.
+- **No retries.** `retry: 0`: a test that passes only on a second attempt is a flaky test and should fail where it is seen.
+- **Any zone, any order.** Tests run in `America/Los_Angeles` by default; set `TEST_TZ=Asia/Singapore` (or any zone) to try another, and `npx vitest run --sequence.shuffle --sequence.seed=<n>` to shuffle the order. Fixtures that a route mutates must be copied per test.
+
 ## CI
 
 Every pull request and every push to `main` runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml): secret scan, lint, type-check, tests, frontend build and the smoke test above. See [CI.md](CI.md) for what each job does, how to run the same checks locally, and the decisions behind it.

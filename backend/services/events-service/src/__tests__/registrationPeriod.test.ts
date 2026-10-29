@@ -1,10 +1,11 @@
 import express from "express";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
 import { eventStartsAt } from "../lib/eventTiming.js";
 import { getRegistrationState, isListed } from "../lib/registrationPeriod.js";
+import { setClockForTest } from "../lib/clock.js";
 
 vi.mock("../middleware/auth.js", async () => {
   const applyMock = (req: AuthedRequest, _res: unknown, next: () => void) => {
@@ -161,11 +162,7 @@ function buildApp(
 }
 
 describe("registration period routes", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-10-18T00:00:00Z"));
-  });
-  afterEach(() => vi.useRealTimers());
+  beforeEach(() => setClockForTest("2026-10-18T00:00:00Z"));
 
   it("PUT saves the open date for the assigned coordinator and records history", async () => {
     const { app, update, historyInsert } = buildApp();
@@ -228,7 +225,7 @@ describe("registration period routes", () => {
     const planning = buildApp({ event: { id: 7, status: "Planning", coordinator_id: coordinator.id } });
     expect((await request(planning.app).post("/api/events/7/registration/open").send({})).status).toBe(409);
 
-    vi.setSystemTime(new Date("2026-11-21T00:00:00Z"));
+    setClockForTest("2026-11-21T00:00:00Z");
     const ended = buildApp();
     expect((await request(ended.app).post("/api/events/7/registration/open").send({})).status).toBe(409);
   });
