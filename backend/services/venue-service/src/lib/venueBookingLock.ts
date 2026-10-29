@@ -22,12 +22,14 @@ type Supabase = {
 const STALE_MS = 30_000;
 const RETRY_ATTEMPTS = 8;
 const RETRY_DELAY_MS = 150;
+/** Postgres unique_violation: the venue's lock row already exists. */
+const DUPLICATE_KEY = "23505";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function tryAcquire(supabase: Supabase, venueId: number): Promise<boolean> {
+async function tryAcquire(supabase: Supabase, venueId: number, lockedAt: string): Promise<boolean> {
   // Clear a lock left behind by a process that crashed mid-decision. Two
   // processes racing this step is harmless: a delete that finds nothing
   // is a no-op, and the insert below is what actually decides the winner.
@@ -38,13 +40,21 @@ async function tryAcquire(supabase: Supabase, venueId: number): Promise<boolean>
     .lt("locked_at", new Date(Date.now() - STALE_MS).toISOString());
 
   // Postgres rejects a second row with the same primary key; that failure
-  // is "someone else holds this venue's lock", not a real error.
-  const { error } = await supabase.from("venue_booking_locks").insert({ venue_id: venueId });
-  return !error;
+  // is "someone else holds this venue's lock". Any other failure (database
+  // down, table missing) is a real error and must not look like contention.
+  const { error } = await supabase.from("venue_booking_locks").insert({ venue_id: venueId, locked_at: lockedAt });
+  if (!error) return true;
+  if (error.code === DUPLICATE_KEY) return false;
+  throw new Error(`Could not take the lock for venue ${venueId}: ${error.message}`);
 }
 
-async function release(supabase: Supabase, venueId: number): Promise<void> {
-  await supabase.from("venue_booking_locks").delete().eq("venue_id", venueId);
+/**
+ * Deletes only the row this call inserted. `lockedAt` is the timestamp it
+ * stamped on that row, so a lock that went stale and was reclaimed by
+ * another process is left alone instead of being released out from under it.
+ */
+async function release(supabase: Supabase, venueId: number, lockedAt: string): Promise<void> {
+  await supabase.from("venue_booking_locks").delete().eq("venue_id", venueId).eq("locked_at", lockedAt);
 }
 
 export interface LockBusy {
@@ -64,11 +74,12 @@ export async function withVenueBookingLock<T>(
   task: () => Promise<T>,
 ): Promise<T | LockBusy> {
   for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
-    if (await tryAcquire(supabase, venueId)) {
+    const lockedAt = new Date().toISOString();
+    if (await tryAcquire(supabase, venueId, lockedAt)) {
       try {
         return await task();
       } finally {
-        await release(supabase, venueId);
+        await release(supabase, venueId, lockedAt);
       }
     }
     if (attempt < RETRY_ATTEMPTS - 1) await delay(RETRY_DELAY_MS);

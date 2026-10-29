@@ -52,6 +52,25 @@ export interface CreatePeriodResult {
   notificationsFailed: boolean;
 }
 
+/** The notice shown once a block-out is saved: what it cut across and whether the coordinators were told. */
+export function describeBlockOutResult(
+  result: CreatePeriodResult,
+  verb: string,
+): { text: string; warning: boolean } {
+  if (result.affected.length === 0) {
+    return { text: `${verb} It shows as unavailable on the calendar.`, warning: false };
+  }
+  const flagged = result.affected.filter((b) => b.replacementRequired).length;
+  const pending = result.affected.length - flagged;
+  const parts = [];
+  if (flagged > 0) parts.push(`${flagged} booking${flagged === 1 ? "" : "s"} cancelled`);
+  if (pending > 0) parts.push(`${pending} pending request${pending === 1 ? "" : "s"} clash with it`);
+  const notified = result.notificationsFailed
+    ? "but we couldn't notify the coordinators — please let them know directly."
+    : `${result.coordinatorsNotified} coordinator${result.coordinatorsNotified === 1 ? "" : "s"} notified.`;
+  return { text: `${verb} ${parts.join("; ")}; ${notified}`, warning: result.notificationsFailed };
+}
+
 export class PeriodError extends Error {
   fields: Record<string, string>;
   constructor(message: string, fields: Record<string, string> = {}) {

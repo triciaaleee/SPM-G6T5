@@ -1,25 +1,26 @@
 import { createRouter, createWebHistory } from "vue-router";
-import EventsListView from "../views/EventsListView.vue";
-import AttendeeEventsView from "../views/AttendeeHomeView.vue";
-import AttendeeDiscoverView from "../views/AttendeeDiscoverView.vue";
-import AttendeeEventDetailView from "../views/AttendeeEventDetailView.vue";
-import EventDetailView from "../views/EventDetailView.vue";
-import NewEventRequestView from "../views/NewEventRequestView.vue";
-import LoginView from "../views/LoginView.vue";
-import SignupView from "../views/SignupView.vue";
-import VenueSearchView from "../views/VenueSearchView.vue";
-import VenueAvailabilityView from "../views/VenueAvailabilityView.vue";
-import VenueStaff from "../views/VenueStaff.vue";
-import CoordinatorWorkloadView from "../views/CoordinatorWorkloadView.vue";
-import TechnicalSupportView from "../views/TechnicalSupportView.vue";
-import EquipmentRequestDetailView from "../views/EquipmentRequestDetailView.vue";
-import EquipmentInventoryView from "../views/EquipmentInventoryView.vue";
-import EquipmentMaintenanceView from "../views/EquipmentMaintenanceView.vue";
-import LeadDashboardView from "../views/LeadDashboardView.vue";
-import LeadUnassignedQueueView from "../views/LeadUnassignedQueueView.vue";
-import LeadCoordinatorView from "../views/LeadCoordinatorView.vue";
-import SafetyReviewQueueView from "../views/SafetyReviewQueueView.vue";
-import NotificationsView from "../views/NotificationsView.vue";
+import EventsListView from "../views/events/EventsListView.vue";
+import AttendeeEventsView from "../views/attendee/AttendeeHomeView.vue";
+import AttendeeDiscoverView from "../views/attendee/AttendeeDiscoverView.vue";
+import AttendeeEventDetailView from "../views/attendee/AttendeeEventDetailView.vue";
+import EventDetailView from "../views/events/EventDetailView.vue";
+import NewEventRequestView from "../views/events/NewEventRequestView.vue";
+import LoginView from "../views/auth/LoginView.vue";
+import SignupView from "../views/auth/SignupView.vue";
+import VenueSearchView from "../views/coordinator/VenueSearchView.vue";
+import VenueAvailabilityView from "../views/coordinator/VenueAvailabilityView.vue";
+import VenueStaff from "../views/venue-staff/VenueStaff.vue";
+import VenueCatalogueView from "../views/venue-staff/VenueCatalogueView.vue";
+import CoordinatorWorkloadView from "../views/coordinator/CoordinatorWorkloadView.vue";
+import TechnicalSupportView from "../views/equipment/TechnicalSupportView.vue";
+import EquipmentRequestDetailView from "../views/equipment/EquipmentRequestDetailView.vue";
+import EquipmentInventoryView from "../views/equipment/EquipmentInventoryView.vue";
+import EquipmentMaintenanceView from "../views/equipment/EquipmentMaintenanceView.vue";
+import LeadDashboardView from "../views/lead/LeadDashboardView.vue";
+import LeadUnassignedQueueView from "../views/lead/LeadUnassignedQueueView.vue";
+import LeadCoordinatorView from "../views/lead/LeadCoordinatorView.vue";
+import SafetyReviewQueueView from "../views/safety/SafetyReviewQueueView.vue";
+import NotificationsView from "../views/notifications/NotificationsView.vue";
 import LandingView from "../views/public/LandingView.vue";
 import PublicEventsView from "../views/public/PublicEventsView.vue";
 import PublicEventDetailView from "../views/public/PublicEventDetailView.vue";
@@ -130,6 +131,13 @@ export const router = createRouter({
       path: "/venue-schedule",
       name: "venue-schedule",
       component: VenueStaff,
+      meta: { requiresAuth: true, roles: ["venue_staff"] },
+    },
+    {
+      // E4-1: venue staff's catalogue of the venues they look after, and where a new one is added.
+      path: "/venue-catalogue",
+      name: "venue-catalogue",
+      component: VenueCatalogueView,
       meta: { requiresAuth: true, roles: ["venue_staff"] },
     },
     {

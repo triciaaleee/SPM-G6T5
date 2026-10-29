@@ -144,6 +144,17 @@ cd backend/services/notification-service && npm test
 cd backend/services/registration-service && npm test
 ```
 
+`user-service` and `venue-service` also have coverage, real-database integration tests and (venue-service) mutation testing:
+
+```bash
+cd backend/services/venue-service
+npm run test:coverage      # unit tests + v8 coverage report (text, coverage/index.html, lcov)
+npm run test:integration   # hits the real (shared dev) Supabase project; never part of `npm test`
+npm run test:mutation      # Stryker: mutates src/ and checks the unit tests notice (slow; report in reports/mutation/)
+```
+
+The integration tests seed throwaway rows under a `ZINT-` prefix and delete them in `afterAll`, so they are safe to run against the dev database. They need `backend/.env` to be filled in.
+
 ## CI
 
 Every pull request and every push to `main` runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml): secret scan, lint, type-check, tests, frontend build and the smoke test above. See [CI.md](CI.md) for what each job does, how to run the same checks locally, and the decisions behind it.

@@ -1,4 +1,4 @@
-import type { VenueBooking } from "./venuesApi";
+import type { AvailabilityBooking, VenueBooking } from "./venuesApi";
 import type { UnavailabilityPeriod } from "./unavailabilityApi";
 
 /**
@@ -9,7 +9,7 @@ import type { UnavailabilityPeriod } from "./unavailabilityApi";
 
 export type CalendarView = "day" | "week" | "month";
 
-/** Venues viewable at once; the view's dropdown enforces it. */
+/** Venues the calendar draws at once in day and week view (month draws every venue). */
 export const MAX_VENUES = 4;
 
 /** Booking statuses that appear on the calendar (live ones only). */
@@ -115,6 +115,31 @@ export function bookingEntries(venueId: number, bookings: VenueBooking[]): Calen
         allDay: !timed,
       } satisfies CalendarEntry;
     });
+}
+
+/**
+ * A coordinator's view of a venue: only the bookings that block it (Approved, On Hold), at the event's
+ * own times. No attendance — a coordinator isn't shown another event's plan.
+ */
+export function availabilityEntries(venueId: number, bookings: AvailabilityBooking[]): CalendarEntry[] {
+  return bookings.map((b) => {
+    const startMin = toMinutes(b.startTime);
+    const endMin = toMinutes(b.endTime);
+    const timed = startMin !== null && endMin !== null && endMin > startMin;
+    return {
+      id: `booking-${b.id}`,
+      kind: "booking",
+      venueId,
+      date: b.date,
+      startMin: timed ? startMin : null,
+      endMin: timed ? endMin : null,
+      title: b.event.name || "Untitled event",
+      status: b.status,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      allDay: !timed,
+    } satisfies CalendarEntry;
+  });
 }
 
 /** One entry per day a block-out covers inside [from, to]. */

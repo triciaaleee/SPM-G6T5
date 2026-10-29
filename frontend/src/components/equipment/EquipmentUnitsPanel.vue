@@ -20,6 +20,7 @@
 import { ChevronDownIcon, ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
 import AppButton from "../ui/AppButton.vue";
 import DataTable from "../ui/DataTable.vue";
+import PaginationBar from "../ui/PaginationBar.vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import {
   EquipmentRequestError,
@@ -59,6 +60,15 @@ function todayLocal(): string {
   return new Date().toLocaleDateString("en-CA");
 }
 
+// Client-side paging over the equipment types; the per-type unit lists inside a row are not paged.
+const PAGE_SIZE = 20;
+const page = ref(1);
+const unitsRoot = ref<HTMLElement | null>(null);
+function changePage(next: number) {
+  page.value = next;
+  unitsRoot.value?.scrollIntoView?.({ block: "start" });
+}
+
 /** Types with units currently out of use sort first, so what needs attention is seen first. */
 const groups = computed(() => {
   const byType = new Map<string, EquipmentUnit[]>();
@@ -67,6 +77,9 @@ const groups = computed(() => {
     .map(([type, list]) => ({ type, units: list }))
     .sort((a, b) => unusableCount(b.units) - unusableCount(a.units) || a.type.localeCompare(b.type));
 });
+
+const currentPage = computed(() => Math.min(page.value, Math.max(1, Math.ceil(groups.value.length / PAGE_SIZE))));
+const pagedGroups = computed(() => groups.value.slice((currentPage.value - 1) * PAGE_SIZE, currentPage.value * PAGE_SIZE));
 
 function isRunning(period: UnitUnavailabilityPeriod): boolean {
   const today = todayLocal();
@@ -430,7 +443,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="units" aria-labelledby="units-title">
+  <section ref="unitsRoot" class="units" aria-labelledby="units-title">
 
     <p v-if="notice" class="body-small notice" :class="{ 'notice--warning': notice.warning }" role="status" data-testid="units-notice">
       {{ notice.text }}
@@ -445,7 +458,7 @@ onMounted(async () => {
       :columns="TYPE_COLUMNS"
       :column-widths="TYPE_COLUMN_WIDTHS"
       column-gap="var(--spacing-24)"
-      :rows="groups"
+      :rows="pagedGroups"
       :row-key="(group) => group.type"
       :row-test-id="(group) => `type-${group.type}`"
       :row-detail="(group) => (hasOutOfUse(group.type) && outOpen.has(group.type)) || markingType === group.type || open.has(group.type)"
@@ -713,6 +726,9 @@ onMounted(async () => {
         </div>
       </template>
     </DataTable>
+
+    <PaginationBar v-if="groups.length > 0" :page="currentPage" :page-size="PAGE_SIZE" :total="groups.length"
+      @update:page="changePage" />
   </section>
 </template>
 

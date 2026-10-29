@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  availabilityEntries,
   blockEntries,
   bookingEntries,
   layoutLanes,
@@ -7,7 +8,7 @@ import {
   startOfWeek,
   visibleRange,
 } from "../venueCalendar";
-import type { VenueBooking } from "../venuesApi";
+import type { AvailabilityBooking, VenueBooking } from "../venuesApi";
 import type { UnavailabilityPeriod } from "../unavailabilityApi";
 
 function booking(id: number, status: VenueBooking["status"], start: string | null, end: string | null): VenueBooking {
@@ -78,6 +79,56 @@ describe("bookingEntries", () => {
   it("converts times to minutes", () => {
     const [entry] = bookingEntries(1, [booking(1, "Approved", "09:30", "11:00")]);
     expect([entry.startMin, entry.endMin]).toEqual([570, 660]);
+  });
+});
+
+describe("availabilityEntries", () => {
+  const blocking = (
+    id: number,
+    status: AvailabilityBooking["status"],
+    startTime: string | null,
+    endTime: string | null,
+    name: string | null = "Gala Dinner",
+  ): AvailabilityBooking => ({
+    id,
+    status,
+    date: "2026-10-10",
+    startTime,
+    endTime,
+    occupiedStart: "09:30",
+    occupiedEnd: "12:45",
+    holdExpiresAt: null,
+    event: { id: 11, name },
+  });
+
+  it("draws Approved and On Hold bookings at the event's own times, with no attendance", () => {
+    const [approved, hold] = availabilityEntries(7, [
+      blocking(1, "Approved", "10:00", "12:00"),
+      blocking(2, "On Hold", "14:00", "16:00"),
+    ]);
+
+    expect(approved).toMatchObject({
+      id: "booking-1",
+      kind: "booking",
+      venueId: 7,
+      status: "Approved",
+      startMin: 600,
+      endMin: 720,
+      allDay: false,
+      title: "Gala Dinner",
+    });
+    expect(approved.attendance).toBeUndefined();
+    expect(hold.status).toBe("On Hold");
+  });
+
+  it("treats a booking with no usable times as all day", () => {
+    const [none, backwards] = availabilityEntries(7, [
+      blocking(1, "Approved", null, null, null),
+      blocking(2, "Approved", "12:00", "10:00"),
+    ]);
+
+    expect(none).toMatchObject({ startMin: null, endMin: null, allDay: true, title: "Untitled event" });
+    expect(backwards.allDay).toBe(true);
   });
 });
 

@@ -138,6 +138,12 @@ requestsRouter.get("/", async (req: AuthedRequest, res) => {
     query = query.eq("organiser_id", user.id);
   } else {
     query = query.neq("status", "Draft");
+    // "My events": a coordinator asks for only what is assigned to them, instead of downloading
+    // everyone's and filtering in the browser. Only the value "me", only for a coordinator; the
+    // default call (All events, the Lead) is unchanged.
+    if (user.role === "coordinator" && req.query.assignedTo === "me") {
+      query = query.eq("coordinator_id", user.id);
+    }
   }
 
   const { data, error } = await query;

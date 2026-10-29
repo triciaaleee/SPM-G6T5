@@ -1,7 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SafetyChangesCard from "../SafetyChangesCard.vue";
-import SafetyReviewQueueView from "../../views/SafetyReviewQueueView.vue";
+import SafetyReviewQueueView from "../../views/safety/SafetyReviewQueueView.vue";
 import type { SafetyChangeRequest, SafetyReviewQueueItem } from "../../lib/eventsApi";
 
 /** E3-14: the Safety Officer requests changes; the coordinator sees what's flagged. */
