@@ -216,10 +216,10 @@ async function handleLogout() {
   display: flex;
   align-items: center;
   min-height: 44px;
-  color: var(--color-grey-500);
-  font-size: 16px;
+  color: var(--color-grey-600);
+  font-size: 1rem;
   font-weight: 400;
-  line-height: 1.125rem;
+  line-height: 1.25rem;
   text-decoration: none;
   text-transform: capitalize;
 }
@@ -270,13 +270,15 @@ async function handleLogout() {
 
 .account-name {
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
 
 .account-role {
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
 }
 
 /* Hidden on mobile so a long name and the Log out button don't collide. */
@@ -288,6 +290,7 @@ async function handleLogout() {
 
 .role-pill {
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
   border: 1px solid transparent;
   border-radius: var(--radius-full);
@@ -333,7 +336,7 @@ async function handleLogout() {
 
 .avatar {
   flex-shrink: 0;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--color-purple-200);
   color: var(--color-purple-600);
   font-weight: 700;
@@ -346,12 +349,14 @@ async function handleLogout() {
   width: 28px;
   height: 28px;
   font-size: 0.75rem;
+  line-height: 1rem;
 }
 
 .avatar--lg {
   width: 40px;
   height: 40px;
   font-size: 1rem;
+  line-height: 1.25rem;
 }
 
 .account-menu {
@@ -381,7 +386,7 @@ async function handleLogout() {
 .account-chevron {
   width: 16px;
   height: 16px;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   transition: transform 0.15s ease;
 }
 
@@ -419,6 +424,7 @@ async function handleLogout() {
 .account-popover__name {
   margin: 0;
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
@@ -440,6 +446,7 @@ async function handleLogout() {
   border-radius: var(--radius-xs);
   font-family: var(--font-family-lato);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-700);
   cursor: pointer;
@@ -458,6 +465,6 @@ async function handleLogout() {
 .account-popover__logout-icon {
   width: 20px;
   height: 20px;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 </style>

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import AppPanel from "../../components/ui/AppPanel.vue";
+import BackLink from "../../components/ui/BackLink.vue";
+import StatusBadge from "../../components/ui/StatusBadge.vue";
 /**
  * E5-1 AC1/AC2: Technical Support open one event's equipment requests. They
  * see the requested equipment, quantities and the organiser's technical
@@ -52,7 +55,7 @@ const EDIT_COLUMNS = [
 ];
 /** Shared by both states, so a row's columns line up whether or not it's expanded (sized for the edit
  * state's wider "Arranging now" cell — the stepper, "of N" and "Arrange all"). */
-const COLUMN_WIDTHS = "1fr 6rem 8rem 22rem 11rem";
+const COLUMN_WIDTHS = "minmax(12rem, 1fr) 6rem 8rem 22rem 11rem";
 
 /** Collapsed/read-only: what was actually arranged, nothing editable. */
 const VIEW_COLUMNS = [
@@ -436,18 +439,15 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="back">
-      <button type="button" class="back-link" @click="goBack">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
-        Back
-      </button>
+      <BackLink @click="goBack">Back</BackLink>
     </div>
 
     <p v-if="loading" class="full body-default muted">Loading equipment request…</p>
 
-    <section v-else-if="accessDenied" class="full denied" role="alert">
-      <h1 class="h3">You don't have access to this event</h1>
+    <AppPanel as="section" size="md" class="full denied" v-else-if="accessDenied" role="alert">
+      <h1 class="h6">You don't have access to this event</h1>
       <p class="body-default muted">No equipment has been requested for it.</p>
-    </section>
+    </AppPanel>
 
     <p v-else-if="errorMessage || !view" class="full body-default error-text" role="alert">
       {{ errorMessage ?? "We couldn't load this equipment request. Please try again." }}
@@ -513,7 +513,7 @@ onMounted(async () => {
         </div>
 
         <ul class="request-list">
-          <li v-for="r in activeRequests" :key="r.id" class="request-card">
+          <AppPanel as="li" size="md" class="request-card" v-for="r in activeRequests" :key="r.id">
             <div class="request-card__header">
               <div class="request-card__heading">
                 <h3 class="h5">Request {{ requestNumber(r) }}</h3>
@@ -536,7 +536,7 @@ onMounted(async () => {
               <DataTable
                 :columns="editFor(r).expanded ? EDIT_COLUMNS : VIEW_COLUMNS"
                 :column-widths="COLUMN_WIDTHS"
-                column-gap="120px"
+                column-gap="var(--spacing-24)"
                 :rows="r.items"
                 :row-key="(item) => item.id"
                 :row-class="(item) => ({ 'item-row': true, 'item-row--danger': editFor(r).expanded && chosenQuantity(r, item) > 0 && itemShortfall(item) > 0 })"
@@ -668,7 +668,7 @@ onMounted(async () => {
               </template>
 
               <template #cell-status="{ row: item }">
-                <span class="badge" :class="itemStatusClass(r, item)" data-testid="item-status">{{ itemStatusLabel(r, item) }}</span>
+                <StatusBadge :status-class="itemStatusClass(r, item)" data-testid="item-status">{{ itemStatusLabel(r, item) }}</StatusBadge>
               </template>
             </DataTable>
             </div>
@@ -716,16 +716,16 @@ onMounted(async () => {
                 {{ editFor(r).notice?.text }}
               </p>
             </div>
-          </li>
+          </AppPanel>
         </ul>
 
         <div v-if="cancelledRequests.length > 0" class="cancelled-section">
-          <button type="button" class="cancelled-toggle" :aria-expanded="showCancelled" aria-controls="cancelled-requests"
-            data-testid="cancelled-toggle" @click="showCancelled = !showCancelled">
+          <AppButton variant="link" class="cancelled-toggle" :aria-expanded="showCancelled" aria-controls="cancelled-requests"
+      data-testid="cancelled-toggle" @click="showCancelled = !showCancelled">
             <ChevronDownIcon class="cancelled-toggle__icon" :class="{ 'cancelled-toggle__icon--open': showCancelled }"
               aria-hidden="true" />
             Cancelled requests ({{ cancelledRequests.length }})
-          </button>
+          </AppButton>
 
           <ul v-if="showCancelled" id="cancelled-requests" class="cancelled-list" data-testid="cancelled-list">
             <li v-for="r in cancelledRequests" :key="r.id" class="cancelled-row">
@@ -807,90 +807,38 @@ onMounted(async () => {
   }
 }
 
-.back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  min-height: 44px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--color-purple-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.back-link:hover {
-  text-decoration: underline;
-}
-
-.back-link:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
-.h3 {
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.75rem;
-  color: var(--color-grey-900);
+.h6 {
   margin: 0 0 var(--spacing-8);
 }
 
 .h4 {
-  font-size: 1.75rem;
-  font-weight: 700;
-  line-height: 2.25rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 /* Style.md Composite Text Styles — H5: section divider title. */
 .h5 {
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 2rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
   margin: 0;
   color: var(--color-grey-700);
 }
 
 .body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
   margin: 0;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
   color: var(--color-error-600);
-}
-
-.denied {
-  padding: var(--spacing-40) var(--spacing-24);
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
 }
 
 /* "When and where": a flat strip between two rules, matching AttendeeEventDetailView's pattern. */
@@ -987,10 +935,6 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-16);
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-24);
 }
 
 .requests-empty {
@@ -1013,20 +957,6 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-16);
-}
-
-.cancelled-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  padding: 0;
-  border: none;
-  background: none;
-  font-family: inherit;
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-purple-600);
-  cursor: pointer;
 }
 
 .cancelled-toggle__icon {
@@ -1086,6 +1016,7 @@ onMounted(async () => {
   background: var(--color-grey-100);
   color: var(--color-grey-700);
   font-size: 0.875rem;
+  line-height: 1.125rem;
 }
 
 .cancelled-pill__icon {
@@ -1137,12 +1068,13 @@ onMounted(async () => {
 .item-name {
   display: block;
   font-size: 1.125rem;
-  line-height: 1.5rem;
+  line-height: 1.375rem;
   color: var(--color-grey-900);
 }
 
 .item-qty {
   font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-600);
 }
 
@@ -1156,7 +1088,7 @@ onMounted(async () => {
   padding: 0;
   border: none;
   background: none;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   cursor: pointer;
 }
 
@@ -1182,8 +1114,9 @@ onMounted(async () => {
 
 .unit-panel__label {
   font-size: 0.6875rem;
+  line-height: 0.875rem;
   font-weight: 700;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1202,6 +1135,7 @@ onMounted(async () => {
   padding: 0 var(--spacing-12);
   border-radius: var(--radius-xs);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
 }
 
@@ -1230,6 +1164,7 @@ onMounted(async () => {
 
 .item-available__count {
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
@@ -1240,7 +1175,8 @@ onMounted(async () => {
 
 .item-available__today {
   font-size: 0.6875rem;
-  color: var(--color-grey-500);
+  line-height: 0.875rem;
+  color: var(--color-grey-600);
 }
 
 /* The grey strip under the table that holds the actions (and what is outstanding). */
@@ -1248,32 +1184,6 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-12);
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  height: var(--spacing-24);
-  padding: 0 var(--spacing-12);
-  border-radius: var(--radius-full);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-}
-
-.status-open {
-  background: var(--color-blue-200);
-  color: var(--color-blue-800);
-}
-
-.status-success {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: var(--color-warning-100);
-  color: var(--color-warning-900);
 }
 
 /* A shortfall is caught here, before Save — the error set's role, same tokens as .unit-tag--short. */
@@ -1336,6 +1246,7 @@ onMounted(async () => {
   border-radius: var(--radius-xs);
   color: var(--color-error-600);
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
 }
 
@@ -1406,6 +1317,7 @@ onMounted(async () => {
   border-left: 1px solid var(--color-grey-200);
   border-right: 1px solid var(--color-grey-200);
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
@@ -1413,6 +1325,7 @@ onMounted(async () => {
 .qty-stepper__warning {
   margin: 0;
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-error-600);
 }
@@ -1434,6 +1347,7 @@ onMounted(async () => {
 .reserve-panel__title {
   margin: 0;
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }

@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import IconButton from "../ui/IconButton.vue";
 import AppButton from "../ui/AppButton.vue";
+import AppModal from "../ui/AppModal.vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ExclamationTriangleIcon, XMarkIcon } from "@heroicons/vue/20/solid";
 import {
@@ -244,15 +246,12 @@ onBeforeUnmount(() => {
     Nested grid: the form uses a local 2-col grid — the date pair and the time pair span 1 col each;
     every other field spans both.
   -->
-  <div class="overlay" @click.self="!saving && emit('close')">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="block-out-title">
+  <AppModal size="lg" :padded="false" :dismissible="!saving" labelled-by="block-out-title" @close="emit('close')">
       <header class="panel__header">
         <div>
-          <h2 id="block-out-title" class="h6">{{ editing ? "Edit block-out" : "Block out time" }}</h2>
+          <h2 id="block-out-title" class="h5">{{ editing ? "Edit block-out" : "Block out time" }}</h2>
         </div>
-        <button type="button" class="icon-button" aria-label="Close" :disabled="saving" @click="emit('close')">
-          <XMarkIcon class="icon-button__icon" aria-hidden="true" />
-        </button>
+        <IconButton label="Close" size="md" :disabled="saving" @click="emit('close')"><XMarkIcon aria-hidden="true" /></IconButton>
       </header>
 
       <form class="form" novalidate @submit.prevent="submit">
@@ -364,35 +363,10 @@ onBeforeUnmount(() => {
           <AppButton variant="primary" type="submit" :disabled="saving">{{ submitLabel }}</AppButton>
         </div>
       </form>
-    </div>
-  </div>
+  </AppModal>
 </template>
 
 <style scoped>
-.overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-24);
-  box-sizing: border-box;
-  background: var(--color-grey-alpha-40-dark);
-}
-
-.modal {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  max-width: 800px;
-  max-height: 100%;
-  overflow-y: auto;
-  background: var(--color-base-white);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-popover);
-}
-
 .panel__header {
   display: flex;
   align-items: flex-start;
@@ -406,51 +380,20 @@ onBeforeUnmount(() => {
   margin: var(--spacing-4) 0 0;
 }
 
-.h6 {
+.h5 {
   margin: 0;
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 2rem;
-  color: var(--color-grey-900);
 }
 
 .body-small {
   margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.125rem;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
   color: var(--color-error-600);
-}
-
-.icon-button {
-  display: inline-flex;
-  padding: var(--spacing-4);
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-grey-500);
-  cursor: pointer;
-}
-
-.icon-button:hover:not(:disabled) {
-  background: var(--color-grey-75);
-  color: var(--color-grey-800);
-}
-
-.icon-button:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.icon-button__icon {
-  width: var(--spacing-24);
-  height: var(--spacing-24);
 }
 
 /* Local 2-col grid (see column mapping). */
@@ -484,7 +427,7 @@ onBeforeUnmount(() => {
   display: block;
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .hours-hint {
@@ -500,27 +443,12 @@ onBeforeUnmount(() => {
 .input {
   height: 40px;
   padding: 0 var(--spacing-12);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  background: var(--color-base-white);
-  color: var(--color-grey-900);
-  font-family: var(--font-family-lato);
   font-size: 0.875rem;
   line-height: 1.125rem;
 }
 
 .input::placeholder {
   color: var(--color-grey-300);
-}
-
-.input:focus {
-  outline: none;
-  border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--ring-light);
-}
-
-.input[aria-invalid="true"] {
-  border-color: var(--color-error-600);
 }
 
 .checkbox {

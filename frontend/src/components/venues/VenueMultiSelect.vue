@@ -88,6 +88,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocumentClick));
 .single {
   margin: 0;
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
@@ -108,6 +109,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocumentClick));
   color: var(--color-grey-900);
   font-family: var(--font-family-lato);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -120,7 +122,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocumentClick));
 .picker__chevron {
   width: var(--spacing-16);
   height: var(--spacing-16);
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .picker__popover {
@@ -143,6 +145,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocumentClick));
   padding: var(--spacing-8);
   border-radius: var(--radius-xs);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-900);
   cursor: pointer;
 }
@@ -164,7 +167,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocumentClick));
   border-top: 1px solid var(--color-grey-100);
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .picker__check {

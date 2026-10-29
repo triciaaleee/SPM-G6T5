@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import UnderlineTabs from "../../components/ui/UnderlineTabs.vue";
+import EmptyState from "../../components/ui/EmptyState.vue";
+import BackLink from "../../components/ui/BackLink.vue";
 import AppButton from "../../components/ui/AppButton.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -203,6 +206,11 @@ const resultSummary = computed(() => {
 
 // ---- AC "Available time slots" tab -----------------------------------
 
+const RESULTS_TABS = [
+  { key: "browse" as const, label: "Browse venues" },
+  { key: "timeslots" as const, label: "Available time slots" },
+];
+
 const resultsTab = ref<"browse" | "timeslots">("browse");
 const availabilityByVenue = ref<Map<number, VenueAvailability>>(new Map());
 const availabilityLoading = ref(false);
@@ -303,11 +311,9 @@ onMounted(async () => {
   <div class="page">
     <div class="content">
       <!-- A real link (so it can still be opened in a new tab), but a plain click goes back — see backToEvent. -->
-      <a v-if="sourceEventRoute" :href="sourceEventRoute.href" class="back-link body-small"
-        @click.exact.prevent="backToEvent">
-        <VenueIcon name="chevron-left" :size="16" />
+      <BackLink v-if="sourceEventRoute" :href="sourceEventRoute.href" @click.exact.prevent="backToEvent">
         Back to {{ sourceEventName }}
-      </a>
+      </BackLink>
 
       <div class="page-header">
         <div>
@@ -331,22 +337,13 @@ onMounted(async () => {
 
       <VenueFilterBar v-model="filters" :options="options" />
 
-      <div class="tabs" role="tablist" aria-label="Results view">
-        <button type="button" class="tab" :class="{ 'tab--active': resultsTab === 'browse' }"
-          role="tab" :aria-selected="resultsTab === 'browse'" @click="resultsTab = 'browse'">
-          Browse venues
-        </button>
-        <button type="button" class="tab" :class="{ 'tab--active': resultsTab === 'timeslots' }"
-          role="tab" :aria-selected="resultsTab === 'timeslots'" @click="resultsTab = 'timeslots'">
-          Available time slots
-        </button>
-      </div>
+      <UnderlineTabs v-model="resultsTab" class="tabs" :tabs="RESULTS_TABS" aria-label="Results view" />
 
       <section v-if="resultsTab === 'timeslots'" class="timeslots" aria-live="polite">
-        <div v-if="!filters.date" class="empty-state">
+        <EmptyState v-if="!filters.date">
           <p class="empty-state__title">Pick a date</p>
           <p class="body-default muted">Set a date filter to see venue availability for that day.</p>
-        </div>
+        </EmptyState>
 
         <template v-else>
           <div class="timeslots__toolbar">
@@ -389,14 +386,14 @@ onMounted(async () => {
 
         <template v-else-if="!loading || venues.length > 0">
           <!-- AC3 -->
-          <div v-if="venues.length === 0" class="empty-state">
+          <EmptyState v-if="venues.length === 0">
             <p class="empty-state__title">No results found</p>
             <p class="body-default muted">No venue matches all of your filters.</p>
 
             <AppButton variant="ghost" type="button" class="empty-state__clear" @click="clearAllFilters">
               Clear all filters
             </AppButton>
-          </div>
+          </EmptyState>
 
           <template v-else>
             <p class="body-small muted results__count" :class="{ 'results__count--stale': loading }">
@@ -503,33 +500,16 @@ onMounted(async () => {
 }
 
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
-  font-weight: 400;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 var(--spacing-24);
 }
 
-.body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -560,12 +540,10 @@ onMounted(async () => {
   color: var(--color-grey-900);
 }
 
+
+
 .back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-4);
   margin-bottom: var(--spacing-16);
-  font-weight: 700;
 }
 
 .context-banner {
@@ -584,32 +562,11 @@ onMounted(async () => {
 }
 
 .tabs {
-  display: flex;
-  gap: var(--spacing-4);
   margin-top: var(--spacing-24);
-  border-bottom: 1px solid var(--color-grey-100);
-}
-
-.tab {
-  padding: var(--spacing-12) var(--spacing-4);
-  margin-bottom: -1px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--color-grey-500);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
 }
 
 .tab + .tab {
   margin-left: var(--spacing-16);
-}
-
-.tab--active {
-  color: var(--color-blue-700);
-  border-bottom-color: var(--color-blue-600);
 }
 
 .timeslots {
@@ -643,6 +600,7 @@ onMounted(async () => {
 .selection-bar__venue {
   margin: 0;
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
@@ -770,7 +728,7 @@ onMounted(async () => {
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .tags {
@@ -795,17 +753,6 @@ onMounted(async () => {
   border-color: var(--color-purple-300);
   background: var(--color-purple-100);
   color: var(--color-purple-800);
-}
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: var(--spacing-40) var(--spacing-24);
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
 }
 
 .empty-state__title {
@@ -840,7 +787,7 @@ onMounted(async () => {
 
 .btn__count {
   font-weight: 400;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 /* Space above the "Request this venue" button. */

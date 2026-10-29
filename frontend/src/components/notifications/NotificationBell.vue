@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import IconButton from "../ui/IconButton.vue";
 import AppButton from "../ui/AppButton.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -235,9 +236,7 @@ onBeforeUnmount(() => {
           <p class="toast__body">{{ toast.body }}</p>
           <AppButton variant="ghost" size="sm" type="button" class="toast__action" @click="viewFromToast">View</AppButton>
         </div>
-        <button type="button" class="toast__close" aria-label="Dismiss" @click="toast = null">
-          <XMarkIcon class="toast__close-icon" aria-hidden="true" />
-        </button>
+        <IconButton label="Dismiss" size="sm" @click="toast = null"><XMarkIcon aria-hidden="true" /></IconButton>
       </div>
     </Teleport>
   </div>
@@ -400,7 +399,7 @@ onBeforeUnmount(() => {
 .item__when {
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .dropdown__footer {
@@ -483,39 +482,8 @@ onBeforeUnmount(() => {
   margin: var(--spacing-8) 0 0 calc(-1 * var(--spacing-12));
 }
 
-.toast__close {
-  display: inline-flex;
-  flex-shrink: 0;
-  padding: var(--spacing-2);
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-grey-500);
-  cursor: pointer;
-}
-
-.toast__close:hover {
-  background: var(--color-grey-75);
-  color: var(--color-grey-800);
-}
-
-.toast__close:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.toast__close-icon {
-  width: var(--spacing-16);
-  height: var(--spacing-16);
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {

@@ -134,7 +134,7 @@ describe("TechnicalSupportView", () => {
     const wrapper = await mountView([makeRequest()]);
 
     expect(wrapper.text()).not.toContain("Sorted by event date");
-    expect(wrapper.find(".subheading").text()).toBe("Everything still to arrange, soonest event first");
+    expect(wrapper.find(".page-header .body-default").text()).toBe("Everything still to arrange, soonest event first");
   });
 
   it("lists groups (events) by date, then by start time", async () => {

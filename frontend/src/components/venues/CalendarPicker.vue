@@ -8,6 +8,7 @@ export type DayMarker = "booking" | "request";
 </script>
 
 <script setup lang="ts">
+import IconButton from "../ui/IconButton.vue";
 import { computed, ref, watch } from "vue";
 import VenueIcon from "./VenueIcon.vue";
 
@@ -122,14 +123,9 @@ function shiftMonth(delta: number): void {
 <template>
   <div class="calendar">
     <div class="calendar__header">
-      <button type="button" class="calendar__nav" :disabled="!canGoBack" aria-label="Previous month"
-        @click="shiftMonth(-1)">
-        <VenueIcon name="chevron-left" :size="16" />
-      </button>
+      <IconButton label="Previous month" size="sm" tone="brand" :disabled="!canGoBack" @click="shiftMonth(-1)"><VenueIcon name="chevron-left" :size="16" /></IconButton>
       <span class="calendar__month" aria-live="polite">{{ monthLabel }}</span>
-      <button type="button" class="calendar__nav" aria-label="Next month" @click="shiftMonth(1)">
-        <VenueIcon name="chevron-right" :size="16" />
-      </button>
+      <IconButton label="Next month" size="sm" tone="brand" @click="shiftMonth(1)"><VenueIcon name="chevron-right" :size="16" /></IconButton>
     </div>
 
     <div class="calendar__grid" :class="{ 'calendar__grid--roomy': roomy }" role="grid">
@@ -173,28 +169,6 @@ function shiftMonth(delta: number): void {
   color: var(--color-grey-900);
 }
 
-.calendar__nav {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-purple-600);
-  cursor: pointer;
-}
-
-.calendar__nav:hover:not(:disabled) {
-  background: var(--color-purple-100);
-}
-
-.calendar__nav:disabled {
-  color: var(--color-grey-300);
-  cursor: default;
-}
-
 .calendar__grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
@@ -210,7 +184,7 @@ function shiftMonth(delta: number): void {
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .calendar__day {

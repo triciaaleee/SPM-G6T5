@@ -99,7 +99,7 @@
 
   /* Grid */
   --grid-desktop-margin: 80px;
-  --grid-desktop-gutter: 28px;
+  --grid-desktop-gutter: 32px;
   --grid-tablet-margin: 32px;
   --grid-tablet-gutter: 32px;
   --grid-mobile-margin: 6px;
@@ -118,7 +118,7 @@
   /* Focus rings */
   --ring-brand: #701EC2;
   --ring-light: rgba(112, 30, 194, 0.24);
-  --ring-error: #FFE3E0;
+  --ring-error: #CC1000;
 
   /* Elevation (Style.md Section 8.1) */
   --shadow-card: 0 1px 3px rgba(34, 34, 34, 0.08);

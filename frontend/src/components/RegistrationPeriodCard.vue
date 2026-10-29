@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppPanel from "./ui/AppPanel.vue";
 /**
  * E6: when registration opens, its current state (not open, open, full, closed) and when it closes by itself, shown
  * read-only to the owning organiser. Only the assigned coordinator sets the open date or opens and closes
@@ -50,9 +51,9 @@ const stageNote = computed(() => {
 </script>
 
 <template>
-  <div class="details-card registration-period" data-testid="registration-period">
+  <AppPanel size="lg" class="registration-period" data-testid="registration-period">
     <h2 class="section-title">Registration</h2>
-    <p class="body-default">
+    <p class="subheading">
       Status: <strong data-testid="registration-period-state">{{ REGISTRATION_OVERVIEW_LABEL[overview] }}</strong>
       <span v-if="manual" class="muted">
         (the coordinator has manually {{ manual === "FORCE_OPEN" ? "opened" : "closed" }} registration)
@@ -72,11 +73,11 @@ const stageNote = computed(() => {
       </template>
       <template v-else>It closes automatically {{ REGISTRATION_CUTOFF_DAYS }} days before the event, or when it is full.</template>
     </p>
-  </div>
+  </AppPanel>
 </template>
 
 <style scoped>
-/* The card's own box comes from the event page's .details-card, applied to this root. */
+/* The card's own box comes from AppPanel, applied to this root. */
 .registration-period {
   display: flex;
   flex-direction: column;
@@ -84,25 +85,23 @@ const stageNote = computed(() => {
 }
 
 .section-title {
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 700;
-  line-height: 1.75rem;
+  line-height: 2rem;
   color: var(--color-grey-900);
   margin: 0;
 }
 
-.body-default {
-  font-size: 18px;
+.subheading {
   color: var(--color-grey-900);
   margin: 0;
 }
 
 .body-small {
-  font-size: 0.875rem;
   margin: 0;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 </style>

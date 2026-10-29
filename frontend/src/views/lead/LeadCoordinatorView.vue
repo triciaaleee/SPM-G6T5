@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BackLink from "../../components/ui/BackLink.vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { fetchMyEvents, type EventSummary } from "../../lib/eventsApi";
@@ -100,13 +101,7 @@ onMounted(async () => {
     Mobile (4-col):   content col 1-4, full width, grid-mobile-margin 6px; event list col 1-4.
   -->
   <div class="page">
-    <RouterLink :to="{ name: 'lead-dashboard' }" class="back-link">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M15.75 19.5 8.25 12l7.5-7.5" />
-      </svg>
-      Back to overview
-    </RouterLink>
+    <BackLink :to="{ name: 'lead-dashboard' }">Back to overview</BackLink>
 
     <p v-if="loading" class="full body-default muted">Loading events…</p>
     <p v-else-if="errorMessage" class="full body-default error-text" role="alert">{{ errorMessage }}</p>
@@ -188,28 +183,6 @@ onMounted(async () => {
   }
 }
 
-.back-link {
-  justify-self: start;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  min-height: 44px;
-  color: var(--color-purple-600);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  text-decoration: none;
-}
-
-.back-link:hover {
-  color: var(--color-purple-700);
-}
-
-.back-link:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
 .coordinator-head {
   display: flex;
   align-items: center;
@@ -238,6 +211,7 @@ onMounted(async () => {
   color: var(--color-grey-700);
   font-family: var(--font-family-lato);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -265,6 +239,7 @@ onMounted(async () => {
   background: var(--color-grey-100);
   color: var(--color-grey-600);
   font-size: 0.75rem;
+  line-height: 1rem;
   min-width: 20px;
   text-align: center;
 }
@@ -292,31 +267,22 @@ onMounted(async () => {
 
 /* H2 */
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
   overflow-wrap: anywhere;
 }
 
 /* Subheading */
 .subheading {
-  font-size: 1.125rem;
-  font-weight: 400;
-  line-height: 1.375rem;
   color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
 
 .body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
   margin: 0;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {

@@ -20,6 +20,7 @@
 import { ChevronDownIcon, ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
 import AppButton from "../ui/AppButton.vue";
 import DataTable from "../ui/DataTable.vue";
+import StatusBadge from "../ui/StatusBadge.vue";
 import PaginationBar from "../ui/PaginationBar.vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import {
@@ -206,6 +207,27 @@ function unitIds(list: { id: number }[]): string {
 }
 
 /** The bold date line and the small line under it, for a dated group. */
+const OUT_COLUMNS = [
+  { key: "when", label: "When" },
+  { key: "what", label: "Change" },
+  { key: "reason", label: "Reason" },
+  { key: "type", label: "Type" },
+  { key: "action", label: "" },
+];
+const OUT_WIDTHS = "14rem minmax(0, 1fr) minmax(0, 1fr) 10rem 9rem";
+
+/** One list for the table: groups with dates first, then units whose status was set outside the app. */
+function outRowsOf(type: string) {
+  return [
+    ...outGroupsOf(type).map((out) => ({ kind: "out" as const, key: out.key, out })),
+    ...statusGroupsOf(type).map((st) => ({ kind: "status" as const, key: st.key, st })),
+  ];
+}
+
+function unitsOf(row: ReturnType<typeof outRowsOf>[number]) {
+  return row.kind === "out" ? row.out.units : row.st.units;
+}
+
 function whenOf(out: OutGroup): { date: string; sub: string } {
   if (out.endDate === null) return { date: `From ${formatCardDate(out.startDate)}`, sub: "until marked usable again" };
   return { date: `${formatCardDate(out.startDate)} – ${formatCardDate(out.endDate)}`, sub: "" };
@@ -521,51 +543,55 @@ onMounted(async () => {
         <!-- What is out of use: dated groups as they were marked, then units whose status was set outside the app -->
         <template v-if="hasOutOfUse(group.type) && outOpen.has(group.type)">
           <p class="out-table__title">Out of use</p>
-          <ul class="out-table" :aria-label="`${group.type} out of use`">
-            <li class="out-table__row out-table__row--header" aria-hidden="true">
-              <span class="out-table__heading">When</span>
-              <span class="out-table__heading">Change</span>
-              <span class="out-table__heading">Reason</span>
-              <span class="out-table__heading">Type</span>
-              <span class="out-table__heading"></span>
-            </li>
-            <li v-for="out in outGroupsOf(group.type)" :key="out.key" class="out-table__row" data-testid="out-group">
+          <DataTable
+            :columns="OUT_COLUMNS"
+            :column-widths="OUT_WIDTHS"
+            column-gap="var(--spacing-16)"
+            :rows="outRowsOf(group.type)"
+            :row-key="(r) => r.key"
+            :row-test-id="() => 'out-group'"
+            :aria-label="`${group.type} out of use`"
+          >
+            <template #cell-when="{ row }">
               <span class="out-table__when">
-                <span class="out-table__date">{{ whenOf(out).date }}</span>
-                <span v-if="whenOf(out).sub" class="out-table__time">{{ whenOf(out).sub }}</span>
+                <template v-if="row.kind === 'out'">
+                  <span class="out-table__date">{{ whenOf(row.out).date }}</span>
+                  <span v-if="whenOf(row.out).sub" class="out-table__time">{{ whenOf(row.out).sub }}</span>
+                </template>
+                <template v-else>
+                  <span class="out-table__date">No dates set</span>
+                  <span class="out-table__time">Set outside the app</span>
+                </template>
               </span>
+            </template>
+            <template #cell-what="{ row }">
               <span class="out-table__what body-small">
-                {{ out.units.length }} unit{{ out.units.length === 1 ? "" : "s" }} · {{ unitIds(out.units) }}
+                {{ unitsOf(row).length }} unit{{ unitsOf(row).length === 1 ? "" : "s" }} · {{ unitIds(unitsOf(row)) }}
               </span>
-              <span class="out-table__reason body-small">{{ out.note || "—" }}</span>
-              <span class="out-table__badge">{{ out.reason }}</span>
-              <span class="out-table__action">
-                <AppButton
-                  variant="outline"
-                  size="sm"
-                  type="button"
-                  :disabled="clearingKey === out.key"
-                  :aria-label="`Mark ${out.units.length} ${group.type} usable again (${out.reason}, ${periodText(out)})`"
-                  data-testid="group-usable"
-                  @click="markGroupUsable(group.type, out)"
-                >
-                  {{ clearingKey === out.key ? "Updating…" : "Return to use" }}
-                </AppButton>
-              </span>
-            </li>
-            <li v-for="st in statusGroupsOf(group.type)" :key="st.key" class="out-table__row" data-testid="out-group">
-              <span class="out-table__when">
-                <span class="out-table__date">No dates set</span>
-                <span class="out-table__time">Set outside the app</span>
-              </span>
-              <span class="out-table__what body-small">
-                {{ st.units.length }} unit{{ st.units.length === 1 ? "" : "s" }} · {{ unitIds(st.units) }}
-              </span>
-              <span class="out-table__reason body-small">—</span>
-              <span class="out-table__badge">{{ st.status }}</span>
-              <span class="out-table__action"></span>
-            </li>
-          </ul>
+            </template>
+            <template #cell-reason="{ row }">
+              <span class="out-table__reason body-small">{{ row.kind === "out" ? row.out.note || "—" : "—" }}</span>
+            </template>
+            <template #cell-type="{ row }">
+              <StatusBadge class="out-table__badge" status-class="status-attention">
+                {{ row.kind === "out" ? row.out.reason : row.st.status }}
+              </StatusBadge>
+            </template>
+            <template #cell-action="{ row }">
+              <AppButton
+                v-if="row.kind === 'out'"
+                variant="outline"
+                size="sm"
+                type="button"
+                :disabled="clearingKey === row.out.key"
+                :aria-label="`Mark ${row.out.units.length} ${group.type} usable again (${row.out.reason}, ${periodText(row.out)})`"
+                data-testid="group-usable"
+                @click="markGroupUsable(group.type, row.out)"
+              >
+                {{ clearingKey === row.out.key ? "Updating…" : "Return to use" }}
+              </AppButton>
+            </template>
+          </DataTable>
         </template>
 
         <!-- Mark unusable: quantity, then the impact, then confirm -->
@@ -643,7 +669,7 @@ onMounted(async () => {
 
             <p class="body-small muted">
               {{ selected.size }} selected. The units below are suggested; tick others if you know which ones are affected.
-              <button type="button" class="link-button" data-testid="reset-suggestion" @click="resetToSuggestion">Use the suggestion</button>
+              <AppButton variant="link" class="link-button" data-testid="reset-suggestion" @click="resetToSuggestion">Use the suggestion</AppButton>
             </p>
 
             <ul class="pick-list">
@@ -748,27 +774,19 @@ onMounted(async () => {
 }
 
 .h4 {
-  font-size: 1.75rem;
-  font-weight: 700;
-  line-height: 2.25rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
   margin: 0;
 }
 
 .body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
   margin: 0;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -804,6 +822,7 @@ onMounted(async () => {
   padding: 0;
   font-family: var(--font-family-lato);
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
   color: var(--color-grey-900);
   text-align: left;
@@ -821,6 +840,7 @@ onMounted(async () => {
 
 .count {
   font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-900);
 }
 
@@ -834,6 +854,7 @@ onMounted(async () => {
   background: var(--color-warning-200);
   color: var(--color-warning-900);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
 }
 
@@ -873,43 +894,9 @@ onMounted(async () => {
 .out-table__title {
   margin: 0 0 var(--spacing-16);
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
   color: var(--color-grey-900);
-}
-
-.out-table {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-
-.out-table li + li {
-  border-top: 1px solid var(--color-grey-100);
-}
-
-.out-table__row {
-  display: grid;
-  grid-template-columns: 14rem 1fr 1fr 10rem 9rem;
-  align-items: center;
-  column-gap: var(--spacing-16);
-  padding: var(--spacing-16);
-  background: var(--color-base-white);
-}
-
-.out-table__row--header {
-  padding: var(--spacing-12) var(--spacing-16);
-  background: var(--color-grey-75);
-}
-
-.out-table__heading {
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--color-grey-500);
 }
 
 .out-table__when {
@@ -920,13 +907,15 @@ onMounted(async () => {
 
 .out-table__date {
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
 
 .out-table__time {
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
 }
 
 .out-table__what {
@@ -935,32 +924,6 @@ onMounted(async () => {
 
 .out-table__reason {
   color: var(--color-grey-700);
-}
-
-.out-table__badge {
-  justify-self: start;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-12);
-  border-radius: var(--radius-xs);
-  background: var(--color-warning-200);
-  color: var(--color-warning-900);
-}
-
-.out-table__action {
-  justify-self: end;
-}
-
-@media (max-width: 1024px) {
-  .out-table__row {
-    grid-template-columns: 1fr 1fr;
-    row-gap: var(--spacing-8);
-  }
-
-  .out-table__row--header {
-    display: none;
-  }
 }
 
 .form {
@@ -995,6 +958,7 @@ onMounted(async () => {
 .mark-card__title {
   margin: 0;
   font-size: 1.125rem;
+  line-height: 1.375rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
@@ -1007,6 +971,7 @@ onMounted(async () => {
   border-radius: var(--radius-sm);
   background: var(--color-grey-50);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-900);
 }
 
@@ -1019,6 +984,7 @@ onMounted(async () => {
 
 .field-label {
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-700);
 }
@@ -1026,27 +992,18 @@ onMounted(async () => {
 .field-error {
   margin: 0;
   font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-error-600);
 }
 
 .input {
-  font-family: var(--font-family-lato);
-  font-size: 0.9375rem;
-  color: var(--color-grey-900);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
+  font-size: 1rem;
+  line-height: 1.25rem;
   padding: var(--spacing-8) var(--spacing-12);
 }
 
 .input--short {
   width: 6rem;
-}
-
-.input:focus-visible {
-  outline: none;
-  border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--ring-light);
 }
 
 /* Impact preview ------------------------------------------------------------ */
@@ -1077,21 +1034,6 @@ onMounted(async () => {
   margin-top: var(--spacing-4);
 }
 
-.link-button {
-  border: none;
-  background: none;
-  padding: 0;
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-purple-600);
-  cursor: pointer;
-}
-
-.link-button:hover {
-  text-decoration: underline;
-}
-
 .pick-list {
   max-height: 16rem;
   overflow-y: auto;
@@ -1120,7 +1062,8 @@ onMounted(async () => {
 
 .pick__name {
   min-width: 8rem;
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-900);
 }
 
@@ -1176,7 +1119,8 @@ onMounted(async () => {
 
 .unit__name {
   flex: 1 1 8rem;
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-900);
 }
 

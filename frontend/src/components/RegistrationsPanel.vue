@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import SegmentedToggle from "./ui/SegmentedToggle.vue";
+import StatusBadge from "./ui/StatusBadge.vue";
 /**
  * E3-5 AC3 / E6-5: the event's registrations, read-only, for the owning
  * organiser and coordinators — so a Completed event's attendee list stays
@@ -87,16 +89,10 @@ onMounted(async () => {
   <section class="registrations">
     <div class="registrations__header">
       <h2 class="section-title">Registrations</h2>
-      <div v-if="!loading && !loadError" class="view-toggle" role="group" aria-label="Show registrations">
-        <button v-for="tab in tabs" :key="tab.key" type="button" class="toggle-btn"
-          :class="{ 'toggle-btn--active': activeTab === tab.key }" :aria-pressed="activeTab === tab.key"
-          @click="activeTab = tab.key">
-          {{ tab.label }}
-        </button>
-      </div>
+      <SegmentedToggle v-if="!loading && !loadError" v-model="activeTab" :options="tabs" aria-label="Show registrations" />
     </div>
-    <p v-if="loading" class="body-default muted">Loading registrations…</p>
-    <p v-else-if="loadError" class="body-default error-text">{{ loadError }}</p>
+    <p v-if="loading" class="body-small muted">Loading registrations…</p>
+    <p v-else-if="loadError" class="body-small error-text">{{ loadError }}</p>
     <template v-else>
       <div class="summary">
         <p class="summary__count" data-testid="registered-count">
@@ -108,7 +104,7 @@ onMounted(async () => {
         </p>
       </div>
 
-      <p v-if="rows.length === 0" class="body-default muted empty">{{ emptyMessage }}</p>
+      <p v-if="rows.length === 0" class="body-small muted empty">{{ emptyMessage }}</p>
       <DataTable
         v-else
         :columns="COLUMNS"
@@ -123,7 +119,7 @@ onMounted(async () => {
         </template>
         <template #cell-registeredOn="{ row }">{{ formatMoment(row.createdAt) }}</template>
         <template #cell-status="{ row }">
-          <span class="badge" :class="registrationBadgeClass(row.status)">{{ row.status }}</span>
+          <StatusBadge :status-class="registrationBadgeClass(row.status)">{{ row.status }}</StatusBadge>
         </template>
       </DataTable>
     </template>
@@ -142,24 +138,19 @@ onMounted(async () => {
 }
 
 .section-title {
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 700;
-  line-height: 1.75rem;
+  line-height: 2rem;
   color: var(--color-grey-900);
   margin: 0;
 }
 
-.body-default {
-  font-size: 0.875rem;
+.body-small {
   color: var(--color-grey-900);
 }
 
-.body-small {
-  font-size: 14px;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -181,6 +172,7 @@ onMounted(async () => {
 .summary__count {
   margin: 0;
   font-size: 16px;
+  line-height: 1.25rem;
   font-weight: 400;
   color: var(--color-grey-900);
 }
@@ -190,46 +182,6 @@ onMounted(async () => {
 }
 
 /* Segmented toggle, as on the coordinator page before it was split — in Secondary Blue (Style.md 2.8). */
-.view-toggle {
-  display: inline-flex;
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  overflow: hidden;
-}
-
-.toggle-btn {
-  appearance: none;
-  background: var(--color-base-white);
-  border: none;
-  border-right: 1px solid var(--color-grey-200);
-  cursor: pointer;
-  padding: var(--spacing-8) var(--spacing-16);
-  font-family: inherit;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--color-grey-600);
-  transition: background 0.1s, color 0.1s;
-}
-
-.toggle-btn:last-child {
-  border-right: none;
-}
-
-.toggle-btn:hover:not(.toggle-btn--active) {
-  background: var(--color-grey-50);
-  color: var(--color-grey-900);
-}
-
-.toggle-btn:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: -2px;
-}
-
-.toggle-btn--active {
-  background: var(--color-blue-600);
-  color: var(--color-base-white);
-}
-
 /* Withdrawn and cancelled people read as no longer attending. */
 .registration-name {
   font-weight: 700;
@@ -237,32 +189,7 @@ onMounted(async () => {
 }
 
 .registration-name--inactive {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
-/* Registration badge colours, as in AttendeeEventsView.vue (Style.md 2.6/2.7). */
-.badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-xs);
-  white-space: nowrap;
-}
-
-.status-success {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: var(--color-warning-100);
-  color: var(--color-warning-900);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
 </style>

@@ -215,34 +215,6 @@ const ICONS: Record<CardFact["icon"], string[]> = {
   color: var(--color-purple-700);
 }
 
-.status-success {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: var(--color-warning-100);
-  color: var(--color-warning-900);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-/* "Awaiting Clarification" and "Open": the Secondary Blue badge pair. */
-.status-info,
-.status-open {
-  background: var(--color-blue-200);
-  color: var(--color-blue-800);
-}
-
-/* A finished event reads as neutral grey, not live. */
-.status-over {
-  background: var(--color-grey-200);
-  color: var(--color-grey-900);
-}
-
 /* Text ---------------------------------------------------------------------- */
 
 /* Title on the left; a short aside (places left) pushed to the right end of the same row. */
@@ -268,7 +240,7 @@ const ICONS: Record<CardFact["icon"], string[]> = {
 
 .card-aside__icon {
   flex: none;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 /* No places left: the error text colour, icon included (Style.md 3.1). */
@@ -318,7 +290,7 @@ const ICONS: Record<CardFact["icon"], string[]> = {
 .fact__icon {
   flex: none;
   margin-top: var(--spacing-2);
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .fact--clamp .fact__text {
@@ -342,7 +314,7 @@ const ICONS: Record<CardFact["icon"], string[]> = {
   margin: 0;
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .person-avatar {
@@ -356,6 +328,7 @@ const ICONS: Record<CardFact["icon"], string[]> = {
   background: var(--color-purple-200);
   color: var(--color-purple-600);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
 }
 
@@ -384,7 +357,7 @@ const ICONS: Record<CardFact["icon"], string[]> = {
   min-width: 0;
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .card-footer__actions {

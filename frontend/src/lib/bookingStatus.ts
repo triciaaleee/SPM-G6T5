@@ -19,14 +19,14 @@ export type BookingStatus = (typeof BOOKING_STATUSES)[number];
  * Badge colour for a booking status, using the same four UI-state classes
  * as events (see lib/eventStatus.ts): the venue is secured (success), the
  * request is dead (error), something is pending a decision (warning), or
- * it needs the coordinator to act (info).
+ * it needs the coordinator to arrange a replacement (attention).
  */
 export function bookingStatusBadgeClass(status: string): string {
   if (status === "Approved") return "status-success";
   if (status === "Rejected" || status === "Expired" || status === "Withdrawn" || status === "Cancelled") {
     return "status-error";
   }
-  if (status === "Replacement Required") return "status-info";
+  if (status === "Replacement Required") return "status-attention";
   return "status-warning"; // Requested / On Hold
 }
 

@@ -267,7 +267,8 @@ function select(venueId: number, segment: Segment): void {
 
 .hour-label {
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
 }
 
 .event-window {
@@ -283,6 +284,7 @@ function select(venueId: number, segment: Segment): void {
   border: 1px solid var(--color-purple-300);
   color: var(--color-purple-800);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -319,7 +321,7 @@ function select(venueId: number, segment: Segment): void {
 
 .segment--closed {
   background: var(--color-grey-75);
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .segment--available {
@@ -354,12 +356,7 @@ function select(venueId: number, segment: Segment): void {
   line-height: 0.875rem;
 }
 
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 </style>

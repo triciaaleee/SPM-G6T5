@@ -263,9 +263,9 @@ onMounted(refresh);
                of it — a resolved question must still require a click to
                reveal the thread, not just skip straight to it. -->
           <div v-if="!readOnly && !expanded.has(q.id) && !q.resolved" class="clarification-thread__reply-area">
-            <button type="button" class="clarification-thread__reply-btn" @click="openReplyBox(q.id)">
+            <AppButton variant="link" class="clarification-thread__reply-btn" @click="openReplyBox(q.id)">
               Reply
-            </button>
+            </AppButton>
           </div>
 
           <!-- Expanded (resolved or not): replies to the question, as a
@@ -301,9 +301,9 @@ onMounted(refresh);
                   </AppButton>
                 </div>
               </div>
-              <button v-else type="button" class="clarification-thread__reply-btn" @click="openReplyBox(q.id)">
+              <AppButton variant="link" class="clarification-thread__reply-btn" v-else @click="openReplyBox(q.id)">
                 Reply
-              </button>
+              </AppButton>
             </template>
           </div>
         </li>
@@ -335,6 +335,7 @@ onMounted(refresh);
 
 .clarification-panel__title {
   font-size: 1.125rem;
+  line-height: 1.375rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
@@ -375,18 +376,16 @@ onMounted(refresh);
 
 .clarification-panel__textarea {
   width: 100%;
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
   padding: var(--spacing-12);
-  font-size: 0.9375rem;
-  color: var(--color-grey-900);
-  background: var(--color-base-white);
+  font-size: 1rem;
+  line-height: 1.25rem;
   resize: vertical;
 }
 
 .clarification-panel__error {
   color: var(--color-error-600);
   font-size: 0.875rem;
+  line-height: 1.125rem;
 }
 
 .clarification-panel__row-buttons {
@@ -436,7 +435,7 @@ onMounted(refresh);
   flex-shrink: 0;
   width: 22px;
   height: 22px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--color-success-600);
   color: var(--color-base-white);
   display: flex;
@@ -457,6 +456,7 @@ onMounted(refresh);
   color: var(--color-purple-600);
   border-radius: var(--radius-xs);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
   padding: var(--spacing-4) var(--spacing-8);
   cursor: pointer;
@@ -487,24 +487,14 @@ onMounted(refresh);
 
 .clarification-thread__meta {
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
   margin: var(--spacing-4) 0 0 var(--spacing-24);
 }
 
 .clarification-thread__reply-area {
   margin-top: var(--spacing-8);
   margin-left: var(--spacing-24);
-}
-
-.clarification-thread__reply-btn {
-  align-self: flex-start;
-  background: none;
-  border: none;
-  color: var(--color-purple-600);
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
-  padding: var(--spacing-4) 0;
 }
 
 .clarification-thread__reply-box {
@@ -542,8 +532,8 @@ onMounted(refresh);
 
 .thread-reply__text {
   margin: var(--spacing-4) 0 0;
-  font-size: 16px;
-  line-height: 1.32rem;
+  font-size: 1rem;
+  line-height: 1.25rem;
 }
 
 .thread-reply__meta {
@@ -552,7 +542,8 @@ onMounted(refresh);
   gap: var(--spacing-8);
   margin: 0;
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
 }
 
 .author-you {
@@ -560,18 +551,8 @@ onMounted(refresh);
   font-weight: 700;
 }
 
-.body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 </style>

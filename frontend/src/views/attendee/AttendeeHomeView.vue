@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UnderlineTabs from "../../components/ui/UnderlineTabs.vue";
 import { computed, onMounted, ref } from "vue";
 import { getStoredUser } from "../../lib/auth.ts";
 import { fetchMyRegistrations, type MyRegistration } from "../../lib/registrationApi.ts";
@@ -113,22 +114,8 @@ onMounted(async () => {
         <p class="subheading">Events you have registered for.</p>
       </div>
 
-      <div v-if="!loading && !errorMessage" class="tabs" role="tablist" aria-label="My events">
-        <button
-          v-for="tab in tabs"
-          :id="`events-tab-${tab.key}`"
-          :key="tab.key"
-          type="button"
-          role="tab"
-          class="tab"
-          :class="{ 'tab--active': activeTab === tab.key }"
-          :aria-selected="activeTab === tab.key"
-          aria-controls="events-panel"
-          @click="activeTab = tab.key"
-        >
-          {{ tab.label }}
-        </button>
-      </div>
+      <UnderlineTabs v-if="!loading && !errorMessage" v-model="activeTab" :tabs="tabs" aria-label="My events"
+        id-prefix="events-tab" panel-id="events-panel" />
 
       <div id="events-panel" role="tabpanel" :aria-labelledby="`events-tab-${activeTab}`">
         <p v-if="loading" class="body-default muted">Loading your events…</p>
@@ -197,28 +184,20 @@ onMounted(async () => {
 }
 
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
-  line-height: 1.375rem;
   color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
 
 .body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
   margin: 0;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -226,44 +205,7 @@ onMounted(async () => {
 }
 
 /* Tabs: Style.md 2.4 — Purple 600 marks the active tab, same treatment as EventsListView. */
-.tabs {
-  display: flex;
-  gap: var(--spacing-32);
-  border-bottom: 1px solid var(--color-grey-100);
-}
-
-.tab {
-  display: flex;
-  align-items: center;
-  appearance: none;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  padding: var(--spacing-12) var(--spacing-4);
-  cursor: pointer;
-  font-family: var(--font-family-lato);
-  font-size: 1rem;
-  line-height: 1.25rem;
-  font-weight: 700;
-  color: var(--color-grey-600);
-}
-
-.tab:hover {
-  color: var(--color-grey-900);
-}
-
-.tab:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
 .tab--active,
-.tab--active:hover {
-  color: var(--color-blue-600);
-  border-bottom-color: var(--color-blue-600);
-}
-
 /* Card list: nested grid with the page's column count, each card spanning a third of it. */
 .card-list {
   list-style: none;

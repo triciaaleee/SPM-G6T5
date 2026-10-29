@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import EmptyState from "../../components/ui/EmptyState.vue";
 import AppButton from "../../components/ui/AppButton.vue";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -236,10 +237,10 @@ const minToDate = computed(() => draft.fromDate || undefined);
 
     <p v-if="venuesError" class="body-default error-text full-row">{{ venuesError }}</p>
     <p v-else-if="loadingVenues" class="body-default muted full-row">Loading venues…</p>
-    <div v-else-if="venues.length === 0" class="empty-state full-row">
+    <EmptyState class="full-row" v-else-if="venues.length === 0">
       <p class="empty-state__title">No venues yet</p>
       <p class="body-default muted">There are no active venues to show availability for.</p>
-    </div>
+    </EmptyState>
 
     <template v-else>
       <section class="controls full-row" aria-label="Venue and target">
@@ -316,7 +317,7 @@ const minToDate = computed(() => draft.fromDate || undefined);
         </p>
         <p v-if="!targetVisible" class="body-small muted">
           Your target is outside the dates shown.
-          <button type="button" class="btn-link" @click="jumpToTarget">Go to target</button>
+          <AppButton variant="link" class="btn-link" @click="jumpToTarget">Go to target</AppButton>
         </p>
         <p v-else-if="visibleFreeSlots.length === 0" class="body-small muted">
           No free slots in your target on the dates shown{{ data.venue.setupMinutes || data.venue.turnaroundMinutes ? "once setup and turnaround are allowed for" : "" }}.
@@ -382,40 +383,23 @@ const minToDate = computed(() => draft.fromDate || undefined);
 
 .h2 {
   margin: 0;
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
 }
 
 .h6 {
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 700;
-  line-height: 1.75rem;
-  color: var(--color-grey-900);
 }
 
 .subheading {
   margin: var(--spacing-8) 0 0;
-  font-size: 1.125rem;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
-}
-
-.body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
+  color: var(--color-grey-600);
 }
 
 .body-small {
   margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.125rem;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -536,46 +520,11 @@ const minToDate = computed(() => draft.fromDate || undefined);
   width: 100%;
   height: 40px;
   padding: 0 var(--spacing-12);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  background: var(--color-base-white);
-  color: var(--color-grey-900);
-  font-family: var(--font-family-lato);
   font-size: 0.875rem;
   line-height: 1.125rem;
 }
 
-.input:focus {
-  outline: none;
-  border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--ring-light);
-}
-
-.input--error {
-  border-color: var(--color-error-600);
-}
-
 /* ---- Buttons (Style.md 3.4: one solid button per view) ---- */
-
-.btn-link {
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--color-purple-600);
-  font: inherit;
-  font-weight: 700;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.btn-link:hover {
-  color: var(--color-purple-700);
-}
-
-.btn-link:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
 
 /* ---- Summary ---- */
 
@@ -618,7 +567,7 @@ const minToDate = computed(() => draft.fromDate || undefined);
 }
 
 .summary__facts dt {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .summary__facts dd {
@@ -674,17 +623,6 @@ const minToDate = computed(() => draft.fromDate || undefined);
 }
 
 /* ---- Empty state ---- */
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: var(--spacing-40) var(--spacing-24);
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  text-align: center;
-}
 
 .empty-state__title {
   margin: 0 0 var(--spacing-8);

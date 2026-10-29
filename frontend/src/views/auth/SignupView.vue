@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UnderlineTabs from "../../components/ui/UnderlineTabs.vue";
 import AppButton from "../../components/ui/AppButton.vue";
 import AuthSplitLayout from "../../components/auth/AuthSplitLayout.vue";
 import { computed, ref, watch } from "vue";
@@ -26,6 +27,8 @@ const ROLE_OPTIONS: { value: SignupRole; label: string }[] = [
   { value: "organiser", label: "Event Organiser" },
 ];
 
+const ROLE_TABS = ROLE_OPTIONS.map((option) => ({ key: option.value, label: option.label }));
+
 const name = ref("");
 const email = ref("");
 const password = ref("");
@@ -41,28 +44,6 @@ const route = useRoute();
 
 /** Keeps a pending ?redirect when switching to the login form. */
 const loginLink = computed(() => ({ name: "login", query: typeof route.query.redirect === "string" ? { redirect: route.query.redirect } : {} }));
-
-/**
- * WAI-ARIA tabs pattern: only the active tab is in the Tab order, and the
- * arrow keys move between tabs (Home/End jump to the ends), selecting as
- * they go.
- */
-const tabButtons = ref<HTMLButtonElement[]>([]);
-
-function handleTabKeydown(event: KeyboardEvent) {
-  const current = ROLE_OPTIONS.findIndex((o) => o.value === role.value);
-  const last = ROLE_OPTIONS.length - 1;
-  const next =
-    event.key === "ArrowRight" ? (current === last ? 0 : current + 1)
-    : event.key === "ArrowLeft" ? (current === 0 ? last : current - 1)
-    : event.key === "Home" ? 0
-    : event.key === "End" ? last
-    : null;
-  if (next === null) return;
-  event.preventDefault();
-  role.value = ROLE_OPTIONS[next].value;
-  tabButtons.value[next]?.focus();
-}
 
 // AC3: the rule is on screen from the start, ticking off as it's met,
 // rather than only surfacing after a failed submit.
@@ -131,24 +112,8 @@ async function handleSubmit() {
       <h1 class="h3">Create an account</h1>
       <p class="subheading">Sign up to join events or organise your own.</p>
 
-      <div class="tabs" role="tablist" aria-label="Account type" @keydown="handleTabKeydown">
-        <button
-          v-for="option in ROLE_OPTIONS"
-          :id="`role-tab-${option.value}`"
-          :key="option.value"
-          ref="tabButtons"
-          type="button"
-          role="tab"
-          class="tab"
-          :class="{ 'tab--active': role === option.value }"
-          :aria-selected="role === option.value"
-          :tabindex="role === option.value ? 0 : -1"
-          aria-controls="signup-fields"
-          @click="role = option.value"
-        >
-          {{ option.label }}
-        </button>
-      </div>
+      <UnderlineTabs v-model="role" class="tabs" :tabs="ROLE_TABS" aria-label="Account type" id-prefix="role-tab"
+        panel-id="signup-fields" />
 
       <div
         id="signup-fields"
@@ -237,40 +202,27 @@ async function handleSubmit() {
 }
 
 .h3 {
-  font-size: 2rem;
-  font-weight: 700;
-  line-height: 2.5rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 var(--spacing-24);
 }
 
 .field-label {
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-700);
   margin-bottom: var(--spacing-4);
 }
 
 .text-input {
-  font-family: var(--font-family-lato);
   font-size: 1rem;
+  line-height: 1.25rem;
   padding: var(--spacing-12);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
   margin-bottom: var(--spacing-16);
-  background: var(--color-base-white);
-  color: var(--color-grey-900);
-}
-
-.text-input.invalid {
-  border-color: var(--color-error-600);
 }
 
 /* Error sits directly under its input, so pull it up into the input's gap. */
@@ -282,38 +234,7 @@ async function handleSubmit() {
    tab in Purple Primary/600 (Style.md 2.4 "active tabs"). Equal widths so
    the pair reads as one control across the card. */
 .tabs {
-  display: flex;
-  border-bottom: 1px solid var(--color-grey-100);
   margin-bottom: var(--spacing-24);
-}
-
-.tab {
-  flex: 1;
-  appearance: none;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  padding: var(--spacing-12) var(--spacing-4);
-  cursor: pointer;
-  font-family: var(--font-family-lato);
-  font-size: 1rem;
-  line-height: 1.25rem;
-  font-weight: 700;
-  color: var(--color-grey-500);
-}
-
-.tab:hover {
-  color: var(--color-grey-900);
-}
-
-.tab--active {
-  color: var(--color-blue-600);
-  border-bottom-color: var(--color-blue-600);
-}
-
-.tab--active:hover {
-  color: var(--color-blue-600);
 }
 
 .tab-panel {
@@ -333,7 +254,7 @@ async function handleSubmit() {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .password-rules li {
@@ -370,18 +291,13 @@ async function handleSubmit() {
   white-space: nowrap;
 }
 
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .error-text {
   color: var(--color-error-600);
   margin: 0 0 var(--spacing-16);
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .signup-hint {

@@ -129,6 +129,14 @@ describe("EquipmentRequestDetailView", () => {
     expect(mockedView).toHaveBeenCalledWith("7");
   });
 
+  it("never squeezes the Item column below 12rem, so item names don't wrap letter by letter", async () => {
+    mockedView.mockResolvedValue(eventView());
+    const wrapper = await mountView();
+
+    const style = wrapper.get("ul.rows").attributes("style") ?? "";
+    expect(style).toContain("--table-columns: minmax(12rem, 1fr)");
+  });
+
   it("shows the equipment, quantities, technical requirements and the event's date, time and venue", async () => {
     mockedView.mockResolvedValue(eventView());
     const wrapper = await mountView();

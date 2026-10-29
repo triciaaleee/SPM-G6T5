@@ -1,4 +1,11 @@
 <script setup lang="ts">
+import AppPanel from "../../components/ui/AppPanel.vue";
+import IconButton from "../../components/ui/IconButton.vue";
+import BackLink from "../../components/ui/BackLink.vue";
+import AppModal from "../../components/ui/AppModal.vue";
+import DataTable from "../../components/ui/DataTable.vue";
+import UnderlineTabs from "../../components/ui/UnderlineTabs.vue";
+import StatusBadge from "../../components/ui/StatusBadge.vue";
 import AppButton from "../../components/ui/AppButton.vue";
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import {
@@ -689,7 +696,7 @@ function fieldReviewStatus(fieldName: string): "capacity" | "availability" | nul
 }
 /** Approved reads as settled (green); everything else (Withdrawn, Requested, Rejected, Expired…) as neutral. */
 function reservationStatusBadgeClass(status: string): string {
-  return status === "Approved" || status === "Arranged" ? "status-success" : "badge-neutral";
+  return status === "Approved" || status === "Arranged" ? "status-success" : "status-neutral";
 }
 
 /** E3-11: the assigned coordinator's own approve/reject decision on a Pending held change. */
@@ -716,6 +723,20 @@ function toggleFieldApproval(fieldName: string): void {
 const heldCriticalFields = computed(
   () => pendingChangeRequest.value?.fields.filter((f) => f.isCritical && f.outcome === "pending") ?? [],
 );
+
+const CHANGE_REVIEW_COLUMNS = [
+  { key: "field", label: "Field to approve" },
+  { key: "current", label: "Current" },
+  { key: "requested", label: "Requested" },
+  { key: "status", label: "Review status" },
+];
+const CHANGE_REVIEW_WIDTHS = "minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)";
+
+/** The review table's rows: fields already applied first, then the held ones the coordinator ticks. */
+const changeReviewRows = computed(() => [
+  ...appliedCriticalFields.value.map((field) => ({ ...field, applied: true })),
+  ...heldCriticalFields.value.map((field) => ({ ...field, applied: false })),
+]);
 /** Critical fields already applied in an earlier partial approval on this same still-open request. */
 const appliedCriticalFields = computed(
   () => pendingChangeRequest.value?.fields.filter((f) => f.isCritical && f.outcome === "applied") ?? [],
@@ -810,7 +831,7 @@ const CHANGE_REQUEST_FIELD_LABELS: Record<keyof EventRequestPayload, string> = {
 };
 
 function changeRequestBadgeClass(request: ChangeRequestEntry): string {
-  if (request.status === "Auto-Withdrawn") return "badge-neutral";
+  if (request.status === "Auto-Withdrawn") return "status-neutral";
   if (request.status === "Approved") return "status-success";
   if (request.status === "Rejected") return "status-error";
   return "status-warning"; // Pending
@@ -1164,6 +1185,28 @@ async function submitAssignment(): Promise<void> {
   }
 }
 
+/** The event page's sections; Arrangements carries a count of items awaiting review, Registrations the head count. */
+const detailTabs = computed(() => [
+  { key: "overview" as const, label: "Overview" },
+  ...(showArrangementsTab.value
+    ? [
+        {
+          key: "arrangements" as const,
+          label: "Arrangements",
+          count: arrangementsReviewCount.value > 0 ? arrangementsReviewCount.value : undefined,
+          attention: true,
+          countTestId: "arrangements-badge",
+          ariaLabel:
+            arrangementsReviewCount.value > 0 ? `Arrangements, ${arrangementsReviewCount.value} need review` : undefined,
+        },
+      ]
+    : []),
+  ...(showRegistrationsTab.value
+    ? [{ key: "registrations" as const, label: `Registrations (${registeredCount.value})` }]
+    : []),
+  { key: "history" as const, label: "History" },
+]);
+
 onMounted(async () => {
   const id = route.params.id as string;
   try {
@@ -1208,21 +1251,21 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="content">
-      <button type="button" class="back-link" @click="goBack">&larr; Back</button>
+      <BackLink @click="goBack">Back</BackLink>
 
       <p v-if="loading" class="body-default muted">Loading…</p>
 
-      <div v-else-if="accessDenied" class="denied-panel">
+      <AppPanel size="lg" class="denied-panel" v-else-if="accessDenied">
         <p class="card-title">Access denied</p>
         <p class="body-default muted">
           This event doesn't belong to you, or it doesn't exist. This attempt has been recorded.
         </p>
-      </div>
+      </AppPanel>
 
-      <div v-else-if="notFound" class="denied-panel">
+      <AppPanel size="lg" class="denied-panel" v-else-if="notFound">
         <p class="card-title">Event not found</p>
         <p class="body-default muted">This event does not exist.</p>
-      </div>
+      </AppPanel>
 
       <p v-else-if="errorMessage" class="body-default error-text">{{ errorMessage }}</p>
 
@@ -1233,7 +1276,7 @@ onMounted(async () => {
               <p class="body-default muted event-id">
                 Event #{{ event.id }}
               </p>
-              <span class="badge" :class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</span>
+              <StatusBadge :status-class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</StatusBadge>
             </div>
             <h1 class="event-header text-3xl">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}`
               }}</h1>
@@ -1257,26 +1300,7 @@ onMounted(async () => {
           :submitted-at="event.created_at" :review-outcome="event.review_outcome" title="Event Timeline"
           :show-outstanding="false" />
 
-        <div class="tab-bar">
-          <button type="button" class="tab-btn" :class="{ active: activeTab === 'overview' }"
-            @click="activeTab = 'overview'">
-            Overview
-          </button>
-          <button v-if="showArrangementsTab" type="button" class="tab-btn"
-            :class="{ active: activeTab === 'arrangements' }" @click="activeTab = 'arrangements'"
-            :aria-label="arrangementsReviewCount > 0 ? `Arrangements, ${arrangementsReviewCount} need review` : undefined">
-            Arrangements
-            <span v-if="arrangementsReviewCount > 0" class="tab-badge" data-testid="arrangements-badge">{{ arrangementsReviewCount }}</span>
-          </button>
-          <button v-if="showRegistrationsTab" type="button" class="tab-btn"
-            :class="{ active: activeTab === 'registrations' }" @click="activeTab = 'registrations'">
-            Registrations ({{ registeredCount }})
-          </button>
-          <button type="button" class="tab-btn" :class="{ active: activeTab === 'history' }"
-            @click="activeTab = 'history'">
-            History
-          </button>
-        </div>
+        <UnderlineTabs v-model="activeTab" class="tab-bar" :tabs="detailTabs" aria-label="Event sections" />
 
         <!-- Registrations tab: kept mounted (hidden) so the count in the tab label is known on load -->
         <RegistrationsPanel v-if="showRegistrationsTab" v-show="activeTab === 'registrations'" :event-id="event.id"
@@ -1287,7 +1311,7 @@ onMounted(async () => {
         <div v-show="activeTab === 'overview' || activeTab === 'history'" class="detail-grid">
           <div class="detail-grid-col">
             <template v-if="activeTab === 'overview'">
-              <div class="details-card">
+              <AppPanel size="lg">
                 <div class="section-header">
                   <h2 class="section-title">Event Details</h2>
                   <AppButton
@@ -1339,7 +1363,7 @@ onMounted(async () => {
                   </div>
                   <div class="field">
                     <p class="body-small muted mb-1">Status</p>
-                    <span class="badge" :class="statusBadgeClass(event.status)">{{ event.status }}</span>
+                    <StatusBadge :status-class="statusBadgeClass(event.status)">{{ event.status }}</StatusBadge>
                   </div>
                 </div>
                 <hr class="divider" />
@@ -1401,8 +1425,8 @@ onMounted(async () => {
                     </div>
                     <div class="field">
                       <p class="body-small muted mb-1">Purpose</p>
-                      <span class="badge badge-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
-                      }}</span>
+                      <StatusBadge status-class="status-neutral">{{ asSubmittedDetails(event.submitted_details).purpose || "—"
+                      }}</StatusBadge>
                     </div>
                     <div class="field">
                       <p class="body-small muted mb-1">Expected attendance</p>
@@ -1527,12 +1551,12 @@ onMounted(async () => {
                     </p>
                   </div>
                 </div>
-              </div>
+              </AppPanel>
 
               <!-- E3-9: the organiser's own latest change request on this event — what's
      still awaiting review, and what's already live. Not the coordinator's
      decision screen (E3-11). -->
-              <div v-if="isOwnerView && latestChangeRequest" class="details-card change-request-card">
+              <AppPanel size="lg" class="change-request-card" v-if="isOwnerView && latestChangeRequest">
                 <div class="section-header">
                   <div>
                     <h2 class="section-title">Your change request</h2>
@@ -1541,8 +1565,8 @@ onMounted(async () => {
                       {{ formatDate(latestChangeRequest.createdAt) }}
                     </p>
                   </div>
-                  <span class="badge" :class="changeRequestBadgeClass(latestChangeRequest)">{{
-                    organiserChangeRequestBadgeLabel(latestChangeRequest) }}</span>
+                  <StatusBadge :status-class="changeRequestBadgeClass(latestChangeRequest)">{{
+                    organiserChangeRequestBadgeLabel(latestChangeRequest) }}</StatusBadge>
                 </div>
 
                 <template v-if="heldFields.length > 0">
@@ -1619,26 +1643,23 @@ onMounted(async () => {
                     </template>
                   </p>
                 </div>
-              </div>
+              </AppPanel>
 
               <!-- E3-8 AC2/AC4: the assigned coordinator's read-only review of a held
      change request — affected bookings/equipment/registrations, and a
      capacity conflict if the requested attendance exceeds a booked
      venue's capacity. No approve/reject here (E3-11, not built). -->
               <section v-if="isAssignedCoordinator && coordinatorChangeRequest" aria-labelledby="change-review-title">
-                <div class="details-card change-request-card">
+                <AppPanel size="lg" class="change-request-card">
                   <div class="section-header">
                     <h2 id="change-review-title" class="section-title">
                       {{ pendingChangeRequest ? "Change request pending your review" : "Change request" }}
                     </h2>
                     <div class="change-request-card__header-actions">
-                      <button type="button" class="btn-icon" title="Refresh" aria-label="Refresh this change request"
-                        :disabled="refreshingChangeRequest" @click="refreshChangeRequestCard">
-                        <ArrowPathIcon class="btn-icon__svg"
-                          :class="{ 'btn-icon__svg--spinning': refreshingChangeRequest }" aria-hidden="true" />
-                      </button>
-                      <span class="badge" :class="changeRequestBadgeClass(coordinatorChangeRequest)">{{
-                        changeRequestBadgeLabel(coordinatorChangeRequest) }}</span>
+                      <IconButton label="Refresh this change request" size="sm" tone="brand" title="Refresh" :disabled="refreshingChangeRequest" @click="refreshChangeRequestCard"><ArrowPathIcon
+             :class="{ 'btn-icon__svg--spinning': refreshingChangeRequest }" aria-hidden="true" /></IconButton>
+                      <StatusBadge :status-class="changeRequestBadgeClass(coordinatorChangeRequest)">{{
+                        changeRequestBadgeLabel(coordinatorChangeRequest) }}</StatusBadge>
                     </div>
                   </div>
                   <p class="body-small muted mb-1">Submitted {{ formatDate(coordinatorChangeRequest.createdAt) }}</p>
@@ -1676,68 +1697,49 @@ onMounted(async () => {
                           Select the fields to approve. Unselected changes will not be approved.
                         </p>
 
-                        <div class="change-review-table-wrap">
-                          <table class="change-review-table">
-                            <thead>
-                              <tr>
-                                <th class="change-review-table__field-col">Field to approve</th>
-                                <th>Current</th>
-                                <th>Requested</th>
-                                <th>Review status</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              <tr v-for="field in appliedCriticalFields" :key="field.field"
-                                class="change-review-table__row--applied">
-                                <td>
-                                  <span class="change-review-table__checkbox-label">
-                                    <CheckIcon class="change-review-table__applied-icon" aria-hidden="true" />
-                                    <span>{{ CHANGE_REQUEST_FIELD_LABELS[field.field as keyof EventRequestPayload] ??
-                                      field.field }}</span>
-                                  </span>
-                                </td>
-                                <td class="change-review-table__current">{{ field.oldValue ?? "—" }}</td>
-                                <td class="change-review-table__requested">
-                                  <ArrowRightIcon class="change-review-table__arrow" aria-hidden="true" />
-                                  {{ field.newValue }}
-                                </td>
-                                <td>
-                                  <span
-                                    class="change-review-table__status change-review-table__status--applied">Applied</span>
-                                </td>
-                              </tr>
-                              <tr v-for="field in heldCriticalFields" :key="field.field">
-                                <td>
-                                  <label class="change-review-table__checkbox-label">
-                                    <input type="checkbox" :checked="isFieldApproved(field.field)"
-                                      :disabled="changeDecisionSubmitting" @change="toggleFieldApproval(field.field)" />
-                                    <span>{{ CHANGE_REQUEST_FIELD_LABELS[field.field as keyof EventRequestPayload] ??
-                                      field.field }}</span>
-                                  </label>
-                                </td>
-                                <td class="change-review-table__current">{{ field.oldValue ?? "—" }}</td>
-                                <td class="change-review-table__requested">
-                                  <ArrowRightIcon class="change-review-table__arrow" aria-hidden="true" />
-                                  {{ field.newValue }}
-                                </td>
-                                <td>
-                                  <span v-if="fieldReviewStatus(field.field) === 'capacity'"
-                                    class="change-review-table__status change-review-table__status--conflict">
-                                    <ExclamationTriangleIcon class="change-review-table__status-icon"
-                                      aria-hidden="true" />
-                                    Capacity conflict
-                                  </span>
-                                  <span v-else-if="fieldReviewStatus(field.field) === 'availability'"
-                                    class="change-review-table__status change-review-table__status--conflict">
-                                    <ExclamationTriangleIcon class="change-review-table__status-icon"
-                                      aria-hidden="true" />
-                                    Availability conflict
-                                  </span>
-                                </td>
-                              </tr>
-                            </tbody>
-                          </table>
-                        </div>
+                        <DataTable
+                          class="change-review-table"
+                          :columns="CHANGE_REVIEW_COLUMNS"
+                          :column-widths="CHANGE_REVIEW_WIDTHS"
+                          column-gap="var(--spacing-16)"
+                          :rows="changeReviewRows"
+                          :row-key="(row) => row.field"
+                        >
+                          <template #cell-field="{ row }">
+                            <span v-if="row.applied" class="change-review-table__checkbox-label">
+                              <CheckIcon class="change-review-table__applied-icon" aria-hidden="true" />
+                              <span>{{ CHANGE_REQUEST_FIELD_LABELS[row.field as keyof EventRequestPayload] ?? row.field }}</span>
+                            </span>
+                            <label v-else class="change-review-table__checkbox-label">
+                              <input type="checkbox" :checked="isFieldApproved(row.field)"
+                                :disabled="changeDecisionSubmitting" @change="toggleFieldApproval(row.field)" />
+                              <span>{{ CHANGE_REQUEST_FIELD_LABELS[row.field as keyof EventRequestPayload] ?? row.field }}</span>
+                            </label>
+                          </template>
+                          <template #cell-current="{ row }">
+                            <span class="change-review-table__current">{{ row.oldValue ?? "—" }}</span>
+                          </template>
+                          <template #cell-requested="{ row }">
+                            <span class="change-review-table__requested">
+                              <ArrowRightIcon class="change-review-table__arrow" aria-hidden="true" />
+                              {{ row.newValue }}
+                            </span>
+                          </template>
+                          <template #cell-status="{ row }">
+                            <StatusBadge v-if="row.applied" class="change-review-table__status--applied"
+                              status-class="status-success">Applied</StatusBadge>
+                            <StatusBadge v-else-if="fieldReviewStatus(row.field) === 'capacity'"
+                              status-class="status-attention">
+                              <ExclamationTriangleIcon class="change-review-table__status-icon" aria-hidden="true" />
+                              Capacity conflict
+                            </StatusBadge>
+                            <StatusBadge v-else-if="fieldReviewStatus(row.field) === 'availability'"
+                              status-class="status-attention">
+                              <ExclamationTriangleIcon class="change-review-table__status-icon" aria-hidden="true" />
+                              Availability conflict
+                            </StatusBadge>
+                          </template>
+                        </DataTable>
                       </template>
 
                       <div v-else class="proposed-changes__grid">
@@ -1747,10 +1749,10 @@ onMounted(async () => {
                             <p class="body-small muted mb-1">{{ CHANGE_REQUEST_FIELD_LABELS[field.field as keyof
                               EventRequestPayload] ??
                               field.field }}</p>
-                            <span class="badge"
-                              :class="field.outcome === 'applied' ? 'status-success' : 'status-error'">
+                            <StatusBadge
+                              :status-class="field.outcome === 'applied' ? 'status-success' : 'status-error'">
                               {{ field.outcome === "applied" ? "Applied" : "Rejected" }}
-                            </span>
+                            </StatusBadge>
                           </div>
                           <div class="proposed-field">
                             <div>
@@ -1811,8 +1813,8 @@ onMounted(async () => {
                                 <div v-for="booking in coordinatorChangeRequest.impact.bookings" :key="booking.id"
                                   class="reservations__row">
                                   <span class="body-default">{{ booking.venue?.name ?? "Unknown venue" }}</span>
-                                  <span class="badge" :class="reservationStatusBadgeClass(booking.status)">{{
-                                    booking.status }}</span>
+                                  <StatusBadge :status-class="reservationStatusBadgeClass(booking.status)">{{
+                                    booking.status }}</StatusBadge>
                                 </div>
                               </div>
                             </div>
@@ -1824,8 +1826,8 @@ onMounted(async () => {
                                 <div v-for="reservation in coordinatorChangeRequest.impact.equipmentReservations"
                                   :key="reservation.id" class="reservations__row">
                                   <span class="body-default">Request #{{ reservation.id }}</span>
-                                  <span class="badge" :class="reservationStatusBadgeClass(reservation.status)">{{
-                                    reservation.status }}</span>
+                                  <StatusBadge :status-class="reservationStatusBadgeClass(reservation.status)">{{
+                                    reservation.status }}</StatusBadge>
                                 </div>
                               </div>
                             </div>
@@ -1876,7 +1878,7 @@ onMounted(async () => {
                       : "." }}
                     </p>
                   </template>
-                </div>
+                </AppPanel>
               </section>
 
               <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
@@ -1886,7 +1888,7 @@ onMounted(async () => {
             <template v-else>
               <!-- E2-7 AC3: structured edit history, same visibility as the
                    clarification thread (owning organiser or any coordinator). -->
-              <div v-if="!historyLoading" class="details-card history-card">
+              <AppPanel size="lg" class="history-card" v-if="!historyLoading">
                 <h2 class="section-title">Edit history</h2>
                 <p v-if="historyEntries.length === 0" class="body-default muted" data-testid="history-empty">
                   No edit history yet. Changes made to this event will appear here.
@@ -1903,19 +1905,19 @@ onMounted(async () => {
                     </p>
                   </li>
                 </ul>
-              </div>
+              </AppPanel>
 
               <!-- E3-9/E3-11: every change request superseded by a later one — same
        visibility as the live card (owning organiser or assigned coordinator). -->
-              <div v-if="(isOwnerView || isAssignedCoordinator) && pastChangeRequests.length > 0"
-                class="details-card history-card">
+              <AppPanel size="lg" v-if="(isOwnerView || isAssignedCoordinator) && pastChangeRequests.length > 0"
+                class="history-card">
                 <h2 class="section-title">Past change requests</h2>
                 <div class="past-change-requests">
                   <div v-for="request in pastChangeRequests" :key="request.id" class="past-change-request">
                     <div class="past-change-request__head">
                       <p class="body-small muted mb-1">Submitted {{ formatDate(request.createdAt) }}</p>
-                      <span class="badge" :class="changeRequestBadgeClass(request)">{{ changeRequestBadgeLabel(request)
-                        }}</span>
+                      <StatusBadge :status-class="changeRequestBadgeClass(request)">{{ changeRequestBadgeLabel(request)
+                        }}</StatusBadge>
                     </div>
 
                     <p v-if="isWithdrawn(request)" class="body-small muted">
@@ -1932,9 +1934,9 @@ onMounted(async () => {
                         <span class="body-small">
                           {{ field.oldValue ?? "—" }}
                           <ArrowRightIcon class="past-change-request__arrow" aria-hidden="true" /> {{ field.newValue }}
-                          <span class="badge" :class="field.outcome === 'applied' ? 'status-success' : 'status-error'">
+                          <StatusBadge :status-class="field.outcome === 'applied' ? 'status-success' : 'status-error'">
                             {{ field.outcome === "applied" ? "Applied" : "Rejected" }}
-                          </span>
+                          </StatusBadge>
                         </span>
                       </div>
                       <p v-if="request.status === 'Rejected'" class="body-small error-text">
@@ -1943,12 +1945,12 @@ onMounted(async () => {
                     </template>
                   </div>
                 </div>
-              </div>
+              </AppPanel>
             </template>
           </div>
 
           <div class="detail-grid-col">
-            <div class="coordinator-card">
+            <AppPanel size="lg" class="coordinator-card">
               <h2 class="section-title !mb-5">Coordinator</h2>
               <div class="coordinator-person">
                 <span class="coordinator-avatar" :class="{ 'coordinator-avatar--empty': !event.coordinator?.name }"
@@ -2126,11 +2128,11 @@ onMounted(async () => {
                 </div>
               </div>
 
-            </div>
+            </AppPanel>
 
             <!-- Registration period: when it opens, and the manual open/close. Its own card, apart from the
                  coordinator review actions. -->
-            <div v-if="showRegistrationControls" class="details-card review-actions__form" data-testid="registration-controls">
+            <AppPanel size="lg" class="review-actions__form" v-if="showRegistrationControls" data-testid="registration-controls">
               <h2 class="section-title">Registration</h2>
               <p class="body-small muted">
                 Status: <strong data-testid="registration-state">{{ registrationStateLabel }}</strong>.
@@ -2187,10 +2189,10 @@ onMounted(async () => {
                   Use automatic schedule
                 </AppButton>
               </div>
-            </div>
+            </AppPanel>
 
             <!-- The organiser's read-only view of the Registration card above: when registration opens. -->
-            <div v-if="showOwnerRegistration" class="details-card" data-testid="registration-info-owner">
+            <AppPanel size="lg" v-if="showOwnerRegistration" data-testid="registration-info-owner">
               <h2 class="section-title">Registration</h2>
               <p v-if="event.registration_open_date" class="body-small muted" data-testid="registration-open-date-owner">
                 Registration opens on
@@ -2202,7 +2204,7 @@ onMounted(async () => {
               <p v-else class="body-small muted" data-testid="registration-open-date-owner">
                 The coordinator hasn't set the registration open date yet.
               </p>
-            </div>
+            </AppPanel>
 
             <!-- E6: the organiser sees when registration opens, its state and when it closes, with no controls. -->
             <RegistrationPeriodCard v-if="showRegistrationPeriod" :status="event.status"
@@ -2219,9 +2221,8 @@ onMounted(async () => {
 
             <!-- E3-6: a popup for the mandatory cancellation reason, same pattern as
      VenueRequestsPanel's withdraw/release confirm dialog. -->
-            <div v-if="confirmingCancel" class="modal-overlay" @click.self="closeCancel">
-              <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="cancel-event-title">
-                <p id="cancel-event-title" class="modal-title">Cancel this event?</p>
+            <AppModal v-if="confirmingCancel" role="alertdialog" :dismissible="!cancelling" @close="closeCancel">
+              <template #title>Cancel this event?</template>
                 <p class="body-default muted">
                   Cancelling releases every venue booking and equipment reservation, and notifies
                   {{ event.coordinator_id ? "your coordinator" : "the Event Coordinator Leads" }} and anyone registered.
@@ -2234,8 +2235,7 @@ onMounted(async () => {
                 <textarea id="cancel-reason" v-model="cancelReason" rows="3" class="review-actions__textarea"
                   placeholder="Let your coordinator and attendees know why this event is being cancelled…" />
                 <p v-if="cancelError" class="body-default error-text" role="alert">{{ cancelError }}</p>
-
-                <div class="modal-actions">
+              <template #actions>
                   <AppButton variant="outline" type="button" :disabled="cancelling" @click="closeCancel">
                     Keep event
                   </AppButton>
@@ -2243,9 +2243,8 @@ onMounted(async () => {
                     @click="handleCancel">
                     {{ cancelling ? "Cancelling…" : "Confirm cancellation" }}
                   </AppButton>
-                </div>
-              </div>
-            </div>
+              </template>
+            </AppModal>
           </div>
         </div>
 
@@ -2283,7 +2282,7 @@ onMounted(async () => {
                     <AppButton variant="primary" :to="{ name: 'venue-search', query: findVenuesQuery }">
                       Find venues
                     </AppButton>
-                    <button type="button" class="add-venue__cancel" @click="closeAddVenue">Cancel</button>
+                    <AppButton variant="link" class="add-venue__cancel" @click="closeAddVenue">Cancel</AppButton>
                   </div>
                 </section>
               </div>
@@ -2292,8 +2291,8 @@ onMounted(async () => {
 
           <!-- Venue search for the first request: opens pre-filled with this event's date, time and attendance.
                Once a venue is requested or confirmed, this card gives way to "Request another venue" above. -->
-          <div v-if="isCoordinator && event.status !== 'Rejected' && !venuesRequested"
-            class="details-card venue-search-entry" data-testid="venue-recommendations">
+          <AppPanel size="lg" class="venue-search-entry" v-if="isCoordinator && event.status !== 'Rejected' && !venuesRequested"
+       data-testid="venue-recommendations">
             <h2 class="section-title">Venue Recommendations</h2>
             <!-- E4-17: what the next booking is for; recommendations and Find venues follow it. Re-keyed after
                  each request so the next booking starts from the right defaults. -->
@@ -2306,15 +2305,15 @@ onMounted(async () => {
             <AppButton variant="outline" block :to="{ name: 'venue-search', query: findVenuesQuery }">
               Find venues
             </AppButton>
-          </div>
+          </AppPanel>
 
           <!-- E5-1: equipment requirements, recorded by the assigned coordinator while Planning -->
-          <div v-if="isCoordinator && event.status !== 'Rejected'" class="details-card">
+          <AppPanel size="lg" v-if="isCoordinator && event.status !== 'Rejected'">
             <EquipmentRequestPanel :event-id="event.id"
               :organiser-note="asSubmittedDetails(event.submitted_details).equipment || null"
               :can-submit="canCoordinatorEdit || (isAssignedCoordinator && event.status === 'Needs Review')"
               @submitted="loadEquipmentRequests" @changed="loadEquipmentRequests" />
-          </div>
+          </AppPanel>
         </div>
       </div>
     </div>
@@ -2356,35 +2355,8 @@ onMounted(async () => {
   }
 }
 
-.back-link {
-  display: inline-block;
-  font-size: 0.875rem;
-  font-weight: 700;
-  margin-bottom: var(--spacing-24);
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: inherit;
-  color: var(--color-purple-600);
-  cursor: pointer;
-}
-
-.back-link:hover {
-  color: var(--color-purple-700);
-}
-
-.body-default {
-  font-size: 16px;
-  line-height: 125%;
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .mb-1 {
@@ -2410,42 +2382,6 @@ onMounted(async () => {
 }
 
 
-
-.badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-xs);
-}
-
-.status-success {
-  background: #e5eee5;
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: #FEF5E7;
-  color: var(--color-warning-600);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-.status-info {
-  background: var(--color-warning-200);
-  color: var(--color-warning-700);
-}
-
-.denied-panel {
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-32);
-}
 
 .denied-panel .card-title {
   color: var(--color-error-600);
@@ -2478,24 +2414,6 @@ onMounted(async () => {
   margin: 0;
 }
 
-.tab-bar {
-  display: flex;
-  gap: var(--spacing-48);
-  border-bottom: 1px solid var(--color-grey-100);
-  margin-bottom: var(--spacing-24)
-}
-
-.tab-btn {
-  background: none;
-  border: none;
-  padding: var(--spacing-12) 0;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--color-grey-500);
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-}
-
 /* Count of arrangements needing review (Style.md 2.6 Orange Warning: attention, not an error). */
 /* Arrangements tab: a single column of full-width cards. */
 .arrangements {
@@ -2524,7 +2442,7 @@ onMounted(async () => {
 .add-venue-wrap .add-venue__ghost {
   padding-left: 0;
   padding-right: 0;
-  margin-left: 5px;
+  margin-left: var(--spacing-6);
 }
 
 /* On hover only the text (and icon) darken; no background fill. */
@@ -2553,51 +2471,6 @@ onMounted(async () => {
   gap: var(--spacing-24);
 }
 
-.add-venue__cancel {
-  appearance: none;
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: inherit;
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--color-purple-600);
-  cursor: pointer;
-}
-
-.add-venue__cancel:hover {
-  color: var(--color-purple-700);
-}
-
-.add-venue__cancel:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-  border-radius: var(--radius-xs);
-}
-
-.tab-badge {
-  display: inline-block;
-  margin-left: var(--spacing-8);
-  min-width: 1.25rem;
-  padding: 0 var(--spacing-6);
-  border-radius: var(--radius-full);
-  background: var(--color-warning-200);
-  color: var(--color-warning-900);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1.25rem;
-  text-align: center;
-}
-
-.tab-btn:hover {
-  color: var(--color-grey-900);
-}
-
-.tab-btn.active {
-  color: var(--color-blue-700);
-  border-bottom-color: var(--color-blue-600);
-}
-
 .detail-grid {
   display: grid;
   /* minmax(0, …): a bare fr track won't shrink below its content's width, and the
@@ -2620,14 +2493,6 @@ onMounted(async () => {
   gap: var(--grid-desktop-gutter);
 }
 
-.details-card,
-.coordinator-card {
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-32);
-}
-
 .coordinator-card>.divider {
   margin: var(--spacing-24) 0 var(--spacing-4);
 }
@@ -2638,15 +2503,10 @@ onMounted(async () => {
   margin: var(--spacing-24) 0 ;
 }
 
-.badge-neutral {
-  background: var(--color-purple-100);
-  color: var(--color-purple-800);
-}
-
 .section-title {
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 700;
-  line-height: 1.75rem;
+  line-height: 2rem;
   color: var(--color-grey-900);
   margin-bottom: var(--spacing-12);
 }
@@ -2726,6 +2586,7 @@ onMounted(async () => {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 0.75rem;
+  line-height: 1rem;
 }
 
 .proposed-changes__title {
@@ -2763,7 +2624,7 @@ onMounted(async () => {
   flex-shrink: 0;
   width: var(--spacing-16);
   height: var(--spacing-16);
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .proposed-field__tag {
@@ -2804,39 +2665,9 @@ onMounted(async () => {
 
 /* Per-field review table (E3-11) --------------------------------------- */
 
-.change-review-table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-md);
-  margin-bottom: var(--spacing-24);
-}
-
+/* The review table sits above the conflict list. */
 .change-review-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.change-review-table th {
-  padding: var(--spacing-16) var(--spacing-24);
-  background: var(--color-grey-50);
-  color: var(--color-grey-500);
-  text-align: left;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-
-.change-review-table__field-col {
-  min-width: 11rem;
-}
-
-.change-review-table td {
-  padding: var(--spacing-16) var(--spacing-24);
-  border-top: 1px solid var(--color-grey-100);
-  vertical-align: middle;
+  margin-bottom: var(--spacing-24);
 }
 
 .change-review-table__checkbox-label {
@@ -2867,31 +2698,10 @@ onMounted(async () => {
   color: var(--color-grey-400);
 }
 
-.change-review-table__status {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-4);
-  white-space: nowrap;
-}
-
 .change-review-table__status-icon {
   flex-shrink: 0;
   width: var(--spacing-16);
   height: var(--spacing-16);
-}
-
-.change-review-table__status--conflict {
-  color: var(--color-error-600);
-  font-weight: 700;
-}
-
-.change-review-table__status--applied {
-  color: var(--color-success-600);
-  font-weight: 700;
-}
-
-.change-review-table__row--applied {
-  background: var(--color-success-100);
 }
 
 .change-review-table__applied-icon {
@@ -2931,6 +2741,7 @@ onMounted(async () => {
   background: var(--color-base-white);
   color: var(--color-error-600);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
 }
 
@@ -3039,6 +2850,7 @@ onMounted(async () => {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 0.75rem;
+  line-height: 1rem;
 }
 
 .requested-changes {
@@ -3055,6 +2867,7 @@ onMounted(async () => {
   margin: 0;
   color: var(--color-purple-600);
   font-size: 1.5rem;
+  line-height: 2rem;
   font-weight: 700;
 }
 
@@ -3081,6 +2894,10 @@ onMounted(async () => {
 
 .applied-details__divider {
   color: var(--color-grey-300);
+}
+
+.tab-bar {
+  margin-bottom: var(--spacing-24);
 }
 
 .history-card {
@@ -3151,12 +2968,8 @@ onMounted(async () => {
 
 .edit-input {
   width: 100%;
-  font-family: var(--font-family-lato);
-  font-size: 0.9375rem;
-  color: var(--color-grey-900);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
+  font-size: 1rem;
+  line-height: 1.25rem;
   padding: var(--spacing-8) var(--spacing-12);
 }
 
@@ -3205,19 +3018,20 @@ onMounted(async () => {
   flex-shrink: 0;
   width: 3rem;
   height: 3rem;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--color-purple-200);
   color: var(--color-purple-800);
   font-size: 1.25rem;
+  line-height: 1.75rem;
   font-weight: 700;
 }
 
 .coordinator-avatar--empty {
   background: var(--color-grey-100);
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .coordinator-person__text {
@@ -3227,9 +3041,9 @@ onMounted(async () => {
 
 .coordinator-person__name {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 1.75rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.375rem;
   color: var(--color-grey-900);
   overflow-wrap: anywhere;
 }
@@ -3238,14 +3052,14 @@ onMounted(async () => {
   margin: 0;
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .you-badge {
   flex-shrink: 0;
   font-size: 0.875rem;
   font-weight: 700;
-  line-height: 1rem;
+  line-height: 1.125rem;
   padding: var(--spacing-4) var(--spacing-12);
   border-radius: var(--radius-xs);
   background: var(--color-purple-100);
@@ -3275,20 +3089,9 @@ onMounted(async () => {
 /* Style.md 8.2: inputs and selects get the two-layer focus ring. */
 .lead-panel__select {
   width: 100%;
-  font-family: var(--font-family-lato);
   font-size: 1rem;
   line-height: 1.25rem;
-  color: var(--color-grey-900);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
   padding: var(--spacing-8) var(--spacing-12);
-}
-
-.lead-panel__select:focus {
-  outline: none;
-  border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--ring-light);
 }
 
 .lead-panel__select:disabled {
@@ -3344,7 +3147,7 @@ onMounted(async () => {
 .coordinator-help {
   margin: 0 0 var(--spacing-16);
   font-size: 1rem;
-  line-height: 1.5rem;
+  line-height: 1.25rem;
   color: var(--color-grey-700);
 }
 
@@ -3366,27 +3169,10 @@ onMounted(async () => {
 
 .review-actions__textarea {
   width: 100%;
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
   padding: var(--spacing-12);
   font-size: 1rem;
-  color: var(--color-grey-900);
-  background: var(--color-base-white);
+  line-height: 1.25rem;
   resize: vertical;
-}
-
-.btn-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--color-grey-200);
-  background: var(--color-base-white);
-  color: var(--color-purple-600);
-  cursor: pointer;
 }
 
 /* Edit form labels: larger than the read-only captions, with room above the input. */
@@ -3395,7 +3181,7 @@ onMounted(async () => {
   margin-bottom: var(--spacing-12);
   font-size: 1rem;
   line-height: 1.25rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 /* "Edit details": outlined purple button with a pencil, top-right of the Event Details card. */
@@ -3432,40 +3218,19 @@ onMounted(async () => {
   background: var(--color-purple-600);
 }
 
-.switch:focus-visible {
-  outline: 2px solid var(--color-purple-300);
-  outline-offset: 2px;
-}
-
 .switch__thumb {
   position: absolute;
   top: 2px;
   left: 2px;
   width: 20px;
   height: 20px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--color-base-white);
   transition: transform 0.15s ease;
 }
 
 .switch--on .switch__thumb {
   transform: translateX(20px);
-}
-
-.btn-icon:hover {
-  background: var(--color-purple-100);
-  color: var(--color-purple-700);
-  border-color: var(--color-purple-300);
-}
-
-.btn-icon:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.btn-icon__svg {
-  width: 18px;
-  height: 18px;
 }
 
 .btn-icon__svg--spinning {
@@ -3521,35 +3286,6 @@ onMounted(async () => {
 /* E3-6: the reason popup — same overlay/dialog shell as
    VenueRequestsPanel's withdraw/release confirm modal, so every
    "are you sure" dialog in the app looks and behaves the same way. */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgb(0 0 0 / 40%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-24);
-  z-index: 50;
-}
-
-.modal {
-  background: var(--color-base-white);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-24);
-  max-width: 440px;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-}
-
-.modal-title {
-  font-size: 1.125rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
-  margin: 0 0 var(--spacing-8);
-}
-
 .modal-label {
   margin-top: var(--spacing-16);
 }
@@ -3561,13 +3297,6 @@ onMounted(async () => {
 .modal-emphasis {
   color: var(--color-error-600);
   font-weight: 700;
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--spacing-8);
-  margin-top: var(--spacing-16);
 }
 
 .venue-search-entry {

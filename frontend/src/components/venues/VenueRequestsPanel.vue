@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import AppPanel from "../ui/AppPanel.vue";
+import AppModal from "../ui/AppModal.vue";
+import StatusBadge from "../ui/StatusBadge.vue";
 /**
  * E4-8 AC5: the venue requests made for one event and the state each one
  * is in, so a coordinator can see a request is pending without leaving the
@@ -214,12 +217,12 @@ async function confirmAction(): Promise<void> {
 </script>
 
 <template>
-  <div class="details-card venue-requests">
+  <AppPanel size="lg" class="venue-requests">
     <h2 class="section-title">Venue Requests</h2>
 
-    <p v-if="loading || !props.bookings" class="body-default muted">Loading venue requests…</p>
-    <p v-else-if="loadError" class="body-default error-text">{{ loadError }}</p>
-    <p v-else-if="bookings.length === 0" class="body-default muted">
+    <p v-if="loading || !props.bookings" class="body-small muted">Loading venue requests…</p>
+    <p v-else-if="loadError" class="body-small error-text">{{ loadError }}</p>
+    <p v-else-if="bookings.length === 0" class="body-small muted">
       No venue has been requested for this event yet.
     </p>
 
@@ -232,36 +235,36 @@ async function confirmAction(): Promise<void> {
           <template v-if="suitabilityById.get(booking.id)">
             <p class="request-purpose">{{ purposeAndHeadcount(suitabilityById.get(booking.id)!) }}</p>
             <p v-if="SUITABILITY_STATUSES.has(booking.status) && suitabilityById.get(booking.id)!.suitability
-              && !suitabilityById.get(booking.id)!.suitability!.suitable" class="body-small suitability suitability--bad">
+              && !suitabilityById.get(booking.id)!.suitability!.suitable" class="small-text suitability suitability--bad">
               <XCircleIcon class="suitability__icon" aria-hidden="true" />Unsuitable:
               {{ describeSuitabilityReasons(suitabilityById.get(booking.id)!.suitability!.reasons).join("; ") }}
             </p>
           </template>
-          <p v-if="booking.status === 'On Hold' && booking.holdExpiresAt" class="body-small muted">
+          <p v-if="booking.status === 'On Hold' && booking.holdExpiresAt" class="small-text muted">
             Hold expires {{ formatMoment(booking.holdExpiresAt) }}
           </p>
           <!-- E4-10 AC4: Venue Staff must record why they refused, and the
                coordinator is told it. -->
           <p v-if="(booking.status === 'Rejected' || booking.status === 'Cancelled') && booking.decisionReason"
-            class="body-small reason">
+            class="small-text reason">
             Reason: {{ booking.decisionReason }}
           </p>
-          <p v-if="booking.status === 'Cancelled' && offersReplacement(booking)" class="body-small reason">
+          <p v-if="booking.status === 'Cancelled' && offersReplacement(booking)" class="small-text reason">
             This booking was cancelled automatically. Find a replacement venue for the event.
           </p>
-          <p v-if="booking.status === 'Replacement Required'" class="body-small reason">
+          <p v-if="booking.status === 'Replacement Required'" class="small-text reason">
             This venue is no longer available. Find a replacement, then release this booking.
           </p>
-          <p v-if="actionErrorId === booking.id" class="body-small error-text" role="alert">
+          <p v-if="actionErrorId === booking.id" class="small-text error-text" role="alert">
             {{ actionError }}
           </p>
           <p class="request-requested">Requested {{ formatMoment(booking.createdAt) }}</p>
         </div>
         <div class="request-status">
-          <span class="badge" :class="bookingStatusBadgeClass(booking.status)">
+          <StatusBadge :status-class="bookingStatusBadgeClass(booking.status)">
             <CheckIcon v-if="booking.status === 'Approved'" class="badge__icon" aria-hidden="true" />
             {{ bookingStatusLabel(booking.status) }}
-          </span>
+          </StatusBadge>
           <AppButton v-if="canWithdraw && findReplacementTo && offersReplacement(booking)"
             variant="primary" size="sm" class="action-btn" :to="findReplacementTo">
             Find replacement
@@ -288,11 +291,10 @@ async function confirmAction(): Promise<void> {
     <slot v-if="!loading && props.bookings && !loadError" name="actions" />
 
     <!-- E4-9: a small confirm dialog in place of the browser's native confirm(). -->
-    <div v-if="pendingAction" class="modal-overlay" @click.self="cancelAction">
-      <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="withdraw-confirm-title">
-        <p id="withdraw-confirm-title" class="modal-title">{{ pendingActionCopy.title }}</p>
-        <p class="body-default muted">{{ pendingActionCopy.body }}</p>
-        <div class="modal-actions">
+    <AppModal v-if="pendingAction" role="alertdialog" :dismissible="actingId === null" @close="cancelAction">
+      <template #title>{{ pendingActionCopy.title }}</template>
+        <p class="body-small muted">{{ pendingActionCopy.body }}</p>
+      <template #actions>
           <AppButton variant="outline" type="button" :disabled="actingId !== null"
             @click="cancelAction">
             Cancel
@@ -301,10 +303,9 @@ async function confirmAction(): Promise<void> {
             @click="confirmAction">
             {{ actingId !== null ? "Working…" : pendingActionCopy.confirmLabel }}
           </AppButton>
-        </div>
-      </div>
-    </div>
-  </div>
+      </template>
+    </AppModal>
+  </AppPanel>
 </template>
 
 <style scoped>
@@ -317,22 +318,18 @@ async function confirmAction(): Promise<void> {
 
 .section-title {
   font-size: 1.125rem;
+  line-height: 1.375rem;
   font-weight: 700;
   color: var(--color-grey-900);
   margin-bottom: var(--spacing-16);
 }
 
-.body-default {
-  font-size: 0.875rem;
+.body-small {
   color: var(--color-grey-900);
 }
 
-.body-small {
-  font-size: 0.75rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -399,7 +396,7 @@ async function confirmAction(): Promise<void> {
 .request-location {
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .request-name {
@@ -412,7 +409,7 @@ async function confirmAction(): Promise<void> {
 
 .request-purpose {
   font-size: 1rem;
-  line-height: 1.5rem;
+  line-height: 1.25rem;
   color: var(--color-grey-700);
 }
 
@@ -421,19 +418,7 @@ async function confirmAction(): Promise<void> {
   margin-top: var(--spacing-24);
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  font-size: 1rem;
-  font-weight: 700;
-  line-height: 1.25rem;
-  padding: var(--spacing-8) var(--spacing-16);
-  border-radius: var(--radius-xs);
-  white-space: nowrap;
+  color: var(--color-grey-600);
 }
 
 .badge__icon {
@@ -513,6 +498,7 @@ async function confirmAction(): Promise<void> {
   border-radius: var(--radius-xs);
   font-family: inherit;
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   text-align: left;
   white-space: nowrap;
@@ -533,59 +519,6 @@ async function confirmAction(): Promise<void> {
   .request-status {
     align-self: flex-start;
   }
-}
-
-.status-success {
-  background: #e5eee5;
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: #fef5e7;
-  color: var(--color-warning-600);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-.status-info {
-  background: var(--color-warning-200);
-  color: var(--color-warning-700);
-}
-
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgb(0 0 0 / 40%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-24);
-  z-index: 50;
-}
-
-.modal {
-  background: var(--color-base-white);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-24);
-  max-width: 400px;
-  width: 100%;
-}
-
-.modal-title {
-  font-size: 1.125rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
-  margin: 0 0 var(--spacing-8);
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--spacing-8);
-  margin-top: var(--spacing-24);
 }
 
 </style>

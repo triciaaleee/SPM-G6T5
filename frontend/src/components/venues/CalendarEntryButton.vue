@@ -152,11 +152,11 @@ const label = computed(() =>
   border-left-style: solid;
 }
 
-/* Replacement Required: the venue became unavailable after booking, so it reads as a problem. */
+/* Replacement Required: needs a new venue, so it takes the Orange Warning "needs action" colours (Style.md 3.5). */
 .entry--replace {
-  --entry-bg: var(--color-error-200);
-  --entry-border: var(--color-error-600);
-  --entry-text: var(--color-error-800);
+  --entry-bg: var(--color-warning-200);
+  --entry-border: var(--color-warning-300);
+  --entry-text: var(--color-warning-900);
 }
 
 /* Block-out: a flat grey, no stripes. */

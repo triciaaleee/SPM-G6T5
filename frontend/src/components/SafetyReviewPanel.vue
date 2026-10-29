@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppPanel from "./ui/AppPanel.vue";
 /**
  * E3-4: the assigned coordinator submits a Planning event for the Safety
  * Officer's Operational Safety Check. The safety notes are all required
@@ -193,11 +194,11 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <section class="sr-panel" aria-labelledby="safety-review-title">
+  <AppPanel as="section" size="lg" class="sr-panel" aria-labelledby="safety-review-title">
     <h2 id="safety-review-title" class="sr-title">Ready for safety review</h2>
 
     <div v-if="lastReturnedDecision" class="sr-decision" data-testid="safety-decision">
-      <p class="body-small font-semibold">{{ DECISION_HEADINGS[lastReturnedDecision.outcome] }}</p>
+      <p class="body-small font-bold">{{ DECISION_HEADINGS[lastReturnedDecision.outcome] }}</p>
       <p class="body-small">
         {{ lastReturnedDecision.officer?.name ?? "Safety Officer" }}, {{ formatTimestamp(lastReturnedDecision.created_at) }}
       </p>
@@ -235,7 +236,7 @@ async function submit(): Promise<void> {
 
       <form v-else class="sr-form" novalidate @submit.prevent="submit">
         <div v-if="outstanding" class="sr-outstanding" role="alert">
-          <p class="body-small font-semibold">Settle these before submitting:</p>
+          <p class="body-small font-bold">Settle these before submitting:</p>
           <ul class="sr-outstanding__list">
             <li v-if="outstanding.noApprovedVenue" class="body-small">This event has no approved venue booking.</li>
             <li v-for="booking in outstanding.bookings" :key="`b-${booking.bookingId}`" class="body-small">
@@ -275,22 +276,12 @@ async function submit(): Promise<void> {
         </div>
       </form>
     </template>
-  </section>
+  </AppPanel>
 </template>
 
 <style scoped>
-.body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -302,10 +293,6 @@ async function submit(): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-24);
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-32);
 }
 
 .sr-title {
@@ -340,7 +327,7 @@ async function submit(): Promise<void> {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   border: 2px solid var(--color-grey-300);
   background: var(--color-base-white);
   color: var(--color-base-white);
@@ -390,7 +377,7 @@ async function submit(): Promise<void> {
   margin: var(--spacing-2) 0 0;
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .sr-badge {
@@ -428,7 +415,7 @@ async function submit(): Promise<void> {
   margin: 0;
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin-top:-12px;
 }
 
@@ -490,18 +477,10 @@ async function submit(): Promise<void> {
 
 .sr-input {
   width: 100%;
-  font-family: var(--font-family-lato);
-  font-size: 0.9375rem;
-  color: var(--color-grey-900);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
+  font-size: 1rem;
+  line-height: 1.25rem;
   padding: var(--spacing-8) var(--spacing-12);
   resize: vertical;
-}
-
-.sr-input[aria-invalid="true"] {
-  border-color: var(--color-error-600);
 }
 
 .sr-actions {

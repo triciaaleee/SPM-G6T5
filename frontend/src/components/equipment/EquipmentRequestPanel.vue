@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import IconButton from "../ui/IconButton.vue";
+import AppModal from "../ui/AppModal.vue";
+import StatusBadge from "../ui/StatusBadge.vue";
 /**
  * E5-1: the assigned coordinator records what equipment an event needs.
  * Lives in the event detail page's Equipment Requirements card, alongside
@@ -18,7 +21,7 @@
  */
 import AppButton from "../ui/AppButton.vue";
 import DataTable from "../ui/DataTable.vue";
-import { PlusIcon } from "@heroicons/vue/20/solid";
+import { PlusIcon, XMarkIcon } from "@heroicons/vue/20/solid";
 import { computed, onMounted, reactive, ref } from "vue";
 import {
   CANCELLED_REQUEST_STATUS,
@@ -327,7 +330,7 @@ function statusBadgeClass(status: string): string {
 
 <template>
   <section class="eq-panel" aria-labelledby="equipment-requests-title">
-    <p id="equipment-requests-title" class="body-default font-semibold eq-title">Equipment Requirements</p>
+    <p id="equipment-requests-title" class="body-default font-bold eq-title">Equipment Requirements</p>
 
     <p v-if="loading" class="body-small muted">Loading equipment requests…</p>
 
@@ -341,7 +344,7 @@ function statusBadgeClass(status: string): string {
           :data-testid="`eq-request-${r.id}`"
         >
           <div class="eq-request__header">
-            <span class="badge" :class="statusBadgeClass(r.status)">{{ r.status }}</span>
+            <StatusBadge :status-class="statusBadgeClass(r.status)">{{ r.status }}</StatusBadge>
             <p class="body-small muted">Submitted {{ formatDate(r.createdAt) }}</p>
           </div>
           <!-- E5-3 AC1/AC2: Technical Support's status updates, and what's left outstanding, as they happen -->
@@ -420,22 +423,14 @@ function statusBadgeClass(status: string): string {
                     {{ amendErrors[`items[${index}].quantity`] }}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  class="eq-remove"
-                  :disabled="amendRows.length === 1"
-                  aria-label="Remove item"
-                  @click="removeAmendRow(index)"
-                >
-                  &times;
-                </button>
+                <IconButton label="Remove item" size="sm" class="eq-remove" :disabled="amendRows.length === 1" @click="removeAmendRow(index)"><XMarkIcon aria-hidden="true" /></IconButton>
               </div>
               <p v-if="releaseNote(row)" class="body-small eq-release-note" data-testid="release-note">{{ releaseNote(row) }}</p>
             </div>
 
             <p v-for="note in removedReserved" :key="note" class="body-small eq-release-note" data-testid="removed-note">{{ note }}</p>
 
-            <button type="button" class="eq-add" @click="addAmendRow">+ Add another item</button>
+            <AppButton variant="link" class="eq-add" @click="addAmendRow">+ Add another item</AppButton>
 
             <div class="eq-form-actions">
               <AppButton variant="primary" type="button" :disabled="amending" data-testid="save-amendment" @click="saveAmendment(r)">
@@ -486,18 +481,10 @@ function statusBadgeClass(status: string): string {
                 {{ fieldErrors[`items[${index}].quantity`] }}
               </p>
             </div>
-            <button
-              type="button"
-              class="eq-remove"
-              :disabled="formItems.length === 1"
-              aria-label="Remove item"
-              @click="removeItem(index)"
-            >
-              &times;
-            </button>
+            <IconButton label="Remove item" size="sm" class="eq-remove" :disabled="formItems.length === 1" @click="removeItem(index)"><XMarkIcon aria-hidden="true" /></IconButton>
           </div>
 
-          <button type="button" class="eq-add" @click="addItem">+ Add another item</button>
+          <AppButton variant="link" class="eq-add" @click="addItem">+ Add another item</AppButton>
 
           <div class="eq-form-actions">
             <AppButton variant="primary" type="button" :disabled="submitting" @click="submit">
@@ -514,9 +501,8 @@ function statusBadgeClass(status: string): string {
     </template>
 
     <!-- E5-2 AC3: cancelling releases everything reserved at once, so confirm first. -->
-    <div v-if="cancelTarget" class="modal-overlay" @click.self="keepRequest" @keydown.esc="keepRequest">
-      <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="cancel-eq-title" aria-describedby="cancel-eq-body">
-        <p id="cancel-eq-title" class="modal-title">Cancel this equipment request?</p>
+    <AppModal v-if="cancelTarget" role="alertdialog" :dismissible="!cancelling" described-by="cancel-eq-body" @close="keepRequest">
+      <template #title>Cancel this equipment request?</template>
         <p id="cancel-eq-body" class="body-default muted">
           <template v-if="reservedCount(cancelTarget) > 0">
             {{ reservedCount(cancelTarget) }} reserved {{ reservedCount(cancelTarget) === 1 ? "item" : "items" }} will be
@@ -525,30 +511,19 @@ function statusBadgeClass(status: string): string {
           Technical Support will be notified.
         </p>
         <p v-if="cancelError" class="body-small error-text" role="alert">{{ cancelError }}</p>
-        <div class="modal-actions">
+      <template #actions>
           <AppButton variant="outline" :disabled="cancelling" @click="keepRequest">Keep request</AppButton>
           <AppButton variant="danger-solid" :disabled="cancelling" data-testid="confirm-cancel" @click="confirmCancel">
             {{ cancelling ? "Cancelling…" : "Cancel request" }}
           </AppButton>
-        </div>
-      </div>
-    </div>
+      </template>
+    </AppModal>
   </section>
 </template>
 
 <style scoped>
-.body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -588,7 +563,7 @@ function statusBadgeClass(status: string): string {
 
 .eq-request--cancelled .eq-items,
 .eq-request--cancelled .eq-items strong {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   opacity: 0.8;
 }
 
@@ -611,15 +586,6 @@ function statusBadgeClass(status: string): string {
   margin: var(--spacing-8) 0 0;
 }
 
-.badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-xs);
-}
-
 /* One item's own progress inside the table; the request's single status stays the header .badge. */
 .eq-item-state {
   display: inline-block;
@@ -629,21 +595,6 @@ function statusBadgeClass(status: string): string {
   line-height: 1rem;
   padding: var(--spacing-4) var(--spacing-8);
   border-radius: var(--radius-xs);
-}
-
-.status-neutral {
-  background: var(--color-purple-100);
-  color: var(--color-purple-800);
-}
-
-.status-success {
-  background: #e5eee5;
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: #fef5e7;
-  color: var(--color-warning-600);
 }
 
 /* Cancelled: neutral grey, like a finished event's badge (EventCard's status-over). */
@@ -697,7 +648,7 @@ function statusBadgeClass(status: string): string {
   align-self: flex-start;
   padding-left: 0;
   padding-right: 0;
-  margin-left: 5px;
+  margin-left: var(--spacing-6);
 }
 
 .eq-action .eq-new-request:hover:not(:disabled):not(.btn--disabled) {
@@ -763,12 +714,8 @@ function statusBadgeClass(status: string): string {
 
 .eq-input {
   width: 100%;
-  font-family: var(--font-family-lato);
-  font-size: 0.9375rem;
-  color: var(--color-grey-900);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
+  font-size: 1rem;
+  line-height: 1.25rem;
   padding: var(--spacing-8) var(--spacing-12);
 }
 
@@ -783,33 +730,6 @@ function statusBadgeClass(status: string): string {
 .eq-remove {
   align-self: center;
   margin-top: var(--spacing-24);
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  background: var(--color-base-white);
-  color: var(--color-error-600);
-  cursor: pointer;
-}
-
-.eq-remove:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.eq-add {
-  align-self: flex-start;
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--color-purple-600);
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.eq-add:hover {
-  text-decoration: underline;
 }
 
 .eq-form-actions {
@@ -829,39 +749,5 @@ function statusBadgeClass(status: string): string {
 }
 
 /* Cancel confirmation: same modal as the attendee's withdraw dialog, over the Drawer scrim (Style.md 3.5). */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-24);
-  background: var(--color-grey-alpha-40-dark);
-}
-
-.modal {
-  width: 100%;
-  max-width: 400px;
-  padding: var(--spacing-24);
-  background: var(--color-base-white);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-popover);
-}
-
 /* Subheading, bold */
-.modal-title {
-  margin: 0 0 var(--spacing-8);
-  font-size: 1.125rem;
-  line-height: 1.375rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--spacing-8);
-  margin-top: var(--spacing-24);
-}
 </style>

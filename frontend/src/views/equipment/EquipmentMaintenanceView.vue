@@ -70,18 +70,11 @@ import EquipmentUnitsPanel from "../../components/equipment/EquipmentUnitsPanel.
 }
 
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
-  font-weight: 400;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
 </style>

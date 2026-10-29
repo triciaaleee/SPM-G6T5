@@ -99,41 +99,27 @@ async function handleSubmit() {
 }
 
 .h3 {
-  font-size: 2rem;
-  font-weight: 700;
-  line-height: 2.5rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 var(--spacing-24);
 }
 
 .field-label {
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-700);
   margin-bottom: var(--spacing-4);
 }
 
 .text-input {
-  font-family: var(--font-family-lato);
   font-size: 1rem;
+  line-height: 1.25rem;
   padding: var(--spacing-12);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
   margin-bottom: var(--spacing-16);
-  background: var(--color-base-white);
-  color: var(--color-grey-900);
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
 }
 
 .error-text {
@@ -152,7 +138,7 @@ async function handleSubmit() {
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .signup-hint {

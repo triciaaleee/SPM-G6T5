@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import IconButton from "../ui/IconButton.vue";
+import AppButton from "../ui/AppButton.vue";
 /**
  * E2-15: a live chat between an Organiser and their event's assigned
  * coordinator. Mounted once in App.vue (sibling to RouterView, not inside
@@ -242,9 +244,7 @@ onBeforeUnmount(() => {
         <template v-if="activeEventId === null">
           <div class="panel__header">
             <p class="panel__title">Conversations</p>
-            <button type="button" class="icon-btn" aria-label="Collapse chat" @click="toggle">
-              <ChevronRightIcon class="icon-btn__icon" aria-hidden="true" />
-            </button>
+            <IconButton label="Collapse chat" size="sm" @click="toggle"><ChevronRightIcon aria-hidden="true" /></IconButton>
           </div>
 
           <p v-if="threadsLoading" class="body-small muted panel__message">Loading…</p>
@@ -276,17 +276,13 @@ onBeforeUnmount(() => {
         <template v-else>
           <div class="panel__header">
             <div class="panel__header-info">
-              <button v-if="!onEventPage" type="button" class="icon-btn icon-btn--inline" aria-label="Back to conversations" @click="backToInbox">
-                <ArrowLeftIcon class="icon-btn__icon" aria-hidden="true" />
-              </button>
+              <IconButton label="Back to conversations" size="sm" v-if="!onEventPage" @click="backToInbox"><ArrowLeftIcon aria-hidden="true" /></IconButton>
               <div>
                 <p class="panel__title">{{ activeSummary?.eventName ?? history?.event.name ?? "Chat" }}</p>
                 <p v-if="activeSummary" class="body-small muted panel__subtitle">{{ activeSummary.otherParty }}</p>
               </div>
             </div>
-            <button type="button" class="icon-btn" aria-label="Collapse chat" @click="toggle">
-              <ChevronRightIcon class="icon-btn__icon" aria-hidden="true" />
-            </button>
+            <IconButton label="Collapse chat" size="sm" @click="toggle"><ChevronRightIcon aria-hidden="true" /></IconButton>
           </div>
 
           <p v-if="historyLoading && !history" class="body-small muted panel__message">Loading…</p>
@@ -321,9 +317,9 @@ onBeforeUnmount(() => {
                   :disabled="sending"
                   @keydown.enter.exact.prevent="send"
                 />
-                <button type="button" class="btn-send" :disabled="sending || !composerText.trim()" @click="send">
+                <AppButton variant="primary" size="sm" class="btn-send" :disabled="sending || !composerText.trim()" @click="send">
                   Send
-                </button>
+                </AppButton>
               </div>
             </div>
           </template>
@@ -338,13 +334,8 @@ onBeforeUnmount(() => {
   position: relative;
 }
 
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -471,33 +462,6 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: var(--spacing-32);
-  height: var(--spacing-32);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-grey-700);
-  cursor: pointer;
-}
-
-.icon-btn:hover {
-  background: var(--color-grey-75);
-}
-
-.icon-btn--inline {
-  margin-left: calc(-1 * var(--spacing-8));
-}
-
-.icon-btn__icon {
-  width: var(--spacing-20, 20px);
-  height: var(--spacing-20, 20px);
-}
-
 /* Inbox list. */
 .thread-list {
   list-style: none;
@@ -536,7 +500,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-row__name {
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
@@ -544,12 +509,14 @@ onBeforeUnmount(() => {
 .thread-row__when {
   flex-shrink: 0;
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
 }
 
 .thread-row__event {
   margin: 0;
   font-size: 0.75rem;
+  line-height: 1rem;
   color: var(--color-purple-700);
 }
 
@@ -562,7 +529,8 @@ onBeforeUnmount(() => {
 
 .thread-row__preview {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-700);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -577,6 +545,7 @@ onBeforeUnmount(() => {
   background: var(--color-purple-600);
   color: var(--color-base-white);
   font-size: 0.6875rem;
+  line-height: 0.875rem;
   font-weight: 700;
   text-align: center;
 }
@@ -614,7 +583,7 @@ onBeforeUnmount(() => {
 .bubble__body {
   margin: 0;
   font-size: 0.875rem;
-  line-height: 1.25rem;
+  line-height: 1.125rem;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -622,6 +591,7 @@ onBeforeUnmount(() => {
 .bubble__time {
   margin: var(--spacing-2) 0 0;
   font-size: 0.6875rem;
+  line-height: 0.875rem;
   opacity: 0.7;
 }
 
@@ -645,12 +615,8 @@ onBeforeUnmount(() => {
   flex: 1;
   min-width: 0;
   max-height: 96px;
-  font-family: var(--font-family-lato);
   font-size: 0.875rem;
-  color: var(--color-grey-900);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
+  line-height: 1.125rem;
   padding: var(--spacing-8) var(--spacing-12);
   resize: none;
 }
@@ -659,25 +625,8 @@ onBeforeUnmount(() => {
   opacity: 0.6;
 }
 
-.btn-send {
-  flex-shrink: 0;
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-base-white);
-  background: var(--color-purple-600);
-  border: 1px solid transparent;
-  border-radius: var(--radius-xs);
-  padding: var(--spacing-8) var(--spacing-16);
-  cursor: pointer;
-}
-
 .btn-send:not(:disabled):hover {
   background: var(--color-purple-700, var(--color-purple-600));
 }
 
-.btn-send:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
 </style>

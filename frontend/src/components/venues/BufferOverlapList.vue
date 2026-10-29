@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import EmptyState from "../ui/EmptyState.vue";
 /**
  * E4-13 AC2/AC3: the persistent review list of setup/turnaround overlap
  * pairs flagged for one venue — distinct from VenueFormPanel.vue's one-shot
@@ -15,18 +16,18 @@ defineProps<{ overlaps: BufferOverlapRecord[]; loading?: boolean; loadError?: st
 <template>
   <section class="overlap-review" aria-live="polite">
     <h2 class="h5 overlap-review__heading">Flagged booking pairs</h2>
-    <p class="body-small muted overlap-review__intro">
+    <p class="small-text muted overlap-review__intro">
       Bookings whose setup or turnaround time now make their occupied windows overlap. Nothing here is removed
       automatically — a pair drops off this list once it no longer overlaps.
     </p>
 
-    <p v-if="loadError" class="body-small error-text">{{ loadError }}</p>
-    <p v-else-if="loading" class="body-small muted">Checking flagged bookings…</p>
+    <p v-if="loadError" class="small-text error-text">{{ loadError }}</p>
+    <p v-else-if="loading" class="small-text muted">Checking flagged bookings…</p>
 
-    <div v-else-if="overlaps.length === 0" class="empty-state">
+    <EmptyState v-else-if="overlaps.length === 0">
       <p class="empty-state__title">No flagged pairs</p>
-      <p class="body-small muted">Nothing at this venue currently overlaps.</p>
-    </div>
+      <p class="small-text muted">Nothing at this venue currently overlaps.</p>
+    </EmptyState>
 
     <ul v-else class="overlap-list">
       <li v-for="pair in overlaps" :key="pair.id" class="overlap-card">
@@ -34,12 +35,12 @@ defineProps<{ overlaps: BufferOverlapRecord[]; loading?: boolean; loadError?: st
         <div class="overlap-card__body">
           <div class="overlap-card__event">
             <span class="overlap-card__name">{{ pair.first.eventName || "Untitled event" }}</span>
-            <span class="body-small muted">{{ pair.first.window }}</span>
+            <span class="small-text muted">{{ pair.first.window }}</span>
           </div>
           <span class="overlap-card__and">and</span>
           <div class="overlap-card__event">
             <span class="overlap-card__name">{{ pair.second.eventName || "Untitled event" }}</span>
-            <span class="body-small muted">{{ pair.second.window }}</span>
+            <span class="small-text muted">{{ pair.second.window }}</span>
           </div>
         </div>
       </li>
@@ -55,34 +56,15 @@ defineProps<{ overlaps: BufferOverlapRecord[]; loading?: boolean; loadError?: st
 }
 
 .h5 {
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 2rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
-.body-small {
-  font-size: 0.75rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
   color: var(--color-error-600);
-}
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: var(--spacing-40) var(--spacing-24);
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-sm);
 }
 
 .empty-state__title {
@@ -150,6 +132,7 @@ defineProps<{ overlaps: BufferOverlapRecord[]; loading?: boolean; loadError?: st
 
 .overlap-card__and {
   font-size: 0.75rem;
+  line-height: 1rem;
   color: var(--color-grey-700);
 }
 </style>

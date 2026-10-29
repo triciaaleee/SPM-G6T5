@@ -253,35 +253,23 @@ onMounted(async () => {
 
 .h1 {
   margin: 0;
-  font-size: 3rem;
-  line-height: 3.625rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
 }
 
 .h3 {
   margin: 0;
-  font-size: 2rem;
-  line-height: 2.5rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
 }
 
 .subheading {
   margin: 0;
-  font-size: 1.125rem;
-  line-height: 1.375rem;
   color: var(--color-grey-600);
 }
 
 .body-default {
   margin: 0;
-  font-size: 1rem;
-  line-height: 1.25rem;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {

@@ -78,6 +78,13 @@ onMounted(loadFirstPage);
 </script>
 
 <template>
+  <!--
+    Column mapping — Notifications
+    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); the feed col 3-10, centred.
+    Tablet (6-col): feed col 1-6, full width, grid-tablet-margin 32px.
+    Mobile (4-col): feed col 1-4, full width, grid-mobile-margin 6px.
+  -->
+  <div class="page">
   <div class="feed">
     <h1 class="feed__heading">Notifications</h1>
 
@@ -104,18 +111,50 @@ onMounted(loadFirstPage);
       </AppButton>
     </div>
   </div>
+  </div>
 </template>
 
 <style scoped>
-.feed {
-  max-width: 800px;
-  margin: 0 auto;
+.page {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: var(--grid-desktop-gutter);
   padding: var(--spacing-24) var(--grid-desktop-margin);
+  align-content: start;
+}
+
+.feed {
+  grid-column: 3 / 11;
+}
+
+@media (max-width: 1024px) {
+  .page {
+    grid-template-columns: repeat(6, 1fr);
+    gap: var(--grid-tablet-gutter);
+    padding: var(--spacing-24) var(--grid-tablet-margin);
+  }
+
+  .feed {
+    grid-column: 1 / 7;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--grid-mobile-gutter);
+    padding: var(--spacing-24) var(--grid-mobile-margin);
+  }
+
+  .feed {
+    grid-column: 1 / 5;
+  }
 }
 
 .feed__heading {
   margin: 0 0 var(--spacing-16);
   font-size: 1.5rem;
+  line-height: 2rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
@@ -144,7 +183,7 @@ onMounted(loadFirstPage);
   flex-direction: column;
   gap: var(--spacing-4);
   width: 100%;
-  padding: 28px var(--spacing-24);
+  padding: var(--spacing-32) var(--spacing-24);
   border: none;
   background: var(--color-base-white);
   font-family: var(--font-family-lato);
@@ -168,9 +207,9 @@ onMounted(loadFirstPage);
 .item__title {
   font-size: 1rem;
   font-weight: 700;
-  line-height: 1.125rem;
+  line-height: 1.25rem;
   color: var(--color-grey-900);
-  margin-bottom:4px;
+  margin-bottom: var(--spacing-4);
 }
 
 .item__body {
@@ -182,7 +221,7 @@ onMounted(loadFirstPage);
 .item__when {
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .feed__footer {
@@ -191,13 +230,8 @@ onMounted(loadFirstPage);
   padding: var(--spacing-16) 0;
 }
 
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {

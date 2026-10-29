@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import IconButton from "../ui/IconButton.vue";
 import AppButton from "../ui/AppButton.vue";
 import { computed, onMounted, ref, watch } from "vue";
-import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/vue/16/solid";
+import { ChevronLeftIcon, ChevronRightIcon, XMarkIcon } from "@heroicons/vue/16/solid";
 import CalendarEntryButton from "./CalendarEntryButton.vue";
 import VenueIcon from "./VenueIcon.vue";
 import { CALENDAR_STATUSES, type CalendarStatusKey } from "../../lib/calendarStatus";
@@ -300,13 +301,9 @@ function nudge(direction: 1 | -1): void {
   <div class="vc">
     <div class="toolbar">
       <div class="toolbar__nav">
-        <button type="button" class="icon-btn" aria-label="Previous" @click="nudge(-1)">
-          <ChevronLeftIcon class="icon-btn__icon" aria-hidden="true" />
-        </button>
+        <IconButton label="Previous" size="md" @click="nudge(-1)"><ChevronLeftIcon aria-hidden="true" /></IconButton>
         <AppButton variant="outline" type="button" @click="anchor = today">Today</AppButton>
-        <button type="button" class="icon-btn" aria-label="Next" @click="nudge(1)">
-          <ChevronRightIcon class="icon-btn__icon" aria-hidden="true" />
-        </button>
+        <IconButton label="Next" size="md" @click="nudge(1)"><ChevronRightIcon aria-hidden="true" /></IconButton>
         <h2 class="range-title" aria-live="polite">{{ title }}</h2>
       </div>
 
@@ -404,7 +401,7 @@ function nudge(direction: 1 | -1): void {
       <aside class="panel" role="dialog" aria-modal="true" aria-labelledby="entry-title" @keydown.esc="picked = null">
         <header class="panel__header">
           <h2 id="entry-title" class="panel__title">{{ picked.title }}</h2>
-          <button type="button" class="icon-btn" aria-label="Close" @click="picked = null">×</button>
+          <IconButton label="Close" size="md" @click="picked = null"><XMarkIcon aria-hidden="true" /></IconButton>
         </header>
         <dl class="panel__list">
           <dt>Venue</dt>
@@ -448,18 +445,14 @@ function nudge(direction: 1 | -1): void {
 
 .body-default {
   margin: 0;
-  font-size: 1rem;
-  line-height: 1.25rem;
 }
 
 .body-small {
   margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.125rem;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -491,41 +484,11 @@ function nudge(direction: 1 | -1): void {
   color: var(--color-grey-900);
 }
 
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  background: var(--color-base-white);
-  color: var(--color-grey-700);
-  font-size: 1.25rem;
-  cursor: pointer;
-}
-
-.icon-btn:hover {
-  background: var(--color-grey-75);
-}
-
-.icon-btn:focus-visible,
-.segmented__btn:focus-visible,
-.month__date:focus-visible,
-.month__more:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.icon-btn__icon {
-  width: var(--spacing-16);
-  height: var(--spacing-16);
-}
-
 .cap-note {
   margin: 0;
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
 }
 
 /* View switch */
@@ -544,6 +507,7 @@ function nudge(direction: 1 | -1): void {
   color: var(--color-grey-700);
   font-family: var(--font-family-lato);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -665,9 +629,9 @@ function nudge(direction: 1 | -1): void {
 }
 
 .key--replace {
-  --key-bg: var(--color-error-200);
-  --key-border: var(--color-error-600);
-  --key-text: var(--color-error-800);
+  --key-bg: var(--color-warning-200);
+  --key-border: var(--color-warning-300);
+  --key-text: var(--color-warning-900);
 }
 
 /* Unavailable: a flat grey, no stripes. */
@@ -719,13 +683,15 @@ function nudge(direction: 1 | -1): void {
 
 .col-head__title {
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
 
 .col-head__sub {
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
 }
 
 .timegrid__allday {
@@ -735,7 +701,8 @@ function nudge(direction: 1 | -1): void {
 .gutter-label {
   padding: var(--spacing-8) var(--spacing-4);
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
   text-align: right;
 }
 
@@ -757,7 +724,8 @@ function nudge(direction: 1 | -1): void {
   height: var(--hour);
   padding-right: var(--spacing-8);
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
   text-align: right;
   transform: translateY(-0.5em);
 }
@@ -788,8 +756,9 @@ function nudge(direction: 1 | -1): void {
   padding: var(--spacing-8);
   border-bottom: 1px solid var(--color-grey-100);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   text-align: center;
 }
 
@@ -833,6 +802,7 @@ function nudge(direction: 1 | -1): void {
   color: var(--color-grey-900);
   font-family: var(--font-family-lato);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -845,6 +815,7 @@ function nudge(direction: 1 | -1): void {
   color: var(--color-purple-600);
   font-family: var(--font-family-lato);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -903,6 +874,7 @@ function nudge(direction: 1 | -1): void {
   gap: var(--spacing-8) var(--spacing-16);
   margin: 0;
   font-size: 0.875rem;
+  line-height: 1.125rem;
 }
 
 .panel__list dt {

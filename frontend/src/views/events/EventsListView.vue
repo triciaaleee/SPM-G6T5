@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import UnderlineTabs from "../../components/ui/UnderlineTabs.vue";
+import AppModal from "../../components/ui/AppModal.vue";
 import AppButton from "../../components/ui/AppButton.vue";
 import EventCard, { type CardFact } from "../../components/ui/EventCard.vue";
 import PaginationBar from "../../components/ui/PaginationBar.vue";
@@ -186,13 +188,8 @@ onMounted(async () => {
         </AppButton>
       </div>
 
-      <div v-if="!isCoordinator && !loading && !errorMessage" class="tabs" role="tablist">
-        <button v-for="tab in tabs" :key="tab.key" type="button" role="tab" class="tab"
-          :class="{ 'tab--active': activeTab === tab.key }" :aria-selected="activeTab === tab.key"
-          @click="activeTab = tab.key">
-          {{ tab.label }}
-        </button>
-      </div>
+      <UnderlineTabs v-if="!isCoordinator && !loading && !errorMessage" v-model="activeTab" class="tabs" :tabs="tabs"
+        aria-label="My events" />
 
       <p v-if="loading" class="body-default muted">Loading events…</p>
       <p v-else-if="errorMessage" class="body-default error-text">{{ errorMessage }}</p>
@@ -221,10 +218,10 @@ onMounted(async () => {
           >
             <template v-if="needsClarificationReply(event) || event.status === 'Draft'" #footer-actions>
               <span v-if="needsClarificationReply(event)" class="reply-action">Reply Needed</span>
-              <button v-if="event.status === 'Draft'" type="button" class="delete-draft-action"
-                @click="requestDeleteDraft(event, $event)">
+              <AppButton variant="danger" size="sm" class="delete-draft-action" v-if="event.status === 'Draft'" 
+        @click="requestDeleteDraft(event, $event)">
                 Delete
-              </button>
+              </AppButton>
             </template>
           </EventCard>
         </div>
@@ -235,14 +232,13 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="pendingDelete" class="modal-overlay" @click.self="cancelDeleteDraft">
-      <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-draft-title">
-        <p id="delete-draft-title" class="modal-title">Delete draft?</p>
+    <AppModal v-if="pendingDelete" role="alertdialog" :dismissible="!deleting" @close="cancelDeleteDraft">
+      <template #title>Delete draft?</template>
         <p class="body-default muted">
           "{{ eventName(pendingDelete) }}" will be permanently removed. This cannot be undone.
         </p>
         <p v-if="deleteError" class="body-small error-text">{{ deleteError }}</p>
-        <div class="modal-actions">
+      <template #actions>
           <AppButton variant="outline" type="button" :disabled="deleting"
             @click="cancelDeleteDraft">
             Cancel
@@ -251,9 +247,8 @@ onMounted(async () => {
             @click="confirmDeleteDraft">
             {{ deleting ? "Deleting…" : "Delete" }}
           </AppButton>
-        </div>
-      </div>
-    </div>
+      </template>
+    </AppModal>
   </div>
 </template>
 
@@ -293,33 +288,16 @@ onMounted(async () => {
 }
 
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
-  font-weight: 400;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 var(--spacing-32);
 }
 
-.body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -327,32 +305,7 @@ onMounted(async () => {
 }
 
 .tabs {
-  display: flex;
-  gap: var(--spacing-24);
   margin-bottom: var(--spacing-32);
-  border-bottom: 1px solid var(--color-grey-100);
-}
-
-.tab {
-  appearance: none;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: var(--spacing-12) var(--spacing-4);
-  margin-bottom: -1px;
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--color-grey-500);
-  border-bottom: 2px solid transparent;
-}
-
-.tab:hover {
-  color: var(--color-grey-900);
-}
-
-.tab--active {
-  color: var(--color-blue-600);
-  border-bottom-color: var(--color-blue-600);
 }
 
 .card-grid {
@@ -402,58 +355,10 @@ onMounted(async () => {
   flex-shrink: 0;
   color: var(--color-warning-600);
   font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-  padding-bottom: 2px;
-}
-
-.delete-draft-action {
-  appearance: none;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--color-error-600);
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-  padding: 0 0 2px;
-}
-
-.delete-draft-action:hover {
-  text-decoration: underline;
-}
-
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgb(0 0 0 / 40%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-24);
-  z-index: 50;
-}
-
-.modal {
-  background: var(--color-base-white);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-24);
-  max-width: 400px;
-  width: 100%;
-}
-
-.modal-title {
-  font-size: 1.125rem;
+  line-height: 1.125rem;
   font-weight: 700;
-  color: var(--color-grey-900);
-  margin: 0 0 var(--spacing-8);
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--spacing-8);
-  margin-top: var(--spacing-24);
+  white-space: nowrap;
+  padding-bottom: var(--spacing-2);
 }
 
 </style>

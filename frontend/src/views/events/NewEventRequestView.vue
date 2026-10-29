@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import AppButton from "../../components/ui/AppButton.vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import AppPanel from "../../components/ui/AppPanel.vue";
+import BackLink from "../../components/ui/BackLink.vue";
+import SegmentedToggle from "../../components/ui/SegmentedToggle.vue";
+import { useRoute, useRouter } from "vue-router";
 import {
   fetchEventById,
   saveDraft,
@@ -31,6 +34,17 @@ const form = reactive<EventRequestPayload>({
 });
 
 const fieldErrors = ref<Record<string, string>>({});
+
+const REGISTRATION_OPTIONS = [
+  { key: "yes" as const, label: "Yes" },
+  { key: "no" as const, label: "No" },
+];
+const registrationChoice = computed({
+  get: () => (form.registrationNeeded ? "yes" : "no"),
+  set: (value: "yes" | "no") => {
+    form.registrationNeeded = value === "yes";
+  },
+});
 const generalError = ref<string | null>(null);
 const submitting = ref(false);
 const submittedEventId = ref<number | null>(null);
@@ -126,232 +140,180 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="grid grid-cols-4 gap-4 px-[var(--grid-mobile-margin)] py-8 md:grid-cols-6 md:gap-8 md:px-[var(--grid-tablet-margin)] md:py-10 lg:grid-cols-12 lg:px-[var(--grid-desktop-margin)] lg:py-10">
-    <div class="col-span-4 md:col-span-6 md:col-start-1 lg:col-span-8 lg:col-start-3">
-      <RouterLink to="/" class="mb-6 inline-block text-sm font-bold text-purple-600 hover:text-purple-700">
-        Back to my events
-      </RouterLink>
+  <!--
+    Column mapping — Event request form
+    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); back link, form panel and the submitted
+    notice col 3-10, centred.
+    Tablet (6-col): content col 1-6, full width, grid-tablet-margin 32px.
+    Mobile (4-col): content col 1-4, full width, grid-mobile-margin 6px.
+    Nested grid: the date / start / end row uses a local 3-col grid on desktop and tablet, one column on mobile;
+    each requirement is a label column beside its field (stacked on mobile).
+  -->
+  <div class="page">
+    <div class="content">
+      <BackLink to="/">Back to my events</BackLink>
 
-      <p v-if="loadingDraft" class="text-lg text-grey-500">Loading draft…</p>
+      <p v-if="loadingDraft" class="subheading muted">Loading draft…</p>
 
-      <p v-else-if="loadError" class="mt-4 text-sm text-error-600">{{ loadError }}</p>
+      <p v-else-if="loadError" class="body-small error-text" role="alert">{{ loadError }}</p>
 
-      <div v-else-if="submittedEventId" class="rounded-lg border border-grey-100 bg-grey-50 p-8">
-        <p class="text-2xl font-bold text-grey-900">Request submitted</p>
-        <p class="mt-2 text-grey-500">
-          Your event request has been created with status <span class="font-bold text-grey-700">Unassigned</span>
+      <AppPanel v-else-if="submittedEventId" size="lg" class="submitted">
+        <h1 class="h4">Request submitted</h1>
+        <p class="body-default muted">
+          Your event request has been created with status <strong class="strong">Unassigned</strong>
           until a coordinator is assigned to it. You'll see it in your events list along with its submission date.
         </p>
-        <AppButton variant="primary" :to="{ name: 'event-detail', params: { id: submittedEventId } }" class="mt-6">
-          View request
-        </AppButton>
-        <RouterLink to="/" class="ml-4 text-sm font-bold text-purple-600 hover:text-purple-700">
-          Back to my events
-        </RouterLink>
-      </div>
+        <div class="actions">
+          <AppButton variant="primary" :to="{ name: 'event-detail', params: { id: submittedEventId } }">
+            View request
+          </AppButton>
+          <AppButton variant="outline" to="/">Back to my events</AppButton>
+        </div>
+      </AppPanel>
 
-      <form v-else class="rounded-lg border border-grey-100 bg-grey-50 p-8" @submit.prevent="handleSubmit">
-        <h1 class="text-3xl font-bold leading-tight text-grey-900">
-          {{ draftId ? "Edit draft" : "Submit an event request" }}
-        </h1>
-        <p class="mt-2 text-lg text-grey-500">
-          Tell us about your event so ConnectSphere can plan it.
-        </p>
+      <AppPanel v-else as="form" size="lg" class="request-form" @submit.prevent="handleSubmit">
+        <div>
+          <h1 class="h2">{{ draftId ? "Edit draft" : "Submit an event request" }}</h1>
+          <p class="subheading muted">Tell us about your event so ConnectSphere can plan it.</p>
+        </div>
 
-        <p v-if="generalError" class="mt-4 text-sm text-error-600">{{ generalError }}</p>
+        <p v-if="generalError" class="body-small error-text" role="alert">{{ generalError }}</p>
 
-        <div class="mt-8 flex flex-col gap-4">
-          <div>
-            <label for="name" class="mb-1 block text-sm font-bold text-grey-700">Event name</label>
-            <input
-              id="name"
-              v-model="form.name"
-              type="text"
-              class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-3 text-grey-900"
-            />
-            <p v-if="fieldErrors.name" class="mt-1 text-sm text-error-600">{{ fieldErrors.name }}</p>
+        <div class="fields">
+          <div class="field">
+            <label for="name" class="field-label">Event name</label>
+            <input id="name" v-model="form.name" type="text" class="text-input" :aria-invalid="!!fieldErrors.name"
+              :aria-describedby="fieldErrors.name ? 'name-error' : undefined" />
+            <p v-if="fieldErrors.name" id="name-error" class="body-small error-text" role="alert">{{ fieldErrors.name }}</p>
           </div>
 
-          <div>
-            <label for="purpose" class="mb-1 block text-sm font-bold text-grey-700">Purpose</label>
-            <input
-              id="purpose"
-              v-model="form.purpose"
-              type="text"
-              class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-3 text-grey-900"
-            />
-            <p v-if="fieldErrors.purpose" class="mt-1 text-sm text-error-600">{{ fieldErrors.purpose }}</p>
+          <div class="field">
+            <label for="purpose" class="field-label">Purpose</label>
+            <input id="purpose" v-model="form.purpose" type="text" class="text-input"
+              :aria-invalid="!!fieldErrors.purpose" :aria-describedby="fieldErrors.purpose ? 'purpose-error' : undefined" />
+            <p v-if="fieldErrors.purpose" id="purpose-error" class="body-small error-text" role="alert">
+              {{ fieldErrors.purpose }}
+            </p>
           </div>
 
-          <div>
-            <label for="description" class="mb-1 block text-sm font-bold text-grey-700">Description</label>
-            <textarea
-              id="description"
-              v-model="form.description"
-              rows="4"
-              class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-3 text-grey-900"
-            />
-            <p v-if="fieldErrors.description" class="mt-1 text-sm text-error-600">{{ fieldErrors.description }}</p>
+          <div class="field">
+            <label for="description" class="field-label">Description</label>
+            <textarea id="description" v-model="form.description" rows="4" class="text-input"
+              :aria-invalid="!!fieldErrors.description"
+              :aria-describedby="fieldErrors.description ? 'description-error' : undefined" />
+            <p v-if="fieldErrors.description" id="description-error" class="body-small error-text" role="alert">
+              {{ fieldErrors.description }}
+            </p>
           </div>
 
-          <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div>
-              <label for="proposedDate" class="mb-1 block text-sm font-bold text-grey-700">Proposed date</label>
-              <input
-                id="proposedDate"
-                v-model="form.proposedDate"
-                type="date"
-                class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-3 text-grey-900"
-              />
-              <p v-if="fieldErrors.proposedDate" class="mt-1 text-sm text-error-600">{{ fieldErrors.proposedDate }}</p>
+          <div class="when">
+            <div class="field">
+              <label for="proposedDate" class="field-label">Proposed date</label>
+              <input id="proposedDate" v-model="form.proposedDate" type="date" class="text-input"
+                :aria-invalid="!!fieldErrors.proposedDate"
+                :aria-describedby="fieldErrors.proposedDate ? 'proposedDate-error' : undefined" />
+              <p v-if="fieldErrors.proposedDate" id="proposedDate-error" class="body-small error-text" role="alert">
+                {{ fieldErrors.proposedDate }}
+              </p>
             </div>
 
-            <div>
-              <label for="startTime" class="mb-1 block text-sm font-bold text-grey-700">Start time</label>
-              <input
-                id="startTime"
-                v-model="form.startTime"
-                type="time"
-                class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-3 text-grey-900"
-              />
-              <p v-if="fieldErrors.startTime" class="mt-1 text-sm text-error-600">{{ fieldErrors.startTime }}</p>
+            <div class="field">
+              <label for="startTime" class="field-label">Start time</label>
+              <input id="startTime" v-model="form.startTime" type="time" class="text-input"
+                :aria-invalid="!!fieldErrors.startTime"
+                :aria-describedby="fieldErrors.startTime ? 'startTime-error' : undefined" />
+              <p v-if="fieldErrors.startTime" id="startTime-error" class="body-small error-text" role="alert">
+                {{ fieldErrors.startTime }}
+              </p>
             </div>
 
-            <div>
-              <label for="endTime" class="mb-1 block text-sm font-bold text-grey-700">End time</label>
-              <input
-                id="endTime"
-                v-model="form.endTime"
-                type="time"
-                class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-3 text-grey-900"
-              />
-              <p v-if="fieldErrors.endTime" class="mt-1 text-sm text-error-600">{{ fieldErrors.endTime }}</p>
+            <div class="field">
+              <label for="endTime" class="field-label">End time</label>
+              <input id="endTime" v-model="form.endTime" type="time" class="text-input"
+                :aria-invalid="!!fieldErrors.endTime"
+                :aria-describedby="fieldErrors.endTime ? 'endTime-error' : undefined" />
+              <p v-if="fieldErrors.endTime" id="endTime-error" class="body-small error-text" role="alert">
+                {{ fieldErrors.endTime }}
+              </p>
             </div>
           </div>
 
-          <div>
-            <label for="expectedAttendance" class="mb-1 block text-sm font-bold text-grey-700">
-              Expected attendance
-            </label>
-            <input
-              id="expectedAttendance"
-              v-model="form.expectedAttendance"
-              type="number"
-              min="1"
-              class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-3 text-grey-900 sm:w-48"
-            />
-            <p v-if="fieldErrors.expectedAttendance" class="mt-1 text-sm text-error-600">
+          <div class="field field--short">
+            <label for="expectedAttendance" class="field-label">Expected attendance</label>
+            <input id="expectedAttendance" v-model="form.expectedAttendance" type="number" min="1" class="text-input"
+              :aria-invalid="!!fieldErrors.expectedAttendance"
+              :aria-describedby="fieldErrors.expectedAttendance ? 'expectedAttendance-error' : undefined" />
+            <p v-if="fieldErrors.expectedAttendance" id="expectedAttendance-error" class="body-small error-text"
+              role="alert">
               {{ fieldErrors.expectedAttendance }}
             </p>
           </div>
         </div>
 
-        <div class="mt-8">
-          <h2 class="text-xl font-bold text-grey-900">Requirements</h2>
-          <p class="mt-1 text-sm text-grey-500">
+        <section class="requirements" aria-labelledby="requirements-title">
+          <h2 id="requirements-title" class="h6">Requirements</h2>
+          <p class="body-small muted">
             Tell your coordinator what this event needs. If a field doesn't apply to your event, type NA
           </p>
 
-          <div class="mt-4 overflow-hidden rounded-xs border border-grey-200">
-            <table class="w-full border-collapse text-left">
-              <tbody>
-                <tr class="border-b border-grey-200">
-                  <th scope="row" class="w-40 bg-grey-50 px-3 py-3 align-top text-sm font-bold text-grey-700">
-                    <label for="venue">Venue Requirements</label>
-                  </th>
-                  <td class="px-3 py-3">
-                    <textarea
-                      id="venue"
-                      v-model="form.venue"
-                      rows="2"
-                      placeholder="e.g. indoor hall, parking availability"
-                      class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-2 text-grey-900"
-                    />
-                    <p v-if="fieldErrors.venue" class="mt-1 text-sm text-error-600">{{ fieldErrors.venue }}</p>
-                  </td>
-                </tr>
-
-                <tr class="border-b border-grey-200">
-                  <th scope="row" class="w-40 bg-grey-50 px-3 py-3 align-top text-sm font-bold text-grey-700">
-                    <label for="accessibility">Accessibility</label>
-                  </th>
-                  <td class="px-3 py-3">
-                    <textarea
-                      id="accessibility"
-                      v-model="form.accessibility"
-                      rows="2"
-                      placeholder="e.g. wheelchair access, ramps/lifts, prayer room"
-                      class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-2 text-grey-900"
-                    />
-                    <p v-if="fieldErrors.accessibility" class="mt-1 text-sm text-error-600">
-                      {{ fieldErrors.accessibility }}
-                    </p>
-                  </td>
-                </tr>
-
-                <tr class="border-b border-grey-200">
-                  <th scope="row" class="w-40 bg-grey-50 px-3 py-3 align-top text-sm font-bold text-grey-700">
-                    <label for="equipment">Equipment</label>
-                  </th>
-                  <td class="px-3 py-3">
-                    <textarea
-                      id="equipment"
-                      v-model="form.equipment"
-                      rows="2"
-                      placeholder="e.g. projector/screen, whiteboard, podium, extension cords"
-                      class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-2 text-grey-900"
-                    />
-                    <p v-if="fieldErrors.equipment" class="mt-1 text-sm text-error-600">{{ fieldErrors.equipment }}</p>
-                  </td>
-                </tr>
-
-                <tr class="border-b border-grey-200">
-                  <th scope="row" class="w-40 bg-grey-50 px-3 py-3 align-top text-sm font-bold text-grey-700">
-                    <label for="technicalSupport">Technical support</label>
-                  </th>
-                  <td class="px-3 py-3">
-                    <textarea
-                      id="technicalSupport"
-                      v-model="form.technicalSupport"
-                      rows="2"
-                      placeholder="e.g. AV/sound system, livestream setup, on-site IT support"
-                      class="w-full rounded-xs border border-grey-200 bg-base-white px-3 py-2 text-grey-900"
-                    />
-                    <p v-if="fieldErrors.technicalSupport" class="mt-1 text-sm text-error-600">
-                      {{ fieldErrors.technicalSupport }}
-                    </p>
-                  </td>
-                </tr>
-
-                <tr>
-                  <th scope="row" class="w-40 bg-grey-50 px-3 py-3 align-top text-sm font-bold text-grey-700">
-                    Registration needed
-                  </th>
-                  <td class="px-3 py-3">
-                    <div class="flex gap-2" role="group" aria-label="Registration needed">
-                      <AppButton
-                        :variant="form.registrationNeeded ? 'primary' : 'outline'"
-                        :aria-pressed="form.registrationNeeded"
-                        @click="form.registrationNeeded = true"
-                      >
-                        Yes
-                      </AppButton>
-                      <AppButton
-                        :variant="!form.registrationNeeded ? 'primary' : 'outline'"
-                        :aria-pressed="!form.registrationNeeded"
-                        @click="form.registrationNeeded = false"
-                      >
-                        No
-                      </AppButton>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="requirement">
+            <label for="venue" class="field-label">Venue Requirements</label>
+            <div class="field">
+              <textarea id="venue" v-model="form.venue" rows="2" placeholder="e.g. indoor hall, parking availability"
+                class="text-input" :aria-invalid="!!fieldErrors.venue"
+                :aria-describedby="fieldErrors.venue ? 'venue-error' : undefined" />
+              <p v-if="fieldErrors.venue" id="venue-error" class="body-small error-text" role="alert">{{ fieldErrors.venue }}</p>
+            </div>
           </div>
-        </div>
 
-        <div class="mt-8 flex gap-4">
+          <div class="requirement">
+            <label for="accessibility" class="field-label">Accessibility</label>
+            <div class="field">
+              <textarea id="accessibility" v-model="form.accessibility" rows="2"
+                placeholder="e.g. wheelchair access, ramps/lifts, prayer room" class="text-input"
+                :aria-invalid="!!fieldErrors.accessibility"
+                :aria-describedby="fieldErrors.accessibility ? 'accessibility-error' : undefined" />
+              <p v-if="fieldErrors.accessibility" id="accessibility-error" class="body-small error-text" role="alert">
+                {{ fieldErrors.accessibility }}
+              </p>
+            </div>
+          </div>
+
+          <div class="requirement">
+            <label for="equipment" class="field-label">Equipment</label>
+            <div class="field">
+              <textarea id="equipment" v-model="form.equipment" rows="2"
+                placeholder="e.g. projector/screen, whiteboard, podium, extension cords" class="text-input"
+                :aria-invalid="!!fieldErrors.equipment"
+                :aria-describedby="fieldErrors.equipment ? 'equipment-error' : undefined" />
+              <p v-if="fieldErrors.equipment" id="equipment-error" class="body-small error-text" role="alert">
+                {{ fieldErrors.equipment }}
+              </p>
+            </div>
+          </div>
+
+          <div class="requirement">
+            <label for="technicalSupport" class="field-label">Technical support</label>
+            <div class="field">
+              <textarea id="technicalSupport" v-model="form.technicalSupport" rows="2"
+                placeholder="e.g. AV/sound system, livestream setup, on-site IT support" class="text-input"
+                :aria-invalid="!!fieldErrors.technicalSupport"
+                :aria-describedby="fieldErrors.technicalSupport ? 'technicalSupport-error' : undefined" />
+              <p v-if="fieldErrors.technicalSupport" id="technicalSupport-error" class="body-small error-text"
+                role="alert">
+                {{ fieldErrors.technicalSupport }}
+              </p>
+            </div>
+          </div>
+
+          <div class="requirement">
+            <span class="field-label">Registration needed</span>
+            <SegmentedToggle v-model="registrationChoice" :options="REGISTRATION_OPTIONS"
+              aria-label="Registration needed" />
+          </div>
+        </section>
+
+        <div class="actions">
           <AppButton variant="outline" :disabled="submitting || savingDraft" @click="handleSaveDraft">
             {{ savingDraft ? "Saving…" : "Save as Draft" }}
           </AppButton>
@@ -360,7 +322,152 @@ onMounted(async () => {
             {{ submitting ? "Submitting…" : "Submit request" }}
           </AppButton>
         </div>
-      </form>
+      </AppPanel>
     </div>
   </div>
 </template>
+
+<style scoped>
+.page {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: var(--grid-desktop-gutter);
+  padding: var(--spacing-40) var(--grid-desktop-margin);
+  align-content: start;
+}
+
+.content {
+  grid-column: 3 / 11;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+}
+
+@media (max-width: 1024px) {
+  .page {
+    grid-template-columns: repeat(6, 1fr);
+    gap: var(--grid-tablet-gutter);
+    padding: var(--spacing-32) var(--grid-tablet-margin);
+  }
+
+  .content {
+    grid-column: 1 / 7;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--grid-mobile-gutter);
+    padding: var(--spacing-24) var(--grid-mobile-margin);
+  }
+
+  .content {
+    grid-column: 1 / 5;
+  }
+}
+
+.h2,
+.h4,
+.h6 {
+  margin: 0;
+}
+
+.subheading {
+  margin: var(--spacing-8) 0 0;
+}
+
+.muted {
+  color: var(--color-grey-600);
+}
+
+.error-text {
+  margin: 0;
+  color: var(--color-error-600);
+}
+
+.strong {
+  color: var(--color-grey-700);
+}
+
+.submitted,
+.request-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-24);
+}
+
+.submitted p {
+  margin: 0;
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.field--short {
+  max-width: 12rem;
+}
+
+.field-label {
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  color: var(--color-grey-700);
+}
+
+.text-input {
+  width: 100%;
+  padding: var(--spacing-12);
+  font-size: 1rem;
+  line-height: 1.25rem;
+}
+
+.when {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-16);
+}
+
+@media (max-width: 640px) {
+  .when {
+    grid-template-columns: 1fr;
+  }
+}
+
+.requirements {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+}
+
+.requirement {
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  gap: var(--spacing-16);
+  align-items: start;
+  padding-top: var(--spacing-16);
+  border-top: 1px solid var(--color-grey-100);
+}
+
+@media (max-width: 640px) {
+  .requirement {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-8);
+  }
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-16);
+}
+</style>

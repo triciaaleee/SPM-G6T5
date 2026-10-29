@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import AppPanel from "../../components/ui/AppPanel.vue";
+import BackLink from "../../components/ui/BackLink.vue";
+import AppModal from "../../components/ui/AppModal.vue";
+import StatusBadge from "../../components/ui/StatusBadge.vue";
 import AppButton from "../../components/ui/AppButton.vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -174,21 +178,15 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="back">
-      <button type="button" class="back-link" @click="goBack">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M15.75 19.5 8.25 12l7.5-7.5" />
-        </svg>
-        Back
-      </button>
+      <BackLink @click="goBack">Back</BackLink>
     </div>
 
     <p v-if="loading" class="full body-default muted">Loading event…</p>
 
-    <section v-else-if="accessDenied" class="full denied" role="alert">
+    <AppPanel as="section" size="md" class="full denied" v-else-if="accessDenied" role="alert">
       <h1 class="h3">You don't have access to this event</h1>
       <p class="body-default muted">It isn't open for registration and you aren't registered for it.</p>
-    </section>
+    </AppPanel>
 
     <p v-else-if="errorMessage || !event" class="full body-default error-text" role="alert">
       {{ errorMessage ?? "We couldn't load this event. Please try again." }}
@@ -200,9 +198,9 @@ onMounted(async () => {
 
       <div class="title-row">
         <div class="title-block">
-          <span v-if="event.registrationStatus" class="badge" :class="registrationBadgeClass(event.registrationStatus)">
+          <StatusBadge v-if="event.registrationStatus" :status-class="registrationBadgeClass(event.registrationStatus)">
             {{ event.registrationStatus }}
-          </span>
+          </StatusBadge>
           <h1 class="h2">{{ event.name || `Event #${event.id}` }}</h1>
         </div>
 
@@ -239,20 +237,18 @@ onMounted(async () => {
       </p>
 
       <!-- E6-4: withdrawing frees the place at once (it may be taken), so confirm first. -->
-      <div v-if="confirmingWithdraw" class="modal-overlay" @click.self="cancelWithdraw" @keydown.esc="cancelWithdraw">
-        <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="withdraw-title" aria-describedby="withdraw-body">
-          <p id="withdraw-title" class="modal-title">Withdraw from this event?</p>
+      <AppModal v-if="confirmingWithdraw" role="alertdialog" :dismissible="!withdrawing" described-by="withdraw-body" @close="cancelWithdraw">
+        <template #title>Withdraw from this event?</template>
           <p id="withdraw-body" class="body-default muted">
             Your place at "{{ event.name || `Event #${event.id}` }}" will be released straight away.
           </p>
-          <div class="modal-actions">
+        <template #actions>
             <AppButton variant="outline" :disabled="withdrawing" @click="cancelWithdraw">Keep my place</AppButton>
             <AppButton variant="danger-solid" :disabled="withdrawing" data-testid="confirm-withdraw" @click="handleWithdraw">
               {{ withdrawing ? "Withdrawing…" : "Withdraw" }}
             </AppButton>
-          </div>
-        </div>
-      </div>
+        </template>
+      </AppModal>
 
       <div v-if="paragraphs.length > 0" class="description">
         <p v-for="(paragraph, index) in paragraphs" :key="index" class="body-default">{{ paragraph }}</p>
@@ -433,32 +429,6 @@ onMounted(async () => {
   
 }
 
-.back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  min-height: 44px;
-  color: var(--color-purple-600);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  text-decoration: none;
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.back-link:hover {
-  color: var(--color-purple-700);
-}
-
-.back-link:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
 .title-row {
   display: flex;
   align-items: flex-end;
@@ -475,35 +445,23 @@ onMounted(async () => {
 
 .h2 {
   margin: 0;
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
 }
 
 .h3 {
   margin: 0 0 var(--spacing-8);
-  font-size: 2rem;
-  font-weight: 700;
-  line-height: 2.5rem;
-  color: var(--color-grey-900);
 }
 
 .body-default {
   margin: 0;
-  font-size: 1rem;
-  line-height: 1.25rem;
   color: var(--color-grey-700);
 }
 
 .body-small {
   margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.125rem;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -515,77 +473,7 @@ onMounted(async () => {
   color: var(--color-success-600);
 }
 
-.denied {
-  padding: var(--spacing-24);
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-}
-
-/* Status badge — no leading dot. */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  height: var(--spacing-24);
-  padding: 0 var(--spacing-12);
-  border-radius: var(--radius-full);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-}
-
-.status-success {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: var(--color-warning-100);
-  color: var(--color-warning-900);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
 /* Withdraw confirmation: same modal as the organiser's delete-draft dialog, over the Drawer scrim (Style.md 3.5). */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-24);
-  background: var(--color-grey-alpha-40-dark);
-}
-
-.modal {
-  width: 100%;
-  max-width: 400px;
-  padding: var(--spacing-24);
-  background: var(--color-base-white);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-popover);
-}
-
-/* Subheading, bold */
-.modal-title {
-  margin: 0 0 var(--spacing-8);
-  font-size: 1.125rem;
-  line-height: 1.375rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--spacing-8);
-  margin-top: var(--spacing-24);
-}
-
 /* Register: the page's one solid button (Style.md 3.4). */
 
 /* Withdraw: outline in Red Error 300, label in Red Error 600; hover tints, focus rings. */
@@ -692,7 +580,7 @@ onMounted(async () => {
 
 /* "Venue to be confirmed" reads as a placeholder, not a fact. */
 .detail-value--muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 @media (max-width: 640px) {

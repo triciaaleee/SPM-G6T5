@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import StatusBadge from "../../components/ui/StatusBadge.vue";
 /**
  * Venue staff's catalogue: every venue they look after in one table, with a
  * button to add a new one. Adding goes through the same VenueFormPanel the
@@ -153,7 +154,7 @@ onMounted(loadVenues);
         </template>
 
         <template #cell-status="{ row: venue }">
-          <span class="badge" :class="venue.status === 'Available' ? 'badge--ok' : 'badge--muted'">{{ venue.status }}</span>
+          <StatusBadge :status-class="venue.status === 'Available' ? 'status-success' : 'status-neutral'">{{ venue.status }}</StatusBadge>
         </template>
 
         <template #cell-actions="{ row: venue }">
@@ -223,18 +224,11 @@ onMounted(loadVenues);
 }
 
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
-  font-weight: 400;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
 
@@ -263,19 +257,15 @@ onMounted(loadVenues);
 }
 
 .body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
   margin: 0;
 }
 
 .body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
   margin: 0;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -313,21 +303,4 @@ onMounted(loadVenues);
   gap: var(--spacing-8);
 }
 
-.badge {
-  display: inline-block;
-  padding: var(--spacing-2) var(--spacing-8);
-  border-radius: var(--radius-xs);
-  font-size: 0.875rem;
-  font-weight: 700;
-}
-
-.badge--ok {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.badge--muted {
-  background: var(--color-grey-100);
-  color: var(--color-grey-600);
-}
 </style>

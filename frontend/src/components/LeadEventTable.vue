@@ -1,20 +1,24 @@
 <script setup lang="ts">
+import StatusBadge from "./ui/StatusBadge.vue";
 import type { EventSummary } from "../lib/eventsApi";
 import { statusBadgeClass, statusLabel } from "../lib/eventStatus";
 import { eventDateLabel, eventName, eventOrganiser, eventTimeLabel, eventVenue, eventWhen } from "../lib/leadAssignments";
+import { computed } from "vue";
 import DataTable from "./ui/DataTable.vue";
 
 /**
  * A coordinator's active events as a table: event, date, venue and status.
  * Each row opens the event, where the Lead reassigns it (E2-12).
  */
-defineProps<{
+const props = defineProps<{
   events: EventSummary[];
+  /** A short list for a dashboard card: the event (with its date and venue under the name) and its status. */
+  compact?: boolean;
   /** Which who-acts-next group a row sits under, with that group's full count; none for a flat list. */
   groupOf?: (event: EventSummary) => { key: string; label: string; count: number } | null;
 }>();
 
-const COLUMNS = [
+const FULL_COLUMNS = [
   { key: "event", label: "Event" },
   { key: "date", label: "Date", hideOnNarrow: true },
   { key: "time", label: "Time", hideOnNarrow: true },
@@ -25,14 +29,24 @@ const COLUMNS = [
 
 // The first five columns share the full width in these proportions (minmax(0, …) lets them shrink and wrap
 // rather than overflow). Status is a fixed width — not `auto` — so every row's columns line up exactly.
-const COLUMN_WIDTHS = "minmax(0, 18fr) minmax(0, 6fr) minmax(0, 9.5fr) minmax(0, 11fr) minmax(0, 10fr) 10rem";
+const FULL_WIDTHS = "minmax(0, 18fr) minmax(0, 6fr) minmax(0, 9.5fr) minmax(0, 11fr) minmax(0, 10fr) 10rem";
+
+const COMPACT_COLUMNS = [
+  { key: "event", label: "Event" },
+  { key: "status", label: "Status" },
+];
+const COMPACT_WIDTHS = "minmax(0, 1fr) auto";
+
+const columns = computed(() => (props.compact ? COMPACT_COLUMNS : FULL_COLUMNS));
+const columnWidths = computed(() => (props.compact ? COMPACT_WIDTHS : FULL_WIDTHS));
 </script>
 
 <template>
   <DataTable
-    :columns="COLUMNS"
-    :column-widths="COLUMN_WIDTHS"
-    column-gap="var(--spacing-80)"
+    :columns="columns"
+    :column-widths="columnWidths"
+    :column-gap="compact ? 'var(--spacing-16)' : 'var(--spacing-80)'"
+    :hide-header="compact"
     :rows="events"
     :row-key="(event) => event.id"
     :row-to="(event) => ({ name: 'event-detail', params: { id: event.id } })"
@@ -42,7 +56,10 @@ const COLUMN_WIDTHS = "minmax(0, 18fr) minmax(0, 6fr) minmax(0, 9.5fr) minmax(0,
       <span class="cell-event">
         <span class="cell-event__name">{{ eventName(row) }}</span>
         <!-- Narrow screens drop the Date and Venue columns; the same info sits under the name. -->
-        <span class="cell-event__sub">{{ eventWhen(row) }}</span>
+        <span v-if="compact" class="row__details">
+          {{ eventDateLabel(row) ?? "—" }} · {{ eventVenue(row) ?? "Not set" }}
+        </span>
+        <span v-else class="cell-event__sub">{{ eventWhen(row) }}</span>
       </span>
     </template>
     <template #cell-date="{ row }">{{ eventDateLabel(row) ?? "—" }}</template>
@@ -54,7 +71,7 @@ const COLUMN_WIDTHS = "minmax(0, 18fr) minmax(0, 6fr) minmax(0, 9.5fr) minmax(0,
       <span :class="{ 'cell--empty': !eventOrganiser(row) }">{{ eventOrganiser(row) ?? "Unknown" }}</span>
     </template>
     <template #cell-status="{ row }">
-      <span class="badge" :class="statusBadgeClass(row.status)">{{ statusLabel(row.status) }}</span>
+      <StatusBadge :status-class="statusBadgeClass(row.status)">{{ statusLabel(row.status) }}</StatusBadge>
     </template>
     <template #group-header="{ group }">
       <div class="group-header" :class="`group-header--${group.key}`">
@@ -67,7 +84,7 @@ const COLUMN_WIDTHS = "minmax(0, 18fr) minmax(0, 6fr) minmax(0, 9.5fr) minmax(0,
 
 <style scoped>
 .cell--empty {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .cell-event {
@@ -87,34 +104,12 @@ const COLUMN_WIDTHS = "minmax(0, 18fr) minmax(0, 6fr) minmax(0, 9.5fr) minmax(0,
   display: none;
 }
 
-/* Small Text / Tag */
-.badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-full);
-}
-
-.status-success {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: var(--color-warning-200);
-  color: var(--color-warning-900);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-.status-info {
-  background: var(--color-warning-100);
-  color: var(--color-warning-800);
+/* The compact list's line under the name: date and venue. */
+.row__details {
+  font-size: 0.875rem;
+  line-height: 1.125rem;
+  color: var(--color-grey-600);
+  overflow-wrap: anywhere;
 }
 
 /* Who-acts-next subheaders, inline in the table; same treatment as the Coordinator dashboard. */
@@ -128,6 +123,7 @@ const COLUMN_WIDTHS = "minmax(0, 18fr) minmax(0, 6fr) minmax(0, 9.5fr) minmax(0,
 .group-header__title {
   margin: 0;
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }

@@ -63,7 +63,7 @@ describe("VenueFormPanel", () => {
     await wrapper.find(".modal").trigger("click");
     expect(wrapper.emitted("close")).toBeUndefined();
 
-    await wrapper.find(".overlay").trigger("click");
+    await wrapper.find(".modal-overlay").trigger("click");
     expect(wrapper.emitted("close")).toHaveLength(1);
   });
 });
