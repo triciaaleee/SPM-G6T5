@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabaseAdmin } from "../lib/supabaseAdmin.js";
 import { BOOKING_STATUS } from "../lib/bookingStatus.js";
+import { MAX_EVENT_IDS, parseEventIds } from "../lib/eventIds.js";
 import { fetchPublicEvents, type PublicEvent } from "../lib/eventsClient.js";
 
 /**
@@ -20,7 +21,6 @@ import { fetchPublicEvents, type PublicEvent } from "../lib/eventsClient.js";
 export const publicVenuesRouter = Router();
 
 const PUBLIC_VENUE_COLUMNS = "id, name, location, description, capacity, accessibility, layouts, facilities";
-const MAX_EVENT_IDS = 100;
 
 interface ApprovedBookingRow {
   event_id: number;
@@ -39,10 +39,15 @@ async function approvedBookings(eventIds: number[]) {
   return { data: (data ?? []) as unknown as ApprovedBookingRow[], error };
 }
 
-function startsAt(event: PublicEvent): string {
-  return `${event.proposedDate ?? "9999-12-31"}T${event.startTime ?? "00:00"}`;
+const dateOf = (event: PublicEvent) => event.proposedDate ?? "9999-12-31";
+const timeOf = (event: PublicEvent) => event.startTime ?? "00:00";
+
+/** Soonest first; an event with no date sorts last, and one with no time counts as midnight. */
+function byStart(a: PublicEvent, b: PublicEvent): number {
+  return dateOf(a).localeCompare(dateOf(b)) || timeOf(a).localeCompare(timeOf(b));
 }
 
+// Stryker disable next-line StringLiteral: Express matches "" and "/" to the same route
 publicVenuesRouter.get("/", async (_req, res) => {
   const { data: venues, error } = await supabaseAdmin
     .from("venues")
@@ -69,8 +74,7 @@ publicVenuesRouter.get("/", async (_req, res) => {
 
   const eventsByVenue = new Map<number, PublicEvent[]>();
   for (const booking of bookings.data) {
-    const event = eventById.get(booking.event_id);
-    if (!event) continue;
+    const event = eventById.get(booking.event_id)!;
     const list = eventsByVenue.get(booking.venue_id) ?? [];
     if (!list.some((e) => e.id === event.id)) list.push(event);
     eventsByVenue.set(booking.venue_id, list);
@@ -80,16 +84,15 @@ publicVenuesRouter.get("/", async (_req, res) => {
     venues: (venues ?? []).map((venue) => ({
       ...venue,
       upcomingEvents: (eventsByVenue.get(venue.id) ?? [])
-        .sort((a, b) => startsAt(a).localeCompare(startsAt(b)))
+        .sort(byStart)
         .map(({ id, name, proposedDate, startTime }) => ({ id, name, proposedDate, startTime })),
     })),
   });
 });
 
 publicVenuesRouter.get("/event-venues", async (req, res) => {
-  const rawIds = typeof req.query.eventIds === "string" ? req.query.eventIds : "";
-  const idStrings = rawIds.split(",").map((id) => id.trim());
-  if (rawIds === "" || !idStrings.every((id) => /^[1-9]\d*$/.test(id)) || idStrings.length > MAX_EVENT_IDS) {
+  const requestedIds = parseEventIds(req.query.eventIds);
+  if (!requestedIds) {
     res.status(400).json({ error: `eventIds must be 1–${MAX_EVENT_IDS} comma-separated event ids` });
     return;
   }
@@ -100,7 +103,7 @@ publicVenuesRouter.get("/event-venues", async (req, res) => {
     return;
   }
   const listedIds = new Set(listed.events.map((event) => event.id));
-  const eventIds = [...new Set(idStrings.map(Number))].filter((id) => listedIds.has(id));
+  const eventIds = requestedIds.filter((id) => listedIds.has(id));
 
   const bookings = await approvedBookings(eventIds);
   if (bookings.error) {

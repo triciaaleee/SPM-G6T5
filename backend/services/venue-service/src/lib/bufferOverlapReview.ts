@@ -57,10 +57,7 @@ function pairKey(a: number, b: number): string {
 
 /** The pair's two booking ids and cached window strings, in `(a, b)` order (lower id first). */
 function toInsert(venueId: number, overlap: BufferOverlap): OverlapInsert {
-  const [idA, idB] =
-    overlap.first.bookingId < overlap.second.bookingId
-      ? [overlap.first.bookingId, overlap.second.bookingId]
-      : [overlap.second.bookingId, overlap.first.bookingId];
+  const [idA, idB] = normalizePair(overlap.first.bookingId, overlap.second.bookingId);
   const windowA = overlap.first.bookingId === idA ? overlap.first.window : overlap.second.window;
   const windowB = overlap.first.bookingId === idB ? overlap.first.window : overlap.second.window;
   return { venue_id: venueId, booking_id_a: idA, booking_id_b: idB, window_a: windowA, window_b: windowB };
@@ -167,7 +164,7 @@ export async function reconcileBufferOverlapsSafely(
 ): Promise<void> {
   try {
     const result = await reconcileBufferOverlaps(supabase, venueId, authorization, options.now ?? new Date());
-    if (!result || result.inserted.length === 0 || !options.venueName) return;
+    if (!result || !options.venueName) return;
     const messages = bufferOverlapNotifications(options.venueName, result.inserted, options.venueStaffId ?? null);
     await Promise.all(messages.map((message) => getPublisher().publish(message)));
   } catch (err) {

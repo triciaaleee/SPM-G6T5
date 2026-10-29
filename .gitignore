@@ -2,7 +2,7 @@ node_modules/
 dist/
 coverage/
 reports/
-.stryker-tmp/
+.stryker-tmp*/
 .env
 .env.*
 !.env.example

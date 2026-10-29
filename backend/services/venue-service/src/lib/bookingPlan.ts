@@ -81,13 +81,13 @@ function isBlank(value: unknown): boolean {
 /** A whole number given as a number or a plain digit string; null otherwise. */
 function wholeNumber(value: unknown): number | null {
   if (typeof value === "number") return Number.isInteger(value) ? value : null;
-  if (typeof value === "string" && /^-?\d+$/.test(value.trim())) return Number(value.trim());
-  return null;
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return /^-?\d+$/.test(text) ? Number(text) : null;
 }
 
 /** Trimmed, de-duplicated strings; one value or several (query strings repeat keys). */
 function stringList(value: unknown): string[] | null {
-  if (value === undefined || value === null) return null;
   const items = Array.isArray(value) ? value : [value];
   if (items.some((item) => typeof item !== "string")) return null;
   const seen = new Set<string>();
@@ -230,7 +230,7 @@ export function checkSuitability(
     reasons.push({ kind: "capacity", capacity: venue.capacity, headcount: plan.headcount });
   }
   for (const group of FEATURE_GROUPS) {
-    const have = new Set((venue[group] ?? []).map((value) => value.toLowerCase()));
+    const have = new Set(venue[group]?.map((value) => value.toLowerCase()));
     const missing = plan.requirements[group].filter((value) => !have.has(value.toLowerCase()));
     if (missing.length > 0) reasons.push({ kind: group, missing });
   }

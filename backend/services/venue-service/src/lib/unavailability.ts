@@ -132,7 +132,7 @@ export function toBuffers(row: { setup_minutes?: number | null; turnaround_minut
 
 /** "HH:MM" moved by `minutes`, clamped to the same day ("00:00"–"24:00"). */
 function shiftTime(time: string, minutes: number): string {
-  const [h, m] = time.slice(0, 5).split(":").map(Number);
+  const [h, m] = time.split(":").map(Number);
   const total = Math.min(Math.max(h * 60 + m + minutes, 0), 24 * 60);
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
@@ -167,9 +167,9 @@ export function periodBlocksSlot(
   if (date < period.startDate || date > period.endDate) return false;
   if (period.allDay || !period.startTime || !period.endTime) return true;
   if (!slotStart || !slotEnd) return true;
-  const start = slotStart.slice(0, 5);
-  const end = slotEnd.slice(0, 5);
-  return period.startTime < end && period.endTime > start;
+  // The period's times are "HH:MM", so a slot start with seconds compares the
+  // same untrimmed; the end is trimmed so "09:00:30" doesn't overlap a 09:00 start.
+  return period.startTime < slotEnd.slice(0, 5) && period.endTime > slotStart;
 }
 
 const MINUTE_MS = 60 * 1000;
@@ -180,7 +180,7 @@ function dateOf(ms: number): string {
 }
 
 function minutesOf(time: string): number {
-  const [h, m] = time.slice(0, 5).split(":").map(Number);
+  const [h, m] = time.split(":").map(Number);
   return h * 60 + m;
 }
 
@@ -195,9 +195,12 @@ export function periodOverlapsWindow(
   window: OccupiedWindow,
 ): boolean {
   const firstDay = Math.floor(window.startMs / DAY_MS) * DAY_MS;
-  for (let day = firstDay; day < window.endMs; day += DAY_MS) {
+  // Stryker disable next-line ArithmeticOperator: counting days past the window's end adds no overlap, only wasted checks
+  const spanMs = window.endMs - firstDay;
+  const dayCount = Math.ceil(spanMs / DAY_MS);
+  return Array.from({ length: dayCount }, (_, n) => firstDay + n * DAY_MS).some((day) => {
     const date = dateOf(day);
-    if (date < period.startDate || date > period.endDate) continue;
+    if (date < period.startDate || date > period.endDate) return false;
     const block =
       period.allDay || !period.startTime || !period.endTime
         ? { startMs: day, endMs: day + DAY_MS }
@@ -205,9 +208,8 @@ export function periodOverlapsWindow(
             startMs: day + minutesOf(period.startTime) * MINUTE_MS,
             endMs: day + minutesOf(period.endTime) * MINUTE_MS,
           };
-    if (overlaps(block, window)) return true;
-  }
-  return false;
+    return overlaps(block, window);
+  });
 }
 
 /**
