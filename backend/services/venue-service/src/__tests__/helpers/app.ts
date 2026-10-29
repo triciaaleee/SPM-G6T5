@@ -12,8 +12,16 @@ export function appWith(path: string, router: Router) {
   return app;
 }
 
-/** `Authorization` header value for a real, signed token. */
-export const bearer = (id: string, role: string) => `Bearer ${jwt.sign({ sub: id, role }, process.env.JWT_SECRET!, { expiresIn: "1h" })}`;
+/**
+ * `Authorization` header value for a real, signed token. The shared constants
+ * below are signed once, at import, so `iat`/`exp` are fixed numbers rather
+ * than "now + 1h": a token tied to the real clock would be expired for any test
+ * that moves the clock past it.
+ */
+const TOKEN_IAT = Math.floor(Date.parse("2026-01-01T00:00:00.000Z") / 1000);
+const TOKEN_EXP = Math.floor(Date.parse("2100-01-01T00:00:00.000Z") / 1000);
+export const bearer = (id: string, role: string) =>
+  `Bearer ${jwt.sign({ sub: id, role, iat: TOKEN_IAT, exp: TOKEN_EXP }, process.env.JWT_SECRET!)}`;
 export const COORD = bearer("COORD-0001", "coordinator");
 export const STAFF = bearer("VEN-0001", "venue_staff");
 export const ATTENDEE = bearer("ATT-0001", "attendee");

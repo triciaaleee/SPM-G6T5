@@ -1,4 +1,5 @@
 import net from "node:net";
+import { afterEach, beforeEach, vi } from "vitest";
 
 /**
  * supertest starts each test app with `app.listen(0)`, which binds every
@@ -24,3 +25,19 @@ net.Server.prototype.listen = function (this: net.Server, ...args: unknown[]) {
   }
   return originalListen.apply(this, args as never);
 } as typeof net.Server.prototype.listen;
+
+/**
+ * Every test starts on the same fixed date, so nothing depends on the day or
+ * time it happens to run. Only `Date` is faked: timers, promises and the lock's
+ * retry delays still run for real. A test that needs another instant calls
+ * `vi.setSystemTime(...)` itself and wins, because this runs first.
+ */
+export const TEST_NOW = new Date("2026-10-28T04:00:00.000Z");
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: TEST_NOW });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
