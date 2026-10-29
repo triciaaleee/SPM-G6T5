@@ -39,23 +39,23 @@ workspace "ConnectSphere - C3 Events Service" "Level 3 of the C4 model. Componen
 
                 publicController = component "Public events controller" "Shows guests, without signing in, the confirmed events open for registration." "src/routes/publicEvents.ts"
 
-                requestsController = component "Requests controller" "Handles event requests: organisers submit and edit them, and each role sees the events it is allowed to. Edits stop after Planning, and every edit is recorded." "src/routes/events.ts"
+                requestsController = component "Requests controller" "Handles event requests: organisers submit and edit them, and each role sees the events it is allowed to. Edits stop after Planning, and every edit is recorded." "src/routes/events/requests.ts"
 
-                draftsController = component "Drafts controller" "Lets organisers save, resume and delete drafts. Nobody else sees a draft until it is submitted." "src/routes/events.ts"
+                draftsController = component "Drafts controller" "Lets organisers save, resume and delete drafts. Nobody else sees a draft until it is submitted." "src/routes/events/drafts.ts"
 
-                assignmentController = component "Assignment controller" "Lets the Coordinator Lead see unassigned requests and assign or reassign a coordinator. If two Leads act at once, only one succeeds." "src/routes/events.ts"
+                assignmentController = component "Assignment controller" "Lets the Coordinator Lead see unassigned requests and assign or reassign a coordinator. If two Leads act at once, only one succeeds." "src/routes/events/assignment.ts"
 
-                reviewController = component "Review controller" "Lets the assigned coordinator ask the organiser questions, then approve the request into Planning or reject it with a reason." "src/routes/events.ts"
+                reviewController = component "Review controller" "Lets the assigned coordinator ask the organiser questions, then approve the request into Planning or reject it with a reason." "src/routes/events/review.ts"
 
-                safetyController = component "Safety review controller" "Handles the safety review: the coordinator submits the event with safety notes, and the Safety Officer approves, rejects or asks for changes." "src/routes/events.ts"
+                safetyController = component "Safety review controller" "Handles the safety review: the coordinator submits the event with safety notes, and the Safety Officer approves, rejects or asks for changes." "src/routes/events/safetyReview.ts"
 
-                changeController = component "Change request controller" "Handles change requests on a confirmed event. Minor changes apply at once; major ones wait for the coordinator, who sees what they would affect." "src/routes/events.ts"
+                changeController = component "Change request controller" "Handles change requests on a confirmed event. Minor changes apply at once; major ones wait for the coordinator, who sees what they would affect." "src/routes/events/changeRequests.ts"
 
-                lifecycleController = component "Lifecycle controller" "Lets the organiser cancel an event with a reason, and the coordinator mark it completed once it has ended." "src/routes/events.ts"
+                lifecycleController = component "Lifecycle controller" "Lets the organiser cancel an event with a reason, and the coordinator mark it completed once it has ended." "src/routes/events/lifecycle.ts"
 
-                registrationController = component "Registration settings controller" "Lets the coordinator set when registration opens, or force it open or closed. Also tells registration-service what attendees may see." "src/routes/events.ts"
+                registrationController = component "Registration settings controller" "Lets the coordinator set when registration opens, or force it open or closed. Also tells registration-service what attendees may see." "src/routes/events/registration.ts"
 
-                internalController = component "Arrangements-changed handler" "Gives other services event timing and status, and handles reports of lost venues or equipment by sending the event back for review." "src/routes/events.ts"
+                internalController = component "Arrangements-changed handler" "Gives other services event timing and status, and handles reports of lost venues or equipment by sending the event back for review." "src/routes/events/internal.ts"
 
                 # --- Rules ----------------------------------------------------
 

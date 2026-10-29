@@ -853,7 +853,7 @@ function organiserChangeRequestBadgeLabel(request: ChangeRequestEntry): string {
 /**
  * The fields still held — what the "Requested changes" grid shows.
  * Critical field rows survive past Pending (kept as a historical record
- * on an Approved/Rejected request, see routes/events.ts), so this is
+ * on an Approved/Rejected request, see events-service routes/events/changeRequests.ts), so this is
  * explicitly scoped to Pending — otherwise an already-decided request
  * would still read as "awaiting review".
  */

@@ -63,7 +63,6 @@ export interface RelaxOption {
   count: number;
 }
 
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
 
@@ -89,7 +88,7 @@ function readList(query: RawQuery, key: string): string[] | undefined {
 }
 
 export function isRealDate(value: string): boolean {
-  if (!DATE_PATTERN.test(value)) return false;
+  // Anything but a padded YYYY-MM-DD fails to parse, or prints back differently.
   const date = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
@@ -154,17 +153,14 @@ export function parseVenueSearch(query: RawQuery): ParseResult {
   return { valid: true, criteria };
 }
 
-function hasAll(have: string[], want: string[] | undefined): boolean {
-  if (!want || want.length === 0) return true;
+function hasAll(have: string[], want: string[]): boolean {
   const set = new Set(have.map((v) => v.toLowerCase()));
   return want.every((v) => set.has(v.toLowerCase()));
 }
 
 function matchesText(venue: VenueRow, q: string): boolean {
   const needle = q.toLowerCase();
-  return [venue.name, venue.location, venue.description ?? ""].some((field) =>
-    field.toLowerCase().includes(needle),
-  );
+  return [venue.name, venue.location, venue.description].some((field) => field?.toLowerCase().includes(needle));
 }
 
 /**
@@ -196,11 +192,11 @@ function passes(
         criteria.locations.some((loc) => loc.toLowerCase() === venue.location.toLowerCase())
       );
     case "accessibility":
-      return hasAll(venue.accessibility, criteria.accessibility);
+      return hasAll(venue.accessibility, criteria.accessibility!);
     case "layouts":
-      return hasAll(venue.layouts, criteria.layouts);
+      return hasAll(venue.layouts, criteria.layouts!);
     case "facilities":
-      return hasAll(venue.facilities, criteria.facilities);
+      return hasAll(venue.facilities, criteria.facilities!);
   }
 }
 
@@ -269,7 +265,7 @@ export function searchVenues(
     .filter((venue) => matchesAll(venue, criteria, unavailableVenueIds, active))
     .sort((a, b) => a.capacity - b.capacity || a.name.localeCompare(b.name));
 
-  if (matched.length > 0 || active.length === 0) {
+  if (matched.length > 0) {
     return { venues: matched, relax: [] };
   }
 

@@ -102,15 +102,16 @@ async function fetchVenueBookingInfoWithHeaders(
   eventIds: number[],
   headers: Record<string, string>,
 ): Promise<FetchVenueBookingInfoResult> {
-  if (eventIds.length === 0) return { status: "ok", events: [] };
-
-  const batches: number[][] = [];
-  for (let i = 0; i < eventIds.length; i += VENUE_BOOKING_INFO_BATCH) {
-    batches.push(eventIds.slice(i, i + VENUE_BOOKING_INFO_BATCH));
-  }
+  const batches = Array.from({ length: Math.ceil(eventIds.length / VENUE_BOOKING_INFO_BATCH) }, (_, n) =>
+    eventIds.slice(n * VENUE_BOOKING_INFO_BATCH, (n + 1) * VENUE_BOOKING_INFO_BATCH),
+  );
   const results = await Promise.all(batches.map((batch) => fetchVenueBookingInfoBatch(batch, headers)));
-  if (results.some((result) => result.status === "error")) return { status: "error" };
-  return { status: "ok", events: results.flatMap((result) => (result.status === "ok" ? result.events : [])) };
+  const events = [];
+  for (const result of results) {
+    if (result.status === "error") return { status: "error" };
+    events.push(...result.events);
+  }
+  return { status: "ok", events };
 }
 
 async function fetchVenueBookingInfoBatch(

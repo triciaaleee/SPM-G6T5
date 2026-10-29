@@ -97,14 +97,19 @@ export interface NotifyOutcome {
   notificationsFailed: boolean;
 }
 
-export type DecisionResult =
-  | ({ status: "ok"; booking: BookingRow; venue: VenueRow; autoRejectedIds: number[] } & NotifyOutcome)
+/** A decision that landed, before anyone has been told about it. */
+type DecisionLanded = { status: "ok"; booking: BookingRow; venue: VenueRow; autoRejectedIds: number[] };
+
+/** Every way a decision can end without landing. */
+type DecisionRefused =
   | { status: "not_found" }
   | { status: "not_assigned" }
   | { status: "blocked"; message: string }
   | { status: "conflict"; message: string; conflict: ConflictDetail }
   | { status: "event_error" }
   | { status: "error" };
+
+export type DecisionResult = (DecisionLanded & NotifyOutcome) | DecisionRefused;
 
 /**
  * E4-12, change 4: the coordinator hears about an expiry "before or when it
@@ -292,7 +297,7 @@ export async function blockingWindows(
   });
 }
 
-function conflictResult(clash: BlockingBookingWindow, ownWindow: OccupiedWindow, venue: VenueRow): DecisionResult {
+function conflictResult(clash: BlockingBookingWindow, ownWindow: OccupiedWindow, venue: VenueRow): DecisionRefused {
   return {
     status: "conflict",
     message: "Venue is not available for this period",
@@ -313,11 +318,10 @@ function conflictResult(clash: BlockingBookingWindow, ownWindow: OccupiedWindow,
  * Both sides of a race evaluate this the same way, so exactly one yields
  * and the venue is never left promised twice (nor freed entirely).
  */
-function yieldsTo(rival: BookingRow, mine: BookingRow): boolean {
+export function yieldsTo(rival: BookingRow, mine: BookingRow): boolean {
   const rivalAt = rival.decided_at ? Date.parse(rival.decided_at) : 0;
   const myAt = mine.decided_at ? Date.parse(mine.decided_at) : 0;
-  if (rivalAt !== myAt) return rivalAt < myAt;
-  return rival.id < mine.id;
+  return rivalAt < myAt || (rivalAt === myAt && rival.id < mine.id);
 }
 
 /**
@@ -342,7 +346,6 @@ async function autoRejectOverlapping(
   if (error) return null;
 
   const rows = ((data ?? []) as BookingRow[]).filter((row) => row.id !== exceptBookingId);
-  if (rows.length === 0) return { ids: [], losers: [] };
 
   const info = await fetchVenueBookingInfo([...new Set(rows.map((r) => r.event_id))], authorization);
   if (info.status === "error") return null;
@@ -444,7 +447,6 @@ function decidedMessage(
  */
 async function publishAll(messages: OutboundMessage[]): Promise<NotifyOutcome> {
   const recipients = new Set(messages.flatMap((m) => m.recipients.userIds));
-  if (recipients.size === 0) return { coordinatorsNotified: 0, notificationsFailed: false };
   const results = await Promise.all(messages.map((m) => getPublisher().publish(m)));
   const allSent = results.every(Boolean);
   return { coordinatorsNotified: allSent ? recipients.size : 0, notificationsFailed: !allSent };
@@ -461,8 +463,8 @@ export interface DecisionInput {
 
 /** The lock's result: an outcome, plus what still needs notifying afterwards. */
 type GuardedResult =
-  | { outcome: DecisionResult; notifications?: never }
-  | { outcome: DecisionResult; notifications: OutboundMessage[] };
+  | { outcome: DecisionRefused; notifications?: never }
+  | { outcome: DecisionLanded; notifications: OutboundMessage[] };
 
 export async function decideBooking(supabase: Supabase, input: DecisionInput): Promise<DecisionResult> {
   const now = new Date();
@@ -506,7 +508,7 @@ export async function decideBooking(supabase: Supabase, input: DecisionInput): P
       ? await rejectBooking(supabase, booking, venue, input, now)
       : await holdOrApprove(supabase, booking, venue, input, now);
 
-  if (result.outcome.status !== "ok" || !result.notifications) return result.outcome;
+  if (!result.notifications) return result.outcome;
 
   const notified = await publishAll(result.notifications);
   return { ...result.outcome, ...notified };
@@ -562,8 +564,6 @@ async function rejectBooking(
       booking: updated as BookingRow,
       venue,
       autoRejectedIds: [],
-      coordinatorsNotified: 0,
-      notificationsFailed: false,
     },
     notifications: notification ? [notification] : [],
   };
@@ -733,8 +733,6 @@ async function decideUnderLock(
       booking: updated,
       venue,
       autoRejectedIds: autoRejected.ids,
-      coordinatorsNotified: 0,
-      notificationsFailed: false,
     },
     notifications,
   };

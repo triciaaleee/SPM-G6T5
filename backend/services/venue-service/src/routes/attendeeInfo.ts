@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { BOOKING_STATUS } from "../lib/bookingStatus.js";
+import { MAX_EVENT_IDS, parseEventIds } from "../lib/eventIds.js";
 
 /**
  * E6: where an event is being held, for Attendees. Called by
@@ -17,13 +18,12 @@ export const attendeeInfoRouter = Router();
 
 attendeeInfoRouter.use(requireAuth);
 
-const MAX_EVENT_IDS = 100;
-
 interface BookingWithVenueName {
   event_id: number;
   venues: { name: string } | { name: string }[] | null;
 }
 
+// Stryker disable next-line StringLiteral: Express matches "" and "/" to the same route
 attendeeInfoRouter.get("/", async (req: AuthedRequest, res) => {
   const supabase = req.supabase!;
 
@@ -32,13 +32,11 @@ attendeeInfoRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const rawIds = typeof req.query.eventIds === "string" ? req.query.eventIds : "";
-  const idStrings = rawIds.split(",").map((id) => id.trim());
-  if (rawIds === "" || !idStrings.every((id) => /^[1-9]\d*$/.test(id)) || idStrings.length > MAX_EVENT_IDS) {
+  const eventIds = parseEventIds(req.query.eventIds);
+  if (!eventIds) {
     res.status(400).json({ error: `eventIds must be 1–${MAX_EVENT_IDS} comma-separated event ids` });
     return;
   }
-  const eventIds = [...new Set(idStrings.map(Number))];
 
   const { data, error } = await supabase
     .from("venue_bookings")

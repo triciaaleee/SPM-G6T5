@@ -7,7 +7,7 @@ import {
   attendeeAccessibility,
   attendeeOrganiserName,
   registrationInfo,
-} from "./events.js";
+} from "./events/registration.js";
 
 /**
  * Guests browsing the public landing pages: the events attendees can already

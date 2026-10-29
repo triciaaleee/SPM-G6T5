@@ -65,7 +65,7 @@ export function periodWindow(
 }
 
 export function toMinutes(time: string): number {
-  const [h, m] = time.slice(0, 5).split(":").map(Number);
+  const [h, m] = time.split(":").map(Number);
   return h * 60 + m;
 }
 
@@ -83,14 +83,15 @@ export function subtractIntervals(window: Interval, blocked: Interval[]): Interv
   const end = toMinutes(window.end);
   const sorted = blocked
     .map((b) => ({ start: toMinutes(b.start), end: toMinutes(b.end) }))
-    .filter((b) => b.end > cursor && b.start < end)
     .sort((a, b) => a.start - b.start);
 
+  // A block outside the window can't open a gap: the gap stops at the window's
+  // end, and a block that ends before the cursor doesn't move it.
   const free: Interval[] = [];
   for (const block of sorted) {
-    if (block.start > cursor) free.push({ start: fromMinutes(cursor), end: fromMinutes(block.start) });
+    const gapEnd = Math.min(block.start, end);
+    if (gapEnd > cursor) free.push({ start: fromMinutes(cursor), end: fromMinutes(gapEnd) });
     cursor = Math.max(cursor, block.end);
-    if (cursor >= end) break;
   }
   if (cursor < end) free.push({ start: fromMinutes(cursor), end: fromMinutes(end) });
   return free;
@@ -144,7 +145,6 @@ export function freeSlotsForDay(
   const close = toMinutes(hours.closingTime);
   const targetStart = Math.max(open, target.startTime ? toMinutes(target.startTime) : open);
   const targetEnd = Math.min(close, target.endTime ? toMinutes(target.endTime) : close);
-  if (targetEnd <= targetStart) return [];
 
   const slots: FreeSlot[] = [];
   for (const gap of subtractIntervals({ start: hours.openingTime, end: hours.closingTime }, blocked)) {
@@ -152,8 +152,9 @@ export function freeSlotsForDay(
     const gapEnd = toMinutes(gap.end);
     const shownStart = Math.max(gapStart, targetStart);
     const shownEnd = Math.min(gapEnd, targetEnd);
-    if (shownEnd <= shownStart) continue;
 
+    // No event fits when the target window and the gap don't overlap, so this
+    // one check also covers an empty target window and an empty shown range.
     const eventStart = Math.max(gapStart + buffers.setupMinutes, targetStart);
     const eventEnd = Math.min(gapEnd - buffers.turnaroundMinutes, targetEnd);
     if (eventEnd <= eventStart) continue;
@@ -169,16 +170,18 @@ export function freeSlotsForDay(
   return slots;
 }
 
+const DAY_MS = 86_400_000; // 24 hours
+
 /** Every local date from `from` to `to`, inclusive. */
 export function datesBetween(from: string, to: string): string[] {
-  const dates: string[] = [];
-  const [y, m, d] = from.split("-").map(Number);
-  for (const day = new Date(Date.UTC(y, m - 1, d)); ; day.setUTCDate(day.getUTCDate() + 1)) {
-    const key = day.toISOString().slice(0, 10);
-    if (key > to) break;
-    dates.push(key);
-  }
-  return dates;
+  const utc = (date: string) => {
+    const [y, m, d] = date.split("-").map(Number);
+    return Date.UTC(y, m - 1, d);
+  };
+  const first = utc(from);
+  // A negative count (`to` before `from`) gives an empty list.
+  const count = (utc(to) - first) / DAY_MS + 1;
+  return Array.from({ length: count }, (_, n) => new Date(first + n * DAY_MS).toISOString().slice(0, 10));
 }
 
 /** AC5: free slots on every target day that falls inside the loaded range. */
@@ -190,9 +193,8 @@ export function findFreeSlots(
   hours: OperatingHours,
   buffers: VenueBuffers,
 ): FreeSlot[] {
-  const from = target.fromDate > range.from ? target.fromDate : range.from;
-  const to = target.toDate < range.to ? target.toDate : range.to;
-  if (to < from) return [];
+  const from = [target.fromDate, range.from].sort()[1];
+  const to = [target.toDate, range.to].sort()[0];
   return datesBetween(from, to).flatMap((date) =>
     freeSlotsForDay({ date, bookings, periods }, hours, buffers, target),
   );
