@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clock } from "../lib/clock.js";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
@@ -2318,7 +2319,7 @@ describe("attendee access (E6)", () => {
 
   describe("GET /api/events/attendee-info", () => {
     it("still reports an event whose registration has closed as viewable, so its page opens after it leaves Discover", async () => {
-      const closed = { ...confirmedDetails, proposedDate: new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10) };
+      const closed = { ...confirmedDetails, proposedDate: new Date(clock.now().getTime() + 3 * 86_400_000).toISOString().slice(0, 10) };
       const supabase = buildAttendeeInfoSupabase([
         { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: closed },
       ]);
@@ -2582,7 +2583,7 @@ describe("attendee access (E6)", () => {
     });
 
     it("drops an event once it is inside the 5-day cutoff, but keeps one that is further away and a no-registration one", async () => {
-      const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+      const inDays = (days: number) => new Date(clock.now().getTime() + days * 86_400_000).toISOString().slice(0, 10);
       const soon = { ...confirmedDetails, proposedDate: inDays(4), startTime: "09:00", endTime: "11:00" };
       const later = { ...confirmedDetails, proposedDate: inDays(10), startTime: "09:00", endTime: "11:00" };
       const supabase = buildOpenSupabase([
