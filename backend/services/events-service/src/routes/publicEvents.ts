@@ -8,6 +8,7 @@ import {
   attendeeOrganiserName,
   registrationInfo,
 } from "./events/registration.js";
+import { clock } from "../lib/clock.js";
 
 /**
  * Guests browsing the public landing pages: the events attendees can already
@@ -48,6 +49,7 @@ function toPublicEvent(row: PublicEventRow, now: Date) {
   return event;
 }
 
+// Stryker disable next-line StringLiteral: equivalent - the router treats the path "" exactly like "/"
 publicEventsRouter.get("/", async (_req, res) => {
   const { data, error } = await supabaseAdmin
     .from("events")
@@ -58,7 +60,7 @@ publicEventsRouter.get("/", async (_req, res) => {
     return;
   }
 
-  const now = new Date();
+  const now = clock.now();
   const events = ((data ?? []) as PublicEventRow[]).flatMap((row) => toPublicEvent(row, now) ?? []);
   res.json({ events });
 });
@@ -81,7 +83,7 @@ publicEventsRouter.get("/:id", async (req, res) => {
     return;
   }
 
-  const event = data ? toPublicEvent(data as PublicEventRow, new Date()) : null;
+  const event = data ? toPublicEvent(data as PublicEventRow, clock.now()) : null;
   if (!event) {
     res.status(404).json({ error: "Event not found" });
     return;

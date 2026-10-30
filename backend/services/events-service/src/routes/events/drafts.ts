@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { AuthedRequest } from "../../middleware/auth.js";
 import { normaliseDraftEventRequest } from "../../lib/validateEventRequest.js";
 import { isPositiveInteger } from "../../lib/validation.js";
-import { recordAccessDenial, EVENT_COLUMNS } from "./shared.js";
+import { routeParam, recordAccessDenial, EVENT_COLUMNS } from "./shared.js";
 
 /**
  * Drafts controller: organisers save, resume and delete unsubmitted drafts.
@@ -58,7 +58,7 @@ draftsRouter.patch("/:id/draft", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
 
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
@@ -114,7 +114,7 @@ draftsRouter.delete("/:id/draft", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
 
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });

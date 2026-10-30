@@ -1,10 +1,10 @@
 import express from "express";
-import jwt from "jsonwebtoken";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
+import { signWithClock } from "./tokens.js";
 
 /** An arrangement the event was approved on is gone: venue-service / equipment-service tell us. */
 
@@ -18,7 +18,7 @@ vi.mock("../lib/supabaseAdmin.js", () => ({
 }));
 
 process.env.INTERNAL_SERVICE_SECRET = "test-internal-secret";
-const internalHeader = () => jwt.sign({ svc: "venue-service" }, "test-internal-secret", { expiresIn: "60s" });
+const internalHeader = () => signWithClock({ svc: "venue-service" }, "test-internal-secret", { expiresIn: "60s" });
 
 const publish = vi.fn().mockResolvedValue(true);
 const update = vi.fn();
@@ -68,7 +68,7 @@ describe("POST /api/events/:id/arrangements-changed", () => {
   });
 
   it("rejects a forged internal token", async () => {
-    const forged = jwt.sign({ svc: "x" }, "wrong-secret");
+    const forged = signWithClock({ svc: "x" }, "wrong-secret");
     const res = await call(buildApp({ ...baseEvent, status: "Confirmed" }), undefined, forged);
     expect(res.status).toBe(401);
   });

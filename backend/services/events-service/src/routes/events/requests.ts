@@ -12,6 +12,7 @@ import {
 } from "../../lib/reschedule.js";
 import { getPublisher } from "../../lib/rabbitPublisher.js";
 import {
+  routeParam,
   COORDINATOR_LEAD_ROLE,
   recordAccessDenial,
   recordEventHistory,
@@ -68,6 +69,7 @@ async function notifyCoordinatorLeads(eventId: number, eventName: string, actorI
  * lookup to the organiser role (see LISTABLE_ROLES_BY_CALLER in
  * user-service's users.ts).
  */
+// Stryker disable next-line StringLiteral: equivalent - the router treats the path "" exactly like "/"
 requestsRouter.post("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
   if (!supabase || !user) {
@@ -121,6 +123,7 @@ requestsRouter.post("/", async (req: AuthedRequest, res) => {
  * both). Since the service-role client bypasses RLS, this filter is the
  * actual enforcement, not just defense-in-depth.
  */
+// Stryker disable next-line StringLiteral: equivalent - the router treats the path "" exactly like "/"
 requestsRouter.get("/", async (req: AuthedRequest, res) => {
   const { supabase, user } = req;
   if (!supabase || !user) {
@@ -173,7 +176,7 @@ requestsRouter.get("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
 
   if (!isPositiveInteger(eventId)) {
     await recordAccessDenial(supabase, user.id, eventId, "invalid_id_format");
@@ -229,7 +232,7 @@ requestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
 
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
@@ -303,7 +306,7 @@ requestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
         id: existing.id,
         actorId: user.id,
         eventName: eventDisplayName(data as unknown as AssignmentEventRow),
-        coordinatorId: existing.coordinator_id ?? null,
+        coordinatorId: existing.coordinator_id, // the assigned coordinator: checked equal to the caller above
         details: result.value as unknown as Record<string, unknown>,
       });
     }
@@ -312,7 +315,7 @@ requestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
         id: existing.id,
         actorId: user.id,
         eventName: eventDisplayName(data as unknown as AssignmentEventRow),
-        coordinatorId: existing.coordinator_id ?? null,
+        coordinatorId: existing.coordinator_id, // the assigned coordinator: checked equal to the caller above
         details: result.value as unknown as Record<string, unknown>,
       });
     }
@@ -493,7 +496,7 @@ requestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
  * any coordinator.
  */
 requestsRouter.get("/:id/history", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForClarification(req, res, eventId);
   if (!event) return;
 

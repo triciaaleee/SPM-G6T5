@@ -1,4 +1,5 @@
 import type { ValidatedEventRequest } from "./validateEventRequest.js";
+import { clock } from "./clock.js";
 
 /**
  * E3-8: fields held for the assigned coordinator's review rather than
@@ -44,7 +45,7 @@ const EDITABLE_FIELDS = [
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return clock.now().toISOString().slice(0, 10);
 }
 
 function isBlank(value: unknown): boolean {
@@ -190,7 +191,8 @@ export function validateChangeRequestFields(
     // comes straight off `current` typed (expectedAttendance is a number)
     // — compare by string so resubmitting the same number isn't
     // mistaken for a change.
-    const noChange = field === "registrationNeeded" ? oldValue === newValue : String(oldValue ?? "") === newValue;
+    const noChange =
+      field === "registrationNeeded" ? oldValue === newValue : oldValue !== undefined && oldValue !== null && String(oldValue) === newValue;
     if (noChange) continue;
 
     changes.push({

@@ -6,6 +6,7 @@ import { CLOSED_EVENT_STATUSES, EVENT_STATUS } from "../../lib/eventStatus.js";
 import { getPublisher } from "../../lib/rabbitPublisher.js";
 import { fetchCoordinators } from "../../lib/usersClient.js";
 import {
+  routeParam,
   COORDINATOR_LEAD_ROLE,
   recordAccessDenial,
   recordEventHistory,
@@ -140,7 +141,7 @@ async function authorizeLeadAssignment(
  * or failing notification-service never undoes an assignment.
  */
 assignmentRouter.post("/:id/assign", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const authorized = await authorizeLeadAssignment(req, res, eventId);
   if (!authorized) return;
   const { event, coordinator } = authorized;
@@ -225,7 +226,7 @@ assignmentRouter.post("/:id/assign", async (req: AuthedRequest, res) => {
  * assigned one, so two simultaneous reassignments can't both apply.
  */
 assignmentRouter.post("/:id/reassign", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const authorized = await authorizeLeadAssignment(req, res, eventId);
   if (!authorized) return;
   const { event, coordinator } = authorized;

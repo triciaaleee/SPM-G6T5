@@ -23,6 +23,7 @@ import {
   type StoredFlag,
 } from "../../lib/safetyChanges.js";
 import {
+  routeParam,
   COORDINATOR_LEAD_ROLE,
   recordAccessDenial,
   EVENT_COLUMNS,
@@ -31,6 +32,7 @@ import {
   type AssignmentEventRow,
   eventDisplayName,
 } from "./shared.js";
+import { clock } from "../../lib/clock.js";
 
 /**
  * Safety review controller (Week 7 change 6): the assigned coordinator submits
@@ -146,7 +148,7 @@ safetyReviewRouter.get("/safety-review-queue", async (req: AuthedRequest, res) =
  * the notification. Same visibility as the edit history.
  */
 safetyReviewRouter.get("/:id/safety-reviews", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForClarification(req, res, eventId);
   if (!event) return;
 
@@ -179,7 +181,7 @@ safetyReviewRouter.get("/:id/safety-reviews", async (req: AuthedRequest, res) =>
  * AC9: every Safety Officer and the Organiser are notified (#105 row 1).
  */
 safetyReviewRouter.post("/:id/submit-safety-review", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -331,7 +333,7 @@ async function authorizeSafetyOfficerReview(
  * blocks the already-committed decision.
  */
 safetyReviewRouter.post("/:id/safety-review/approve", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeSafetyOfficerReview(req, res, eventId);
   if (!event) return;
 
@@ -390,7 +392,7 @@ safetyReviewRouter.post("/:id/safety-review/approve", async (req: AuthedRequest,
  * never blocks the already-committed decision.
  */
 safetyReviewRouter.post("/:id/safety-review/reject", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeSafetyOfficerReview(req, res, eventId);
   if (!event) return;
 
@@ -458,7 +460,7 @@ safetyReviewRouter.post("/:id/safety-review/reject", async (req: AuthedRequest, 
  * failure to notify never blocks the already-committed decision.
  */
 safetyReviewRouter.post("/:id/safety-review/request-changes", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeSafetyOfficerReview(req, res, eventId);
   if (!event) return;
 
@@ -585,7 +587,7 @@ async function loadChangeRequest(
     const states = currentArrangements(bookings.value, equipment.value);
     const changed = flags.filter((flag) => !flag.cleared_at && hasChanged(flag, states));
     if (changed.length > 0) {
-      const clearedAt = new Date().toISOString();
+      const clearedAt = clock.now().toISOString();
       const { error: clearError } = await supabase
         .from("event_safety_review_flags")
         .update({ cleared_at: clearedAt })
@@ -634,7 +636,7 @@ safetyReviewRouter.get("/:id/safety-changes", async (req: AuthedRequest, res) =>
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
     return;
