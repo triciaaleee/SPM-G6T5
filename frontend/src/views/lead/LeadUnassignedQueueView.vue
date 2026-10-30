@@ -1,4 +1,6 @@
 ﻿<script setup lang="ts">
+import BackLink from "../../components/ui/BackLink.vue";
+import StatusBadge from "../../components/ui/StatusBadge.vue";
 import { onMounted, ref } from "vue";
 import { fetchUnassignedQueue, type EventSummary } from "../../lib/eventsApi";
 import { formatEventDate, statusBadgeClass, statusLabel } from "../../lib/eventStatus";
@@ -52,13 +54,7 @@ onMounted(async () => {
   -->
   <div class="page">
     <div class="content">
-      <RouterLink :to="{ name: 'lead-dashboard' }" class="back-link">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M15.75 19.5 8.25 12l7.5-7.5" />
-        </svg>
-        Back to overview
-      </RouterLink>
+      <BackLink :to="{ name: 'lead-dashboard' }">Back to overview</BackLink>
 
       <div>
         <h1 class="h2">Unassigned queue</h1>
@@ -95,7 +91,7 @@ onMounted(async () => {
           <span :class="{ 'cell--empty': !eventOrganiser(row) }">{{ eventOrganiser(row) ?? "Unknown" }}</span>
         </template>
         <template #cell-status="{ row }">
-          <span class="badge" :class="statusBadgeClass(row.status)">{{ statusLabel(row.status) }}</span>
+          <StatusBadge :status-class="statusBadgeClass(row.status)">{{ statusLabel(row.status) }}</StatusBadge>
         </template>
       </DataTable>
     </div>
@@ -141,66 +137,28 @@ onMounted(async () => {
   }
 }
 
-.back-link {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  min-height: 44px;
-  color: var(--color-purple-600);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  text-decoration: none;
-}
-
-.back-link:hover {
-  color: var(--color-purple-700);
-}
-
-.back-link:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
 /* H2 */
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 /* Subheading */
 .subheading {
-  font-size: 1.125rem;
-  font-weight: 400;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
 
 /* Body Default / Body Small / Small Text */
 .body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
   margin: 0;
 }
 
 .body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
   margin: 0;
 }
 
-.small-text {
-  font-size: 0.75rem;
-  line-height: 1rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -209,7 +167,7 @@ onMounted(async () => {
 
 /* Table cells, same treatment as LeadEventTable */
 .cell--empty {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .cell-event {
@@ -238,33 +196,4 @@ onMounted(async () => {
   }
 }
 
-/* Small Text / Tag */
-.badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-full);
-}
-
-.status-success {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: var(--color-warning-200);
-  color: var(--color-warning-900);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-.status-info {
-  background: var(--color-warning-100);
-  color: var(--color-warning-800);
-}
 </style>

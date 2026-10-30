@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import EmptyState from "../ui/EmptyState.vue";
+import IconButton from "../ui/IconButton.vue";
 /**
  * E4 venue recommendations for one event request, shown in the Venue part
  * of the Coordinator Details card. Every venue listed meets all of the
@@ -193,7 +195,7 @@ function matchedFeatures(venue: Venue): string[] {
 <template>
   <section class="recommendations" aria-labelledby="venue-recommendations-title">
     <div class="recommendations__header">
-      <p id="venue-recommendations-title" class="body-default font-semibold recommendations__title">
+      <p id="venue-recommendations-title" class="body-default font-bold recommendations__title">
         Recommended venues
       </p>
       <p v-if="venues.length > 0" class="body-small muted">{{ venues.length }} suitable</p>
@@ -220,20 +222,20 @@ function matchedFeatures(venue: Venue): string[] {
         </p>
       </div>
 
-      <div v-if="venues.length === 0" class="empty-state" role="status">
-        <p class="body-small font-semibold">No suitable venues were found.</p>
+      <EmptyState v-if="venues.length === 0" role="status">
+        <p class="body-small font-bold">No suitable venues were found.</p>
         <p class="body-small muted">
           No venue meets all of {{ plan ? "this booking's" : "this event's main" }} requirements. Try Find venues to
           loosen the criteria.
         </p>
-      </div>
+      </EmptyState>
 
       <div v-else class="carousel">
         <ul ref="trackRef" class="carousel__track" aria-label="Recommended venues" @scroll.passive="onScroll">
           <li v-for="{ venue, key, index, clone } in slides" :key="key" class="venue-card"
             :aria-hidden="clone ? 'true' : undefined"
             :aria-label="clone ? undefined : `${index + 1} of ${venues.length}: ${venue.name}`">
-            <p class="body-default font-semibold venue-card__name">{{ venue.name }}</p>
+            <p class="body-default font-bold venue-card__name">{{ venue.name }}</p>
             <p class="body-small muted venue-card__meta">
               <VenueIcon name="location" :size="14" />
               {{ venue.location }}
@@ -266,13 +268,9 @@ function matchedFeatures(venue: Venue): string[] {
         </ul>
 
         <div v-if="venues.length > 1" class="carousel__controls">
-          <button type="button" class="carousel__arrow" aria-label="Previous venue" @click="step(-1)">
-            <VenueIcon name="chevron-left" :size="16" />
-          </button>
+          <IconButton label="Previous venue" size="sm" tone="brand" @click="step(-1)"><VenueIcon name="chevron-left" :size="16" /></IconButton>
           <p class="body-small muted" aria-live="polite">{{ activeIndex + 1 }} of {{ venues.length }}</p>
-          <button type="button" class="carousel__arrow" aria-label="Next venue" @click="step(1)">
-            <VenueIcon name="chevron-right" :size="16" />
-          </button>
+          <IconButton label="Next venue" size="sm" tone="brand" @click="step(1)"><VenueIcon name="chevron-right" :size="16" /></IconButton>
         </div>
       </div>
     </template>
@@ -280,19 +278,8 @@ function matchedFeatures(venue: Venue): string[] {
 </template>
 
 <style scoped>
-/* Style.md 5: Body Default / Body Small; 3.2 muted and error text. */
-.body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -356,13 +343,7 @@ function matchedFeatures(venue: Venue): string[] {
 }
 
 .empty-state {
-  display: flex;
-  flex-direction: column;
   gap: var(--spacing-4);
-  padding: var(--spacing-16);
-  border: 1px dashed var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  background: var(--color-base-white);
   color: var(--color-grey-700);
 }
 
@@ -424,28 +405,7 @@ function matchedFeatures(venue: Venue): string[] {
 }
 
 /* Style.md 3.4 ghost button (Purple Primary). */
-.carousel__arrow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-4);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-purple-600);
-  cursor: pointer;
-}
-
-.carousel__arrow:hover {
-  background: var(--color-purple-100);
-}
-
 /* Style.md 8.2: single ring-brand outline for buttons. */
-.carousel__arrow:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
 .request-btn {
   margin-top: var(--spacing-8);
 }

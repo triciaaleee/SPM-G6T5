@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import UnderlineTabs from "../../components/ui/UnderlineTabs.vue";
+import EmptyState from "../../components/ui/EmptyState.vue";
+import StatusBadge from "../../components/ui/StatusBadge.vue";
 /**
  * E5-1 AC1: Technical Support Staff's queue of equipment requests, grouped by
  * event. Each event is a section (with its date, time and venue, and a link
@@ -223,6 +226,8 @@ const tabCounts = computed(() => {
   return counts;
 });
 
+const tabItems = computed(() => TABS.map((status) => ({ key: status, label: status, count: tabCounts.value[status] })));
+
 const groups = computed<Group[]>(() =>
   eventAggregates.value
     .filter((event) => event.aggregateStatus === activeTab.value)
@@ -311,7 +316,7 @@ onMounted(async () => {
   <div class="page">
     <div class="page-header">
       <h1 class="h2">Equipment requests</h1>
-      <p class="subheading">Everything still to arrange, soonest event first</p>
+      <p class="body-default">Everything still to arrange, soonest event first</p>
     </div>
 
     <p v-if="loading" class="body-default muted full">Loading equipment requests…</p>
@@ -319,14 +324,8 @@ onMounted(async () => {
 
     <template v-else>
       <div class="toolbar">
-        <div class="tabs" role="tablist" aria-label="Request status">
-          <button v-for="tabStatus in TABS" :id="`tab-${tabStatus}`" :key="tabStatus"
-            type="button" role="tab" :aria-selected="activeTab === tabStatus" aria-controls="requests-panel" class="tab"
-            :class="{ 'tab--active': activeTab === tabStatus }" @click="activeTab = tabStatus">
-            {{ tabStatus }}
-            <span class="tab-count">{{ tabCounts[tabStatus] }}</span>
-          </button>
-        </div>
+        <UnderlineTabs v-model="activeTab" class="tabs" :tabs="tabItems" aria-label="Request status" id-prefix="tab"
+          panel-id="requests-panel" />
 
         <div class="filters">
           <div class="select">
@@ -346,10 +345,10 @@ onMounted(async () => {
       </div>
 
       <div id="requests-panel" ref="panelRoot" role="tabpanel" :aria-labelledby="`tab-${activeTab}`" class="panel">
-        <div v-if="groups.length === 0" class="empty-state">
+        <EmptyState v-if="groups.length === 0">
           <p class="empty-state__title">Nothing here</p>
           <p class="body-default muted">{{ emptyMessage }}</p>
-        </div>
+        </EmptyState>
 
         <section v-for="group in pagedGroups" :key="group.eventId" class="group" :aria-labelledby="`group-${group.eventId}`">
           <div class="group-header">
@@ -412,7 +411,7 @@ onMounted(async () => {
               <span class="cell-stock">{{ stockFor(row.equipmentType) ?? "—" }}</span>
             </template>
             <template #cell-status="{ row }">
-              <span class="badge" :class="rowStatusBadgeClass(row.status)">{{ row.status }}</span>
+              <StatusBadge :status-class="rowStatusBadgeClass(row.status)">{{ row.status }}</StatusBadge>
             </template>
           </DataTable>
         </section>
@@ -471,46 +470,30 @@ onMounted(async () => {
 }
 
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .h4 {
-  font-size: 1.75rem;
-  font-weight: 700;
-  line-height: 2.25rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 /* Style.md Composite Text Styles — H5: section divider title. */
 .h5 {
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 2rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
-.subheading {
-  font-size: 1rem;
+.body-default {
   font-weight: 400;
-  line-height: 1.25rem;
   color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
 
 .body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
   margin: 0;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -529,63 +512,10 @@ onMounted(async () => {
 /* Tabs --------------------------------------------------------------------- */
 
 .tabs {
-  display: flex;
   flex: 0 1 75%;
-  flex-wrap: wrap;
-  gap: var(--spacing-24);
-  border-bottom: 1.5px solid var(--color-grey-100);
-}
-
-.tab {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  min-height: 44px;
-  padding: 0 var(--spacing-8);
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  background: none;
-  color: var(--color-grey-600);
-  font-family: var(--font-family-lato);
-  font-size: 1rem;
-  font-weight: 700;
-  line-height: 1.25rem;
-  cursor: pointer;
-}
-
-.tab:hover {
-  color: var(--color-grey-900);
-}
-
-.tab:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
 }
 
 .tab--active,
-.tab--active:hover {
-  color: var(--color-blue-600);
-  border-bottom-color: var(--color-blue-600);
-}
-
-.tab-count {
-  min-width: var(--spacing-20);
-  padding: 0 var(--spacing-6);
-  border-radius: var(--radius-full);
-  background: var(--color-grey-100);
-  color: var(--color-grey-600);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1.25rem;
-  text-align: center;
-}
-
-.tab--active .tab-count {
-  background: var(--color-blue-100);
-  color: var(--color-blue-800);
-}
-
 /* Filters ------------------------------------------------------------------ */
 
 .filters {
@@ -604,11 +534,6 @@ onMounted(async () => {
   appearance: none;
   min-height: 44px;
   padding: 0 var(--spacing-40) 0 var(--spacing-16);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  background: var(--color-base-white);
-  color: var(--color-grey-900);
-  font-family: var(--font-family-lato);
   font-size: 0.875rem;
   font-weight: 700;
   line-height: 1.125rem;
@@ -617,11 +542,6 @@ onMounted(async () => {
 
 .select__input:hover {
   border-color: var(--color-grey-300);
-}
-
-.select__input:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
 }
 
 .select__icon {
@@ -699,7 +619,7 @@ onMounted(async () => {
 
 .meta-item__icon {
   flex-shrink: 0;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .group-title-link {
@@ -729,17 +649,6 @@ onMounted(async () => {
 }
 
 
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: var(--spacing-40) var(--spacing-24);
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-}
-
 .empty-state__title {
   margin: 0 0 var(--spacing-8);
   font-size: 1.25rem;
@@ -756,7 +665,7 @@ onMounted(async () => {
 }
 
 .cell-venue--empty {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .cell-qty {
@@ -765,32 +674,6 @@ onMounted(async () => {
 }
 
 /* Per-row status badge (same colour convention as EquipmentRequestDetailView.vue). */
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  height: var(--spacing-24);
-  padding: 0 var(--spacing-12);
-  border-radius: var(--radius-full);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-}
-
-.status-open {
-  background: var(--color-blue-200);
-  color: var(--color-blue-800);
-}
-
-.status-success {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: var(--color-warning-100);
-  color: var(--color-warning-900);
-}
 
 /* Cancelled: neutral grey, like a finished event's badge. */
 .status-cancelled {

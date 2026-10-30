@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import AppPanel from "../../components/ui/AppPanel.vue";
 import { computed, onMounted, ref } from "vue";
 import { fetchMyEvents, fetchUnassignedQueue, type EventSummary } from "../../lib/eventsApi";
 import { fetchCoordinators, type CoordinatorOption } from "../../lib/usersApi";
 import { activeEventsLabel, groupByCoordinator, initials } from "../../lib/leadAssignments";
-import LeadEventList from "../../components/LeadEventList.vue";
+import LeadEventTable from "../../components/LeadEventTable.vue";
 
 /**
  * The Event Coordinator Lead's landing page (Week 7 change 5): every
@@ -78,12 +79,10 @@ onMounted(async () => {
       <p v-else-if="groups.length === 0" class="body-default muted">No coordinators yet.</p>
 
       <div v-else class="card-grid">
-        <section
-          v-for="group in groups"
-          :key="group.id"
-          class="coordinator-card"
-          :aria-labelledby="`coordinator-${group.id}`"
-        >
+        <AppPanel as="section" size="md" class="coordinator-card" v-for="group in groups"
+     :key="group.id"
+     
+     :aria-labelledby="`coordinator-${group.id}`">
           <div class="coordinator-head">
             <span class="avatar" aria-hidden="true">{{ initials(group.name) }}</span>
             <div class="coordinator-head__text">
@@ -95,7 +94,7 @@ onMounted(async () => {
           <p v-if="group.events.length === 0" class="empty-text">
             No active events assigned. Available for new work.
           </p>
-          <LeadEventList v-else :events="group.events.slice(0, EVENTS_PER_CARD)" />
+          <LeadEventTable v-else compact :events="group.events.slice(0, EVENTS_PER_CARD)" />
 
           <RouterLink
             v-if="group.events.length > EVENTS_PER_CARD"
@@ -104,7 +103,7 @@ onMounted(async () => {
           >
             View all {{ group.events.length }} events
           </RouterLink>
-        </section>
+        </AppPanel>
       </div>
     </div>
   </div>
@@ -165,18 +164,11 @@ onMounted(async () => {
 
 /* H2 */
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 /* Subheading */
 .subheading {
-  font-size: 1.125rem;
-  font-weight: 400;
-  line-height: 1.375rem;
   color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
@@ -210,19 +202,15 @@ onMounted(async () => {
 
 /* Body Default / Body Small */
 .body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
   margin: 0;
 }
 
 .body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
   margin: 0;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -243,10 +231,6 @@ onMounted(async () => {
   flex-direction: column;
   gap: var(--spacing-24);
   min-width: 0;
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-24);
 }
 
 @media (max-width: 1024px) {

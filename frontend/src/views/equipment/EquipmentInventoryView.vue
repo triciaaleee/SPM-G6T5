@@ -18,6 +18,8 @@
 import { ExclamationTriangleIcon } from "@heroicons/vue/16/solid";
 import { PlusIcon } from "@heroicons/vue/20/solid";
 import AppButton from "../../components/ui/AppButton.vue";
+import AppModal from "../../components/ui/AppModal.vue";
+import StatusBadge from "../../components/ui/StatusBadge.vue";
 import DataTable from "../../components/ui/DataTable.vue";
 import PaginationBar from "../../components/ui/PaginationBar.vue";
 import { computed, onMounted, reactive, ref } from "vue";
@@ -41,6 +43,14 @@ const items = ref<EquipmentCatalogItem[]>([]);
 
 // Client-side paging: every item is loaded, one page of them is drawn.
 const PAGE_SIZE = 20;
+
+const HISTORY_COLUMNS = [
+  { key: "when", label: "When" },
+  { key: "what", label: "Change" },
+  { key: "reason", label: "Reason" },
+  { key: "type", label: "Type" },
+];
+const HISTORY_WIDTHS = "12rem minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)";
 const page = ref(1);
 const currentPage = computed(() => Math.min(page.value, Math.max(1, Math.ceil(items.value.length / PAGE_SIZE))));
 const pagedItems = computed(() => items.value.slice((currentPage.value - 1) * PAGE_SIZE, currentPage.value * PAGE_SIZE));
@@ -407,29 +417,37 @@ onMounted(async () => {
               <p v-else-if="histories[item.id]?.changes.length === 0" class="body-small muted">No stock changes recorded yet.</p>
               <template v-else>
                 <p class="history__title">History</p>
-                <ul class="history" :aria-label="`${item.name} stock history`">
-                  <li class="history__row history__row--header" aria-hidden="true">
-                    <span class="history__heading">When</span>
-                    <span class="history__heading">Change</span>
-                    <span class="history__heading">Reason</span>
-                    <span class="history__heading history__heading--badge">Type</span>
-                  </li>
-                  <li v-for="entry in histories[item.id].changes" :key="entry.id" class="history__row" data-testid="history-entry">
+                <DataTable
+                  :columns="HISTORY_COLUMNS"
+                  :column-widths="HISTORY_WIDTHS"
+                  column-gap="var(--spacing-16)"
+                  :rows="histories[item.id].changes"
+                  :row-key="(entry) => entry.id"
+                  :row-test-id="() => 'history-entry'"
+                  :aria-label="`${item.name} stock history`"
+                >
+                  <template #cell-when="{ row: entry }">
                     <span class="history__when">
                       <span class="history__date">{{ formatWhenDate(entry.createdAt) }}</span>
                       <span class="history__time">
                         {{ formatWhenTime(entry.createdAt) }}<template v-if="entry.changedBy"> · {{ entry.changedBy }}</template>
                       </span>
                     </span>
+                  </template>
+                  <template #cell-what="{ row: entry }">
                     <span class="history__what body-small">
                       {{ entry.changeType }} {{ entry.quantity }} units · total stock {{ entry.totalBefore }} → {{ entry.totalAfter }}
                     </span>
+                  </template>
+                  <template #cell-reason="{ row: entry }">
                     <span class="history__reason body-small">{{ entry.reason }}</span>
-                    <span class="history__badge" :class="`history__badge--${entry.changeType.toLowerCase()}`">
+                  </template>
+                  <template #cell-type="{ row: entry }">
+                    <StatusBadge :status-class="entry.changeType === 'Added' ? 'status-success' : 'status-neutral'">
                       {{ entry.changeType === "Added" ? "+" : "−" }} {{ entry.changeType }}
-                    </span>
-                  </li>
-                </ul>
+                    </StatusBadge>
+                  </template>
+                </DataTable>
                 <hr class="history__divider" />
               </template>
             </template>
@@ -441,14 +459,16 @@ onMounted(async () => {
     </template>
 
     <!-- Add or remove stock of an existing item. -->
-    <div v-if="change.itemId !== null && !change.confirming" class="modal-overlay" @click.self="cancelChange">
-      <div class="modal add-modal" role="dialog" aria-modal="true" aria-labelledby="change-title">
-        <form class="add-form" data-testid="change-form" @submit.prevent="reviewChange">
-          <p id="change-title" class="modal-title add-modal__title">
+    <AppModal v-if="change.itemId !== null && !change.confirming" size="md" :dismissible="!change.saving"
+      @close="cancelChange">
+      <template #title>
+        <span class="add-modal__title">
             {{ change.direction === "add" ? "Add stock" : "Remove stock" }}
             <template v-if="changingItem"> — {{ changingItem.name }}</template>
             <span v-if="changingItem" class="change-title__stock">(current stock: {{ changingItem.totalStock }})</span>
-          </p>
+        </span>
+      </template>
+      <form class="add-form" data-testid="change-form" @submit.prevent="reviewChange">
           <p v-if="change.direction === 'remove'" class="body-base mb-8 muted">
             Only free units can be removed: ones reserved for an event, out of use, or held by a request stay.
           </p>
@@ -471,21 +491,19 @@ onMounted(async () => {
               {{ change.fieldErrors.reason }}
             </p>
           </div>
-          <div class="modal-actions">
+          <div class="form-actions">
             <AppButton variant="primary" type="submit" :disabled="change.saving" data-testid="review-change">
               {{ change.saving && change.direction === "add" ? "Adding…" : change.direction === "add" ? "Add" : "Remove" }}
             </AppButton>
             <AppButton variant="ghost" type="button" :disabled="change.saving" @click="cancelChange">Cancel</AppButton>
           </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </AppModal>
 
     <!-- Add an item: name and starting stock. -->
-    <div v-if="addingOpen" class="modal-overlay" @click.self="closeAdd">
-      <div class="modal add-modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
-        <p id="add-title" class="modal-title add-modal__title">Add item</p>
-        <form class="add-form" @submit.prevent="addItem">
+    <AppModal v-if="addingOpen" size="md" :dismissible="!adding" @close="closeAdd">
+      <template #title><span class="add-modal__title">Add item</span></template>
+      <form class="add-form" @submit.prevent="addItem">
           <div class="field">
             <label for="new-name" class="field-label">Name</label>
             <input id="new-name" v-model="newName" type="text" class="input" maxlength="100" autocomplete="off"
@@ -505,34 +523,34 @@ onMounted(async () => {
             </p>
           </div>
           <p v-if="addError" class="field-error" role="alert">{{ addError }}</p>
-          <div class="modal-actions">
+          <div class="form-actions">
             <AppButton variant="primary" type="submit" :disabled="!canAdd">
               {{ adding ? "Adding…" : "Add item" }}
             </AppButton>
             <AppButton variant="ghost" type="button" :disabled="adding" @click="closeAdd">Cancel</AppButton>
           </div>
         </form>
-      </div>
-    </div>
+    </AppModal>
 
     <!-- Changing stock adds or removes real units, so confirm first. -->
-    <div v-if="change.confirming && changingItem" class="modal-overlay" @click.self="change.confirming = false">
-      <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="stock-confirm-title" aria-describedby="stock-confirm-body">
-        <p id="stock-confirm-title" class="modal-title add-modal__title">
+    <AppModal v-if="change.confirming && changingItem" role="alertdialog" :dismissible="!change.saving"
+      described-by="stock-confirm-body" @close="change.confirming = false">
+      <template #title>
+        <span class="add-modal__title">
           {{ change.direction === "add" ? "Add" : "Remove" }} {{ parseQuantity(change.quantity) }} {{ changingItem.name }}?
           <span id="stock-confirm-body" class="change-title__stock">
             Total stock goes from {{ changingItem.totalStock }} to {{ totalAfter }}. Reason: {{ change.reason.trim() }}
           </span>
-        </p>
-        <div class="modal-actions">
+        </span>
+      </template>
+      <template #actions>
           <AppButton variant="outline" :disabled="change.saving" @click="change.confirming = false">Back</AppButton>
           <AppButton :variant="change.direction === 'add' ? 'primary' : 'danger-solid'" :disabled="change.saving"
             data-testid="confirm-change" @click="applyChange">
             {{ change.saving ? "Saving…" : change.direction === "add" ? "Add stock" : "Remove stock" }}
           </AppButton>
-        </div>
-      </div>
-    </div>
+      </template>
+    </AppModal>
   </div>
 </template>
 
@@ -583,26 +601,15 @@ onMounted(async () => {
 }
 
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .h4 {
-  font-size: 1.75rem;
-  font-weight: 700;
-  line-height: 2.25rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
-  font-weight: 400;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
 
@@ -625,28 +632,15 @@ onMounted(async () => {
 }
 
 .body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
   margin: 0;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
   color: var(--color-error-600);
-}
-
-.card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-16);
-  padding: var(--spacing-24);
-  box-sizing: border-box;
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
 }
 
 /* The stock table's section: same layout as .card, without the card surface. */
@@ -682,27 +676,12 @@ onMounted(async () => {
 .input {
   height: var(--spacing-48);
   padding: 0 var(--spacing-16);
-  box-sizing: border-box;
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  background: var(--color-base-white);
-  color: var(--color-grey-900);
-  font-family: var(--font-family-lato);
   font-size: 1rem;
   line-height: 1.25rem;
 }
 
 .input:hover {
   border-color: var(--color-grey-300);
-}
-
-.input:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.input[aria-invalid="true"] {
-  border-color: var(--color-error-600);
 }
 
 .input--count {
@@ -731,6 +710,7 @@ onMounted(async () => {
   background: var(--color-warning-200);
   color: var(--color-warning-900);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
 }
 
@@ -740,8 +720,6 @@ onMounted(async () => {
 }
 
 .body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
   margin: 0;
 }
 
@@ -755,36 +733,15 @@ onMounted(async () => {
 .history__title {
   margin: 0 0 var(--spacing-24);
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
   color: var(--color-grey-900);
-}
-
-.history {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
 }
 
 .history__divider {
   margin: var(--spacing-16) 0 0;
   border: none;
   border-top: 2px solid var(--color-grey-200);
-}
-
-.history li + li {
-  border-top: 1px solid var(--color-grey-100);
-}
-
-.history__row {
-  display: grid;
-  grid-template-columns: 12rem 1fr 1fr 1fr;
-  align-items: center;
-  column-gap: var(--spacing-16);
-  padding: var(--spacing-16);
-  background: var(--color-base-white);
 }
 
 .history__when {
@@ -795,13 +752,15 @@ onMounted(async () => {
 
 .history__date {
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
 
 .history__time {
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
 }
 
 .history__reason {
@@ -812,68 +771,8 @@ onMounted(async () => {
   color: var(--color-grey-900);
 }
 
-.history__badge {
-  justify-self: start;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-12);
-  border-radius: var(--radius-xs);
-}
-
-.history__badge--added {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.history__badge--removed {
-  background: var(--color-grey-100);
-  color: var(--color-grey-600);
-}
-
-.history__row--header {
-  padding: var(--spacing-12) var(--spacing-16);
-  background: var(--color-grey-75);
-}
-
-.history__heading {
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--color-grey-500);
-}
-
 /* Confirmation: same modal as the attendee's withdraw dialog, over the Drawer scrim (Style.md 3.5). */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-24);
-  background: var(--color-grey-alpha-40-dark);
-}
-
-.modal {
-  width: 100%;
-  max-width: 600px;
-  padding: var(--spacing-24);
-  background: var(--color-base-white);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-popover);
-}
-
-.modal-title {
-  margin: 0 0 var(--spacing-8);
-  font-size: 1.125rem;
-  line-height: 1.375rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
-}
-
-.modal-actions {
+.form-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--spacing-8);
@@ -889,6 +788,7 @@ onMounted(async () => {
 
 .change-title__stock {
   font-size: 1.25rem;
+  line-height: 1.75rem;
   font-weight: 400;
   margin-left:var(--spacing-8);
 }

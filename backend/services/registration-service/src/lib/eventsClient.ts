@@ -32,6 +32,8 @@ export interface AttendeeEventInfo {
   registrationState?: "NOT_OPEN" | "OPEN" | "CLOSED";
   /** Registration has opened for attendees (open date reached or forced open). */
   listed?: boolean;
+  /** The attendee may find and open the event: listed, or Confirmed with no registration and not yet ended. */
+  viewable?: boolean;
   /** The state is OPEN: Confirmed, in the registration period, not started. */
   open: boolean;
   /** E6-4: the event has started (Singapore time), so a place can no longer be withdrawn. */

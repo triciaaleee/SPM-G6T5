@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { eventsRouter } from "../routes/events.js";
 import { eventStartsAt } from "../lib/eventTiming.js";
-import { getRegistrationState, isListed } from "../lib/registrationPeriod.js";
+import { getRegistrationState, isInformationOnly, isListed } from "../lib/registrationPeriod.js";
 import { setClockForTest } from "../lib/clock.js";
 
 vi.mock("../middleware/auth.js", async () => {
@@ -233,5 +233,27 @@ describe("registration period routes", () => {
   it("returns 409 when the conditional update loses a race", async () => {
     const { app } = buildApp({ updated: null });
     expect((await request(app).post("/api/events/7/registration/close").send({})).status).toBe(409);
+  });
+});
+
+describe("isInformationOnly", () => {
+  const noRegistration = { ...DETAILS, registrationNeeded: false };
+  const at = (iso: string) => new Date(iso);
+
+  it("is true for a Confirmed event with no registration until it ends, and never for the guest rule", () => {
+    const inputs = { status: "Confirmed", details: noRegistration, openDate: null, override: "NONE" };
+
+    expect(isInformationOnly(inputs, at("2026-11-20T00:00:00Z"))).toBe(true);
+    expect(isInformationOnly(inputs, at("2026-11-20T12:00:00Z"))).toBe(true); // 20:00 SGT, still running
+    expect(isListed(inputs, at("2026-11-20T00:00:00Z"))).toBe(false);
+  });
+
+  it("is false once the event has ended, for an event that takes registration, and for any other status", () => {
+    const at2 = at("2026-11-20T00:00:00Z");
+
+    expect(isInformationOnly({ status: "Confirmed", details: noRegistration }, at("2026-11-20T14:00:00Z"))).toBe(false);
+    expect(isInformationOnly({ status: "Confirmed", details: DETAILS }, at2)).toBe(false);
+    expect(isInformationOnly({ status: "Planning", details: noRegistration }, at2)).toBe(false);
+    expect(isInformationOnly({ status: "Needs Review", details: noRegistration }, at2)).toBe(false);
   });
 });

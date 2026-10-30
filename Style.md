@@ -62,6 +62,7 @@ Whenever generating code that uses the Lato typeface:
 - Column spans stated in the column mapping must be implemented as explicit grid placement — `grid-column: 3/11` in CSS, or `col-start-3 col-span-8` in Tailwind — never percentage-width or Flexbox approximation.
 - Do not substitute visual approximation for structural grid placement, even when content is sparse.
 - If multiple screens share a content width, use identical `grid-column` values across those screens — do not let width drift from inconsistent sizing methods.
+- **Exception:** the login and sign-up screens are a full-bleed split — the graphic fills the left 30% of the viewport and the form area the right 70%, which are not whole columns. Inside the form area the normal grid and spacing rules apply.
 
 ### 0.9 Token Fidelity
 
@@ -117,8 +118,8 @@ All surfaces, borders, disabled states, and body text should draw from this scal
 | `Colors/Grey/200` | `#CCCCCC` | Default input border / active neutral outline |
 | `Colors/Grey/300` | `#ABABAB` | Placeholder text / disabled text |
 | `Colors/Grey/400` | `#999999` | Secondary supporting text / helper text / caption text / muted icons |
-| `Colors/Grey/500` | `#7A7A7A` | Tertiary text / low-emphasis content / light neutral surface alternative |
-| `Colors/Grey/600` | `#5E5E5E` | Label text / stronger secondary text |
+| `Colors/Grey/500` | `#7A7A7A` | Icons, decoration and low-emphasis fills. **Not for text** (4.3:1 on white): use `Grey/600` |
+| `Colors/Grey/600` | `#5E5E5E` | Secondary / muted text (6.2:1 on white), label text |
 | `Colors/Grey/700` | `#454545` | Supporting text / default dark neutral surface / footer background |
 | `Colors/Grey/800` | `#2F2F2F` | Strong dark surface / non-black background |
 | `Colors/Grey/900` | `#222222` | Maximum-contrast dark text on light backgrounds |
@@ -243,7 +244,7 @@ Treat this the way a secondary colour is meant to work: a minority presence that
 | `Colors/Secondary Blue/900` | `#0F173A` | 17.4:1 | — |
 
 **USE:** As an occasional relief accent — badges/tags, category markers, or a rare secondary action — when a view is already carrying heavy purple density (nav, primary CTA, links, active states, focus rings all purple) and one more purple element would blur which purple thing is actually primary. This is the *only* case where it substitutes for purple in an interactive element.  
-**USE:** `600` (label) and `700` for the selected tab in underline tabs, with a 2px `600` underline and a `100` / `800` count pill, so the nav bar and tabs both mark "where you are" in blue (Section 3.5b, Underline tabs). This is deliberate: the nav bar and tabs are the two places Secondary Blue marks the current location, keeping purple for actions.  
+**USE:** `700` for the selected tab label in underline tabs (unselected tabs are `Grey/600`), with a 2px `600` underline and a `100` / `800` count pill, so the nav bar and tabs both mark "where you are" in blue (Section 3.5b, Underline tabs). This is deliberate: the nav bar and tabs are the two places Secondary Blue marks the current location, keeping purple for actions.  
 **USE:** `100`–`300` as background fills behind dark text — `Grey/900` (`#222222`) or `Purple Primary/800` (`#3F037A`) both clear AA comfortably on top of any of these three.  
 **USE:** `500`–`900` directly as text, icon, link, or border colour on white/light surfaces — `500` clears AA at 4.5:1, `600` and darker pass AAA.  
 **AVOID:** Using `100`–`300` as text, icon, link, or border colour — insufficient contrast on white or light surfaces (this is the same category Purple Primary/100–300 falls into).  
@@ -298,7 +299,7 @@ Two colours that identify a venue on the venue schedule calendar, next to `Purpl
 | Role | Token | Hex |
 |------|-------|-----|
 | Primary body text | `Colors/Grey/700` | `#454545` |
-| Secondary / muted text | `Colors/Grey/500` | `#7A7A7A` |
+| Secondary / muted text | `Colors/Grey/600` | `#5E5E5E` |
 | Placeholder text | `Colors/Grey/300` | `#ABABAB` |
 | Disabled text | `Colors/Grey/300` | `#ABABAB` |
 | Inverse text (on dark bg) | `Colors/Base/White` | `#FFFFFF` |
@@ -313,7 +314,8 @@ Two colours that identify a venue on the venue schedule calendar, next to `Purpl
 | Layer | Token | Hex | Use |
 |-------|-------|-----|-----|
 | App background | `Colors/Grey/25` | `#FCFCFC` | Root page background |
-| Primary surface | `Colors/Grey/50` | `#F7F7F7` | Large background areas, alternate sections, subtle separation |
+| Primary surface | `Colors/Grey/50` | `#F7F7F7` | Large background areas, alternate sections, subtle separation; in-flow panels and empty states |
+| Raised surface | `Colors/Base/White` | `#FFFFFF` | Cards that are links (event and venue cards), modals, popovers, toasts, table containers |
 
 ### 3.5 Availability & Notification States
 
@@ -331,9 +333,9 @@ Patterns for venue availability (E4-3) and in-app notifications (E7-1). Built on
 | Drawer scrim | `Grey/40% Dark #454545` behind a side drawer or modal. | Dims the page while a drawer (e.g. Block out time) is open. |
 | `booking-approved` | Fill `Colors/Purple Primary/100` across the padded window (setup → turnaround), `Colors/Purple Primary/200` across the advertised event time. Border 1px solid `Colors/Purple Primary/300`, `spacing-4` left bar `Colors/Purple Primary/600`. Text `Colors/Purple Primary/800`, `radius-xs`. | An Approved venue booking on the coordinator's availability calendar — confirmed, so solid. |
 | `booking-on-hold` | Fill `Colors/Orange Warning/100` across the padded window, `Colors/Orange Warning/200` across the event time. Border 1px **dashed** `Colors/Orange Warning/300`, `spacing-4` left bar `Colors/Orange Warning/500`. Text `Colors/Orange Warning/900`, `radius-xs`. | An On Hold booking — the Warning set's "on-hold" role (Section 2.6). The dashed border says "tentative" without relying on colour alone. |
-| `pattern-closed` | Solid `Colors/Grey/75` fill, no border. Text `Colors/Grey/500`. | Time outside a venue's operating hours. Plain grey, distinct from the lock-marked `pattern-unavailable` used for recorded block-outs. |
+| `pattern-closed` | Solid `Colors/Grey/75` fill, no border. Text `Colors/Grey/600`. | Time outside a venue's operating hours. Plain grey, distinct from the lock-marked `pattern-unavailable` used for recorded block-outs. |
 | `slot-available` | Fill `Colors/Green Success/100`, border 1px dashed `Colors/Green Success/300`, text `Colors/Green Success/600`, `radius-xs`. | A free slot inside the coordinator's target date and time range — highlighted so it stands out from everything unavailable. |
-| `schedule-block-*` | The **status** is the block's fill, border and text; the **venue** is only its `spacing-4` left edge (`Purple Primary/600`, `Secondary Blue/600`, `Venue/Magenta`, `Venue/Slate`). A status icon sits before the status name. `radius-xs`. **Approved:** `Green Success/200` fill, `/600` border, `/800` text, check. **On Hold:** `Orange Warning/100` fill, `/400` border, `/900` text, pause. **Requested:** `Base/White` fill, 1px dashed `Grey/600` border, `Grey/700` text, clock. **Replacement Required:** `Red Error/200` fill, `/600` border, `/800` text, warning triangle. **Unavailable** (a block-out): flat `Grey/100` fill, `Grey/300` border, `Grey/900` text, lock — no stripes. | A booking or block-out on the venue staff's schedule calendar. The legend shows a 24×20 swatch of each status (with its icon) and a 4×20 bar per venue. |
+| `schedule-block-*` | The **status** is the block's fill, border and text; the **venue** is only its `spacing-4` left edge (`Purple Primary/600`, `Secondary Blue/600`, `Venue/Magenta`, `Venue/Slate`). A status icon sits before the status name. `radius-xs`. **Approved:** `Green Success/200` fill, `/600` border, `/800` text, check. **On Hold:** `Orange Warning/100` fill, `/400` border, `/900` text, pause. **Requested:** `Base/White` fill, 1px dashed `Grey/600` border, `Grey/700` text, clock. **Replacement Required:** `Orange Warning/200` fill, `/300` border, `/900` text, warning triangle (the same pair as the badge above). **Unavailable** (a block-out): flat `Grey/100` fill, `Grey/300` border, `Grey/900` text, lock — no stripes. | A booking or block-out on the venue staff's schedule calendar. The legend shows a 24×20 swatch of each status (with its icon) and a 4×20 bar per venue. |
 
 **USE:** `pattern-unavailable` only for genuinely unavailable time — never as decoration.  
 **USE:** The coordinator's Venue availability page draws the same calendar and legend as the venue staff's schedule (`schedule-block-*`), limited to the three statuses a coordinator can see: Approved, On Hold and Unavailable. Free slots in a target are listed as `slot-available` chips under the venue summary, not drawn on the grid. `booking-approved`, `booking-on-hold` and `pattern-closed` above are no longer used on that page.  
@@ -352,7 +354,7 @@ Colour choice on the *non-solid* buttons follows the same logic as Section 2.8: 
 | Outline | Transparent | `300` shade, 1px | `600` shade | Secondary actions alongside a solid button |
 | Ghost | Transparent | none | `600` shade | Lowest-emphasis actions; background fills to `100` shade on hover only |
 
-**RULE:** Only one solid/filled button per view or component group. Every other button in that group must be outline or ghost.  
+**RULE:** Only one solid/filled button per view or component group. Every other button in that group must be outline or ghost. A panel and a modal are each their own group, so a page of several independent panels can have one solid button in each.  
 **RULE:** Outline and ghost buttons default to **Purple Primary**, not Secondary Blue — an outline button is still a purple action at lower visual weight, not a different colour identity.  
 **RULE:** Secondary Blue may only replace Purple Primary on an outline/ghost button when the view is already purple-saturated (nav, primary CTA, links, active states, and focus rings are all purple) and one more purple element would make it unclear which purple thing is actually primary. This is a relief valve for excess purple density, not a standing style choice — most views will never need it.  
 **USE:** Solid Purple Primary for the single primary CTA (e.g. "Save", "Send invite", "Create project").  
@@ -374,6 +376,7 @@ Every button in the app is the one `AppButton` component (`frontend/src/componen
 | `ghost` | Transparent, no border, `Purple Primary/600` text. Hover `Purple Primary/100` fill. | Lowest-emphasis actions, inline row actions. |
 | `danger` | Transparent, 1px `Red Error/300` border, `Red Error/600` text. Hover `Red Error/200` fill. Focus: border `Red Error/600` plus a 2px `ring-error` outline. | A destructive action that is not the view's main action (withdraw, remove, reject). |
 | `danger-solid` | `Red Error/600` fill, `Base/White` text. Hover darkens the fill with `brightness(0.9)`. Focus: a 2px `ring-error` outline. | The confirming button of a destructive modal only (a modal is its own button group). |
+| `link` | Transparent, no border, no padding, no `min-height`; `Purple Primary/600` text that underlines on hover. Same 2px `ring-brand` focus outline. | An action that sits inside a sentence or a table row ("Details", "+ Add another item", "Use the suggestion"). The only variant that is not a touch-target-sized block. |
 
 **Size:** `md` is `min-height` 44px (the touch-target minimum), horizontal padding `spacing-24`, text `0.875rem` / 700, `radius-xs`. `sm` is `min-height` 36px with `spacing-16` padding, for dense toolbars only. `xl` is `min-height` 52px, `min-width` 12.5rem, `spacing-48` horizontal padding and `1rem` / 700 text, for a page's one main call to action (e.g. Register on an event page).  
 **Disabled:** `Grey/25` fill, `Grey/100` border, `Grey/300` text, `not-allowed` cursor (Section 3.1).  
@@ -387,7 +390,7 @@ Events are shown as one `EventCard` component (`frontend/src/components/ui/Event
 
 #### Pagination bar (`PaginationBar`)
 
-A table or list too long for one screen is paged by `PaginationBar` (`frontend/src/components/ui/PaginationBar.vue`), placed directly under it. Left: "Showing 21–40 of 47" in Small Text, `Grey/500`. Right: **Previous** and **Next** as `AppButton` `outline` `sm` (disabled at either end, Section 3.1), and between them the page numbers, each a 36px (`spacing-12` × 3) square, `radius-xs`, `0.875rem` / 700 text: `Grey/700` text with a `Grey/75` hover fill; the current page `Purple Primary/100` fill, 1px `Purple Primary/300` border, `Purple Primary/800` text, and `aria-current="page"`. Long ranges collapse to `1 … 4 5 6 … 12` with a `Grey/500` ellipsis. Focus is the 2px `ring-brand` outline. Nothing renders when everything fits on one page.  
+A table or list too long for one screen is paged by `PaginationBar` (`frontend/src/components/ui/PaginationBar.vue`), placed directly under it. Left: "Showing 21–40 of 47" in Small Text, `Grey/600`. Right: **Previous** and **Next** as `AppButton` `outline` `sm` (disabled at either end, Section 3.1), and between them the page numbers, each a 36px (`spacing-12` × 3) square, `radius-xs`, `0.875rem` / 700 text: `Grey/700` text with a `Grey/75` hover fill; the current page `Purple Primary/100` fill, 1px `Purple Primary/300` border, `Purple Primary/800` text, and `aria-current="page"`. Long ranges collapse to `1 … 4 5 6 … 12` with a `Grey/600` ellipsis. Focus is the 2px `ring-brand` outline. Nothing renders when everything fits on one page.  
 **RULE:** Changing a tab, filter or sort returns to page 1, and changing page scrolls the top of the table back into view.  
 **USE:** 20 rows per page for a table of events or requests (about two screens at the table row height of `spacing-20` padding). Where each unit is a tall section rather than a row (equipment requests: one event, with its own small table, per section), 10 per page, and the bar names the unit: "Showing 11–20 of 24 events" (`noun`). A card grid pages 12 at a time, which divides evenly into the 3, 2 and 1 columns it uses (organiser's My events).
 
@@ -398,7 +401,7 @@ A table or list too long for one screen is paged by `PaginationBar` (`frontend/s
 The header's wordmark and nav links follow these rules:
 
 - **Logo:** the ConnectSphere mark (`public/logoo.svg`) replaces a text wordmark. It is `spacing-40` tall with its width following the aspect ratio, and carries `alt="ConnectSphere"`.
-- **Nav links:** 16px, regular weight, capitalised, `Colors/Grey/500`; `Colors/Grey/900` on hover. The current page is marked by bold (700) `Colors/Secondary Blue/600` text, plus `aria-current="page"`.
+- **Nav links:** 16px, regular weight, capitalised, `Colors/Grey/600`; `Colors/Grey/900` on hover. The current page is marked by bold (700) `Colors/Secondary Blue/600` text, plus `aria-current="page"`.
 
 **AVOID:** Purple on the active nav link — the logo and most interactive elements (CTAs, links, focus rings) are already Purple Primary/600, and one more purple element here would blur with the brand mark. Secondary Blue is the relief accent for exactly this situation (Section 2.8).  
 **NOTE:** The Organiser role chip (Section 3.6) is also Secondary Blue. That is acceptable because organisers have no nav links; revisit if they gain any.
@@ -410,10 +413,10 @@ Pages for visitors who are not signed in (`frontend/src/components/public/`, `fr
 | Pattern | Treatment | Use |
 |---------|-----------|-----|
 | Public header | `Base/White` fill, 1px `Grey/100` bottom border, sticky. Logo and nav links as in Section 3.5a; on the right an outline "Log in" and a primary "Sign up" (`AppButton` `sm`). | Every guest page. App.vue's header is for signed-in users only. |
-| Public footer | `Base/White` fill, 1px `Grey/100` top border. Logo, tagline in Small Text `Grey/500`, link columns with a Small Text / Tag heading in `Grey/900` and Body Small links in `Grey/500` (`Purple Primary/700` on hover). | Every guest page. |
+| Public footer | `Base/White` fill, 1px `Grey/100` top border. Logo, tagline in Small Text `Grey/600`, link columns with a Small Text / Tag heading in `Grey/900` and Body Small links in `Grey/600` (`Purple Primary/700` on hover). | Every guest page. |
 | Section tag | `Purple Primary/100` fill, `Purple Primary/700` text, Small Text / Tag, `spacing-24` tall, `radius-full`. | The small label above a landing-page section heading ("Events", "Venues"). |
-| Underline tabs | Body Small 700 `Grey/500`; the selected tab `Secondary Blue/700` with a 2px `Secondary Blue/600` underline (Section 2.8). A count pill beside each label: `Grey/75` / `Grey/600`, selected `Secondary Blue/100` / `Secondary Blue/800`. | Filtering a guest list (All events / Open for registration / Registration closed). |
-| Venue card | Same shell as the event card (`Base/White`, 1px `Grey/100`, `radius-lg`, `shadow-card`). A 3:1 image area — `Purple Primary/50` with a `Purple Primary/300` building icon until venues have photos; H6 name; Body Small facts with `Grey/500` icons; a "Next event" box in `Purple Primary/50` (`Grey/50` when there is none), `radius-xs`. | A venue on the guest pages. |
+| Underline tabs | Body Small 700 `Grey/600`; the selected tab `Secondary Blue/700` with a 2px `Secondary Blue/600` underline (Section 2.8). A count pill beside each label: `Grey/75` / `Grey/600`, selected `Secondary Blue/100` / `Secondary Blue/800`. | Filtering a guest list (All events / Open for registration / Registration closed). |
+| Venue card | Same shell as the event card (`Base/White`, 1px `Grey/100`, `radius-lg`, `shadow-card`). A 3:1 image area — `Purple Primary/50` with a `Purple Primary/300` building icon until venues have photos; H6 name; Body Small facts with `Grey/600` icons; a "Next event" box in `Purple Primary/50` (`Grey/50` when there is none), `radius-xs`. | A venue on the guest pages. |
 | Guest register panel | A card beside the event (`radius-lg`, `shadow-card`): a note that guest registration isn't available, an `xl` primary "Sign up to register", and a "Log in to register" link. Both carry `?redirect=` to the attendee event page. | Where a signed-in attendee would see Register (E6: guests must sign up first). |
 
 **RULE:** A guest page never offers an action that needs an account (register, withdraw) as if it would work; it sends the visitor to sign up or log in instead.
@@ -431,6 +434,41 @@ The role chip in the app header gives each role its own colour so a signed-in us
 | Technical Support | `Colors/Orchid/50` | `Colors/Orchid/200` | `Colors/Orchid/800` | 8.8:1 |
 
 **AVOID:** Reusing these pairings as status badges. Green and orange here are role colours, not success and warning.
+
+### 3.7 Shared components (status badge, modal, icon button, panel, back link, tabs)
+
+Each of these is one component in `frontend/src/components/ui/`; views and panels use it rather than defining their own CSS.
+
+**Status badge (`StatusBadge`).** Small Text / Tag, `radius-full`, `spacing-4` × `spacing-8` padding. The colour comes from a tone, and the tone from the status (`lib/eventStatus.ts`, `bookingStatus.ts`, `registrationStatus.ts`, `equipmentApi.ts`):
+
+| Tone (class) | Fill | Border | Text | Used for |
+|---|---|---|---|---|
+| `success` (`status-success`) | `Green Success/200` | none | `Green Success/700` | Done or good: Planning, Confirmed, Completed, Approved, Arranged, Registered |
+| `warning` (`status-warning`) | `Orange Warning/100` | none | `Orange Warning/900` | Waiting on someone: Requested, Unassigned, Pending, On Hold, Partially fulfilled, Full, Registration closed |
+| `attention` (`status-attention`) | `Orange Warning/200` | `Orange Warning/300` | `Orange Warning/900` | Needs a new arrangement: Replacement Required (the badge in Section 3.5) |
+| `error` (`status-error`) | `Red Error/200` | none | `Red Error/600` | Rejected, Cancelled, Withdrawn |
+| `info` (`status-info`) | `Secondary Blue/200` | none | `Secondary Blue/800` | Awaiting a reply or review: Clarification Requested, Needs Review |
+| `neutral` (`status-neutral`) | `Grey/75` | none | `Grey/700` | Inactive or unknown: Unavailable, Expired, no status |
+
+**RULE:** The six tone classes are defined once, in `frontend/src/style.css`; a component never redefines them. `status-open` is the `info` pair and `status-over` the `neutral` pair, kept so the event card's "Open" and "finished" badges read the same as everywhere else. `attention` draws its 1px `Orange Warning/300` border inside the badge so it stays the same size as the others.
+
+**Modal (`AppModal`).** Scrim `Grey/40% Dark #454545`, panel `Base/White`, `radius-lg`, `shadow-popover`. Width `sm` 400px (confirmations), `md` 600px, `lg` 800px. Confirmations are `alertdialog`, forms are `dialog`. Closes on a click on the scrim and on Escape, unless the action is running. The title is Subheading bold; the buttons sit right-aligned under the content, the confirming one `danger-solid` for a destructive action (Section 3.4).
+
+**Icon button (`IconButton`).** Square, `radius-xs`. `sm` 32px, `md` 40px. `Grey/700` icon, `Grey/75` fill on hover; the `brand` tone uses a `Purple Primary/600` icon. Always has an `aria-label`. Focus is the 2px `ring-brand` outline.
+
+**Panel (`AppPanel`) and empty state (`EmptyState`).** A panel is `Grey/50` fill, 1px `Grey/100` border, `radius-lg`, padding `spacing-24` (`md`) or `spacing-32` (`lg`, a page-level section). An empty state is the same shell with `spacing-40` / `spacing-24` padding and Body Default `Grey/600` text.
+
+**Back link (`BackLink`).** 44px tall, Body Small 700 `Purple Primary/600`, a left chevron icon; a link when it goes to a fixed page, a button when it goes back in history.
+
+**Underline tabs (`UnderlineTabs`) and segmented toggle (`SegmentedToggle`).** Tabs follow the "Underline tabs" row in Section 3.5b: unselected `Grey/600`, hover `Grey/900`, selected `Secondary Blue/700` with a 2px `Secondary Blue/600` underline, and the optional count pill (a count that needs attention uses `Orange Warning/200` with `/900` text). Body Default 700 with `spacing-32` between tabs on app pages; Body Small 700 on the guest pages. Arrow keys move between tabs. A segmented toggle is a joined pair or trio of buttons for switching a view (list or calendar), 40px tall, selected segment `Purple Primary/100` with `Purple Primary/800` text.
+
+### 3.8 Form controls and icons
+
+**Form controls.** Text inputs, textareas and selects are styled once, by element, in `frontend/src/style.css`; a component adds only width, height or layout. 1px `Grey/200` border, `radius-xs`, `Base/White` fill, Lato, `Grey/900` text, `spacing-12` padding, Body Default (Body Small is allowed in dense panels), and a 44px minimum height for a single-line control. Placeholder `Grey/300`. Hover: `Grey/300` border. Focus: the two-layer ring in Section 8.2. Invalid (`aria-invalid="true"`): `Red Error/600` border, with the message under the field in `Red Error/600` Body Small. Disabled: Section 3.1.
+
+**Search box (`SearchBox`).** 48px tall, the same border and `radius-xs`, a magnifier on the left, a clear `IconButton` on the right once there is text, no shadow (it sits in the page flow, Section 8.1).
+
+**Icons.** Heroicons only, solid: 16px beside text, 20px inside controls. Hand-drawn inline SVGs and text glyphs (`×`, `&larr;`) are not used for icons.
 
 ## 4. Typography Tokens
 
@@ -458,8 +496,8 @@ All sizes in `px` (design) — convert to `rem` for code (`px ÷ 16`).
 | `Font/Font Size/20` | 20 | 1.25rem | **Subheading / card title** |
 | `Font/Font Size/24` | 24 | 1.5rem | **Section heading (H4)** |
 | `Font/Font Size/28` | 28 | 1.75rem | **Section heading (H3)** |
-| `Font/Font Size/32` | 32 | 2rem | **Page subheading (H2 — interior)** |
-| `Font/Font Size/36` | 36 | 2.25rem | **Page title (H1 — interior)** |
+| `Font/Font Size/32` | 32 | 2rem | **Section title (H3)** |
+| `Font/Font Size/36` | 36 | 2.25rem | **Interior page title (H2)** |
 | `Font/Font Size/48` | 48 | 3rem | **Hero / Display heading (H1 — hero)** |
 
 **RULE:** Do not apply font size tokens directly. Always use a named composite text style from Section 5.
@@ -481,7 +519,7 @@ Weight choice should reinforce hierarchy, emphasis, and readability — not visu
 **USE:** `400` as the default weight for most UI text and body copy.  
 **USE:** `700` for headings, labels, buttons, and important emphasis.  
 **USE:** `900` only for high-impact display or promotional text.  
-**USE:** `300` sparingly for low-emphasis or long-form editorial content.  
+**AVOID:** `300` and the italic weights: they are defined here but not loaded (Section 0.7), so no component uses them.  
 **AVOID:** Multiple font weights in the same component without a clear hierarchy purpose.  
 **AVOID:** `900` for standard body copy, helper text, or dense UI.  
 **AVOID:** `Italic` as a substitute for semantic emphasis.
@@ -497,14 +535,14 @@ Weight choice should reinforce hierarchy, emphasis, and readability — not visu
 | `Font/Line Height/18` | 18 | 14px text |
 | `Font/Line Height/20` | 20 | 16px body text (1.25 ratio) |
 | `Font/Line Height/22` | 22 | 18px body large |
-| `Font/Line Height/28` | 28 | 20px, 24px text |
-| `Font/Line Height/32` | 32 | 24px, 28px headings |
-| `Font/Line Height/36` | 36 | 28px, 32px headings |
+| `Font/Line Height/28` | 28 | 20px (H6) |
+| `Font/Line Height/32` | 32 | 24px (H5) |
+| `Font/Line Height/36` | 36 | 28px (H4) |
 | `Font/Line Height/40` | 40 | 32px headings |
 | `Font/Line Height/42` | 42 | 36px headings |
 | `Font/Line Height/58` | 58 | 48px display headings |
 
-**RULE:** Line height must always be font size + 4px. For 16px body text use 20px. For 48px display use 58px.
+**RULE:** Use the size and line-height pair of the composite in Section 5 (16px body text is 20px, 48px display is 58px). Font size + 4px is only the fallback for a size that has no composite.
 **RULE:** Do not apply line height tokens directly. Always use a named composite text style from Section 5.
 
 ### 4.5 Letter Spacing
@@ -512,12 +550,12 @@ Weight choice should reinforce hierarchy, emphasis, and readability — not visu
 | Token | Value (px) | Use |
 |-------|------------|-----|
 | `Font/Letter Spacing/0` | 0 | Body text, headings (default) |
-| `Font/Letter Spacing/2` | 2 | Subheadings, card titles |
+| `Font/Letter Spacing/2` | 2 | Reserved (no composite uses it) |
 | `Font/Letter Spacing/4` | 4 | Labels, uppercase tags |
 | `Font/Letter Spacing/6` | 6 | Tight tracking for display |
 | `Font/Letter Spacing/20` | 20 | Wide-tracked ALL CAPS labels only |
 
-**USE:** 0 for all body and heading text. Positive tracking only for ALL CAPS labels or decorative display use.  
+**USE:** 0 for all body and heading text. Positive tracking only for ALL CAPS labels (0.04em, about 0.5px at 12px, in table headings and captions), decorative display use, and the two mobile text styles in Section 5.  
 **AVOID:** Negative letter spacing on Lato — it disrupts legibility.
 
 ### 4.6 Paragraph & List Spacing
@@ -552,8 +590,9 @@ Use these combinations in component specs.
 | **xxSmall Text** | 10px | 400 | 12px | 4 | Constrained UI labels |
 | **xxxSmall Text** | 8px | 400 | 10px | 0 | Rare use only — avoid unless space is extremely limited |
 | **All Caps Heading** | 18px | 700 | 22px | 6 | Swim lane headers, major promo titles |
-| **All Caps Caption** | 12px | 700 | 16px | 6 | App captions and short uppercase labels |
+| **All Caps Caption** | 12px | 700 | 16px | 0.04em | App captions and short uppercase labels |
 
+**RULE:** These composites exist once, as shared classes in `frontend/src/style.css`: `.h1`–`.h6`, `.subheading`, `.body-default`, `.body-small`, `.small-text`, `.small-text-tag`. Components use them in their templates and add only margin or colour locally; they do not re-declare a composite's size or line height.  
 **USE:** Apply heavier weights only where hierarchy or emphasis is required.  
 **USE:** Keep body styles primarily at `400`, with `700` reserved for selective emphasis.  
 **USE:** Reserve `900` for display and promotional heading styles only.  
@@ -590,7 +629,7 @@ Spacing is based on a **primary unit of 4px**. Multiples of 4px govern all spati
 | `spacing-128` | 128 |
 | `spacing-200` | 200 |
 
-**USE:** `spacing-24` as the standard left/right page margin and default spacing between adjacent components.   
+**USE:** `spacing-24` as the default spacing between adjacent components. Page margins are the grid margins in Section 6.2.   
 **USE:** `spacing-40` to separate major content sections on mobile.  
 **USE:** `spacing-80` to separate major content sections on larger layouts.  
 **RULE:** All page margins, component spacing, and section spacing must reference named spacing tokens.  
@@ -615,13 +654,13 @@ Grid systems define column structure, gutters, and margins across breakpoints. A
 | `grid-mobile-width` | 375px | Mobile max content width |
 | `grid-mobile-gutter` | 16px | Mobile column gutter |
 | `grid-mobile-margin` | 6px | Mobile left/right page margin |
-| `paragraph-max-width` | 20rem / 720px | Maximum width for paragraph/body text blocks |
+| `paragraph-max-width` | 45rem / 720px | Maximum width for paragraph/body text blocks |
 
 **RULE:** Every screen must use the grid matching its target breakpoint (12-col desktop, 6-col tablet, 4-col mobile). Do not mix column counts within the same breakpoint.  
 **RULE:** When a layout includes a sidebar, `grid-desktop-margin` is overridden per the Sidebar Margin Rule (Section 0.5) — left margin drops to 0px; the right edge and sidebar-free layouts keep the default 80px.  
 **USE:** `grid-desktop-margin` (80px) and `grid-desktop-gutter` (32px) as the default spacing structure for all 1280px desktop layouts.  
 **USE:** `grid-tablet-margin` (32px) and `grid-tablet-gutter` (32px) for 768px tablet layouts.  
-**USE:** `grid-mobile-margin` (6px) and `grid-mobile-gutter` (16px) for 375px mobile layouts.  
+**USE:** `grid-mobile-margin` (6px) and `grid-mobile-gutter` (16px) for 375px mobile layouts. The 6px margin is intentional: content runs almost edge to edge on a phone, and panels carry their own inner padding.  
 **AVOID:** Rendering any section without a column-span annotation.  
 **AVOID:** Mixing grid systems (e.g., 8-col and 12-col, or desktop and tablet margins) within the same flow.  
 ---
@@ -632,7 +671,7 @@ Grid systems define column structure, gutters, and margins across breakpoints. A
 
 | Token | px | Frequency |
 |-------|----|-----------|
-| `radius-none` | 0px | Tables, full-bleed images |
+| `radius-none` | 0px | Full-bleed images (a table's outer container is `radius-sm`) |
 | `radius-xs` | 4px | **Common — small cards, inputs, chips** |
 | `radius-sm` | 8px | Moderate use |
 | `radius-md` | 12px | Moderate use |
@@ -644,14 +683,14 @@ Grid systems define column structure, gutters, and margins across breakpoints. A
 **Common patterns:**
 - **Big cards / modals / featured containers** — `radius-lg`
 - **Small cards / inputs / chips** — `radius-xs`
-- **Pill-shaped elements** — `radius-full`
+- **Pill-shaped elements** — `radius-full` (also circles: use `radius-full`, not `50%`)
 
 **RULE:** Favour `radius-xs` and `radius-lg` as the two primary radii to maintain visual consistency.  
 **RULE:** When nesting rounded elements, inner radius = outer radius gap padding.
 
 ## 8. Elevation & Interaction States
 
-> **Note:** Section 8.1 (likely Shadows/Elevation, referenced as an "Effects" token collection in Section 1) appears to be missing from this adaptation — only 9.2 survived. Flagging so it can be re-added rather than guessed at.
+> **Note:** 8.1 defines only the three shadow tokens below; add others there as they are needed rather than inlining shadows.
 
 ### 8.1 Elevation (partial)
 
@@ -674,7 +713,7 @@ Use focus ring styles to provide a visible keyboard-focus indicator on all inter
 | `ring-brand` | `Purple Primary/600` (`#701EC2`), 100% opacity | Inner border/stroke — default focus ring for all interactive elements |
 | `ring-light` | `Purple Primary/600` (`#701EC2`), 24% opacity | Outer glow layer — paired with `ring-brand` on form inputs and selects only |
 | `ring-grey` | `Grey/200` (`#CCCCCC`), 24% opacity | Neutral supporting ring where lower emphasis is needed |
-| `ring-error` | `Red Error/200` (`#FFE3E0`), 100% opacity | Used for destructive and error focus states |
+| `ring-error` | `Red Error/600` (`#CC1000`), 100% opacity | Used for destructive and error focus states |
 
 **RULE:** For form inputs and selects (text fields, dropdowns, textareas), apply BOTH layers simultaneously:
 - Inner: `ring-brand` border, 1px width

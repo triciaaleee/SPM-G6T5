@@ -44,6 +44,8 @@ export interface AttendeeEventView {
   /** Null when the attendee has no registration for this event. */
   registrationStatus: RegistrationStatus | null;
   open: boolean;
+  /** False for an event with nothing to register for; absent (older responses) means it needs registration. */
+  registrationNeeded?: boolean;
   /** Open, full, closed, or not yet open; absent from older responses. */
   registrationState?: RegistrationStateValue;
   /** E6-4: the event has started, so a place can no longer be withdrawn. */
@@ -58,6 +60,8 @@ export interface OpenEvent {
   proposedDate: string | null;
   startTime: string | null;
   endTime: string | null;
+  /** Names of the venues booked for the event; empty until one is approved. */
+  venues: string[];
   accessibility: string | null;
   organiserName: string | null;
   /** How many may register; null when the event has no cap. */
@@ -65,6 +69,8 @@ export interface OpenEvent {
   /** Places still free (0 = full); null when the event has no cap. */
   slotsLeft: number | null;
   registrationStatus: RegistrationStatus | null;
+  /** False for an event with nothing to register for; absent (older responses) means it needs registration. */
+  registrationNeeded?: boolean;
   registrationState?: RegistrationStateValue;
 }
 

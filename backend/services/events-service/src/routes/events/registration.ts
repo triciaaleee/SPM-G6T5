@@ -5,6 +5,7 @@ import { EVENT_STATUS } from "../../lib/eventStatus.js";
 import { eventStartsAt, hasEventStarted, localDateStart } from "../../lib/eventTiming.js";
 import {
   getRegistrationState,
+  isInformationOnly,
   isListed,
   REGISTRATION_CUTOFF_DAYS,
   REGISTRATION_DATE_EDITABLE_STATUSES,
@@ -96,9 +97,13 @@ export function registrationInfo(row: RegistrationRowFields, details: Record<str
     override: row.registration_override,
   };
   const registrationState = getRegistrationState(inputs, now);
+  const listed = isListed(inputs, now);
   return {
     registrationState,
-    listed: isListed(inputs, now),
+    listed,
+    // What an attendee may find and open: events open to registration, plus Confirmed events with nothing to
+    // register for that haven't ended. `listed` stays registration-only, so the guest pages don't change.
+    viewable: listed || isInformationOnly(inputs, now),
     open: registrationState === REGISTRATION_STATE.Open,
   };
 }
@@ -154,7 +159,7 @@ registrationRouter.get("/attendee-info", async (req: AuthedRequest, res) => {
       registrationNeeded: details.registrationNeeded === true,
       ...registrationInfo(row, details),
       accessibility: attendeeAccessibility(details.accessibility),
-      capacity: attendeeCapacity(details),
+      capacity: details.registrationNeeded === true ? attendeeCapacity(details) : null,
       organiserName: attendeeOrganiserName(row.organiser),
       // E6-4: an attendee may withdraw until the event starts.
       hasStarted: hasEventStarted(details),
@@ -167,8 +172,10 @@ registrationRouter.get("/attendee-info", async (req: AuthedRequest, res) => {
 });
 
 /**
- * E6: Confirmed events currently open for registration, so an attendee can
- * find something to register for. Same whitelist as GET /attendee-info.
+ * E6: the attendee Discover list: Confirmed events whose registration is open (registration-service turns
+ * that into FULL when no places are left) and Confirmed events with no registration that haven't ended. An
+ * event whose registration has closed (the 5-day cutoff, a manual close, or its start) leaves this list, but
+ * its page stays viewable (see `viewable` in registrationInfo). Same whitelist as GET /attendee-info.
  * Declared before GET /:id.
  */
 registrationRouter.get("/open-for-registration", async (req: AuthedRequest, res) => {
@@ -197,14 +204,14 @@ registrationRouter.get("/open-for-registration", async (req: AuthedRequest, res)
   // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder row has no status, so it is never listed
   const events = (data ?? [])
     .map((row) => ({ row, details: (row.submitted_details ?? {}) as Record<string, unknown> }))
-    .filter(({ row, details }) => registrationInfo(row, details).listed)
+    .filter(({ row, details }) => registrationInfo(row, details).open || isInformationOnly({ status: row.status, details }))
     .map(({ row, details }) => {
       const info: Record<string, unknown> = {
         id: row.id,
-        registrationNeeded: true,
+        registrationNeeded: details.registrationNeeded === true,
         ...registrationInfo(row, details),
         accessibility: attendeeAccessibility(details.accessibility),
-        capacity: attendeeCapacity(details),
+        capacity: details.registrationNeeded === true ? attendeeCapacity(details) : null,
         organiserName: attendeeOrganiserName(row.organiser),
       };
       for (const field of ATTENDEE_INFO_FIELDS) info[field] = details[field] ?? null;

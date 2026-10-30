@@ -526,6 +526,7 @@ describe("GET /event/:eventId/view (attendee view)", () => {
       organiserName: "Pat Organiser",
       capacity: null,
       slotsLeft: null,
+      registrationNeeded: true,
       registrationStatus: "Registered",
       open: false,
       hasStarted: false,
@@ -566,6 +567,7 @@ describe("GET /event/:eventId/view (attendee view)", () => {
         "open",
         "organiserName",
         "proposedDate",
+        "registrationNeeded",
         "registrationStatus",
         "slotsLeft",
         "startTime",
@@ -687,6 +689,30 @@ describe("GET /open-events", () => {
     expect(countQuery.in).toHaveBeenCalledWith("event_id", [1, 2]);
   });
 
+  it("adds each event's venue names, and none when it has no booking, asking for the open ids with the caller's token", async () => {
+    clients.fetchOpenEvents.mockResolvedValue({ status: "ok", events: [eventInfo(), eventInfo({ id: 2 })] });
+    clients.fetchVenueNames.mockResolvedValue({ status: "ok", venuesByEvent: new Map([[1, ["Great Lawn", "Hall B"]]]) });
+    const { app } = buildApp(attendee, query({ data: [], error: null }));
+
+    const res = await request(app).get("/api/registrations/open-events");
+
+    expect(res.body.events.map((e: { id: number; venues: string[] }) => [e.id, e.venues])).toEqual([
+      [1, ["Great Lawn", "Hall B"]],
+      [2, []],
+    ]);
+    expect(clients.fetchVenueNames).toHaveBeenCalledWith([1, 2], "Bearer test-token");
+  });
+
+  it("answers 502 when the venues can't be looked up", async () => {
+    clients.fetchOpenEvents.mockResolvedValue({ status: "ok", events: [eventInfo()] });
+    clients.fetchVenueNames.mockResolvedValue({ status: "error" });
+    const { app } = buildApp(attendee, query({ data: [], error: null }));
+
+    const res = await request(app).get("/api/registrations/open-events");
+
+    expect(res.status).toBe(502);
+  });
+
   it("skips the registrations query when nothing is open", async () => {
     clients.fetchOpenEvents.mockResolvedValue({ status: "ok", events: [] });
     const { app, from } = buildApp(attendee);
@@ -721,6 +747,29 @@ describe("registration state (open / full / closed)", () => {
       [2, "CLOSED"],
       [3, "OPEN"],
     ]);
+  });
+
+  it("lets an unregistered attendee read about an event that needs no registration, with nothing to register for", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({
+      status: "ok",
+      events: [eventInfo({ registrationNeeded: false, open: false, listed: false, viewable: true, capacity: null })],
+    });
+    const { app } = buildApp(attendee, query({ data: null, error: null }));
+
+    const res = await request(app).get("/api/registrations/event/1/view");
+
+    expect(res.status).toBe(200);
+    expect(res.body.event).toMatchObject({ registrationNeeded: false, open: false, slotsLeft: null });
+  });
+
+  it("still denies an unregistered attendee an event that is neither listed nor viewable", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({
+      status: "ok",
+      events: [eventInfo({ registrationNeeded: false, open: false, listed: false, viewable: false })],
+    });
+    const { app } = buildApp(attendee, query({ data: null, error: null }));
+
+    expect((await request(app).get("/api/registrations/event/1/view")).status).toBe(403);
   });
 
   it("lets an unregistered attendee look at a listed event that is now closed", async () => {

@@ -28,7 +28,7 @@ describe("AppButton", () => {
     expect(wrapper.text()).toBe("Save");
   });
 
-  it.each(["primary", "outline", "ghost", "danger", "danger-solid"] as const)("has a %s variant class", (variant) => {
+  it.each(["primary", "outline", "ghost", "danger", "danger-solid", "link"] as const)("has a %s variant class", (variant) => {
     expect(mountButton({ variant }).classes()).toContain(`btn--${variant}`);
   });
 

@@ -83,9 +83,6 @@ function toggleAllVisible(): void {
   width: 100%;
   height: 40px;
   padding: 0 var(--spacing-12);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-lato);
   font-size: 0.875rem;
   line-height: 1.125rem;
   color: var(--color-grey-700);
@@ -106,7 +103,7 @@ function toggleAllVisible(): void {
 .checklist__hint {
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   text-align: right;
 }
 
@@ -121,7 +118,7 @@ function toggleAllVisible(): void {
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .checklist__list {
@@ -135,7 +132,8 @@ function toggleAllVisible(): void {
 .checklist__empty {
   padding: var(--spacing-8);
   font-size: 0.875rem;
-  color: var(--color-grey-500);
+  line-height: 1.125rem;
+  color: var(--color-grey-600);
 }
 
 .check {

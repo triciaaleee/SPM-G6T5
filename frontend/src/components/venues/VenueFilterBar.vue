@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SearchBox from "../ui/SearchBox.vue";
 import AppButton from "../ui/AppButton.vue";
 import { computed, ref } from "vue";
 import {
@@ -12,7 +13,6 @@ import {
 import CalendarPicker from "./CalendarPicker.vue";
 import FilterChecklist from "./FilterChecklist.vue";
 import FilterChip from "./FilterChip.vue";
-import VenueIcon from "./VenueIcon.vue";
 
 /**
  * Search box + filter chips for venue search. Edits the parent's filters
@@ -91,14 +91,9 @@ function setNumber(key: "capacityMin" | "capacityMax", raw: string): void {
 
 <template>
   <div class="filter-bar">
-    <div class="search-box">
-      <VenueIcon name="search" :size="20" class="search-box__icon" />
-      <input v-model="filters.q" type="search" class="search-box__input" placeholder="Search venues by name or keyword"
-        aria-label="Search venues" />
-      <button v-if="filters.q" type="button" class="search-box__clear" aria-label="Clear search" @click="clear('q')">
-        <VenueIcon name="close" :size="20" />
-      </button>
-    </div>
+    <SearchBox v-model="filters.q" class="search-box" placeholder="Search venues by name or keyword"
+      label="Search venues"
+      @clear="clear('q')" />
 
     <div class="chips" role="group" aria-label="Venue filters">
       <FilterChip label="Date & time" icon="calendar" :active-label="availabilityLabel"
@@ -181,70 +176,7 @@ function setNumber(key: "capacityMin" | "capacityMax", raw: string): void {
   gap: var(--spacing-16);
 }
 
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-12);
-  height: 56px;
-  padding: 0 var(--spacing-16) 0 var(--spacing-24);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-popover);
-}
-
-.search-box:focus-within {
-  border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--ring-light);
-}
-
-.search-box__icon {
-  color: var(--color-grey-700);
-}
-
-.search-box__input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  border: none;
-  background: transparent;
-  font-family: var(--font-family-lato);
-  font-size: 1.125rem;
-  line-height: 1.375rem;
-  color: var(--color-grey-900);
-}
-
-.search-box__input::placeholder {
-  color: var(--color-grey-300);
-}
-
 /* The wrapper carries the focus treatment (Style.md 8.2) for the whole box. */
-.search-box__input:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-.search-box__input::-webkit-search-cancel-button {
-  display: none;
-}
-
-.search-box__clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-grey-700);
-  cursor: pointer;
-}
-
-.search-box__clear:hover {
-  background: var(--color-grey-75);
-}
-
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -290,13 +222,9 @@ function setNumber(key: "capacityMin" | "capacityMax", raw: string): void {
   min-width: 0;
   height: 40px;
   padding: 0 var(--spacing-12);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-lato);
   font-size: 0.875rem;
   line-height: 1.125rem;
   color: var(--color-grey-700);
-  background: var(--color-base-white);
 }
 
 .field__input::placeholder {
@@ -317,7 +245,7 @@ function setNumber(key: "capacityMin" | "capacityMax", raw: string): void {
 }
 
 .field__hint {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .field__error {

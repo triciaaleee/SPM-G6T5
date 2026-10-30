@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import StatusBadge from "../../components/ui/StatusBadge.vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { CalendarIcon, ChevronRightIcon, ClockIcon, MapPinIcon, UserIcon } from "@heroicons/vue/24/outline";
@@ -89,7 +90,7 @@ onMounted(async () => {
         <img :src="eventThumbnail(event.id)" alt="" class="full banner" decoding="async" />
 
         <div class="main">
-          <span class="badge" :class="badge.className">{{ badge.label }}</span>
+          <StatusBadge :status-class="badge.className">{{ badge.label }}</StatusBadge>
           <h1 class="h2">{{ event.name || `Event #${event.id}` }}</h1>
 
           <div v-if="paragraphs.length > 0" class="description">
@@ -191,7 +192,7 @@ onMounted(async () => {
 }
 
 .breadcrumb__link {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   text-decoration: none;
 }
 
@@ -226,28 +227,6 @@ onMounted(async () => {
   padding: var(--spacing-24);
   background: var(--color-grey-50);
   border-radius: var(--radius-lg);
-}
-
-/* Status badge: same colours as EventCard's (Style.md 3.4 Event card). */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  height: var(--spacing-24);
-  padding: 0 var(--spacing-12);
-  border-radius: var(--radius-full);
-  font-size: 0.75rem;
-  line-height: 1rem;
-  font-weight: 700;
-}
-
-.status-open {
-  background: var(--color-blue-200);
-  color: var(--color-blue-800);
-}
-
-.status-warning {
-  background: var(--color-warning-100);
-  color: var(--color-warning-900);
 }
 
 .description {
@@ -289,7 +268,7 @@ onMounted(async () => {
   font-size: 0.75rem;
   line-height: 1rem;
   font-weight: 700;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 /* Body Default */
@@ -321,43 +300,27 @@ onMounted(async () => {
 /* Text styles (Style.md 5) */
 .h2 {
   margin: 0;
-  font-size: 2.25rem;
-  line-height: 2.625rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
 }
 
 .h4 {
   margin: 0;
-  font-size: 1.75rem;
-  line-height: 2.25rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
 }
 
 .h6 {
   margin: 0;
-  font-size: 1.25rem;
-  line-height: 1.75rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
 }
 
 .body-default {
   margin: 0;
-  font-size: 1rem;
-  line-height: 1.25rem;
   color: var(--color-grey-700);
 }
 
 .body-small {
   margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.125rem;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {

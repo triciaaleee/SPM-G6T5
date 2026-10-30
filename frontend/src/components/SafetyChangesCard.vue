@@ -30,7 +30,7 @@ function formatMoment(value: string): string {
 </script>
 
 <template>
-  <section class="details-card changes" aria-labelledby="safety-changes-title">
+  <section class="changes" aria-labelledby="safety-changes-title">
     <div class="changes__head">
       <ExclamationTriangleIcon class="changes__icon" aria-hidden="true" />
       <div>
@@ -111,14 +111,10 @@ function formatMoment(value: string): string {
 
 .body-default {
   margin: 0;
-  font-size: 1rem;
-  line-height: 1.25rem;
 }
 
 .body-small {
   margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.125rem;
 }
 
 .muted {

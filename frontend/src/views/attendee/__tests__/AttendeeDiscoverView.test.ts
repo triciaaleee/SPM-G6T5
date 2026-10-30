@@ -25,6 +25,7 @@ function openEvent(overrides: Partial<OpenEvent> = {}): OpenEvent {
     proposedDate: "2026-11-19",
     startTime: "18:30",
     endTime: "21:00",
+    venues: [],
     accessibility: null,
     organiserName: "Pat Organiser",
     capacity: null,
@@ -56,7 +57,7 @@ describe("AttendeeDiscoverView", () => {
     expect(wrapper.text()).toContain("Showing 2 events");
   });
 
-  it("follows the organiser's card: description, date and time on separate lines, and the organiser's name", async () => {
+  it("follows the organiser's card: description, date, time and venue on separate lines, and the organiser's name", async () => {
     mockedOpen.mockResolvedValue([openEvent(), openEvent({ id: 2, name: "No Organiser", organiserName: null, proposedDate: "2026-12-04" })]);
     const wrapper = await mountView();
 
@@ -64,7 +65,7 @@ describe("AttendeeDiscoverView", () => {
     expect(first.find(".card-description").text()).toBe("Talk to employers and alumni.");
     expect(first.find(".card-person").text()).toContain("Organiser: Pat Organiser");
     expect(first.text()).not.toContain("Coordinator");
-    expect(first.findAll(".fact").map((fact) => fact.text())).toEqual(["19 Nov 2026", "6:30 PM to 9:00 PM"]);
+    expect(first.findAll(".fact").map((fact) => fact.text())).toEqual(["19 Nov 2026", "6:30 PM to 9:00 PM", "Venue to be confirmed"]);
     expect(first.find(".badge__dot").exists()).toBe(true);
     expect(second.find(".card-person").exists()).toBe(false);
   });
@@ -115,11 +116,35 @@ describe("AttendeeDiscoverView", () => {
     expect(badges[1].classes()).toContain("status-success");
   });
 
-  it("shows an empty message when nothing is open", async () => {
+  it("shows an empty message when there is nothing to show", async () => {
     mockedOpen.mockResolvedValue([]);
     const wrapper = await mountView();
 
-    expect(wrapper.text()).toContain("No events are open for registration right now");
+    expect(wrapper.text()).toContain("No events to show right now");
+  });
+
+  it("shows the booked venue(s) on the card, or 'Venue to be confirmed' when there is none", async () => {
+    mockedOpen.mockResolvedValue([
+      openEvent({ id: 1, name: "Booked", venues: ["Great Lawn", "Hall B"] }),
+      openEvent({ id: 2, name: "Unbooked", venues: [], proposedDate: "2026-12-04" }),
+    ]);
+    const wrapper = await mountView();
+
+    const cards = wrapper.findAll(".card-item");
+    expect(cards[0].text()).toContain("Great Lawn, Hall B");
+    expect(cards[1].text()).toContain("Venue to be confirmed");
+  });
+
+  it("lists an event that needs no registration with a 'No registration needed' badge and no places-left text", async () => {
+    mockedOpen.mockResolvedValue([
+      openEvent({ id: 5, name: "Open Day", registrationNeeded: false, registrationState: "CLOSED", capacity: null, slotsLeft: null }),
+    ]);
+    const wrapper = await mountView();
+
+    expect(wrapper.get(".card-title").text()).toBe("Open Day");
+    expect(wrapper.get(".badge").text()).toBe("No registration needed");
+    expect(wrapper.get(".badge").classes()).toContain("status-neutral");
+    expect(wrapper.find("[data-testid='slots-left']").exists()).toBe(false);
   });
 
   it("shows an error when loading fails", async () => {

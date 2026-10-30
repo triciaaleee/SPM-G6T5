@@ -47,6 +47,8 @@ const props = defineProps<{
   rowGroup?: (row: T) => RowGroup | null | undefined;
   /** When given, an extra full-width `row-detail` slot renders right after a row for which this returns true. */
   rowDetail?: (row: T) => boolean;
+  /** Hide the column-heading row (a compact list that reads without headings). */
+  hideHeader?: boolean;
 }>();
 
 const gridStyle = computed(() => ({
@@ -68,7 +70,7 @@ const rowEntries = computed(() => {
 
 <template>
   <ul class="rows" :style="gridStyle">
-    <li class="row row--header" aria-hidden="true">
+    <li v-if="!hideHeader" class="row row--header" aria-hidden="true">
       <span
         v-for="column in columns"
         :key="column.key"
@@ -159,7 +161,7 @@ const rowEntries = computed(() => {
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
@@ -170,9 +172,10 @@ const rowEntries = computed(() => {
   align-items: flex-start;
   min-width: 0;
   font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-600);
   overflow-wrap: anywhere;
-  gap: 8px;
+  gap: var(--spacing-8);
 }
 
 .row-group-header {

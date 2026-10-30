@@ -22,6 +22,178 @@ body {
   background: var(--color-grey-25);
 }
 
+/* Composite text styles (Style.md Section 5). One definition each; components add only margin or colour
+   locally. They set no margin, so applying one never moves a layout. */
+@layer components {
+  .h1 {
+    font-size: 3rem;
+    font-weight: 700;
+    line-height: 3.625rem;
+    color: var(--color-grey-900);
+  }
+
+  .h2 {
+    font-size: 2.25rem;
+    font-weight: 700;
+    line-height: 2.625rem;
+    color: var(--color-grey-900);
+  }
+
+  .h3 {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 2.5rem;
+    color: var(--color-grey-900);
+  }
+
+  .h4 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 2.25rem;
+    color: var(--color-grey-900);
+  }
+
+  .h5 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 2rem;
+    color: var(--color-grey-900);
+  }
+
+  .h6 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    line-height: 1.75rem;
+    color: var(--color-grey-900);
+  }
+
+  .subheading {
+    font-size: 1.125rem;
+    font-weight: 400;
+    line-height: 1.375rem;
+  }
+
+  .body-default {
+    font-size: 1rem;
+    line-height: 1.25rem;
+  }
+
+  .body-small {
+    font-size: 0.875rem;
+    line-height: 1.125rem;
+  }
+
+  .small-text {
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+
+  .small-text-tag {
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1rem;
+  }
+
+  /* Status tones (Style.md 3.7). The only place these colours are defined; StatusBadge and EventCard use them. */
+  .status-success {
+    background: var(--color-success-200);
+    color: var(--color-success-700);
+  }
+
+  .status-warning {
+    background: var(--color-warning-100);
+    color: var(--color-warning-900);
+  }
+
+  .status-attention {
+    background: var(--color-warning-200);
+    color: var(--color-warning-900);
+    box-shadow: inset 0 0 0 1px var(--color-warning-300);
+  }
+
+  .status-error {
+    background: var(--color-error-200);
+    color: var(--color-error-600);
+  }
+
+  /* "Open" is the same Secondary Blue pair as info. */
+  .status-info,
+  .status-open {
+    background: var(--color-blue-200);
+    color: var(--color-blue-800);
+  }
+
+  /* A finished event or an inactive row reads as neutral grey, not live. */
+  .status-neutral,
+  .status-over {
+    background: var(--color-grey-75);
+    color: var(--color-grey-700);
+  }
+}
+
+/* Form controls (Style.md 3.8): one look for every text input, textarea and select. :where() keeps the specificity
+   at zero, so a component's own class can still size or lay out a control. Checkboxes, radios and ranges keep
+   their native look. */
+@layer base {
+  :where(
+      input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="hidden"]),
+      select,
+      textarea
+    ) {
+    box-sizing: border-box;
+    padding: var(--spacing-12);
+    border: 1px solid var(--color-grey-200);
+    border-radius: var(--radius-xs);
+    background: var(--color-base-white);
+    color: var(--color-grey-900);
+    font-family: var(--font-family-lato);
+    font-size: 1rem;
+    line-height: 1.25rem;
+  }
+
+  :where(
+      input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="hidden"]),
+      select
+    ) {
+    min-height: 44px;
+  }
+
+  :where(
+      input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="hidden"]),
+      select,
+      textarea
+    )::placeholder {
+    color: var(--color-grey-300);
+  }
+
+  :where(
+      input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="hidden"]),
+      select,
+      textarea
+    ):hover:not(:disabled) {
+    border-color: var(--color-grey-300);
+  }
+
+  :where(
+      input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="hidden"]),
+      select,
+      textarea
+    )[aria-invalid="true"] {
+    border-color: var(--color-error-600);
+  }
+
+  :where(
+      input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="hidden"]),
+      select,
+      textarea
+    ):disabled {
+    background: var(--color-grey-25);
+    border-color: var(--color-grey-100);
+    color: var(--color-grey-300);
+    cursor: not-allowed;
+  }
+}
+
 a {
   color: var(--color-purple-600);
   text-decoration: none;

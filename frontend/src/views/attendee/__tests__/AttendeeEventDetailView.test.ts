@@ -337,6 +337,17 @@ describe("AttendeeEventDetailView", () => {
     expect(wrapper.findAll(".actions button").map((b) => b.text())).toEqual(["Withdraw registration"]);
   });
 
+  it("says no registration is needed, with no Register or Withdraw button, for an event that takes none", async () => {
+    mockedView.mockResolvedValue(
+      eventView({ open: false, registrationNeeded: false, registrationState: "CLOSED", registrationStatus: null }),
+    );
+    const wrapper = await mountView();
+
+    expect(wrapper.find("[data-testid='no-registration']").text()).toBe("No registration needed");
+    expect(wrapper.find("[data-testid='registration-closed']").exists()).toBe(false);
+    expect(wrapper.findAll(".actions button")).toHaveLength(0);
+  });
+
   it("offers no Withdraw once the event has started", async () => {
     mockedView.mockResolvedValue(eventView({ open: false, registrationState: "CLOSED", hasStarted: true }));
     const wrapper = await mountView();

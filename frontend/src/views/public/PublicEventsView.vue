@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import SearchBox from "../../components/ui/SearchBox.vue";
+import UnderlineTabs from "../../components/ui/UnderlineTabs.vue";
 import { computed, onMounted, ref } from "vue";
-import { ChevronRightIcon, MagnifyingGlassIcon, XMarkIcon } from "@heroicons/vue/24/outline";
+import { ChevronRightIcon } from "@heroicons/vue/24/outline";
 import PublicLayout from "../../components/public/PublicLayout.vue";
 import PublicEventCard from "../../components/public/PublicEventCard.vue";
 import {
@@ -41,6 +43,10 @@ const tabCounts = computed(() => ({
   open: events.value.filter((e) => e.open).length,
   closed: events.value.filter((e) => !e.open).length,
 }));
+
+const tabItems = computed(() =>
+  TABS.map((option) => ({ key: option.value, label: option.label, count: tabCounts.value[option.value] })),
+);
 
 const visible = computed(() => {
   const needle = query.value.trim().toLowerCase();
@@ -103,23 +109,11 @@ onMounted(async () => {
           <p class="subheading">Find your next unforgettable night out. Browse what's on and sign up to reserve your place.</p>
         </div>
 
-        <div class="tabs" role="tablist" aria-label="Filter events">
-          <button v-for="option in TABS" :key="option.value" type="button" role="tab" class="tab"
-            :class="{ 'tab--active': tab === option.value }" :aria-selected="tab === option.value"
-            @click="tab = option.value">
-            {{ option.label }} <span class="tab__count">{{ tabCounts[option.value] }}</span>
-          </button>
-        </div>
+        <UnderlineTabs v-model="tab" :tabs="tabItems" aria-label="Filter events" size="sm" />
 
         <div class="toolbar">
-          <div class="search-box">
-            <MagnifyingGlassIcon class="search-box__icon" aria-hidden="true" />
-            <input v-model="query" type="search" class="search-box__input" placeholder="Search events, organisers or venues"
-              aria-label="Search events" />
-            <button v-if="query" type="button" class="search-box__clear" aria-label="Clear search" @click="query = ''">
-              <XMarkIcon class="search-box__icon" aria-hidden="true" />
-            </button>
-          </div>
+          <SearchBox v-model="query" class="search-box" placeholder="Search events, organisers or venues"
+            label="Search events" />
           <label class="sort">
             <span class="sort__label">Sort by</span>
             <select v-model="sort" class="sort__select">
@@ -174,7 +168,7 @@ onMounted(async () => {
 }
 
 .breadcrumb__link {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   text-decoration: none;
 }
 
@@ -198,58 +192,6 @@ onMounted(async () => {
 }
 
 /* Tabs: underline style; selected = Purple Primary (Style.md 3.1 Selected). */
-.tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-24);
-  border-bottom: 1px solid var(--color-grey-100);
-}
-
-.tab {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  padding: var(--spacing-12) 0;
-  margin-bottom: -1px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-  font-weight: 700;
-  color: var(--color-grey-500);
-  cursor: pointer;
-}
-
-.tab:hover {
-  color: var(--color-grey-800);
-}
-
-.tab--active {
-  color: var(--color-blue-700);
-  border-bottom-color: var(--color-blue-600);
-}
-
-.tab:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.tab__count {
-  padding: 0 var(--spacing-8);
-  border-radius: var(--radius-full);
-  background: var(--color-grey-75);
-  color: var(--color-grey-600);
-  font-size: 0.75rem;
-  line-height: 1rem;
-}
-
-.tab--active .tab__count {
-  background: var(--color-blue-100);
-  color: var(--color-blue-800);
-}
-
 .toolbar {
   display: flex;
   gap: var(--spacing-16);
@@ -259,71 +201,6 @@ onMounted(async () => {
 /* Search box: same pattern as AttendeeDiscoverView's. */
 .search-box {
   flex: 1;
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-12);
-  height: var(--spacing-48);
-  padding: 0 var(--spacing-12) 0 var(--spacing-16);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-}
-
-.search-box:focus-within {
-  border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--ring-light);
-}
-
-.search-box__icon {
-  flex: none;
-  width: var(--spacing-20);
-  height: var(--spacing-20);
-  color: var(--color-grey-700);
-}
-
-.search-box__input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  border: none;
-  background: transparent;
-  font-family: var(--font-family-lato);
-  font-size: 1rem;
-  line-height: 1.25rem;
-  color: var(--color-grey-900);
-}
-
-.search-box__input::placeholder {
-  color: var(--color-grey-300);
-}
-
-.search-box__input:focus-visible {
-  outline: none;
-}
-
-.search-box__input::-webkit-search-cancel-button {
-  display: none;
-}
-
-.search-box__clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--spacing-32);
-  height: var(--spacing-32);
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  cursor: pointer;
-}
-
-.search-box__clear:hover {
-  background: var(--color-grey-75);
-}
-
-.search-box__clear:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
 }
 
 .sort {
@@ -335,27 +212,16 @@ onMounted(async () => {
 .sort__label {
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   white-space: nowrap;
 }
 
 .sort__select {
   height: var(--spacing-48);
   padding: 0 var(--spacing-12);
-  background: var(--color-base-white);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-lato);
   font-size: 0.875rem;
   line-height: 1.125rem;
   font-weight: 700;
-  color: var(--color-grey-900);
-}
-
-.sort__select:focus-visible {
-  outline: none;
-  border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--ring-light);
 }
 
 .count {
@@ -383,27 +249,19 @@ onMounted(async () => {
 /* Text styles (Style.md 5) */
 .h2 {
   margin: 0;
-  font-size: 2.25rem;
-  line-height: 2.625rem;
-  font-weight: 700;
-  color: var(--color-grey-900);
 }
 
 .subheading {
   margin: var(--spacing-8) 0 0;
-  font-size: 1.125rem;
-  line-height: 1.375rem;
   color: var(--color-grey-600);
 }
 
 .body-default {
   margin: 0;
-  font-size: 1rem;
-  line-height: 1.25rem;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {

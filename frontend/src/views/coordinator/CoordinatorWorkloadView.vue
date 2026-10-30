@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import UnderlineTabs from "../../components/ui/UnderlineTabs.vue";
+import StatusBadge from "../../components/ui/StatusBadge.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   CheckCircleIcon,
@@ -350,23 +352,8 @@ onMounted(async () => {
 
       <template v-else>
         <div class="toolbar">
-          <div class="tabs" role="tablist" aria-label="Filter events by timing">
-            <button
-              v-for="tab in timingTabs"
-              :id="`coordinator-tab-${tab.key}`"
-              :key="tab.key"
-              type="button"
-              role="tab"
-              class="tab"
-              :class="{ 'tab--active': timingTab === tab.key }"
-              :aria-selected="timingTab === tab.key"
-              aria-controls="coordinator-panel"
-              @click="timingTab = tab.key"
-            >
-              {{ tab.label }}
-              <span class="tab__count">{{ tab.count }}</span>
-            </button>
-          </div>
+          <UnderlineTabs v-model="timingTab" class="tabs" :tabs="timingTabs" aria-label="Filter events by timing"
+            id-prefix="coordinator-tab" panel-id="coordinator-panel" />
 
           <div ref="statusFilterRoot" class="status-filter" @keydown="onStatusFilterKeydown">
             <span id="status-filter-label" class="status-filter__label">Status</span>
@@ -489,7 +476,7 @@ onMounted(async () => {
               <span class="cell-time">{{ eventTimeLabel(event) }}</span>
             </template>
             <template #cell-status="{ row: event }">
-              <span class="status-badge" :class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</span>
+              <StatusBadge :status-class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</StatusBadge>
             </template>
             <template #cell-chevron>
               <svg class="row-chevron" aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none"
@@ -558,29 +545,20 @@ onMounted(async () => {
 }
 
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
-  font-weight: 400;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
 
 .body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
   margin-top: var(--spacing-32);
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -599,55 +577,8 @@ onMounted(async () => {
 }
 
 .tabs {
-  display: flex;
-  gap: var(--spacing-32);
-  border-bottom: 1px solid var(--color-grey-100);
   flex: 1 1 auto;
   flex-wrap: wrap;
-}
-
-.tab {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  flex-shrink: 0;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  padding: var(--spacing-12) var(--spacing-4);
-  font-family: var(--font-family-lato);
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--color-grey-600);
-  cursor: pointer;
-}
-
-.tab:hover {
-  color: var(--color-grey-900);
-}
-
-.tab:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.tab--active {
-  color: var(--color-blue-600);
-  border-bottom-color: var(--color-blue-600);
-}
-
-.tab__count {
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  background: var(--color-grey-100);
-  color: var(--color-grey-600);
-  padding: 2px var(--spacing-6);
-  border-radius: var(--radius-full);
-  min-width: 20px;
-  text-align: center;
 }
 
 .status-filter {
@@ -661,7 +592,7 @@ onMounted(async () => {
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .status-filter__trigger {
@@ -672,18 +603,19 @@ onMounted(async () => {
   min-width: 220px;
   min-height: 44px;
   padding: 0 var(--spacing-12);
-  border: 1px solid var(--color-grey-300);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-xs);
   background: var(--color-base-white);
   font-family: var(--font-family-lato);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-700);
   cursor: pointer;
 }
 
 .status-filter__trigger--open {
   border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--color-purple-alpha-24, rgba(112, 30, 194, 0.24));
+  box-shadow: 0 0 0 4px var(--ring-light);
 }
 
 .status-filter__trigger:focus-visible {
@@ -725,6 +657,7 @@ onMounted(async () => {
   background: transparent;
   font-family: var(--font-family-lato);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-900);
   cursor: pointer;
   text-align: left;
@@ -787,7 +720,7 @@ onMounted(async () => {
 }
 
 .status-filter__section-label--other {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 /* Quick-filter chips: Upcoming tab only, both pages. Same "Selected" treatment as
@@ -817,6 +750,7 @@ onMounted(async () => {
   color: var(--color-grey-700);
   font-family: var(--font-family-lato);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -844,6 +778,7 @@ onMounted(async () => {
   background: var(--color-grey-100);
   color: var(--color-grey-600);
   font-size: 0.75rem;
+  line-height: 1rem;
   min-width: 20px;
   text-align: center;
 }
@@ -867,6 +802,7 @@ onMounted(async () => {
 .group-header__title {
   margin: 0;
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
@@ -919,42 +855,14 @@ onMounted(async () => {
 }
 
 .row-chevron {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .cell-event__title {
   font-size: 18px;
-  font-weight: 600;
-  color: var(--color-grey-900);
-}
-
-.status-badge {
-  display: inline-block;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-sm);
-  font-size: 0.75rem;
+  line-height: 1.375rem;
   font-weight: 700;
-  line-height: 1rem;
-}
-
-.status-success {
-  background: var(--color-success-200);
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: var(--color-warning-100);
-  color: var(--color-warning-900);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-.status-info {
-  background: var(--color-blue-200);
-  color: var(--color-blue-800);
+  color: var(--color-grey-900);
 }
 
 /* Needs Review: yellow highlight, so the row stands out at a glance */

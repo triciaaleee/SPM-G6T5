@@ -58,7 +58,7 @@ test("coordinator requests a venue through the search page, then Venue Staff app
   // It shows Requested on the event's own Venue Requests panel, which sits
   // on the event page's Arrangements tab.
   await page.goto(`/events/${event.id}`);
-  await page.getByRole("button", { name: /^Arrangements/ }).click();
+  await page.getByRole("tab", { name: /^Arrangements/ }).click();
   const requestRow = page.locator(".request-row", { hasText: venue.name }).first();
   await expect(requestRow.getByText("Requested", { exact: true })).toBeVisible();
 
@@ -80,7 +80,7 @@ test("coordinator requests a venue through the search page, then Venue Staff app
   // would just redirect them away from it).
   await signInThroughStorage(page, coordinator);
   await page.goto(`/events/${event.id}`);
-  await page.getByRole("button", { name: /^Arrangements/ }).click();
+  await page.getByRole("tab", { name: /^Arrangements/ }).click();
   const approvedRow = page.locator(".request-row", { hasText: venue.name }).first();
   await expect(approvedRow.getByText("Approved", { exact: true })).toBeVisible();
 });

@@ -240,7 +240,7 @@ describe("EventDetailView — Cancel event (E3-6)", () => {
   it("keeps the button in the title row on every tab", async () => {
     const wrapper = await mountPage(makeEvent({ status: "Planning" }), organiser);
 
-    await wrapper.findAll(".tab-btn").find((b) => b.text() === "History")!.trigger("click");
+    await wrapper.findAll("[role='tab']").find((b) => b.text() === "History")!.trigger("click");
     expect(wrapper.find(".event-title-row [data-testid='cancel-event']").exists()).toBe(true);
   });
 

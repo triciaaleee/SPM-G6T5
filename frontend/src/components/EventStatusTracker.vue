@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppPanel from "./ui/AppPanel.vue";
 /**
  * E3-1: Event tracking status bar.
  * AC1 — shows the current status and the date it last changed.
@@ -217,7 +218,7 @@ function stepCaption(index: number): string {
     </p>
   </div>
 
-  <div v-if="showOutstanding && (status === 'Planning' || !showTimeline)" class="details-card status-card">
+  <AppPanel size="lg" class="status-card" v-if="showOutstanding && (status === 'Planning' || !showTimeline)">
     <h2 class="section-title">{{ title }}</h2>
 
     <div v-if="(status === 'Planning' || status === 'Needs Review') && showOutstanding" class="outstanding">
@@ -233,7 +234,7 @@ function stepCaption(index: number): string {
         </li>
       </ul>
     </div>
-  </div>
+  </AppPanel>
 </template>
 
 <style scoped>
@@ -252,46 +253,12 @@ function stepCaption(index: number): string {
   margin: 0 0 var(--spacing-12);
 }
 
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .mb-1 {
   margin-bottom: var(--spacing-8);
-}
-
-.badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-xs);
-}
-
-.status-success {
-  background: #e5eee5;
-  color: var(--color-success-700);
-}
-
-.status-warning {
-  background: #FEF5E7;
-  color: var(--color-warning-600);
-}
-
-.status-error {
-  background: var(--color-error-200);
-  color: var(--color-error-600);
-}
-
-.status-info {
-  background: var(--color-warning-200);
-  color: var(--color-warning-700);
 }
 
 /* The timeline sits bare on the page (no card). Five equal columns: each step is a circle with a
@@ -330,11 +297,12 @@ function stepCaption(index: number): string {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   border: 2px solid var(--color-grey-300);
   background: var(--color-base-white);
   color: var(--color-grey-600);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
 }
 
@@ -358,7 +326,7 @@ function stepCaption(index: number): string {
 .status-tracker__inner {
   width: 0.625rem;
   height: 0.625rem;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--color-purple-600);
 }
 
@@ -372,7 +340,7 @@ function stepCaption(index: number): string {
 .status-tracker__caption {
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .status-tracker__step[data-state="complete"] .status-tracker__dot {
@@ -455,6 +423,7 @@ function stepCaption(index: number): string {
   align-items: center;
   gap: var(--spacing-8);
   font-size: 1rem;
+  line-height: 1.25rem;
   color: var(--color-grey-900);
 }
 
@@ -469,7 +438,7 @@ function stepCaption(index: number): string {
 .outstanding__dot {
   width: 0.5rem;
   height: 0.5rem;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--color-warning-400);
   flex-shrink: 0;
 }
@@ -477,6 +446,7 @@ function stepCaption(index: number): string {
 @media (max-width: 640px) {
   .status-tracker__label {
     font-size: 0.75rem;
+  line-height: 1rem;
   }
 }
 </style>

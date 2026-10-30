@@ -144,7 +144,7 @@ const year = new Date().getFullYear();
   font-size: 1rem;
   line-height: 1.25rem;
   font-weight: 400;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   text-decoration: none;
 }
 
@@ -217,7 +217,7 @@ const year = new Date().getFullYear();
 .footer-link {
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   text-decoration: none;
   justify-self: start;
 }
@@ -241,12 +241,10 @@ const year = new Date().getFullYear();
 /* Small Text */
 .small-text {
   margin: 0;
-  font-size: 0.75rem;
-  line-height: 1rem;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 @media (max-width: 1024px) {

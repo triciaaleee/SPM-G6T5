@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AppPanel from "../../components/ui/AppPanel.vue";
+import StatusBadge from "../../components/ui/StatusBadge.vue";
 /**
  * E1-10/E3-12/E3-13: the Safety Officer's queue — every event awaiting an
  * Operational Safety Check, with the coordinator's safety notes, and the
@@ -12,6 +14,7 @@
  */
 import AppButton from "../../components/ui/AppButton.vue";
 import { computed, onMounted, ref } from "vue";
+import { statusBadgeClass } from "../../lib/eventStatus";
 import {
   approveSafetyReview,
   fetchSafetyReviewQueue,
@@ -245,88 +248,94 @@ function formatMoment(value: string): string {
 </script>
 
 <template>
+  <!--
+    Column mapping — Safety review queue
+    Desktop (12-col): outer container col 1-12 (grid-desktop-margin 80px); header, notice and request cards col 1-12.
+    Tablet (6-col): content col 1-6, full width, grid-tablet-margin 32px.
+    Mobile (4-col): content col 1-4, full width, grid-mobile-margin 6px.
+  -->
   <div class="page">
     <div class="content">
       <header class="page-header">
         <div>
           <h1 class="page-title">Safety review queue</h1>
-          <p class="body-default muted py-3">
+          <p class="body-small muted py-3">
             Events awaiting an Operational Safety Check, with the coordinator's safety notes.
           </p>
         </div>
       </header>
 
-      <p v-if="notice" class="body-default notice" role="status">{{ notice }}</p>
+      <p v-if="notice" class="body-small notice" role="status">{{ notice }}</p>
 
-      <p v-if="loading" class="body-default muted">Loading the safety review queue…</p>
-      <p v-else-if="loadError" class="body-default error-text" role="alert">{{ loadError }}</p>
-      <p v-else-if="!hasEvents" class="body-default muted">No events are awaiting a safety review.</p>
+      <p v-if="loading" class="body-small muted">Loading the safety review queue…</p>
+      <p v-else-if="loadError" class="body-small error-text" role="alert">{{ loadError }}</p>
+      <p v-else-if="!hasEvents" class="body-small muted">No events are awaiting a safety review.</p>
 
       <ul v-else class="request-list">
-        <li v-for="event in events" :key="event.id" class="request-card">
+        <AppPanel as="li" size="md" class="request-card" v-for="event in events" :key="event.id">
           <div class="request-card__head">
             <div>
               <p class="card-title">{{ eventName(event) }}</p>
-              <p class="body-small muted">Coordinator: {{ event.coordinator?.name ?? "Unassigned" }}</p>
+              <p class="small-text muted">Coordinator: {{ event.coordinator?.name ?? "Unassigned" }}</p>
             </div>
-            <span class="badge status-info">Safety Review</span>
+            <StatusBadge :status-class="statusBadgeClass('Safety Review')">Safety Review</StatusBadge>
           </div>
 
           <dl class="request-card__facts">
             <div class="fact">
-              <dt class="body-small muted">Date</dt>
-              <dd class="body-default">{{ formatDate(eventProposedDate(event)) }}</dd>
+              <dt class="small-text muted">Date</dt>
+              <dd class="body-small">{{ formatDate(eventProposedDate(event)) }}</dd>
             </div>
             <div class="fact">
-              <dt class="body-small muted">Time</dt>
-              <dd class="body-default">{{ eventWindow(event) }}</dd>
+              <dt class="small-text muted">Time</dt>
+              <dd class="body-small">{{ eventWindow(event) }}</dd>
             </div>
             <div class="fact">
-              <dt class="body-small muted">Attendance</dt>
-              <dd class="body-default">{{ eventAttendance(event) }}</dd>
+              <dt class="small-text muted">Attendance</dt>
+              <dd class="body-small">{{ eventAttendance(event) }}</dd>
             </div>
           </dl>
 
           <dl v-if="event.safetyNotes" class="safety-notes">
             <div class="safety-notes__item">
-              <dt class="body-small muted">Equipment placement</dt>
-              <dd class="body-default">{{ event.safetyNotes.equipmentPlacement }}</dd>
+              <dt class="small-text muted">Equipment placement</dt>
+              <dd class="body-small">{{ event.safetyNotes.equipmentPlacement }}</dd>
             </div>
             <div class="safety-notes__item">
-              <dt class="body-small muted">Crowd movement</dt>
-              <dd class="body-default">{{ event.safetyNotes.crowdMovement }}</dd>
+              <dt class="small-text muted">Crowd movement</dt>
+              <dd class="body-small">{{ event.safetyNotes.crowdMovement }}</dd>
             </div>
             <div class="safety-notes__item">
-              <dt class="body-small muted">Emergency access</dt>
-              <dd class="body-default">{{ event.safetyNotes.emergencyAccess }}</dd>
+              <dt class="small-text muted">Emergency access</dt>
+              <dd class="body-small">{{ event.safetyNotes.emergencyAccess }}</dd>
             </div>
             <div class="safety-notes__item">
-              <dt class="body-small muted">Known venue restrictions</dt>
-              <dd class="body-default">{{ event.safetyNotes.venueRestrictions }}</dd>
+              <dt class="small-text muted">Known venue restrictions</dt>
+              <dd class="body-small">{{ event.safetyNotes.venueRestrictions }}</dd>
             </div>
           </dl>
 
           <!-- E3-14 AC3: on a resubmission, what was asked for last time and whether it was addressed. -->
           <div v-if="event.changeRequest" class="previous-changes">
-            <p class="body-small muted">You requested changes on {{ formatMoment(event.changeRequest.requestedAt) }}</p>
+            <p class="small-text muted">You requested changes on {{ formatMoment(event.changeRequest.requestedAt) }}</p>
             <ul class="flag-list">
               <li v-for="flag in event.changeRequest.flags" :key="`${flag.type}:${flag.id}`" class="flag-row">
-                <span class="body-small"><strong>{{ flag.label }}:</strong> {{ flag.note }}</span>
+                <span class="small-text"><strong>{{ flag.label }}:</strong> {{ flag.note }}</span>
                 <span class="flag-state" :class="flag.clearedAt ? 'flag-state--done' : 'flag-state--open'">
                   {{ flag.clearedAt ? "Changed" : "Not changed" }}
                 </span>
               </li>
             </ul>
-            <p v-if="event.changeRequest.generalNote" class="body-small">
+            <p v-if="event.changeRequest.generalNote" class="small-text">
               <strong>General:</strong> {{ event.changeRequest.generalNote }}
             </p>
           </div>
 
           <div v-if="rejectingId === event.id" class="reject-box">
-            <label :for="`reason-${event.id}`" class="body-small muted">Reason for rejecting</label>
+            <label :for="`reason-${event.id}`" class="small-text muted">Reason for rejecting</label>
             <textarea :id="`reason-${event.id}`" v-model="rejectReason" rows="3" class="reason-input"
               :maxlength="MAX_SAFETY_REJECT_REASON_LENGTH" placeholder="The coordinator is sent this." />
-            <p v-if="rejectReasonError" class="body-small error-text">{{ rejectReasonError }}</p>
+            <p v-if="rejectReasonError" class="small-text error-text">{{ rejectReasonError }}</p>
             <div class="actions">
               <AppButton variant="danger" type="button" :disabled="busyId === event.id" @click="confirmReject(event)">
                 {{ busyId === event.id ? "Rejecting…" : "Confirm rejection" }}
@@ -340,19 +349,19 @@ function formatMoment(value: string): string {
           <!-- E3-14: pick what must change and describe it (AC1); both are required (AC2). -->
           <div v-else-if="changesId === event.id" class="reject-box">
             <fieldset class="arrangements">
-              <legend class="body-small muted">Affected arrangements (pick at least one)</legend>
-              <p v-if="!event.arrangements" class="body-small error-text">
+              <legend class="small-text muted">Affected arrangements (pick at least one)</legend>
+              <p v-if="!event.arrangements" class="small-text error-text">
                 This event's venue bookings and equipment couldn't be loaded. Refresh the page to try again.
               </p>
-              <p v-else-if="event.arrangements.length === 0" class="body-small muted">
+              <p v-else-if="event.arrangements.length === 0" class="small-text muted">
                 This event has no venue bookings or equipment to flag.
               </p>
               <div v-for="option in event.arrangements ?? []" :key="arrangementKey(option)" class="arrangement-item">
                 <label class="arrangement">
                   <input type="checkbox" class="arrangement__check"
                     :checked="changesSelected.has(arrangementKey(option))" @change="toggleArrangement(option)" />
-                  <span class="body-default">{{ option.label }}</span>
-                  <span class="body-small muted">
+                  <span class="body-small">{{ option.label }}</span>
+                  <span class="small-text muted">
                     {{ option.type === "venue_booking" ? "Venue booking" : "Equipment" }} · {{ option.detail }}
                   </span>
                 </label>
@@ -361,18 +370,18 @@ function formatMoment(value: string): string {
                   <textarea v-model="changesNotes[noteKey(option)]" rows="2" class="reason-input arrangement__note"
                     :maxlength="MAX_SAFETY_REJECT_REASON_LENGTH" :aria-label="`What must change: ${option.label}`"
                     :placeholder="`What must change about ${option.label}?`" />
-                  <p v-if="changesErrors[noteKey(option)]" class="body-small error-text arrangement__note">
+                  <p v-if="changesErrors[noteKey(option)]" class="small-text error-text arrangement__note">
                     {{ changesErrors[noteKey(option)] }}
                   </p>
                 </template>
               </div>
-              <p v-if="changesErrors.arrangements" class="body-small error-text">{{ changesErrors.arrangements }}</p>
+              <p v-if="changesErrors.arrangements" class="small-text error-text">{{ changesErrors.arrangements }}</p>
             </fieldset>
-            <label :for="`changes-general-${event.id}`" class="body-small muted">General notes (optional)</label>
+            <label :for="`changes-general-${event.id}`" class="small-text muted">General notes (optional)</label>
             <textarea :id="`changes-general-${event.id}`" v-model="changesGeneral" rows="2" class="reason-input"
               :maxlength="MAX_SAFETY_REJECT_REASON_LENGTH"
               placeholder="Anything that isn't about one arrangement, e.g. send an updated crowd plan." />
-            <p v-if="changesErrors.generalNote" class="body-small error-text">{{ changesErrors.generalNote }}</p>
+            <p v-if="changesErrors.generalNote" class="small-text error-text">{{ changesErrors.generalNote }}</p>
             <div class="actions">
               <AppButton variant="primary" type="button" :disabled="busyId === event.id" @click="confirmChanges(event)">
                 {{ busyId === event.id ? "Sending…" : "Send to coordinator" }}
@@ -395,8 +404,8 @@ function formatMoment(value: string): string {
             </AppButton>
           </div>
 
-          <p v-if="rowError?.id === event.id" class="body-small error-text" role="alert">{{ rowError.message }}</p>
-        </li>
+          <p v-if="rowError?.id === event.id" class="small-text error-text" role="alert">{{ rowError.message }}</p>
+        </AppPanel>
       </ul>
     </div>
   </div>
@@ -448,27 +457,24 @@ function formatMoment(value: string): string {
 
 .page-title {
   font-size: 2rem;
+  line-height: 2.5rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
 
 .card-title {
   font-size: 1rem;
+  line-height: 1.25rem;
   font-weight: 700;
   color: var(--color-grey-900);
 }
 
-.body-default {
-  font-size: 0.875rem;
+.body-small {
   color: var(--color-grey-900);
 }
 
-.body-small {
-  font-size: 0.75rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -490,13 +496,6 @@ function formatMoment(value: string): string {
   list-style: none;
   margin: 0;
   padding: 0;
-}
-
-.request-card {
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-24);
 }
 
 .request-card__head {
@@ -533,21 +532,6 @@ function formatMoment(value: string): string {
 
 .safety-notes__item dd {
   margin: var(--spacing-2) 0 0;
-}
-
-.badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  padding: var(--spacing-4) var(--spacing-8);
-  border-radius: var(--radius-xs);
-  white-space: nowrap;
-}
-
-.status-info {
-  background: var(--color-warning-200);
-  color: var(--color-warning-700);
 }
 
 .actions {
@@ -654,16 +638,9 @@ function formatMoment(value: string): string {
 .reason-input {
   width: 100%;
   padding: var(--spacing-8) var(--spacing-12);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
   font-size: 0.875rem;
-  font-family: inherit;
+  line-height: 1.125rem;
   resize: vertical;
 }
 
-.reason-input:focus-visible {
-  outline: 2px solid var(--color-purple-600);
-  outline-offset: 1px;
-  box-shadow: 0 0 0 4px var(--color-purple-100);
-}
 </style>

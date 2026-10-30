@@ -146,10 +146,10 @@ function formatMoment(value: string | null): string {
           <span v-if="request.status === 'On Hold' && request.holdExpiresAt" class="row__hold">
             On hold · Hold expires {{ formatMoment(request.holdExpiresAt) }}
           </span>
-          <button type="button" class="link-button row__toggle" :aria-expanded="expanded.has(request.id)"
-            @click="toggleDetails(request.id)">
+          <AppButton variant="link" class="link-button row__toggle" :aria-expanded="expanded.has(request.id)"
+      @click="toggleDetails(request.id)">
             {{ expanded.has(request.id) ? "Hide details" : "Details" }}
-          </button>
+          </AppButton>
         </span>
         <!-- E4-17: what this venue is for, sized for its own session. -->
         <span class="row__people">
@@ -246,8 +246,9 @@ function formatMoment(value: string | null): string {
 .rows__head {
   border-bottom: 1px solid var(--color-grey-100);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .row + .row {
@@ -281,11 +282,13 @@ function formatMoment(value: string | null): string {
 
 .row__sub {
   font-size: 0.75rem;
-  color: var(--color-grey-500);
+  line-height: 1rem;
+  color: var(--color-grey-600);
 }
 
 .row__hold {
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
   color: var(--color-warning-800);
 }
@@ -299,19 +302,6 @@ function formatMoment(value: string | null): string {
 
 .link-button {
   align-self: flex-start;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--color-purple-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.75rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.link-button:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
 }
 
 .reject-box {
@@ -325,22 +315,15 @@ function formatMoment(value: string | null): string {
 .reason-input {
   width: 100%;
   padding: var(--spacing-8) var(--spacing-12);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  font-family: inherit;
   font-size: 0.875rem;
+  line-height: 1.125rem;
   resize: vertical;
-}
-
-.reason-input:focus-visible {
-  outline: 2px solid var(--color-purple-600);
-  outline-offset: 1px;
-  box-shadow: 0 0 0 4px var(--color-purple-100);
 }
 
 .row__error {
   margin: 0;
   font-size: 0.75rem;
+  line-height: 1rem;
   color: var(--color-error-600);
 }
 
@@ -364,8 +347,9 @@ function formatMoment(value: string | null): string {
 .detail__label {
   margin-bottom: var(--spacing-4);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .tags {
@@ -381,6 +365,7 @@ function formatMoment(value: string | null): string {
   border-radius: var(--radius-xs);
   background: var(--color-base-white);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
   color: var(--color-grey-700);
 }

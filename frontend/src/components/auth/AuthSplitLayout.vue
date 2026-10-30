@@ -10,7 +10,8 @@ import loginPic from "../../assets/login_pic.png";
 <template>
   <!--
     Column mapping — Auth split layout
-    Desktop (12-col): graphic cols 1-3.6 (30% of the viewport, full height), form area the remaining 70%.
+    Desktop: a full-bleed split, the one exception to the 12-col grid (Style.md 0.8): the graphic fills the left 30% of
+    the viewport at full height, the form area the remaining 70%. Inside the form area the grid rules apply.
     Tablet (6-col): same 30 / 70 split, grid-tablet-margin 32px around the form.
     Mobile (4-col): graphic hidden; form col 1-4, full width, grid-mobile-margin 6px.
   -->
@@ -63,12 +64,12 @@ import loginPic from "../../assets/login_pic.png";
   color: var(--color-purple-800);
 }
 
-/* H2, uppercase, Black weight (Style.md 4.3: hero headings) */
+/* H1, uppercase, Black weight (Style.md 4.3: hero headings) */
 .split__headline {
   margin: 0;
-  font-size: 2.85rem;
-  font-weight: 800;
-  line-height: 2.75rem;
+  font-size: 3rem;
+  font-weight: 900;
+  line-height: 3.625rem;
   text-transform: uppercase;
 }
 

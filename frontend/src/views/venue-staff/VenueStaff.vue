@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import SegmentedToggle from "../../components/ui/SegmentedToggle.vue";
+import UnderlineTabs from "../../components/ui/UnderlineTabs.vue";
+import EmptyState from "../../components/ui/EmptyState.vue";
 import AppButton from "../../components/ui/AppButton.vue";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -52,6 +55,11 @@ const TABS: { key: ScheduleTab; label: string; status: VenueBooking["status"]; n
   { key: "bookings", label: "Bookings", status: "Approved", noun: "booking", empty: "No confirmed bookings." },
   { key: "requested", label: "Requests", status: "Requested", noun: "request", empty: "No booking requests." },
   { key: "held", label: "On Hold", status: "On Hold", noun: "hold", empty: "No venues on hold." },
+];
+
+const VIEW_OPTIONS = [
+  { key: "calendar" as const, label: "Calendar", icon: CalendarDaysIcon, testId: "view-calendar" },
+  { key: "list" as const, label: "List", icon: ListBulletIcon, testId: "view-list" },
 ];
 
 function toKey(date: Date): string {
@@ -220,6 +228,10 @@ const tabCounts = computed<Record<ScheduleTab, number>>(() => ({
   requested: pendingInScope.value.filter((r) => r.status === "Requested").length,
   held: pendingInScope.value.filter((r) => r.status === "On Hold").length,
 }));
+
+const tabItems = computed(() =>
+  TABS.map((tab) => ({ key: tab.key, label: tab.label, count: tabCounts.value[tab.key] })),
+);
 
 /** A decision landed: it can knock other requests out, so reload everything it touches. */
 function onDecided(message: string): void {
@@ -471,10 +483,10 @@ onMounted(async () => {
 
     <p v-if="venuesError" class="body-default error-text full-row">{{ venuesError }}</p>
     <p v-else-if="loadingVenues" class="body-default muted full-row">Loading venues…</p>
-    <div v-else-if="venues.length === 0" class="empty-state full-row">
+    <EmptyState class="full-row" v-else-if="venues.length === 0">
       <p class="empty-state__title">No venues yet</p>
       <p class="body-default muted">There are no active venues to show a schedule for.</p>
-    </div>
+    </EmptyState>
 
     <template v-else>
       <section class="schedule" aria-live="polite" :aria-busy="loadingBookings">
@@ -493,23 +505,12 @@ onMounted(async () => {
               <span class="field-label">To</span>
               <input v-model="rangeTo" type="date" class="range-filter__input" :min="rangeFrom || today" />
             </label>
-            <button v-if="rangeActive" type="button" class="link-button" @click="rangeFrom = ''; rangeTo = ''">
+            <AppButton variant="link" class="link-button" v-if="rangeActive" @click="rangeFrom = ''; rangeTo = ''">
               Clear dates
-            </button>
+            </AppButton>
           </div>
 
-          <div class="view-toggle" role="group" aria-label="Schedule view">
-            <button type="button" class="toggle-btn" :class="{ 'toggle-btn--active': viewMode === 'calendar' }"
-              :aria-pressed="viewMode === 'calendar'" data-testid="view-calendar" @click="viewMode = 'calendar'">
-              <CalendarDaysIcon class="toggle-btn__icon" aria-hidden="true" />
-              Calendar
-            </button>
-            <button type="button" class="toggle-btn" :class="{ 'toggle-btn--active': viewMode === 'list' }"
-              :aria-pressed="viewMode === 'list'" data-testid="view-list" @click="viewMode = 'list'">
-              <ListBulletIcon class="toggle-btn__icon" aria-hidden="true" />
-              List
-            </button>
-          </div>
+          <SegmentedToggle v-model="viewMode" :options="VIEW_OPTIONS" aria-label="Schedule view" />
         </div>
 
         <!-- Where the calendar's rule is written down: it needs venues picked, up to four. -->
@@ -535,13 +536,8 @@ onMounted(async () => {
           {{ heading }}
         </h2>
 
-        <div class="tabs" role="tablist" aria-label="Booking status">
-          <button v-for="tab in TABS" :id="`tab-${tab.key}`" :key="tab.key" type="button" role="tab" class="tab"
-            :class="{ 'tab--active': activeTab === tab.key }" :aria-selected="activeTab === tab.key"
-            aria-controls="schedule-panel" :tabindex="activeTab === tab.key ? 0 : -1" @click="activeTab = tab.key">
-            {{ tab.label }} ({{ tabCounts[tab.key] }})
-          </button>
-        </div>
+        <UnderlineTabs v-model="activeTab" class="tabs" :tabs="tabItems" aria-label="Booking status" id-prefix="tab"
+          panel-id="schedule-panel" count-style="inline" />
 
         <!-- Long lists scroll inside this area instead of paging. -->
         <div id="schedule-panel" class="schedule__scroll" role="tabpanel" :aria-labelledby="`tab-${activeTab}`" tabindex="0">
@@ -553,10 +549,10 @@ onMounted(async () => {
             </label>
             <p v-if="pendingError" class="body-default error-text" role="alert">{{ pendingError }}</p>
             <p v-else-if="pendingLoading" class="body-default muted">Loading booking requests…</p>
-            <div v-else-if="tabPending.length === 0" class="empty-state">
+            <EmptyState v-else-if="tabPending.length === 0">
               <p class="empty-state__title">Nothing here</p>
               <p class="body-default muted">{{ activeTabConfig.empty }}</p>
-            </div>
+            </EmptyState>
             <VenueRequestRows v-else :requests="tabPending" @decided="onDecided" />
           </template>
 
@@ -564,10 +560,10 @@ onMounted(async () => {
           <template v-else>
             <p v-if="bookingsError" class="body-default error-text">{{ bookingsError }}</p>
             <p v-else-if="loadingBookings && bookings.length === 0" class="body-default muted">Loading bookings…</p>
-            <div v-else-if="tabBookings.length === 0" class="empty-state" :class="{ 'is-stale': loadingBookings }">
+            <EmptyState v-else-if="tabBookings.length === 0" :class="{ 'is-stale': loadingBookings }">
               <p class="empty-state__title">Nothing here</p>
               <p class="body-default muted">{{ activeTabConfig.empty }}</p>
-            </div>
+            </EmptyState>
             <ul v-else class="rows" :class="{ 'is-stale': loadingBookings }">
             <li class="rows__head" aria-hidden="true">
               <span>Date</span><span>Time</span><span>Event</span><span>Attendance</span><span />
@@ -587,10 +583,10 @@ onMounted(async () => {
                   {{ formatAttendance(booking.setup ? booking.setup.headcount : booking.event.expectedAttendance) }}
                   <span v-if="booking.setup" class="row__purpose">{{ booking.setup.purpose }}</span>
                 </span>
-                <button type="button" class="link-button row__toggle" :aria-expanded="expanded.has(booking.id)"
-                  :aria-controls="`details-${booking.venueId}-${booking.id}`" @click="toggleDetails(booking.id)">
+                <AppButton variant="link" class="link-button row__toggle" :aria-expanded="expanded.has(booking.id)"
+         :aria-controls="`details-${booking.venueId}-${booking.id}`" @click="toggleDetails(booking.id)">
                   {{ expanded.has(booking.id) ? "Hide details" : "Details" }}
-                </button>
+                </AppButton>
               </div>
               <dl v-if="expanded.has(booking.id)" :id="`details-${booking.venueId}-${booking.id}`" class="row__details">
                 <div class="detail">
@@ -679,7 +675,7 @@ onMounted(async () => {
 .page-header,
 .full-row {
   grid-column: 1 / 13;
-  margin-bottom:8px;
+  margin-bottom: var(--spacing-8);
 }
 
 .schedule {
@@ -723,41 +719,20 @@ onMounted(async () => {
 }
 
 .h2 {
-  font-size: 2.25rem;
-  font-weight: 700;
-  line-height: 2.625rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .h5 {
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 2rem;
-  color: var(--color-grey-900);
   margin: 0;
 }
 
 .subheading {
-  font-size: 1.125rem;
-  font-weight: 400;
-  line-height: 1.375rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   margin: var(--spacing-8) 0 0;
 }
 
-.body-default {
-  font-size: 1rem;
-  line-height: 1.25rem;
-}
-
-.body-small {
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .error-text {
@@ -775,36 +750,10 @@ onMounted(async () => {
 
 /* Tabs: Style.md 2.4 — Purple 600 marks the active tab. */
 .tabs {
-  display: flex;
-  gap: var(--spacing-24);
   margin-bottom: var(--spacing-16);
-  border-bottom: 1px solid var(--color-grey-100);
-}
-
-.tab {
-  margin-bottom: -1px;
-  padding: var(--spacing-8) 0;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--color-grey-500);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.tab:hover {
-  color: var(--color-grey-800);
 }
 
 .tab--active,
-.tab--active:hover {
-  border-bottom-color: var(--color-blue-600);
-  color: var(--color-blue-600);
-}
-
 .schedule__day {
   display: flex;
   align-items: baseline;
@@ -846,8 +795,9 @@ onMounted(async () => {
 .rows__head {
   border-bottom: 1px solid var(--color-grey-100);
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 700;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .row + .row {
@@ -879,8 +829,9 @@ onMounted(async () => {
 
 .row__venue,
 .row__purpose {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
   font-size: 0.75rem;
+  line-height: 1rem;
 }
 
 .row__people {
@@ -942,54 +893,6 @@ onMounted(async () => {
 }
 
 /* Same segmented switch as the Venue Availability page. */
-.view-toggle {
-  display: flex;
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  overflow: hidden;
-}
-
-.toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-8);
-  height: 40px;
-  padding: 0 var(--spacing-16);
-  border: none;
-  border-right: 1px solid var(--color-grey-200);
-  background: var(--color-base-white);
-  color: var(--color-grey-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.125rem;
-  cursor: pointer;
-}
-
-.toggle-btn:last-child {
-  border-right: none;
-}
-
-.toggle-btn:hover:not(.toggle-btn--active) {
-  background: var(--color-grey-50);
-  color: var(--color-grey-900);
-}
-
-.toggle-btn--active {
-  background: var(--color-purple-100);
-  color: var(--color-purple-700);
-}
-
-.toggle-btn:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
-.toggle-btn__icon {
-  width: var(--spacing-16);
-  height: var(--spacing-16);
-}
-
 .range-filter__field {
   display: flex;
   flex-direction: column;
@@ -999,34 +902,8 @@ onMounted(async () => {
 .range-filter__input {
   height: 40px;
   padding: 0 var(--spacing-12);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  background: var(--color-base-white);
-  color: var(--color-grey-900);
-  font-family: var(--font-family-lato);
   font-size: 0.875rem;
-}
-
-.range-filter__input:focus {
-  outline: none;
-  border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--ring-light);
-}
-
-.link-button {
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--color-purple-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.link-button:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
+  line-height: 1.125rem;
 }
 
 .is-stale {
@@ -1044,7 +921,7 @@ onMounted(async () => {
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .detail__value {
@@ -1074,17 +951,6 @@ onMounted(async () => {
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1rem;
-}
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: var(--spacing-40) var(--spacing-24);
-  background: var(--color-grey-50);
-  border: 1px solid var(--color-grey-100);
-  border-radius: var(--radius-sm);
 }
 
 .empty-state__title {
@@ -1166,6 +1032,7 @@ onMounted(async () => {
   gap: var(--spacing-8);
   margin-bottom: var(--spacing-8);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   color: var(--color-grey-700);
   cursor: pointer;
 }

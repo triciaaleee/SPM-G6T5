@@ -10,7 +10,7 @@ import type { RouteLocationRaw } from "vue-router";
 const props = withDefaults(
   defineProps<{
     /** primary: the view's one solid action; outline/ghost: lower emphasis; danger*: destructive. */
-    variant?: "primary" | "outline" | "ghost" | "danger" | "danger-solid";
+    variant?: "primary" | "outline" | "ghost" | "danger" | "danger-solid" | "link";
     /** md is the 44px touch target; sm (36px) is for dense toolbars only; xl is a larger, wider call to action. */
     size?: "md" | "sm" | "xl";
     /** Stretch to the full width of its container. */
@@ -116,6 +116,27 @@ const classes = computed(() => [
 
 .btn--ghost:hover:not(:disabled):not(.btn--disabled) {
   background: var(--color-purple-100);
+}
+
+/* link: an inline text action in a sentence or table row; no padding, no minimum height. */
+.btn.btn--link {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-purple-600);
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.btn--link:hover:not(:disabled):not(.btn--disabled) {
+  color: var(--color-purple-700);
+  text-decoration: underline;
+}
+
+.btn.btn--link:disabled,
+.btn.btn--link.btn--disabled {
+  background: transparent;
+  border-color: transparent;
 }
 
 /* danger */

@@ -157,23 +157,12 @@ function optionId(index: number): string {
   width: 100%;
   height: 40px;
   padding: 0 var(--spacing-40) 0 var(--spacing-16);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  background: var(--color-base-white);
-  color: var(--color-grey-900);
-  font-family: var(--font-family-lato);
   font-size: 0.875rem;
   line-height: 1.125rem;
 }
 
 .picker__input::placeholder {
   color: var(--color-grey-300);
-}
-
-.picker__input:focus {
-  outline: none;
-  border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--ring-light);
 }
 
 .picker__icon {
@@ -232,13 +221,13 @@ function optionId(index: number): string {
 .picker__meta {
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .picker__empty {
   padding: var(--spacing-12) var(--spacing-16);
   font-size: 0.875rem;
   line-height: 1.125rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 </style>

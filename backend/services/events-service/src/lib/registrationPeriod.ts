@@ -1,5 +1,5 @@
 import { EVENT_STATUS } from "./eventStatus.js";
-import { eventEndsAt, eventStartsAt, localDateStart } from "./eventTiming.js";
+import { eventEndsAt, eventStartsAt, hasEventEnded, localDateStart } from "./eventTiming.js";
 import { clock } from "./clock.js";
 
 /**
@@ -107,7 +107,8 @@ export function getRegistrationState(
  * Whether attendees may see the event in the listing: registration has been
  * opened (the open date has arrived, or the coordinator forced it open) and the
  * event takes registration. Closed and full events stay listed. The listing
- * route filters with this; keep them the same.
+ * guest listing filters with this; keep them the same. (The attendee Discover list is narrower: it drops
+ * events once their registration has closed, see GET /open-for-registration.)
  */
 export function isListed(inputs: RegistrationInputs, now: Date = clock.now()): boolean {
   if (!takesRegistration(inputs, now)) return false;
@@ -115,4 +116,17 @@ export function isListed(inputs: RegistrationInputs, now: Date = clock.now()): b
   if (override === REGISTRATION_OVERRIDE.ForceOpen) return true;
   const opensAt = localDateStart(inputs.openDate);
   return opensAt !== null && now.getTime() >= opensAt.getTime();
+}
+
+/**
+ * A Confirmed event that doesn't ask for registration and hasn't ended. Attendees can still find it and read
+ * about it (there is nothing to register for), so it is shown on their Discover list. It is not "listed" in
+ * the registration sense, so the guest pages, which use `isListed`, don't show it.
+ */
+export function isInformationOnly(inputs: Pick<RegistrationInputs, "status" | "details">, now: Date = clock.now()): boolean {
+  return (
+    inputs.status === EVENT_STATUS.Confirmed &&
+    inputs.details.registrationNeeded !== true &&
+    !hasEventEnded(inputs.details, now)
+  );
 }

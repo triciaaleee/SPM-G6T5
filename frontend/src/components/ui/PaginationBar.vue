@@ -85,7 +85,7 @@ function go(page: number): void {
   margin: 0;
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .pagination__controls {
@@ -116,6 +116,7 @@ function go(page: number): void {
   color: var(--color-grey-700);
   font-family: var(--font-family-lato);
   font-size: 0.875rem;
+  line-height: 1.125rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -141,6 +142,6 @@ function go(page: number): void {
   align-items: center;
   justify-content: center;
   width: 24px;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 </style>

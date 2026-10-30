@@ -209,7 +209,7 @@ describe("EquipmentInventoryView — changing stock needs a reason (E5-5)", () =
     await row(wrapper, 1).find("[data-testid='remove-stock']").trigger("click");
 
     const form = wrapper.find("[data-testid='change-form']");
-    expect(form.text()).toContain("Remove stock");
+    expect(wrapper.find("[role='dialog']").text()).toContain("Remove stock");
     expect(form.text()).toContain("Only free units can be removed");
     expect(form.find("#change-reason").exists()).toBe(true);
 

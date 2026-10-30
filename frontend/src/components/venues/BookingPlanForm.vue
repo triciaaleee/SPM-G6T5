@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppButton from "../ui/AppButton.vue";
 /**
  * E4-17: what the next venue booking of this event is for — its purpose,
  * headcount and needs — so recommendations, search and the request itself
@@ -168,9 +169,9 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
     <div class="field">
       <div class="needs__header">
         <span class="field__label">Needs</span>
-        <button type="button" class="link-btn" :aria-expanded="editingNeeds" @click="editingNeeds = !editingNeeds">
+        <AppButton variant="link" class="link-btn" :aria-expanded="editingNeeds" @click="editingNeeds = !editingNeeds">
           {{ editingNeeds ? "Done" : "Change" }}
-        </button>
+        </AppButton>
       </div>
       <template v-if="!editingNeeds">
         <div v-if="allNeeds.length > 0" class="tags">
@@ -220,22 +221,14 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
 
 .body-default {
   margin: 0;
-  font-size: 1rem;
-  line-height: 1.25rem;
 }
 
 .body-small {
   margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.125rem;
-}
-
-.font-semibold {
-  font-weight: 700;
 }
 
 .muted {
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .field {
@@ -255,7 +248,7 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
 .field__hint {
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--color-grey-500);
+  color: var(--color-grey-600);
 }
 
 .field__error {
@@ -267,27 +260,12 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
 .input {
   height: 44px;
   padding: 0 var(--spacing-12);
-  border: 1px solid var(--color-grey-200);
-  border-radius: var(--radius-xs);
-  background: var(--color-base-white);
-  color: var(--color-grey-900);
-  font-family: var(--font-family-lato);
   font-size: 0.875rem;
   line-height: 1.125rem;
 }
 
 .input::placeholder {
   color: var(--color-grey-300);
-}
-
-.input:focus {
-  outline: none;
-  border-color: var(--ring-brand);
-  box-shadow: 0 0 0 4px var(--ring-light);
-}
-
-.input[aria-invalid="true"] {
-  border-color: var(--color-error-600);
 }
 
 .headcount {
@@ -340,11 +318,6 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
 }
 
 .chip:focus-visible,
-.link-btn:focus-visible {
-  outline: 2px solid var(--ring-brand);
-  outline-offset: 2px;
-}
-
 .needs__header {
   display: flex;
   align-items: center;
@@ -358,22 +331,6 @@ const allNeeds = computed(() => [...form.layouts, ...form.facilities, ...form.ac
 }
 
 /* Ghost purple, Style.md 3.4 — lowest-emphasis action. */
-.link-btn {
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--color-purple-600);
-  font-family: var(--font-family-lato);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1rem;
-  cursor: pointer;
-}
-
-.link-btn:hover {
-  text-decoration: underline;
-}
-
 .tags {
   display: flex;
   flex-wrap: wrap;
