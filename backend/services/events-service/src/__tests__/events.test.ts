@@ -2256,13 +2256,17 @@ describe("GET /api/events — E3-2 coordinator workload view", () => {
 
     it("is not applied for the Event Coordinator Lead, who has no assigned events of their own", async () => {
       const eq = vi.fn();
-      const neq = vi.fn().mockResolvedValue({ data: [], error: null });
+      // Like the real query builder, the result of .neq() can be awaited and can also be chained on:
+      // were the filter wrongly applied to the Lead, .eq would be called and this test would see it.
+      const result = Object.assign(Promise.resolve({ data: [], error: null }), { eq });
+      const neq = vi.fn().mockReturnValue(result);
       const select = vi.fn().mockReturnValue({ eq, neq });
       const from = vi.fn().mockReturnValue({ select });
 
       const app = buildApp({ from }, { id: "LEAD-0001", role: "coordinator_lead" });
-      await request(app).get("/api/events?assignedTo=me");
+      const res = await request(app).get("/api/events?assignedTo=me");
 
+      expect(res.status).toBe(200);
       expect(eq).not.toHaveBeenCalled();
     });
 
