@@ -146,6 +146,12 @@ registrationsRouter.get("/open-events", async (req: AuthedRequest, res) => {
     }
   }
 
+  const venues = await fetchVenueNames(eventIds, req.headers.authorization!);
+  if (venues.status === "error") {
+    res.status(502).json({ error: "Failed to load the events' venues" });
+    return;
+  }
+
   const registered = await countRegistered(supabase!, cappedEventIds(open.events));
   if (!registered.ok) {
     res.status(500).json({ error: "Failed to load registrations" });
@@ -157,6 +163,7 @@ registrationsRouter.get("/open-events", async (req: AuthedRequest, res) => {
       const slots = slotsLeft(event.capacity, registered.counts.get(event.id) ?? 0);
       return {
         ...event,
+        venues: venues.venuesByEvent.get(event.id) ?? [],
         organiserName: event.organiserName ?? null,
         capacity: event.capacity ?? null,
         slotsLeft: slots,
@@ -515,7 +522,7 @@ registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) 
 
   const hasPlace =
     registrationStatus === REGISTRATION_STATUS.registered || registrationStatus === REGISTRATION_STATUS.cancelled;
-  if (!event || (!hasPlace && !(event.listed ?? event.open))) {
+  if (!event || (!hasPlace && !(event.viewable ?? event.listed ?? event.open))) {
     console.warn(`Attendee ${user!.id} denied access to event ${eventId} (not registered, not listed)`);
     res.status(403).json({ error: "Access denied" });
     return;
@@ -547,6 +554,7 @@ registrationsRouter.get("/event/:eventId/view", async (req: AuthedRequest, res) 
       organiserName: event.organiserName ?? null,
       capacity: event.capacity ?? null,
       slotsLeft: slots,
+      registrationNeeded: event.registrationNeeded,
       registrationState: attendeeState(event, slots),
       registrationStatus,
       open: event.open,

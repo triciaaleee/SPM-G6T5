@@ -218,6 +218,9 @@ onMounted(async () => {
         <p v-else-if="hasStartedWithPlace" class="body-default muted" data-testid="event-started">
           This event has started
         </p>
+        <p v-else-if="event.registrationNeeded === false" class="body-default muted" data-testid="no-registration">
+          No registration needed
+        </p>
         <p v-else-if="!canWithdraw && event.open === false" class="body-default muted" data-testid="registration-closed">
           {{ event.registrationState === "NOT_OPEN" ? "Registration hasn't opened yet" : "Registration is closed" }}
         </p>

@@ -275,7 +275,8 @@ State is `NOT_OPEN | OPEN | FULL | CLOSED`, decided in this order: `FORCE_CLOSED
 - **Registration statuses** (`registration_status`, migrations `0023`, `0041`): `Registered` (holds a place), `Withdrawn` (the attendee gave the place up; can register again while registration is open), `Cancelled` (the organiser cancelled the whole event, E3-6; set only by registration-service's `event.cancelled` handler, final). "Cancelled" is never used for an attendee's own withdrawal.
 
 - Only the assigned coordinator sets the open date (`PUT /api/events/:id/registration`, must be earlier than the 5-day cutoff) or the override (`POST /:id/registration/open|close|auto`, Confirmed only).
-- Attendees see an event once registration has opened (open date reached or `FORCE_OPEN`); closed and full events stay listed.
+- Attendees see an event on Discover once registration has opened (open date reached or `FORCE_OPEN`) and until it closes (the 5-day cutoff, a manual close, or the event start); full events stay listed. A closed event leaves Discover, but its details page stays viewable and it stays in My events for anyone registered.
+- **Events that need no registration** (`registrationNeeded` false) appear on the attendee Discover list while they are `Confirmed` and haven't ended (Singapore time). They carry a "No registration needed" badge, show no places left, and cannot be registered for; events-service marks them `viewable` (not `listed`), so the guest pages are unchanged.
 - Registering goes through the `register_for_event` Postgres function (migration `0040`), which counts and writes under a per-event advisory lock so two attendees can't take the last place.
 
 ## 4. Frontend: follow `Style.md`

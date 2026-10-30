@@ -40,7 +40,7 @@ test("coordinator records equipment requirements via the form; Technical Support
   // the event page's Arrangements tab.
   await signInThroughStorage(page, coordinator);
   await page.goto(`/events/${event.id}`);
-  await page.getByRole("button", { name: /^Arrangements/ }).click();
+  await page.getByRole("tab", { name: /^Arrangements/ }).click();
   await page.getByRole("button", { name: "Add Equipment Request" }).click();
 
   await page.getByLabel("Equipment type").selectOption(String(item.id));

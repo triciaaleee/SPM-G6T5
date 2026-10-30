@@ -2317,6 +2317,18 @@ describe("attendee access (E6)", () => {
   });
 
   describe("GET /api/events/attendee-info", () => {
+    it("still reports an event whose registration has closed as viewable, so its page opens after it leaves Discover", async () => {
+      const closed = { ...confirmedDetails, proposedDate: new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10) };
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: closed },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1");
+
+      expect(res.body.events[0]).toMatchObject({ registrationState: "CLOSED", open: false, listed: true, viewable: true });
+    });
+
     it("returns only the whitelisted attendee-facing fields", async () => {
       const supabase = buildAttendeeInfoSupabase([
         {
@@ -2338,6 +2350,7 @@ describe("attendee access (E6)", () => {
           registrationNeeded: true,
           registrationState: "OPEN",
           listed: true,
+          viewable: true,
           open: true,
           accessibility: validPayload.accessibility,
           capacity: 50,
@@ -2516,23 +2529,35 @@ describe("attendee access (E6)", () => {
       expect(res.body.events[0].capacity).toBe(50);
     });
 
-    it("lists only open events, with the whitelisted fields", async () => {
+    it("lists open events and events with no registration that haven't ended, with the whitelisted fields", async () => {
       const supabase = buildOpenSupabase([
         { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails },
         { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, proposedDate: "2000-01-01" } },
         { id: 3, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: { ...confirmedDetails, registrationNeeded: false } },
+        { id: 4, status: "Confirmed", submitted_details: { ...confirmedDetails, registrationNeeded: false, proposedDate: "2000-01-01" } },
       ]);
       const app = buildApp(supabase, attendee);
 
       const res = await request(app).get("/api/events/open-for-registration");
 
       expect(res.status).toBe(200);
-      expect(res.body.events.map((e: { id: number }) => e.id)).toEqual([1]);
+      expect(res.body.events.map((e: { id: number }) => e.id)).toEqual([1, 3]);
       expect(JSON.stringify(res.body)).not.toContain("INTERNAL");
       expect(supabase.eq).toHaveBeenCalledWith("status", "Confirmed");
     });
 
-    it("lists events that haven't been forced closed or ended with their state, including closed ones, but not unopened ones", async () => {
+    it("shows an event with no registration as such: nothing to register for, and no capacity to count against", async () => {
+      const supabase = buildOpenSupabase([
+        { id: 3, status: "Confirmed", submitted_details: { ...confirmedDetails, registrationNeeded: false } },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.body.events[0]).toMatchObject({ id: 3, registrationNeeded: false, capacity: null, open: false });
+    });
+
+    it("lists only events whose registration is open: not closed, forced-closed or unopened ones", async () => {
       const supabase = buildOpenSupabase([
         { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: confirmedDetails },
         {
@@ -2552,9 +2577,24 @@ describe("attendee access (E6)", () => {
 
       expect(res.body.events.map((e: { id: number; registrationState: string }) => [e.id, e.registrationState])).toEqual([
         [1, "OPEN"],
-        [2, "CLOSED"],
         [5, "OPEN"],
       ]);
+    });
+
+    it("drops an event once it is inside the 5-day cutoff, but keeps one that is further away and a no-registration one", async () => {
+      const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+      const soon = { ...confirmedDetails, proposedDate: inDays(4), startTime: "09:00", endTime: "11:00" };
+      const later = { ...confirmedDetails, proposedDate: inDays(10), startTime: "09:00", endTime: "11:00" };
+      const supabase = buildOpenSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: soon },
+        { id: 2, status: "Confirmed", registration_open_date: "2020-01-01", submitted_details: later },
+        { id: 3, status: "Confirmed", submitted_details: { ...soon, registrationNeeded: false } },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/open-for-registration");
+
+      expect(res.body.events.map((e: { id: number }) => e.id)).toEqual([2, 3]);
     });
 
     it("refuses non-attendees", async () => {

@@ -2,14 +2,15 @@
 import SearchBox from "../../components/ui/SearchBox.vue";
 import { computed, onMounted, ref } from "vue";
 import { fetchOpenEvents, type OpenEvent } from "../../lib/registrationApi";
-import { registrationBadgeClass, registrationStateBadge } from "../../lib/registrationStatus";
+import { listingBadge, registrationBadgeClass } from "../../lib/registrationStatus";
 import EventCard, { type CardFact } from "../../components/ui/EventCard.vue";
 import { eventThumbnail, formatCardDate, formatCardTimeRange, slotsLabel } from "../../lib/attendeeEvents";
 
 /**
- * Attendee "Discover events": every event open for registration. Each card
- * only links to the event's details page; registering happens there. Only
- * the fields registration-service returns for an open event are shown.
+ * Attendee "Discover events": every event whose registration is open
+ * (or full), plus Confirmed events that need no registration and haven't
+ * ended. Each card only links to the event's details page; registering happens
+ * there. Only the fields registration-service returns for such an event are shown.
  */
 const events = ref<OpenEvent[]>([]);
 const loading = ref(true);
@@ -33,11 +34,13 @@ const filtered = computed(() => {
   );
 });
 
-/** Date and time each get their own line. The accessibility note is on the event page only. */
+/** Date, time and venue each get their own line. The accessibility note is on the event page only. */
 function cardFacts(event: OpenEvent): CardFact[] {
   const facts: CardFact[] = [
     { icon: "calendar", text: formatCardDate(event.proposedDate) },
     { icon: "clock", text: formatCardTimeRange(event.startTime, event.endTime) },
+    // Same wording as My events: the booked venue(s), or a placeholder until one is approved.
+    { icon: "pin", text: event.venues.length > 0 ? event.venues.join(", ") : "Venue to be confirmed" },
   ];
   return facts;
 }
@@ -74,8 +77,8 @@ onMounted(async () => {
   <div class="page">
     <div class="content">
       <div>
-        <h1 class="h2">Events open for registration</h1>
-        <p class="subheading">Find events you want to attend, then open one to register.</p>
+        <h1 class="h2">Discover events</h1>
+        <p class="subheading">Find events you want to attend, then open one to see the details or register.</p>
       </div>
 
       <p v-if="loading" class="body-default muted">Loading events…</p>
@@ -84,7 +87,7 @@ onMounted(async () => {
       <template v-else>
         <SearchBox v-model="query" class="search-box" placeholder="Search events" label="Search events" />
 
-        <p v-if="sorted.length === 0" class="body-default muted">No events are open for registration right now.</p>
+        <p v-if="sorted.length === 0" class="body-default muted">No events to show right now.</p>
         <p v-else-if="filtered.length === 0" class="body-default muted">No events match "{{ query }}".</p>
 
         <template v-else>
@@ -97,8 +100,8 @@ onMounted(async () => {
               :thumbnail="eventThumbnail(event.id)"
               :title="eventTitle(event)"
               :description="event.description"
-              :status-label="event.registrationStatus ?? registrationStateBadge(event.registrationState).label"
-              :status-class="event.registrationStatus ? registrationBadgeClass(event.registrationStatus) : registrationStateBadge(event.registrationState).className"
+              :status-label="event.registrationStatus ?? listingBadge(event).label"
+              :status-class="event.registrationStatus ? registrationBadgeClass(event.registrationStatus) : listingBadge(event).className"
               :facts="cardFacts(event)"
               :title-aside="slotsAside(event)"
               person-label="Organiser"
