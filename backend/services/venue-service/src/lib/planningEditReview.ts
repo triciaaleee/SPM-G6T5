@@ -120,7 +120,8 @@ export async function handleEventEdited(msg: InboundMessage, deps: HandleEventEd
     if (!reason) continue;
 
     let status: BookingStatus = booking.status;
-    if (booking.status === BOOKING_STATUS.approved && canTransition(booking.status, BOOKING_STATUS.replacementRequired)) {
+    // canTransition is the one place §3a says which statuses can become Replacement Required (only Approved).
+    if (canTransition(booking.status, BOOKING_STATUS.replacementRequired)) {
       const { data: updated, error: updateError } = await supabase
         .from("venue_bookings")
         .update({

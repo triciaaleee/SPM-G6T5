@@ -124,8 +124,22 @@ function buildReviewSupabase(options: {
   const resolveEq = vi.fn().mockReturnValue({ select: resolveSelect });
   const clarificationUpdate = vi.fn().mockReturnValue({ eq: resolveEq });
 
+  // The reject route records history and stores event.rejected in the outbox.
+  const historyInsert = vi.fn().mockResolvedValue({ error: null });
+  const outboxInsert = vi.fn((row: Record<string, unknown>) => ({
+    select: () => ({
+      single: vi.fn().mockResolvedValue({
+        data: { id: 1, message_id: "msg-1", occurred_at: "2026-01-01T00:00:00.000Z", ...row },
+        error: null,
+      }),
+    }),
+  }));
+  const outboxUpdate = vi.fn(() => ({ eq: vi.fn().mockResolvedValue({ error: null }) }));
+
   const from = vi.fn().mockImplementation((table: string) => {
     if (table === "access_denials") return { insert: denialInsert };
+    if (table === "event_history") return { insert: historyInsert };
+    if (table === "event_outbox") return { insert: outboxInsert, update: outboxUpdate };
     if (table === "event_clarifications") {
       return { insert: clarificationInsert, select: clarificationSelect, update: clarificationUpdate };
     }
@@ -138,6 +152,8 @@ function buildReviewSupabase(options: {
     updateEq,
     updateSelect,
     denialInsert,
+    historyInsert,
+    outboxInsert,
     clarificationInsert,
     clarificationListSelect,
     clarificationUpdate,
@@ -752,6 +768,43 @@ describe("POST /api/events/:id/reject", () => {
     const res = await request(app).post("/api/events/1/reject").send({ reason: "No venue found at all" });
 
     expect(res.status).toBe(200);
+  });
+
+  it("records the rejection in the event history, since the decision columns are overwritten", async () => {
+    const { from, historyInsert } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Rejected" },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    await request(app).post("/api/events/1/reject").send({ reason: "No venue found at all" });
+
+    expect(historyInsert).toHaveBeenCalledWith([
+      expect.objectContaining({ field: "Status", old_value: "Clarification Requested", new_value: "Rejected", changed_by: coordinator.id }),
+      expect.objectContaining({ field: "Rejection reason", old_value: null, new_value: "No venue found at all" }),
+    ]);
+  });
+
+  it("stores event.rejected in the outbox for venue-service and equipment-service, with nobody notified", async () => {
+    const { from, outboxInsert } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id, organiser_id: "ORG-0001" },
+      updatedEvent: { id: 1, status: "Rejected", submitted_details: { name: "Spring Gala" } },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/reject").send({ reason: "No venue found at all" });
+
+    expect(res.status).toBe(200);
+    expect(outboxInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "event.rejected",
+        event_id: 1,
+        actor_id: coordinator.id,
+        recipients: { userIds: [], roles: [] },
+        data: { eventName: expect.any(String), reason: "No venue found at all" },
+      }),
+    );
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: "event.rejected", messageId: "msg-1" }));
   });
 });
 
@@ -1562,6 +1615,49 @@ describe("PATCH /api/events/:id", () => {
       expect(rescheduled()).toHaveLength(0);
     });
 
+    it("does not publish it when a clarification raised from Requested is answered with a new date or attendance", async () => {
+      const { from } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Clarification Requested",
+          status_before_clarification: "Requested",
+          organiser_id: owner.id,
+          coordinator_id: coordinator.id,
+          submitted_details: validPayload,
+        },
+        updatedEvent: { id: 1, status: "Requested" },
+      });
+      const app = buildApp({ from }, owner);
+
+      const res = await request(app)
+        .patch("/api/events/1")
+        .send({ ...validPayload, proposedDate: "2099-02-02", startTime: "13:00", endTime: "15:00", expectedAttendance: 500 });
+
+      expect(res.status).toBe(200);
+      expect(rescheduled()).toHaveLength(0);
+      expect(attendanceMessages()).toHaveLength(0);
+    });
+
+    it("publishes it when a clarification raised from Planning is answered with a new date", async () => {
+      const { from } = buildPatchSupabase({
+        event: {
+          id: 1,
+          status: "Clarification Requested",
+          status_before_clarification: "Planning",
+          organiser_id: owner.id,
+          coordinator_id: coordinator.id,
+          submitted_details: validPayload,
+        },
+        updatedEvent: { id: 1, status: "Planning" },
+      });
+      const app = buildApp({ from }, owner);
+
+      const res = await request(app).patch("/api/events/1").send({ ...validPayload, proposedDate: "2099-02-02", startTime: "13:00", endTime: "15:00" });
+
+      expect(res.status).toBe(200);
+      expect(rescheduled()).toHaveLength(1);
+    });
+
     it("does not publish it before Planning, when nothing can be reserved yet", async () => {
       const { from } = buildPatchSupabase({
         event: { id: 1, status: "Requested", organiser_id: owner.id, coordinator_id: coordinator.id, submitted_details: validPayload },
@@ -2214,8 +2310,11 @@ describe("GET /api/events — E3-2 coordinator workload view", () => {
     const from = vi.fn().mockReturnValue({ select });
 
     const app = buildApp({ from }, coordinator);
-    await request(app).get("/api/events");
+    const res = await request(app).get("/api/events");
 
+    // A 200 matters here: a query wrongly narrowed to the coordinator would fail on this stub, not call eq.
+    expect(res.status).toBe(200);
+    expect(neq).toHaveBeenCalledWith("status", "Draft");
     expect(eq).not.toHaveBeenCalledWith("coordinator_id", expect.anything());
   });
 
@@ -2262,8 +2361,11 @@ describe("GET /api/events — E3-2 coordinator workload view", () => {
       const from = vi.fn().mockReturnValue({ select });
 
       const app = buildApp({ from }, { id: "LEAD-0001", role: "coordinator_lead" });
-      await request(app).get("/api/events?assignedTo=me");
+      const res = await request(app).get("/api/events?assignedTo=me");
 
+      // The Lead still gets the full list (a 200 from the unfiltered query), not a failure.
+      expect(res.status).toBe(200);
+      expect(neq).toHaveBeenCalledWith("status", "Draft");
       expect(eq).not.toHaveBeenCalled();
     });
 
@@ -2328,6 +2430,29 @@ describe("attendee access (E6)", () => {
       const res = await request(app).get("/api/events/attendee-info?ids=1");
 
       expect(res.body.events[0]).toMatchObject({ registrationState: "CLOSED", open: false, listed: true, viewable: true });
+    });
+
+    it("does not report an event whose registration has not opened yet as viewable", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: "2098-01-01", submitted_details: confirmedDetails },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1");
+
+      expect(res.body.events[0]).toMatchObject({ registrationState: "NOT_OPEN", open: false, listed: false, viewable: false });
+    });
+
+    it("shows no capacity for an event that needs no registration, even though it has an expected attendance", async () => {
+      const supabase = buildAttendeeInfoSupabase([
+        { id: 1, status: "Confirmed", registration_open_date: null, submitted_details: { ...confirmedDetails, registrationNeeded: false } },
+      ]);
+      const app = buildApp(supabase, attendee);
+
+      const res = await request(app).get("/api/events/attendee-info?ids=1");
+
+      expect(res.body.events[0]).toMatchObject({ registrationNeeded: false, viewable: true, capacity: null });
+      expect(confirmedDetails.expectedAttendance).toBe(50);
     });
 
     it("returns only the whitelisted attendee-facing fields", async () => {

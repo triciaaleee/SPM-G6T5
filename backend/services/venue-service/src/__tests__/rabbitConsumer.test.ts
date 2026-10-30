@@ -56,6 +56,14 @@ describe("connectAndConsume", () => {
     });
     expect(channel.bindQueue).toHaveBeenCalledWith("venue-service", "connectsphere.events", "event.cancelled");
     expect(channel.bindQueue).toHaveBeenCalledWith("venue-service.dlq", "connectsphere.dlx", "event.cancelled");
+    expect(channel.bindQueue).toHaveBeenCalledWith("venue-service", "connectsphere.events", "event.rejected");
+    expect(channel.bindQueue).toHaveBeenCalledWith("venue-service.dlq", "connectsphere.dlx", "event.rejected");
+    for (const key of ["event.rescheduled", "event.attendance_changed"]) {
+      expect(channel.bindQueue).toHaveBeenCalledWith("venue-service", "connectsphere.events", key);
+      expect(channel.bindQueue).toHaveBeenCalledWith("venue-service.dlq", "connectsphere.dlx", key);
+    }
+    // Four routing keys, each bound to the queue and to its dead-letter queue, and nothing else.
+    expect(channel.bindQueue).toHaveBeenCalledTimes(8);
     expect(channel.prefetch).toHaveBeenCalledWith(1);
   });
 

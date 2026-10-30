@@ -59,7 +59,7 @@ async function startRabbit(): Promise<void> {
   try {
     const consumer = connectAndConsume(url, (msg) => handleMessage(msg, { supabase: supabaseAdmin }));
     await consumer.start();
-    console.log("equipment-service: connected to RabbitMQ, consuming event.cancelled and event.rescheduled");
+    console.log("equipment-service: connected to RabbitMQ, consuming event.cancelled, event.rejected and event.rescheduled");
   } catch (err) {
     console.error("equipment-service: failed to connect to RabbitMQ, consumer idle", err);
   }

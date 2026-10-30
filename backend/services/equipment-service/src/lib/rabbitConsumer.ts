@@ -29,7 +29,8 @@ const DLQ = "equipment-service.dlq";
 
 /**
  * RabbitMQ.md section 4: equipment-service only needs `event.cancelled`
- * (E3-6) and `event.rescheduled` (stored booking windows follow the event),
+ * (E3-6), `event.rejected` (the same release for a rejected event) and
+ * `event.rescheduled` (stored booking windows follow the event),
  * so the queue binds to those routing keys alone rather than every message
  * on the exchange. Acks only after the handler's own DB
  * write succeeds; a thrown handler error nacks without requeue, so the
@@ -52,6 +53,7 @@ export function connectAndConsume(url: string, handler: MessageHandler): RabbitC
 
     await channel.assertQueue(DLQ, { durable: true });
     await channel.bindQueue(DLQ, DLX, "event.cancelled");
+    await channel.bindQueue(DLQ, DLX, "event.rejected");
     await channel.bindQueue(DLQ, DLX, "event.rescheduled");
 
     await channel.assertQueue(QUEUE, {
@@ -59,6 +61,7 @@ export function connectAndConsume(url: string, handler: MessageHandler): RabbitC
       arguments: { "x-dead-letter-exchange": DLX },
     });
     await channel.bindQueue(QUEUE, EXCHANGE, "event.cancelled");
+    await channel.bindQueue(QUEUE, EXCHANGE, "event.rejected");
     await channel.bindQueue(QUEUE, EXCHANGE, "event.rescheduled");
 
     await channel.prefetch(1);

@@ -60,6 +60,14 @@ interface Options {
   upsertError?: boolean;
   deleteError?: boolean;
   resolveError?: boolean;
+  /** Fails only the events update that moves the status (Confirmed to Needs Review). */
+  flipError?: boolean;
+  /** Fails the events update that puts the details back during an undo (the second one that writes details). */
+  restoreDetailsError?: boolean;
+  /** Fails deleting the change request during an undo. */
+  deleteRequestError?: boolean;
+  /** Fails only the first change_request_fields upsert, so an undo's own upsert succeeds. */
+  upsertFailsOnce?: boolean;
 }
 
 function buildApp(options: Options = {}) {
@@ -103,7 +111,7 @@ function buildApp(options: Options = {}) {
   );
 
   const deleteChain: any = {};
-  deleteChain.eq = () => deleteChain;
+  deleteChain.eq = vi.fn(() => deleteChain);
   deleteChain.in = resolved(null, options.deleteError ? { message: "boom" } : null);
 
   const insertChangeRequest = vi.fn(() => ({
@@ -120,26 +128,50 @@ function buildApp(options: Options = {}) {
 
   // events.update() is awaited after one or two .eq() filters (the Needs
   // Review move adds a status filter), so the chain is thenable at every depth.
-  const updateEvent = vi.fn((_patch: Record<string, unknown>) => {
-    const result = { data: null, error: options.updateError ? { message: "boom" } : null };
-    const chain: any = { eq: () => chain, then: (resolve: (value: unknown) => unknown) => resolve(result) };
+  let detailWrites = 0;
+  const eventUpdateEq = vi.fn();
+  const updateEvent = vi.fn((patch: Record<string, unknown>) => {
+    if ("submitted_details" in patch) detailWrites += 1;
+    const failed =
+      options.updateError ||
+      (options.flipError && "status" in patch) ||
+      (options.restoreDetailsError && "submitted_details" in patch && detailWrites > 1);
+    const result = { data: null, error: failed ? { message: "boom" } : null };
+    const chain: any = {
+      eq: (...args: unknown[]) => {
+        eventUpdateEq(...args);
+        return chain;
+      },
+      then: (resolve: (value: unknown) => unknown) => resolve(result),
+    };
     return chain;
   });
+
+  const deleteChangeRequest = vi.fn(() => ({ eq: resolved(null, options.deleteRequestError ? { message: "boom" } : null) }));
+  let upsertCalls = 0;
+  const upsertFields = vi.fn(async () => {
+    upsertCalls += 1;
+    const failed = options.upsertError || (options.upsertFailsOnce && upsertCalls === 1);
+    return { data: null, error: failed ? { message: "boom" } : null };
+  });
+  const deleteFields = vi.fn(() => deleteChain);
+  const historyInsert = resolved(null);
 
   const tables: Record<string, any> = {
     events: {
       select: () => ({ eq: () => ({ maybeSingle: resolved(event) }) }),
       update: updateEvent,
     },
-    event_history: { insert: resolved(null) },
+    event_history: { insert: historyInsert },
     change_requests: {
       insert: insertChangeRequest,
+      delete: deleteChangeRequest,
       select: () => changeRequestsSelectChain,
       update: updateChangeRequest,
     },
     change_request_fields: {
-      upsert: resolved(null, options.upsertError ? { message: "boom" } : null),
-      delete: () => deleteChain,
+      upsert: upsertFields,
+      delete: deleteFields,
       select: () => fieldsSelectChain,
     },
     access_denials: { insert: resolved(null) },
@@ -154,7 +186,7 @@ function buildApp(options: Options = {}) {
   // Stashed rather than returned alongside `app` so every existing
   // `const app = buildApp(...)` call site keeps working unchanged; only
   // tests that care about the exact insert/update payload reach for this.
-  (app as any).__spies = { insertChangeRequest, updateChangeRequest, updateEvent };
+  (app as any).__spies = { insertChangeRequest, updateChangeRequest, updateEvent, deleteChangeRequest, upsertFields, deleteFields, deleteFieldsEq: deleteChain.eq, deleteFieldsIn: deleteChain.in, eventUpdateEq, historyInsert };
   return app;
 }
 
@@ -388,6 +420,138 @@ describe("POST /api/events/:id/change-requests — merging into an open Pending 
     expect(res.status).toBe(201);
     expect(res.body.changeRequestId).toBe(55);
     expect(res.body.applied).toEqual(["description"]);
+  });
+});
+
+describe("POST /api/events/:id/change-requests — undoing a failed submission", () => {
+  const heldVenue = { id: 1, field: "venue", old_value: "Grand Ballroom", new_value: "Seminar Room 3-01", is_critical: true };
+  const heldAttendance = { id: 2, field: "expectedAttendance", old_value: "100", new_value: "150", is_critical: true };
+  const undoFailureLogged = () =>
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("could not undo a failed change request"), expect.anything());
+
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("deletes a request it just created when the submitted_details update fails", async () => {
+    const app = buildApp({ updateError: true });
+    const res = await request(app).post("/api/events/7/change-requests").send({ description: "Updated gala description" });
+
+    expect(res.status).toBe(500);
+    expect((app as any).__spies.deleteChangeRequest).toHaveBeenCalledTimes(1);
+    expect((app as any).__spies.historyInsert).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("deletes a request it just created when the move to Needs Review fails", async () => {
+    const app = buildApp({ flipError: true });
+    const res = await request(app).post("/api/events/7/change-requests").send({ venue: "Seminar Room 3-01" });
+
+    expect(res.status).toBe(500);
+    expect((app as any).__spies.deleteChangeRequest).toHaveBeenCalledTimes(1);
+    expect((app as any).__spies.historyInsert).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("puts the event's details back, then deletes the request, when a non-critical edit had already been applied", async () => {
+    const app = buildApp({ flipError: true });
+    const res = await request(app)
+      .post("/api/events/7/change-requests")
+      .send({ venue: "Seminar Room 3-01", description: "Updated gala description" });
+
+    expect(res.status).toBe(500);
+    const patches = (app as any).__spies.updateEvent.mock.calls.map((call: unknown[]) => call[0]);
+    expect(patches[0]).toEqual({ submitted_details: expect.objectContaining({ description: "Updated gala description" }) });
+    expect(patches[patches.length - 1]).toEqual({ submitted_details: submittedDetails });
+    // The details update, the move to Needs Review and the put-back each filter on the event's id.
+    const byId = (app as any).__spies.eventUpdateEq.mock.calls.filter((call: unknown[]) => call[0] === "id" && call[1] === 7);
+    expect(byId).toHaveLength(3);
+    // A put-back that works does not stop the undo: the request is deleted too.
+    expect((app as any).__spies.deleteChangeRequest).toHaveBeenCalledTimes(1);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("restores only the held fields the failed call touched, and removes only the ones it added", async () => {
+    const app = buildApp({ openRequest: { id: 55 }, openFields: [heldVenue, heldAttendance], upsertFailsOnce: true });
+    // The venue was already held and is overwritten; accessibility is new to the request; attendance is left alone.
+    const res = await request(app).post("/api/events/7/change-requests").send({ venue: "Lecture Theatre 2", accessibility: "Hearing loop" });
+
+    expect(res.status).toBe(500);
+    expect((app as any).__spies.deleteChangeRequest).not.toHaveBeenCalled();
+
+    expect((app as any).__spies.deleteFieldsEq).toHaveBeenCalledWith("request_id", 55);
+    expect((app as any).__spies.deleteFieldsIn).toHaveBeenCalledTimes(1);
+    expect((app as any).__spies.deleteFieldsIn).toHaveBeenCalledWith("field", ["accessibility"]);
+
+    const upserts = (app as any).__spies.upsertFields.mock.calls;
+    expect(upserts).toHaveLength(2);
+    expect(upserts[1][0]).toEqual([
+      { request_id: 55, field: "venue", old_value: "Grand Ballroom", new_value: "Seminar Room 3-01", is_critical: true },
+    ]);
+    expect(upserts[1][1]).toEqual({ onConflict: "request_id,field" });
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("restores an already-open request's held value when overwriting it fails", async () => {
+    const app = buildApp({ openRequest: { id: 55 }, openFields: [heldVenue], upsertError: true });
+    const res = await request(app).post("/api/events/7/change-requests").send({ venue: "Lecture Theatre 2" });
+
+    expect(res.status).toBe(500);
+    expect((app as any).__spies.deleteChangeRequest).not.toHaveBeenCalled();
+    const upserts = (app as any).__spies.upsertFields.mock.calls;
+    expect(upserts).toHaveLength(2);
+    expect(upserts[1][0]).toEqual([
+      { request_id: 55, field: "venue", old_value: "Grand Ballroom", new_value: "Seminar Room 3-01", is_critical: true },
+    ]);
+    // Here the put-back upsert fails as well, which is logged and does not change the answer.
+    undoFailureLogged();
+  });
+
+  it("removes a field it had added to an already-open request, and has nothing to restore", async () => {
+    const app = buildApp({ openRequest: { id: 55 }, openFields: [heldVenue], upsertFailsOnce: true });
+    const res = await request(app).post("/api/events/7/change-requests").send({ expectedAttendance: 150 });
+
+    expect(res.status).toBe(500);
+    expect((app as any).__spies.deleteFieldsIn).toHaveBeenCalledWith("field", ["expectedAttendance"]);
+    expect((app as any).__spies.deleteChangeRequest).not.toHaveBeenCalled();
+    // Only the failed write: with nothing to restore, no second upsert is made.
+    expect((app as any).__spies.upsertFields).toHaveBeenCalledTimes(1);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  describe("when the undo itself fails", () => {
+    it("still answers 500 and logs it when the details cannot be put back", async () => {
+      const app = buildApp({ flipError: true, restoreDetailsError: true });
+      const res = await request(app)
+        .post("/api/events/7/change-requests")
+        .send({ venue: "Seminar Room 3-01", description: "Updated gala description" });
+
+      expect(res.status).toBe(500);
+      undoFailureLogged();
+      // The undo stops at the first failure.
+      expect((app as any).__spies.deleteChangeRequest).not.toHaveBeenCalled();
+    });
+
+    it("still answers 500 and logs it when the new request cannot be deleted", async () => {
+      const app = buildApp({ flipError: true, deleteRequestError: true });
+      const res = await request(app).post("/api/events/7/change-requests").send({ venue: "Seminar Room 3-01" });
+
+      expect(res.status).toBe(500);
+      undoFailureLogged();
+    });
+
+    it("still answers 500 and logs it when an added field cannot be removed", async () => {
+      const app = buildApp({ openRequest: { id: 55 }, openFields: [heldVenue], upsertError: true, deleteError: true });
+      const res = await request(app).post("/api/events/7/change-requests").send({ expectedAttendance: 150 });
+
+      expect(res.status).toBe(500);
+      undoFailureLogged();
+    });
   });
 });
 

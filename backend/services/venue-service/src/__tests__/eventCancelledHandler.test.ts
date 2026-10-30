@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleEventCancelled } from "../lib/eventCancelledHandler.js";
+import { handleEventRejected } from "../lib/eventRejectedHandler.js";
+import { handleMessage } from "../lib/handleMessage.js";
 import type { InboundMessage } from "../lib/rabbitConsumer.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
@@ -208,5 +210,86 @@ describe("handleEventCancelled (E3-6 -> AGENTS.md §3a)", () => {
       await expect(handleEventCancelled(buildMsg(), { supabase })).resolves.toBeUndefined();
       setPublisherForTest(undefined);
     });
+  });
+});
+
+describe("handleEventRejected (a Planning event rejected through a clarification)", () => {
+  it("withdraws every active booking and tells each venue's staff the event was rejected", async () => {
+    const { supabase, update, updateEq, updateIn } = buildSupabase();
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+
+    await handleEventRejected(buildMsg({ type: "event.rejected", data: { eventName: "Spring Gala", reason: "No venue found" } }), { supabase });
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: "Withdrawn", decided_by: "ORG-0001", hold_expires_at: null }));
+    expect(updateEq).toHaveBeenCalledWith("event_id", 7);
+    expect(updateIn).toHaveBeenCalledWith("status", ["Requested", "On Hold", "Approved", "Replacement Required"]);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith({
+      type: "booking.withdrawn",
+      eventId: 7,
+      actorId: "ORG-0001",
+      recipients: { userIds: ["VENUE-0001"], roles: [] },
+      data: { bookingId: 900, venueName: "Grand Ballroom", eventName: "Spring Gala", reason: "event_rejected" },
+    });
+    setPublisherForTest(undefined);
+  });
+
+  it("names the event by its number when the message carries no name", async () => {
+    const { supabase } = buildSupabase();
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+
+    await handleEventRejected(buildMsg({ type: "event.rejected", data: { reason: "No venue found" } }), { supabase });
+
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ eventName: "Event #7" }) }));
+    setPublisherForTest(undefined);
+  });
+
+  it("is a no-op when the event has no active bookings, as when it is rejected from Requested", async () => {
+    const { supabase, venuesSelect } = buildSupabase({ bookings: [] });
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+
+    await handleEventRejected(buildMsg({ type: "event.rejected" }), { supabase });
+
+    expect(venuesSelect).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    setPublisherForTest(undefined);
+  });
+
+  it("is a no-op when the message carries no eventId", async () => {
+    const { supabase, update } = buildSupabase();
+    await handleEventRejected(buildMsg({ type: "event.rejected", eventId: null }), { supabase });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("propagates a failure updating the bookings, so the message goes to the dead-letter queue", async () => {
+    const { supabase } = buildSupabase({ updateError: true });
+    await expect(handleEventRejected(buildMsg({ type: "event.rejected" }), { supabase })).rejects.toBeTruthy();
+  });
+});
+
+describe("handleMessage routing for the release messages", () => {
+  it("sends event.cancelled to the release, with its own reason", async () => {
+    const { supabase } = buildSupabase();
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+
+    await handleMessage(buildMsg({ type: "event.cancelled" }), { supabase });
+
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reason: "event_cancelled" }) }));
+    setPublisherForTest(undefined);
+  });
+
+  it("sends event.rejected to the same release as event.cancelled, with its own reason", async () => {
+    const { supabase } = buildSupabase();
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+
+    await handleMessage(buildMsg({ type: "event.rejected" }), { supabase });
+
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reason: "event_rejected" }) }));
+    setPublisherForTest(undefined);
   });
 });

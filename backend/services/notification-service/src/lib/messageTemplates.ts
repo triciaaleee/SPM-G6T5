@@ -70,7 +70,7 @@ const TEMPLATES: Record<string, Template> = {
   /**
    * #18/#33 in RabbitMQ.md section 3.3. The coordinator-driven reasons
    * (E4-9: `coordinator_withdrew`/`coordinator_released`) and the E3-6
-   * cancellation reason (`event_cancelled`) each read differently; #19's
+   * cancellation reason (`event_cancelled`) and the rejection reason (`event_rejected`) each read differently; #19's
    * `replaced` still falls back to generic "withdrawn" wording, since
    * that publisher hasn't landed.
    */
@@ -82,6 +82,13 @@ const TEMPLATES: Record<string, Template> = {
       return {
         title: `${venueName} — booking released`,
         body: `${eventName} was cancelled, so its booking for ${venueName} was released and the venue is free again.`,
+        link,
+      };
+    }
+    if (msg.data.reason === "event_rejected") {
+      return {
+        title: `${venueName} — booking released`,
+        body: `${eventName} was rejected, so its booking for ${venueName} was released and the venue is free again.`,
         link,
       };
     }
@@ -477,9 +484,10 @@ const TEMPLATES: Record<string, Template> = {
         link: "/equipment-requests",
       };
     }
+    const outcome = msg.data.reason === "event_rejected" ? "rejected" : "cancelled";
     return {
       title: "Equipment reservations released",
-      body: `${eventName} was cancelled, so its equipment reservations were released back to inventory.`,
+      body: `${eventName} was ${outcome}, so its equipment reservations were released back to inventory.`,
       // The event's requests are cancelled with it; Technical Support can still open them, under Cancelled / Past.
       link: supportEventLink(msg),
     };
