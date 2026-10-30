@@ -5,6 +5,7 @@ import { EVENT_STATUS } from "../../lib/eventStatus.js";
 import { publishDurably } from "../../lib/outbox.js";
 import { eventEndsAt, hasEventEnded } from "../../lib/eventTiming.js";
 import {
+  routeParam,
   recordAccessDenial,
   recordEventHistory,
   EVENT_COLUMNS,
@@ -12,6 +13,7 @@ import {
   type AssignmentEventRow,
   eventDisplayName,
 } from "./shared.js";
+import { clock } from "../../lib/clock.js";
 
 /**
  * Lifecycle controller: the organiser cancels an event with a reason (E3-6),
@@ -63,7 +65,7 @@ lifecycleRouter.post("/:id/cancel", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   if (!isPositiveInteger(eventId)) {
     res.status(404).json({ error: "Event not found" });
     return;
@@ -110,7 +112,7 @@ lifecycleRouter.post("/:id/cancel", async (req: AuthedRequest, res) => {
     .update({
       status: EVENT_STATUS.Cancelled,
       review_outcome: reason,
-      decided_at: new Date().toISOString(),
+      decided_at: clock.now().toISOString(),
       decided_by: user.id,
     })
     .eq("id", existing.id)
@@ -174,7 +176,7 @@ lifecycleRouter.post("/:id/cancel", async (req: AuthedRequest, res) => {
  * re-review between the checks and the write makes it a 409 instead.
  */
 lifecycleRouter.post("/:id/complete", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 

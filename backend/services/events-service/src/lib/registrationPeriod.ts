@@ -1,5 +1,6 @@
 import { EVENT_STATUS } from "./eventStatus.js";
 import { eventEndsAt, eventStartsAt, hasEventEnded, localDateStart } from "./eventTiming.js";
+import { clock } from "./clock.js";
 
 /**
  * Registration period. The coordinator stores an open date and an optional
@@ -76,10 +77,9 @@ function takesRegistration({ status, details }: RegistrationInputs, now: Date): 
  */
 export function getRegistrationState(
   inputs: RegistrationInputs,
-  now: Date = new Date(),
+  now: Date = clock.now(),
   fullness?: { registeredCount: number; capacity: number | null },
 ): RegistrationState {
-  if (inputs.details.registrationNeeded !== true) return REGISTRATION_STATE.Closed;
   if (!takesRegistration(inputs, now)) return REGISTRATION_STATE.Closed;
 
   const override = parseOverride(inputs.override);
@@ -110,7 +110,7 @@ export function getRegistrationState(
  * guest listing filters with this; keep them the same. (The attendee Discover list is narrower: it drops
  * events once their registration has closed, see GET /open-for-registration.)
  */
-export function isListed(inputs: RegistrationInputs, now: Date = new Date()): boolean {
+export function isListed(inputs: RegistrationInputs, now: Date = clock.now()): boolean {
   if (!takesRegistration(inputs, now)) return false;
   const override = parseOverride(inputs.override);
   if (override === REGISTRATION_OVERRIDE.ForceOpen) return true;
@@ -123,7 +123,7 @@ export function isListed(inputs: RegistrationInputs, now: Date = new Date()): bo
  * about it (there is nothing to register for), so it is shown on their Discover list. It is not "listed" in
  * the registration sense, so the guest pages, which use `isListed`, don't show it.
  */
-export function isInformationOnly(inputs: Pick<RegistrationInputs, "status" | "details">, now: Date = new Date()): boolean {
+export function isInformationOnly(inputs: Pick<RegistrationInputs, "status" | "details">, now: Date = clock.now()): boolean {
   return (
     inputs.status === EVENT_STATUS.Confirmed &&
     inputs.details.registrationNeeded !== true &&

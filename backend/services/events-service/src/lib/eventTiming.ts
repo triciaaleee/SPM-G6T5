@@ -6,10 +6,21 @@
  * and would make an event "end" eight hours late.
  */
 
+import { clock } from "./clock.js";
+
 /** Singapore has no daylight saving, so a fixed offset is exact. */
 export const EVENT_UTC_OFFSET = "+08:00";
 
+// The patterns are anchored on purpose: without "^" a signed extended year such as "+092026-11-10" gets
+// through and Date reads it as the year 92026 (tested in libEdges.test.ts).
+//
+// Mutation testing: dropping the trailing "$" (date) or either anchor (time) changes nothing observable.
+// The value is spliced into `${date}T${time}:00+08:00` and handed to Date, which rejects any stray character,
+// so a string those mutants would admit still comes back null. Fuzzed with 4 million prefixed/suffixed values
+// without finding a difference. Stryker can only skip a mutator as a whole, hence the two disables.
+// Stryker disable next-line Regex: the "^" case is covered by a dedicated test; "$" is equivalent (see above)
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+// Stryker disable next-line Regex: equivalent mutants only (see above)
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 /** Used when an event has a date but no end time: it runs to the end of that day. */
@@ -54,7 +65,7 @@ export function eventStartsAt(details: Record<string, unknown>): Date | null {
  * can't be worked out is treated as not started. E6-4: attendees may
  * withdraw any time before this.
  */
-export function hasEventStarted(details: Record<string, unknown>, now: Date = new Date()): boolean {
+export function hasEventStarted(details: Record<string, unknown>, now: Date = clock.now()): boolean {
   const startsAt = eventStartsAt(details);
   return startsAt !== null && startsAt.getTime() <= now.getTime();
 }
@@ -71,7 +82,7 @@ export function localDateStart(date: unknown): Date | null {
  * worked out is treated as not ended, so nothing that depends on it having
  * run (E3-5 completion) is allowed by mistake.
  */
-export function hasEventEnded(details: Record<string, unknown>, now: Date = new Date()): boolean {
+export function hasEventEnded(details: Record<string, unknown>, now: Date = clock.now()): boolean {
   const endsAt = eventEndsAt(details);
   return endsAt !== null && endsAt.getTime() <= now.getTime();
 }

@@ -13,7 +13,8 @@ import {
   REGISTRATION_STATE,
 } from "../../lib/registrationPeriod.js";
 import type { RegistrationOverride } from "../../lib/registrationPeriod.js";
-import { recordAccessDenial, recordEventHistory, EVENT_COLUMNS, authorizeCoordinatorReview } from "./shared.js";
+import { routeParam, recordAccessDenial, recordEventHistory, EVENT_COLUMNS, authorizeCoordinatorReview } from "./shared.js";
+import { clock } from "../../lib/clock.js";
 
 /**
  * Registration settings controller (E6): the assigned coordinator sets when
@@ -88,7 +89,7 @@ interface RegistrationRowFields {
  * re-derive it. Times are Singapore time (lib/eventTiming.ts); the rules are
  * in lib/registrationPeriod.ts.
  */
-export function registrationInfo(row: RegistrationRowFields, details: Record<string, unknown>, now: Date = new Date()) {
+export function registrationInfo(row: RegistrationRowFields, details: Record<string, unknown>, now: Date = clock.now()) {
   const inputs = {
     status: row.status,
     details,
@@ -133,7 +134,8 @@ registrationRouter.get("/attendee-info", async (req: AuthedRequest, res) => {
   }
 
   const idStrings = rawIds.split(",").map((id) => id.trim());
-  if (rawIds === "" || !idStrings.every(isPositiveInteger) || idStrings.length > MAX_ATTENDEE_INFO_IDS) {
+  // An absent or empty list splits to [""], which is not a positive integer, so it is refused here too.
+  if (!idStrings.every(isPositiveInteger) || idStrings.length > MAX_ATTENDEE_INFO_IDS) {
     res.status(400).json({ error: `ids must be 1–${MAX_ATTENDEE_INFO_IDS} comma-separated event ids` });
     return;
   }
@@ -199,6 +201,7 @@ registrationRouter.get("/open-for-registration", async (req: AuthedRequest, res)
     return;
   }
 
+  // Stryker disable next-line ArrayDeclaration: equivalent - a placeholder row has no status, so it is never listed
   const events = (data ?? [])
     .map((row) => ({ row, details: (row.submitted_details ?? {}) as Record<string, unknown> }))
     .filter(({ row, details }) => registrationInfo(row, details).open || isInformationOnly({ status: row.status, details }))
@@ -242,7 +245,7 @@ async function loadRegistrationRow(
 }
 
 registrationRouter.put("/:id/registration", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -309,7 +312,7 @@ registrationRouter.put("/:id/registration", async (req: AuthedRequest, res) => {
 /** open / close / auto: the manual override on registration (Confirmed events only). */
 function registrationOverrideRoute(action: string, override: RegistrationOverride) {
   registrationRouter.post(`/:id/registration/${action}`, async (req: AuthedRequest, res) => {
-    const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const eventId = routeParam(req.params.id);
     const event = await authorizeCoordinatorReview(req, res, eventId);
     if (!event) return;
 
@@ -328,8 +331,9 @@ function registrationOverrideRoute(action: string, override: RegistrationOverrid
       res.status(409).json({ error: "This event doesn't need registration" });
       return;
     }
-    const startsAt = eventStartsAt(row.submitted_details ?? {});
-    if (override === REGISTRATION_OVERRIDE.ForceOpen && startsAt !== null && startsAt.getTime() <= Date.now()) {
+    // The guard above already refused a missing submitted_details.
+    const startsAt = eventStartsAt(row.submitted_details!);
+    if (override === REGISTRATION_OVERRIDE.ForceOpen && startsAt !== null && startsAt.getTime() <= clock.now().getTime()) {
       res.status(409).json({ error: "This event has already started, so registration can't be opened" });
       return;
     }

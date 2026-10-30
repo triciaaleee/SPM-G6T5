@@ -4,12 +4,14 @@ import { isPositiveInteger } from "../../lib/validation.js";
 import { EVENT_STATUS } from "../../lib/eventStatus.js";
 import { getPublisher } from "../../lib/rabbitPublisher.js";
 import {
+  routeParam,
   EVENT_COLUMNS,
   authorizeCoordinatorReview,
   loadEventForClarification,
   type AssignmentEventRow,
   eventDisplayName,
 } from "./shared.js";
+import { clock } from "../../lib/clock.js";
 
 /**
  * Review controller: the assigned coordinator asks the organiser questions
@@ -36,7 +38,7 @@ const REJECTABLE_STATUSES = new Set<string>([EVENT_STATUS.Requested, EVENT_STATU
  * authorizeCoordinatorReview). Sets status to "Planning".
  */
 reviewRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -69,7 +71,7 @@ reviewRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
     .from("events")
     .update({
       status: "Planning",
-      decided_at: new Date().toISOString(),
+      decided_at: clock.now().toISOString(),
       decided_by: user.id,
     })
     .eq("id", event.id)
@@ -102,7 +104,7 @@ reviewRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
  * authorizeCoordinatorReview per AC5).
  */
 reviewRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -123,7 +125,7 @@ reviewRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
     .update({
       status: "Rejected",
       review_outcome: reason,
-      decided_at: new Date().toISOString(),
+      decided_at: clock.now().toISOString(),
       decided_by: user.id,
     })
     .eq("id", event.id)
@@ -167,7 +169,7 @@ const CLARIFICATION_REQUESTABLE_STATUSES = new Set<string>([...COORDINATOR_REVIE
  * that leaves approval blocked (AC1's "no outstanding clarification").
  */
 reviewRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -189,7 +191,7 @@ reviewRouter.post("/:id/request-clarification", async (req: AuthedRequest, res) 
       status: "Clarification Requested",
       status_before_clarification: event.status,
       review_outcome: message,
-      decided_at: new Date().toISOString(),
+      decided_at: clock.now().toISOString(),
       decided_by: user.id,
     })
     .eq("id", event.id)
@@ -241,7 +243,7 @@ const CLARIFICATION_COLUMNS = "id, parent_id, author_id, author_role, message, r
 
 /** AC3: the full exchange, chronological, for anyone with access to the event. */
 reviewRouter.get("/:id/clarifications", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForClarification(req, res, eventId);
   if (!event) return;
 
@@ -268,7 +270,7 @@ reviewRouter.get("/:id/clarifications", async (req: AuthedRequest, res) => {
  * asking without a way to re-open a request that's already flagged.
  */
 reviewRouter.post("/:id/clarifications", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -300,7 +302,7 @@ reviewRouter.post("/:id/clarifications", async (req: AuthedRequest, res) => {
 
 /** Either party replies within a question's thread. */
 reviewRouter.post("/:id/clarifications/:questionId/replies", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await loadEventForClarification(req, res, eventId);
   if (!event) return;
 
@@ -319,7 +321,7 @@ reviewRouter.post("/:id/clarifications/:questionId/replies", async (req: AuthedR
     return;
   }
 
-  const questionId = Array.isArray(req.params.questionId) ? req.params.questionId[0] : req.params.questionId;
+  const questionId = routeParam(req.params.questionId);
   if (!isPositiveInteger(questionId)) {
     res.status(404).json({ error: "Question not found" });
     return;
@@ -372,7 +374,7 @@ reviewRouter.post("/:id/clarifications/:questionId/replies", async (req: AuthedR
  * on the event is resolved, /approve unblocks (see its status check).
  */
 reviewRouter.post("/:id/clarifications/:questionId/resolve", async (req: AuthedRequest, res) => {
-  const eventId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const eventId = routeParam(req.params.id);
   const event = await authorizeCoordinatorReview(req, res, eventId);
   if (!event) return;
 
@@ -381,7 +383,7 @@ reviewRouter.post("/:id/clarifications/:questionId/resolve", async (req: AuthedR
     return;
   }
 
-  const questionId = Array.isArray(req.params.questionId) ? req.params.questionId[0] : req.params.questionId;
+  const questionId = routeParam(req.params.questionId);
   if (!isPositiveInteger(questionId)) {
     res.status(404).json({ error: "Question not found" });
     return;
