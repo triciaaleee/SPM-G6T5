@@ -102,19 +102,21 @@ The event status machine is **fixed**. Use exactly these status values (exact ca
 ### Diagram
 
 ```
-  (pre-process)         (lifecycle START)
- ┌─────────┐  submit   ┌───────────────┐  Lead assigns  ┌───────────────┐              ┌─────────────────────────┐
- │  Draft  │ ────────▶ │  Unassigned   │ ─────────────▶ │   Requested   │ ◀──────────▶ │ Clarification Requested │
- └─────────┘           └───────────────┘                └───────┬───────┘              └─────────────────────────┘
-  optional                                                      │
-                                                    ┌───────────┴───────────┐
-                                                    ▼                       ▼
-                                            ┌───────────────┐       ┌───────────────┐
-                                            │   Planning    │       │   Rejected    │  END
-                                            └───┬───────┬───┘       └───────────────┘
-                                                │  ▲    └────────▶ Clarification Requested (returns to Planning)
-                  coordinator submits for │  │ safety: changes requested / rejected
-                  safety review           ▼  │
+  (pre-process)      (lifecycle START)                                 ┌───────────────┐
+                                                    ┌─ rejects ───────▶│    Rejected   │ END
+                                                    │                  └───────────────┘
+                                                    │                          ▲ coordinator rejects, from either origin
+┌─────────┐         ┌──────────────┐        ┌───────┴───────┐     ┌────────────┴────────────┐
+│  Draft  │─submit─▶│  Unassigned  │─assign▶│   Requested   │◀───▶│ Clarification Requested │
+└─────────┘         └──────────────┘        └───┬───────────┘     └─────────────────────────┘
+                                                │ coordinator approves               ▲ coordinator asks / organiser responds
+                                                ▼                                    │
+                                            ┌───────────────┐                        │
+                                            │    Planning   │◀───────────────────────┘
+                                            └───┬───────────┘
+                                                │       ▲ safety: changes requested / rejected
+                     coordinator submits for    │       │
+                     safety review              ▼       │
                                             ┌───────────────┐
                                             │ Safety Review │
                                             └───────┬───────┘
@@ -131,6 +133,10 @@ The event status machine is **fixed**. Use exactly these status values (exact ca
                                             ┌───────────────┐
                                             │   Completed   │  END
                                             └───────────────┘
+
+  Unassigned ──▶ Requested: the Event Coordinator Lead assigns the request.
+  Clarification Requested always returns to the status it came from
+  (Requested or Planning), or is rejected by the coordinator from either.
 
   Cancelled (END): the Organiser can cancel from any active status
   (Unassigned, Requested, Clarification Requested, Planning,
