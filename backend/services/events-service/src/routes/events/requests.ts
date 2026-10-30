@@ -404,7 +404,9 @@ requestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   );
 
   // Equipment and venues can only be booked from Planning on, so an earlier edit has nothing to move or re-check.
-  if (!isDraftSubmit && !PRE_PLANNING_STATUSES.has(existing.status)) {
+  // A clarification response is judged by the status the event came from, not by "Clarification Requested".
+  const announceStatus = isClarificationResponse ? existing.status_before_clarification || EVENT_STATUS.Requested : existing.status;
+  if (!isDraftSubmit && !PRE_PLANNING_STATUSES.has(announceStatus)) {
     const newDetails = result.value as unknown as Record<string, unknown>;
     const announced = {
       id: existing.id,

@@ -197,6 +197,54 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
     targetRequestId = created.id;
   }
 
+  const rowsToUpsert = [
+    ...upsertedCritical.map((change) => ({ ...change, isCritical: true })),
+    ...nonCriticalChanges.map((change) => ({ field: change.field, oldValue: change.oldValue, newValue: change.newValue, isCritical: false })),
+  ];
+
+  // The writes below are separate statements, not one transaction, so a failure part-way would leave the request
+  // and the event disagreeing (a request recorded as applied that never reached the event). undoWrites puts back
+  // what this call changed before the 500 goes out. It is best-effort: if it fails too, it is only logged.
+  const createdHere = !openRequest;
+  const requestId = targetRequestId as number;
+  let detailsApplied = false;
+  const undoWrites = async (): Promise<void> => {
+    try {
+      if (detailsApplied) {
+        const { error } = await supabase.from("events").update({ submitted_details: current }).eq("id", existing.id);
+        if (error) throw error;
+      }
+      if (createdHere) {
+        // The request's fields go with it (on delete cascade, migration 0036).
+        const { error } = await supabase.from("change_requests").delete().eq("id", requestId);
+        if (error) throw error;
+        return;
+      }
+      const touched = rowsToUpsert.map((row) => row.field);
+      const addedFields = touched.filter((field) => !openFields.some((open) => open.field === field));
+      if (addedFields.length > 0) {
+        const { error } = await supabase.from("change_request_fields").delete().eq("request_id", requestId).in("field", addedFields);
+        if (error) throw error;
+      }
+      const toRestore = openFields.filter((open) => touched.includes(open.field) || revertedFields.includes(open.field));
+      if (toRestore.length > 0) {
+        const { error } = await supabase.from("change_request_fields").upsert(
+          toRestore.map((open) => ({
+            request_id: requestId,
+            field: open.field,
+            old_value: open.old_value,
+            new_value: open.new_value,
+            is_critical: open.is_critical,
+          })),
+          { onConflict: "request_id,field" },
+        );
+        if (error) throw error;
+      }
+    } catch (err) {
+      console.error(`events-service: could not undo a failed change request on event ${existing.id}`, err);
+    }
+  };
+
   if (revertedFields.length > 0 && targetRequestId) {
     const { error: deleteError } = await supabase
       .from("change_request_fields")
@@ -204,15 +252,12 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
       .eq("request_id", targetRequestId)
       .in("field", revertedFields);
     if (deleteError) {
+      await undoWrites();
       res.status(500).json({ error: "Failed to raise change request" });
       return;
     }
   }
 
-  const rowsToUpsert = [
-    ...upsertedCritical.map((change) => ({ ...change, isCritical: true })),
-    ...nonCriticalChanges.map((change) => ({ field: change.field, oldValue: change.oldValue, newValue: change.newValue, isCritical: false })),
-  ];
   if (rowsToUpsert.length > 0 && targetRequestId) {
     const { error: upsertError } = await supabase.from("change_request_fields").upsert(
       rowsToUpsert.map((change) => ({
@@ -225,6 +270,7 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
       { onConflict: "request_id,field" },
     );
     if (upsertError) {
+      await undoWrites();
       res.status(500).json({ error: "Failed to raise change request" });
       return;
     }
@@ -245,17 +291,44 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
       .eq("id", existing.id);
 
     if (updateError) {
+      await undoWrites();
       res.status(500).json({ error: "Failed to apply change request" });
       return;
     }
-
-    await recordEventHistory(
-      supabase,
-      existing.id,
-      nonCriticalChanges.map((change) => ({ field: change.field, oldValue: change.oldValue, newValue: change.newValue })),
-      user.id,
-    );
+    detailsApplied = true;
   }
+
+  const eventName = eventDisplayName(existing as unknown as AssignmentEventRow);
+  let notificationsFailed = false;
+  let autoResolved = false;
+  let flippedToNeedsReview = false;
+
+  // A held critical field puts a Confirmed event into Needs Review until the
+  // coordinator decides it (AGENTS.md section 3). The status filter makes it
+  // a no-op if the event already moved on; an event already in Needs Review
+  // stays there.
+  if (upsertedCritical.length > 0 && existing.status === EVENT_STATUS.Confirmed) {
+    const { error: reviewError } = await supabase
+      .from("events")
+      .update({ status: EVENT_STATUS.NeedsReview })
+      .eq("id", existing.id)
+      .eq("status", EVENT_STATUS.Confirmed);
+    if (reviewError) {
+      await undoWrites();
+      res.status(500).json({ error: "Failed to raise change request" });
+      return;
+    }
+    flippedToNeedsReview = true;
+  }
+
+  // History is written only once the writes above have all landed, so a failure never leaves entries for a change
+  // that was undone.
+  await recordEventHistory(
+    supabase,
+    existing.id,
+    nonCriticalChanges.map((change) => ({ field: change.field, oldValue: change.oldValue, newValue: change.newValue })),
+    user.id,
+  );
 
   // Critical fields are held, not applied (E3-8 AC1) — already recorded
   // above in change_request_fields; just the pending-review event_history
@@ -291,24 +364,7 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
     user.id,
   );
 
-  const eventName = eventDisplayName(existing as unknown as AssignmentEventRow);
-  let notificationsFailed = false;
-  let autoResolved = false;
-
-  // A held critical field puts a Confirmed event into Needs Review until the
-  // coordinator decides it (AGENTS.md section 3). The status filter makes it
-  // a no-op if the event already moved on; an event already in Needs Review
-  // stays there.
-  if (upsertedCritical.length > 0 && existing.status === EVENT_STATUS.Confirmed) {
-    const { error: reviewError } = await supabase
-      .from("events")
-      .update({ status: EVENT_STATUS.NeedsReview })
-      .eq("id", existing.id)
-      .eq("status", EVENT_STATUS.Confirmed);
-    if (reviewError) {
-      res.status(500).json({ error: "Failed to raise change request" });
-      return;
-    }
+  if (flippedToNeedsReview) {
     await recordEventHistory(
       supabase,
       existing.id,
@@ -335,6 +391,7 @@ changeRequestsRouter.post("/:id/change-requests", async (req: AuthedRequest, res
       })
       .eq("id", targetRequestId);
     if (resolveError) {
+      await undoWrites();
       res.status(500).json({ error: "Failed to raise change request" });
       return;
     }

@@ -18,6 +18,19 @@ export interface HandleEventCancelledDeps {
  * no bookings.
  */
 export async function handleEventCancelled(msg: InboundMessage, deps: HandleEventCancelledDeps): Promise<void> {
+  await releaseForEvent(msg, deps, "event_cancelled");
+}
+
+/**
+ * The release shared by `event.cancelled` and `event.rejected` (a Planning
+ * event rejected through a clarification may already hold reservations,
+ * AGENTS.md section 3). `reason` is what Technical Support is told.
+ */
+export async function releaseForEvent(
+  msg: InboundMessage,
+  deps: HandleEventCancelledDeps,
+  reason: "event_cancelled" | "event_rejected",
+): Promise<void> {
   if (msg.eventId === null) return;
 
   // The units reserved for the event are its equipment_booking rows. Releasing
@@ -40,6 +53,6 @@ export async function handleEventCancelled(msg: InboundMessage, deps: HandleEven
     eventId: msg.eventId,
     actorId: msg.actorId,
     recipients: { userIds: [], roles: ["technical_support"] },
-    data: { eventName, reason: "event_cancelled" },
+    data: { eventName, reason },
   });
 }

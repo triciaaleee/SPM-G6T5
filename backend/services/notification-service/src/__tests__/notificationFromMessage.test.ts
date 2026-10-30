@@ -738,6 +738,43 @@ describe("handleInboundMessage", () => {
     ]);
   });
 
+  it("says a rejected event's equipment was released because it was rejected", async () => {
+    const { supabase, insert } = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "equipment.released",
+        eventId: 7,
+        recipients: { userIds: [], roles: ["technical_support"] },
+        data: { eventName: "Alumni Gala", reason: "event_rejected" },
+      }),
+      { supabase, resolveRoleUserIds: vi.fn().mockResolvedValue(["TS-0001"]) },
+    );
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        title: "Equipment reservations released",
+        body: "Alumni Gala was rejected, so its equipment reservations were released back to inventory.",
+        link: "/equipment-requests/event/7",
+      }),
+    ]);
+  });
+
+  it("says a rejected event's venue booking was released because it was rejected", async () => {
+    const { supabase, insert } = buildSupabase();
+    await handleInboundMessage(
+      buildMsg({
+        type: "booking.withdrawn",
+        data: { venueName: "Auditorium A", eventName: "Alumni Gala", reason: "event_rejected" },
+      }),
+      { supabase, resolveRoleUserIds: vi.fn().mockResolvedValue([]) },
+    );
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        title: "Auditorium A — booking released",
+        body: "Alumni Gala was rejected, so its booking for Auditorium A was released and the venue is free again.",
+      }),
+    ]);
+  });
+
   it("renders equipment.reservation_clash with the event page for the coordinator and the request for Technical Support", async () => {
     const { supabase, insert } = buildSupabase();
     await handleInboundMessage(
@@ -1085,6 +1122,20 @@ describe("handleInboundMessage", () => {
 
     expect(supabase.from).not.toHaveBeenCalled();
     expect(resolveRoleUserIds).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("skips event.rejected quietly: the services holding the event's arrangements act on it, nobody is notified", async () => {
+    const { supabase, insert } = buildSupabase();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleInboundMessage(buildMsg({ type: "event.rejected", recipients: { userIds: [], roles: [] } }), {
+      supabase,
+      resolveRoleUserIds: vi.fn(),
+    });
+
     expect(insert).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
