@@ -177,6 +177,20 @@ The messages above are best effort: if the broker is down when a service publish
 
 Delivery is at-least-once: a retry reuses the stored `messageId`, so every consumer of `event.cancelled` must be safe to run twice. Today they are (each only matches rows still active). The store is not in the same transaction as the cancellation, so a crash between the two can still lose the message; the window is far smaller than a broker outage.
 
+### Known limitations
+
+**No reconnection after a broker drop.** No service reconnects its consumer once the RabbitMQ connection drops (the broker restarts, or the network blips). The team decided on 2026-10-31 not to fix this before the code freeze: writing reconnection code, or switching to a reconnecting library such as `amqp-connection-manager`, would mean retesting every service that uses RabbitMQ. What happens instead:
+
+| Service | On a broker drop |
+|---|---|
+| notification-service, registration-service | The error is logged and the REST API keeps running, but the consumer stops taking messages. `/health` still returns `{"ok":true}`, so neither the healthcheck nor Docker's `restart: unless-stopped` notices. registration-service's publisher reconnects on its next publish. |
+| events-service, venue-service, equipment-service | Their connections have no `error` listener, so the drop ends the process. Under Docker the restart policy brings it back; under `npm run dev` it stays down until restarted (the other services keep running). |
+| chat-service | Publishes only. It logs the error and reconnects on its next publish. |
+
+Workaround: once RabbitMQ is back, restart the affected services (`docker compose restart notification-service registration-service`, or stop and rerun `npm run dev`). Queues are durable and messages are published as persistent, so whatever reached a queue while its consumer was stopped is processed after the restart. Messages published while the broker itself was down are dropped, except those events-service sends through its outbox (above).
+
+**A failed role lookup holds back the whole notification.** A message can name users and roles together, e.g. `event.cancelled` for an event with no coordinator yet goes to the Organiser and to every `coordinator_lead`. notification-service asks user-service who holds each role before writing anything. If that lookup fails, the message goes to `notification-service.dlq` and nobody on it is notified, including the users it names. This is deliberate: before, a failed lookup was treated as "nobody holds this role" and the message was acked and lost. Nothing replays the DLQ automatically; dead-lettered messages can be inspected in the management UI (section 6).
+
 ## 5. Backlog alignment
 
 Every message above traces to an acceptance criterion or an E7-2 matrix row. The last gaps were closed on 2026-10-10: E7-2 (#62) gained rows for booking withdrawals, cancelled equipment requests, attendee withdrawals and pending bookings hit by unavailability, and E6-4 (#57) gained the withdrawal notification criterion.
