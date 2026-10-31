@@ -44,7 +44,15 @@ export function connectAndConsume(url: string, handler: MessageHandler): RabbitC
 
   async function start(): Promise<void> {
     connection = await amqp.connect(url);
+    // amqplib emits "error" when the broker drops; with no listener Node
+    // throws it and the whole service dies, taking the REST API with it.
+    connection.on("error", (err: unknown) => {
+      console.error("registration-service: RabbitMQ connection error", err);
+    });
     channel = await connection.createChannel();
+    channel.on("error", (err: unknown) => {
+      console.error("registration-service: RabbitMQ channel error", err);
+    });
 
     await channel.assertExchange(EXCHANGE, "topic", { durable: true });
     await channel.assertExchange(DLX, "topic", { durable: true });
@@ -63,14 +71,21 @@ export function connectAndConsume(url: string, handler: MessageHandler): RabbitC
     await channel.consume(QUEUE, (msg) => {
       if (!msg) return;
       void (async () => {
+        let processed = true;
         try {
           const parsed = JSON.parse(msg.content.toString("utf8")) as InboundMessage;
           console.log(`registration-service: consumed "${parsed.type}" from RabbitMQ (messageId=${parsed.messageId})`);
           await handler(parsed);
-          channel!.ack(msg);
         } catch (err) {
+          processed = false;
           console.error("registration-service: failed to process message, sending to DLQ", err);
-          channel!.nack(msg, false, false);
+        }
+        try {
+          if (processed) channel!.ack(msg);
+          else channel!.nack(msg, false, false);
+        } catch (err) {
+          // The channel closed while the handler ran. Thrown from here it would end the process; the broker redelivers the message.
+          console.error("registration-service: RabbitMQ channel closed before the message was settled", err);
         }
       })();
     });

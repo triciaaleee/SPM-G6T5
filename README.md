@@ -182,6 +182,14 @@ The unit suites run the real routers and the real auth middleware against `helpe
 | `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. Rows use `ZINT-NOTIF-` recipients and are deleted in `afterAll`. No broker or user-service is needed: role lookups are stubbed, and the boot test blanks `RABBITMQ_URL` so it never consumes from the shared queue. |
 | `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Takes about 2 minutes. |
 
+`registration-service` has the same layers. Run these from `backend/services/registration-service`:
+
+| Command | What it does |
+|---|---|
+| `npm run test:coverage` | `npm test` with v8 coverage. Fails below 100% statements, branches, functions and lines (`src/index.ts` and `*.fake.ts` are excluded). |
+| `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. It creates `ZINT-REG-` throwaway users and events and deletes them in `afterAll`. The other services are replaced at their client modules and RabbitMQ by a fake, and the boot test blanks `RABBITMQ_URL` so it never consumes from the shared queue. |
+| `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Takes about 3 minutes. |
+
 ### How the tests stay deterministic
 
 `events-service` follows these rules, so a test never depends on when or where it runs:
