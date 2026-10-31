@@ -21,6 +21,7 @@ export function validateStockChange(input: unknown): Validation<StockChange> {
   const direction = body.direction;
   if (direction !== "add" && direction !== "remove") fields.direction = "Choose add or remove.";
 
+  // Stryker disable next-line ConditionalExpression,StringLiteral,MethodExpression: a blank quantity becomes 0 or stays a string, and is refused either way
   const raw = typeof body.quantity === "string" && body.quantity.trim() !== "" ? Number(body.quantity) : body.quantity;
   if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > MAX_QUANTITY) {
     fields.quantity = `Enter a whole number from 1 to ${MAX_QUANTITY}.`;

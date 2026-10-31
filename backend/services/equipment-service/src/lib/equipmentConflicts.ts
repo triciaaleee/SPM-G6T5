@@ -75,12 +75,14 @@ export async function unitsBlocked(
   }[];
   const otherEventIds = [...new Set(bookings.map((b) => b.event_id).filter((id) => id !== options.eventId))];
 
+  // Stryker disable next-line ConditionalExpression,EqualityOperator: fetchEventBookingInfo([]) answers without a request, so asking for no events is the same as skipping the call
   const otherInfo = otherEventIds.length > 0 ? await fetchEventBookingInfo(otherEventIds, authorization) : { status: "ok" as const, events: [] };
   const otherEventsById = new Map(otherInfo.status === "ok" ? otherInfo.events.map((e) => [e.id, e]) : []);
 
   if (options.refreshStoredWindows) {
     const stale = new Map<number, OccupiedWindow>();
     for (const booking of bookings) {
+      // Stryker disable next-line ConditionalExpression,LogicalOperator: only skips work: this event is never in otherEventsById, and a repeated event just recomputes the same window
       if (booking.event_id === options.eventId || stale.has(booking.event_id)) continue;
       const current = otherEventsById.has(booking.event_id) ? occupiedWindow(otherEventsById.get(booking.event_id)!) : null;
       if (current && (booking.window_start_ms !== current.startMs || booking.window_end_ms !== current.endMs)) {
@@ -99,8 +101,10 @@ export async function unitsBlocked(
 
   const blocked = new Set<number>();
   for (const booking of bookings) {
+    // Stryker disable next-line ConditionalExpression: adding a unit to the Set twice changes nothing
     if (blocked.has(booking.equipment_id)) continue;
 
+    // Stryker disable next-line ConditionalExpression,BlockStatement: an own-event booking would fall through to `!otherWindow` and block the unit all the same
     if (booking.event_id === options.eventId) {
       // Only reachable when treatOwnEventClaimsAsBlocking is true — this
       // event's own window, so it always overlaps itself.
