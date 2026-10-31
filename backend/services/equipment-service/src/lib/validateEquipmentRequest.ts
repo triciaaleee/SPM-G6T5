@@ -73,6 +73,7 @@ export function validateEquipmentItems(input: unknown): ValidationResult {
       }
     }
 
+    // Stryker disable next-line StringLiteral: `value` is only returned when no field failed, so whether a bad item is collected is unobservable
     if (!fields[`items[${index}].equipmentCatalogId`] && quantity !== undefined) {
       value.push({
         equipmentCatalogId: Number(item.equipmentCatalogId),
@@ -134,6 +135,7 @@ export interface StatusUpdateResult {
 export function validateStatusUpdate(input: StatusUpdateInput, items: StatusUpdateItem[]): StatusUpdateResult {
   const fields: Record<string, string> = {};
 
+  // Stryker disable next-line StringLiteral: any fallback that isn't a real status fails the status check the same way
   const status = typeof input.status === "string" ? input.status.trim() : "";
   if (!(EQUIPMENT_REQUEST_STATUSES as readonly string[]).includes(status)) {
     fields.status = `Status must be one of: ${EQUIPMENT_REQUEST_STATUSES.join(", ")}.`;
@@ -146,6 +148,7 @@ export function validateStatusUpdate(input: StatusUpdateInput, items: StatusUpda
 
   const fulfillments: ValidatedFulfillment[] = [];
   if (status === "Partially Fulfilled" && !fields.status) {
+    // Stryker disable next-line ArrayDeclaration: a junk row maps to NaN and matches no item, like having no rows
     const rawFulfillments = Array.isArray(input.fulfillments) ? input.fulfillments : [];
     const byItemId = new Map(
       rawFulfillments.map((raw) => {
@@ -157,6 +160,7 @@ export function validateStatusUpdate(input: StatusUpdateInput, items: StatusUpda
     for (const item of items) {
       const raw = byItemId.get(item.id);
       const numericValue = Number(raw);
+      // Stryker disable next-line ConditionalExpression,LogicalOperator: isInteger already rejects undefined (NaN) and Infinity, so the first two tests are redundant
       if (raw === undefined || !Number.isFinite(numericValue) || !Number.isInteger(numericValue)) {
         fields[`fulfillments[${item.id}]`] = "Enter how many of this item were fulfilled.";
       } else if (numericValue < 0 || numericValue > item.quantity) {
@@ -170,6 +174,7 @@ export function validateStatusUpdate(input: StatusUpdateInput, items: StatusUpda
   if (Object.keys(fields).length > 0) {
     return { valid: false, fields };
   }
+  // Stryker disable next-line ConditionalExpression,StringLiteral: a Partially Fulfilled update without a note has already failed validation
   const keptNote = status === "Partially Fulfilled" && note !== "" ? note : null;
   return { valid: true, fields: {}, value: { status: status as EquipmentRequestStatus, note: keptNote, fulfillments } };
 }
@@ -200,6 +205,7 @@ export function validateAmendedItems(input: unknown): AmendmentResult {
   const fields: Record<string, string> = {};
   const seen = new Set<number>();
   const value = (base.value as ValidatedEquipmentItem[]).map((item, index): ValidatedAmendedItem => {
+    // Stryker disable next-line OptionalChaining: base validation has already rejected any row that isn't an object
     const rawId = raw[index]?.itemId;
     if (rawId === undefined || rawId === null || rawId === "") return item;
 

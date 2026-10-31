@@ -43,16 +43,15 @@ export interface AttendeeEventInfo {
 export type FetchEventsResult = { status: "ok"; events: AttendeeEventInfo[] } | { status: "error" };
 
 async function getEvents(path: string, authorization: string): Promise<FetchEventsResult> {
-  let res: Response;
   try {
-    res = await fetch(`${eventsServiceUrl()}${path}`, { headers: { Authorization: authorization } });
+    const res = await fetch(`${eventsServiceUrl()}${path}`, { headers: { Authorization: authorization } });
+    if (!res.ok) return { status: "error" };
+
+    const body = (await res.json()) as { events?: AttendeeEventInfo[] };
+    return { status: "ok", events: body.events ?? [] };
   } catch {
     return { status: "error" };
   }
-  if (!res.ok) return { status: "error" };
-
-  const body = (await res.json()) as { events?: AttendeeEventInfo[] };
-  return { status: "ok", events: body.events ?? [] };
 }
 
 /** Attendee-facing info for several events. Missing ids (and drafts) simply aren't returned. */

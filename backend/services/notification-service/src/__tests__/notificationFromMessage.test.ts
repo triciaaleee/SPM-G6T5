@@ -25,8 +25,8 @@ function buildMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
   };
 }
 
-function buildSupabase(options: { existing?: unknown[]; insertError?: unknown } = {}) {
-  const existingQuery = query({ data: options.existing ?? [], error: null });
+function buildSupabase(options: { existing?: unknown[]; insertError?: unknown; lookup?: Record<string, unknown> } = {}) {
+  const existingQuery = query(options.lookup ?? { data: options.existing ?? [], error: null });
   const insert = vi.fn().mockResolvedValue({ error: options.insertError ?? null });
   const supabase = {
     from: vi.fn(() => ({ select: existingQuery.select, insert })),
@@ -1146,5 +1146,117 @@ describe("handleInboundMessage", () => {
     const resolveRoleUserIds = vi.fn().mockResolvedValue([]);
 
     await expect(handleInboundMessage(buildMsg(), { supabase, resolveRoleUserIds })).rejects.toThrow("db down");
+  });
+
+  it("writes every column of the row", async () => {
+    const { supabase, insert } = buildSupabase();
+
+    await handleInboundMessage(buildMsg(), { supabase, resolveRoleUserIds: vi.fn() });
+
+    expect(supabase.from.mock.calls).toEqual([["notifications"], ["notifications"]]);
+    expect(insert).toHaveBeenCalledWith([
+      {
+        recipient_id: "VEN-0001",
+        type: "booking.withdrawn",
+        title: "Auditorium A — booking released",
+        body: "your event was cancelled, so its booking for Auditorium A was released and the venue is free again.",
+        link: "/events/7",
+        event_id: 7,
+        message_id: "11111111-1111-1111-1111-111111111111",
+        actor_id: "COORD-0003",
+        occurred_at: "2026-10-10T08:15:00Z",
+      },
+    ]);
+  });
+
+  it("looks a redelivered message up by its messageId", async () => {
+    const { supabase, existingQuery } = buildSupabase();
+
+    await handleInboundMessage(buildMsg(), { supabase, resolveRoleUserIds: vi.fn() });
+
+    expect(existingQuery.select).toHaveBeenCalledWith("id");
+    expect(existingQuery.eq).toHaveBeenCalledWith("message_id", "11111111-1111-1111-1111-111111111111");
+    expect(existingQuery.limit).toHaveBeenCalledWith(1);
+  });
+
+  it("throws when the dedupe lookup fails, so the caller nacks", async () => {
+    const failure = { message: "lookup failed" };
+    const { supabase, insert } = buildSupabase({ lookup: { data: null, error: failure } });
+
+    await expect(handleInboundMessage(buildMsg(), { supabase, resolveRoleUserIds: vi.fn() })).rejects.toBe(failure);
+
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("treats a lookup with no data as not yet recorded", async () => {
+    const { supabase, insert } = buildSupabase({ lookup: { data: null, error: null } });
+
+    await handleInboundMessage(buildMsg(), { supabase, resolveRoleUserIds: vi.fn() });
+
+    expect(insert).toHaveBeenCalledOnce();
+  });
+
+  it("notifies someone only once when they are named directly and through a role", async () => {
+    const { supabase, insert } = buildSupabase();
+    const resolveRoleUserIds = vi.fn(async (role: string) => (role === "a" ? ["LEAD-1", "U-1"] : ["LEAD-1", "LEAD-2"]));
+
+    await handleInboundMessage(buildMsg({ recipients: { userIds: ["U-1"], roles: ["a", "b"] } }), { supabase, resolveRoleUserIds });
+
+    expect(insert.mock.calls[0][0].map((r: { recipient_id: string }) => r.recipient_id)).toEqual(["U-1", "LEAD-1", "LEAD-2"]);
+  });
+
+  it("inserts nothing and warns about nothing when a message has no recipients", async () => {
+    const { supabase, insert } = buildSupabase();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleInboundMessage(buildMsg({ recipients: { userIds: [], roles: ["nobody_holds_this"] } }), {
+      supabase,
+      resolveRoleUserIds: vi.fn().mockResolvedValue([]),
+    });
+
+    expect(insert).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("throws when a role lookup fails, so the message is dead-lettered instead of lost", async () => {
+    const { supabase, insert } = buildSupabase();
+    const failure = new Error("user-service returned 500");
+
+    await expect(
+      handleInboundMessage(buildMsg({ recipients: { userIds: ["U-1"], roles: ["coordinator_lead"] } }), {
+        supabase,
+        resolveRoleUserIds: vi.fn().mockRejectedValue(failure),
+      }),
+    ).rejects.toBe(failure);
+
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("names the type it has no template for", async () => {
+    const { supabase } = buildSupabase();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleInboundMessage(buildMsg({ type: "something.unknown" }), { supabase, resolveRoleUserIds: vi.fn() });
+
+    expect(warn).toHaveBeenCalledWith('notification-service: no template for message type "something.unknown", skipping');
+    warn.mockRestore();
+  });
+
+  it("treats a type named after a built-in object property as having no template", async () => {
+    const { supabase, insert } = buildSupabase();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleInboundMessage(buildMsg({ type: "constructor" }), { supabase, resolveRoleUserIds: vi.fn() });
+
+    expect(insert).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it.each(["event.rescheduled", "event.attendance_changed", "event.rejected"])("doesn't even look up %s", async (type) => {
+    const { supabase } = buildSupabase();
+    await handleInboundMessage(buildMsg({ type }), { supabase, resolveRoleUserIds: vi.fn() });
+    expect(supabase.from).not.toHaveBeenCalled();
   });
 });
