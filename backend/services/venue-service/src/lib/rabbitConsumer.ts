@@ -2,7 +2,7 @@ import amqp from "amqplib";
 
 /**
  * The envelope every publisher on `connectsphere.events` uses
- * (c4_diagrams/RabbitMQ.md section 2).
+ * (RabbitMQ.md section 2).
  */
 export interface InboundMessage {
   messageId: string;

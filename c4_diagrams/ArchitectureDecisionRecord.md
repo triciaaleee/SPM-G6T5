@@ -227,7 +227,7 @@ A9 and A10 come from AGENTS.md section 3, A11 and A12 from section 3a. A9 has th
 
 ## 4. Messaging rules
 
-Every publisher and consumer on `connectsphere.events` follows these. Which messages exist, who sends them and who receives them is in [`RabbitMQ.md`](RabbitMQ.md).
+Every publisher and consumer on `connectsphere.events` follows these. Which messages exist, who sends them and who receives them is in [`RabbitMQ.md`](../RabbitMQ.md).
 
 | ID | Rule | Why |
 |---|---|---|
