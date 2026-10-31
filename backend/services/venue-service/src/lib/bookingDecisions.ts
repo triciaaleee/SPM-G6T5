@@ -128,7 +128,7 @@ function expiredMessage(
     eventId: booking.event_id,
     actorId: null,
     recipients: { userIds: [coordinatorId], roles: [] },
-    data: { eventName: eventLabel(event, booking.event_id), venueName: venue.name },
+    data: { eventName: eventLabel(event, booking.event_id), venueName: venue.name, expiresAt: booking.hold_expires_at },
   };
 }
 
