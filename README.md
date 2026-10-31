@@ -163,6 +163,14 @@ The integration tests seed throwaway rows under a `ZINT-` prefix and delete them
 | `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. It creates `ZEVT-` throwaway users and events and deletes them in `afterAll` (and sweeps any a crashed run left behind). RabbitMQ is replaced by an in-memory publisher, so only Supabase is needed. |
 | `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Sets `MUTATION_RUN=1`, which leaves out `routeMatrix.test.ts` (the route sweep) so each mutant runs fast. The TypeScript checker drops mutants that could never compile. A full run takes about 20 minutes; add `-- --mutate 'src/lib/**/*.ts'` for a quicker run on the pure modules, or `--mutate 'src/routes/events/review.ts:100-200'` for a line range. Run only one Stryker at a time per folder, or give a second run its own `--tempDirName`. Mutants that cannot change behaviour are marked `// Stryker disable next-line <Mutator>: <why>` in the source. |
 
+`registration-service` has the same layers. Run these from `backend/services/registration-service`:
+
+| Command | What it does |
+|---|---|
+| `npm run test:coverage` | `npm test` with v8 coverage. Fails below 100% statements, branches, functions and lines (`src/index.ts` and `*.fake.ts` are excluded). |
+| `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. It creates `ZINT-REG-` throwaway users and events and deletes them in `afterAll`. The other services are replaced at their client modules and RabbitMQ by a fake, and the boot test blanks `RABBITMQ_URL` so it never consumes from the shared queue. |
+| `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Takes about 3 minutes. |
+
 ### How the tests stay deterministic
 
 `events-service` follows these rules, so a test never depends on when or where it runs:

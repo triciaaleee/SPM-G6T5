@@ -785,3 +785,646 @@ describe("registration state (open / full / closed)", () => {
     expect(res.body.event.registrationState).toBe("CLOSED");
   });
 });
+
+describe("event ids", () => {
+  // events.id is a Postgres integer: past this, the query errors and the caller gets a 500 instead of a 400.
+  const TOO_BIG = "2147483648";
+
+  it.each([
+    ["GET", `/api/registrations/event/${TOO_BIG}/view`],
+    ["PATCH", `/api/registrations/event/${TOO_BIG}/withdraw`],
+  ])("%s %s refuses an id that doesn't fit the column, before any query", async (method, path) => {
+    const { app, from } = buildApp(attendee);
+    const res = await (method === "GET" ? request(app).get(path) : request(app).patch(path));
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Invalid event id" });
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("the roster refuses an id that doesn't fit the column", async () => {
+    const { app } = buildApp(organiser);
+    const res = await request(app).get(`/api/registrations/event/${TOO_BIG}`);
+    expect(res.status).toBe(400);
+    expect(clients.canViewEvent).not.toHaveBeenCalled();
+  });
+
+  it("registering refuses an id that doesn't fit the column", async () => {
+    const { app } = buildApp(attendee);
+    const res = await request(app).post("/api/registrations").send({ eventId: 2147483648 });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "eventId must be a positive integer", field: "eventId" });
+  });
+
+  it("accepts the largest id that fits", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [] });
+    const { app } = buildApp(attendee);
+    const res = await request(app).get("/api/registrations/event/2147483647/view");
+    expect(res.status).toBe(403);
+    expect(clients.fetchAttendeeEvents).toHaveBeenCalledWith([2147483647], "Bearer test-token");
+  });
+});
+
+describe("withdrawing while the organiser cancels", () => {
+  // The event is fetched between reading the place and giving it up, so a cancellation can land in between.
+  it("only gives up a place that is still Registered", async () => {
+    const updateQuery = query({ data: null, error: null }, { data: row({ status: "Withdrawn" }), error: null });
+    const { app } = buildApp(attendee, query({ data: null, error: null }, { data: row(), error: null }), updateQuery);
+
+    await request(app).patch("/api/registrations/event/1/withdraw");
+
+    expect(updateQuery.eq).toHaveBeenCalledWith("registration_id", 10);
+    expect(updateQuery.eq).toHaveBeenCalledWith("status", "Registered");
+  });
+
+  it("answers 409 and notifies nobody when the place is gone by the time it writes", async () => {
+    const updateQuery = query({ data: null, error: null });
+    const { app } = buildApp(attendee, query({ data: null, error: null }, { data: row(), error: null }), updateQuery);
+
+    const res = await request(app).patch("/api/registrations/event/1/withdraw");
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "You no longer hold a place for this event", code: "no_place" });
+    expect(publish).not.toHaveBeenCalled();
+  });
+});
+
+const COLUMNS = "registration_id, event_id, user_id, status, created_at, additional_info";
+const failed = { data: null, error: { message: "boom" } };
+
+describe("GET /open-events: details", () => {
+  it("answers 502 when the events can't be loaded", async () => {
+    clients.fetchOpenEvents.mockResolvedValue({ status: "error" });
+    const { app } = buildApp(attendee);
+    const res = await request(app).get("/api/registrations/open-events");
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Failed to load events" });
+  });
+
+  it("reads the caller's own status for just those events, on the registrations table", async () => {
+    const statuses = query({ data: [{ event_id: 1, status: "Withdrawn" }], error: null });
+    const { app, from } = buildApp(attendee, statuses);
+
+    const res = await request(app).get("/api/registrations/open-events");
+
+    expect(from).toHaveBeenCalledWith("registrations");
+    expect(statuses.select).toHaveBeenCalledWith("event_id, status");
+    expect(statuses.eq).toHaveBeenCalledWith("user_id", "ATT-0001");
+    expect(statuses.in).toHaveBeenCalledWith("event_id", [1]);
+    expect(clients.fetchOpenEvents).toHaveBeenCalledWith("Bearer test-token");
+    expect(clients.fetchVenueNames).toHaveBeenCalledWith([1], "Bearer test-token");
+    expect(res.body.events[0]).toEqual({
+      ...eventInfo(),
+      venues: ["Great Lawn"],
+      capacity: null,
+      slotsLeft: null,
+      registrationStatus: "Withdrawn",
+    });
+  });
+
+  it("answers 500 when the caller's statuses can't be loaded", async () => {
+    const { app } = buildApp(attendee, query(failed));
+    const res = await request(app).get("/api/registrations/open-events");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to load registrations" });
+  });
+
+  it("reads missing status rows as no registration", async () => {
+    const { app } = buildApp(attendee, query({ data: null, error: null }));
+    const res = await request(app).get("/api/registrations/open-events");
+    expect(res.body.events[0].registrationStatus).toBeNull();
+  });
+
+  it("counts only Registered places, only for capped events", async () => {
+    clients.fetchOpenEvents.mockResolvedValue({
+      status: "ok",
+      events: [eventInfo({ id: 1, capacity: 3 }), eventInfo({ id: 2 }), eventInfo({ id: 3, capacity: 1 })],
+    });
+    const counts = query({ data: [{ event_id: 1 }, { event_id: 1 }, { event_id: 3 }], error: null });
+    const { app } = buildApp(attendee, query({ data: [], error: null }), counts);
+
+    const res = await request(app).get("/api/registrations/open-events");
+
+    expect(counts.select).toHaveBeenCalledWith("event_id");
+    expect(counts.eq).toHaveBeenCalledWith("status", "Registered");
+    expect(counts.in).toHaveBeenCalledWith("event_id", [1, 3]);
+    expect(res.body.events.map((e: { slotsLeft: number | null }) => e.slotsLeft)).toEqual([1, null, 0]);
+  });
+
+  it("reads missing count rows as nobody registered", async () => {
+    clients.fetchOpenEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ capacity: 3 })] });
+    const { app } = buildApp(attendee, query({ data: [], error: null }), query({ data: null, error: null }));
+    const res = await request(app).get("/api/registrations/open-events");
+    expect(res.body.events[0].slotsLeft).toBe(3);
+  });
+
+  it("answers 500 when the places can't be counted", async () => {
+    clients.fetchOpenEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ capacity: 3 })] });
+    const { app } = buildApp(attendee, query({ data: [], error: null }), query(failed));
+    const res = await request(app).get("/api/registrations/open-events");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to load registrations" });
+  });
+
+  it("only shows FULL for an OPEN event with no places left", async () => {
+    clients.fetchOpenEvents.mockResolvedValue({
+      status: "ok",
+      events: [
+        eventInfo({ id: 1, capacity: 1, registrationState: "CLOSED" }),
+        eventInfo({ id: 2, capacity: 2, registrationState: "OPEN" }),
+        eventInfo({ id: 3, capacity: 1, registrationState: "OPEN" }),
+      ],
+    });
+    const counts = query({ data: [{ event_id: 1 }, { event_id: 2 }, { event_id: 3 }], error: null });
+    const { app } = buildApp(attendee, query({ data: [], error: null }), counts);
+
+    const res = await request(app).get("/api/registrations/open-events");
+
+    expect(res.body.events.map((e: { registrationState: string }) => e.registrationState)).toEqual(["CLOSED", "OPEN", "FULL"]);
+  });
+});
+
+describe("GET /user/:userId: details", () => {
+  it("reads the caller's rows newest first, asking for each event once", async () => {
+    const rows = query({ data: [row({ registration_id: 2 }), row({ registration_id: 1 })], error: null });
+    const { app, from } = buildApp(attendee, rows);
+
+    const res = await request(app).get("/api/registrations/user/ATT-0001");
+
+    expect(from).toHaveBeenCalledWith("registrations");
+    expect(rows.select).toHaveBeenCalledWith(COLUMNS);
+    expect(rows.eq).toHaveBeenCalledWith("user_id", "ATT-0001");
+    expect(rows.order).toHaveBeenCalledWith("created_at", { ascending: false });
+    expect(clients.fetchAttendeeEvents).toHaveBeenCalledWith([1], "Bearer test-token");
+    expect(clients.fetchVenueNames).toHaveBeenCalledWith([1], "Bearer test-token");
+    expect(res.body.registrations[0]).toEqual({
+      registrationId: 2,
+      eventId: 1,
+      userId: "ATT-0001",
+      status: "Registered",
+      createdAt: "2026-01-01T00:00:00Z",
+      additionalInfo: null,
+      event: {
+        name: "Freshman Orientation Fair",
+        description: "Booths and tours",
+        proposedDate: "2099-01-01",
+        startTime: "09:00",
+        endTime: "15:00",
+        venues: ["Great Lawn"],
+        accessibility: "Step-free entry",
+        organiserName: "Pat Organiser",
+      },
+    });
+  });
+
+  it("fills in what other services left out", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ organiserName: undefined })] });
+    clients.fetchVenueNames.mockResolvedValue({ status: "ok", venuesByEvent: new Map() });
+    const { app } = buildApp(attendee, query({ data: [row()], error: null }));
+
+    const res = await request(app).get("/api/registrations/user/ATT-0001");
+
+    expect(res.body.registrations[0].event).toMatchObject({ venues: [], organiserName: null });
+  });
+
+  it("answers 500 when the rows can't be loaded", async () => {
+    const { app } = buildApp(attendee, query(failed));
+    const res = await request(app).get("/api/registrations/user/ATT-0001");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to load registrations" });
+  });
+
+  it("reads missing rows as none", async () => {
+    const { app } = buildApp(attendee, query({ data: null, error: null }));
+    const res = await request(app).get("/api/registrations/user/ATT-0001");
+    expect(res.body).toEqual({ registrations: [] });
+  });
+
+  it("answers 502 when the events can't be loaded", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "error" });
+    const { app } = buildApp(attendee, query({ data: [row()], error: null }));
+    const res = await request(app).get("/api/registrations/user/ATT-0001");
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Failed to load events" });
+  });
+
+  it("names the failure when venues can't be loaded", async () => {
+    clients.fetchVenueNames.mockResolvedValue({ status: "error" });
+    const { app } = buildApp(attendee, query({ data: [row()], error: null }));
+    const res = await request(app).get("/api/registrations/user/ATT-0001");
+    expect(res.body).toEqual({ error: "Failed to load the events' venues" });
+  });
+});
+
+describe("GET /event/:eventId (roster): details", () => {
+  it("reads this event's rows oldest first, asking for each name once", async () => {
+    clients.fetchUserNames.mockResolvedValue(new Map([["ATT-0001", "Attendee One"]]));
+    const rows = query({ data: [row(), row({ registration_id: 11 }), row({ registration_id: 12, user_id: "ATT-0002" })], error: null });
+    const { app, from } = buildApp(organiser, rows);
+
+    const res = await request(app).get("/api/registrations/event/1");
+
+    expect(clients.canViewEvent).toHaveBeenCalledWith(1, "Bearer test-token");
+    expect(from).toHaveBeenCalledWith("registrations");
+    expect(rows.select).toHaveBeenCalledWith(COLUMNS);
+    expect(rows.eq).toHaveBeenCalledWith("event_id", 1);
+    expect(rows.order).toHaveBeenCalledWith("created_at");
+    expect(clients.fetchUserNames).toHaveBeenCalledWith(["ATT-0001", "ATT-0002"], "Bearer test-token");
+    expect(res.body.registrations[0].name).toBe("Attendee One");
+    expect(res.body.registrations[2].name).toBeNull();
+  });
+
+  it("answers 500 when the rows can't be loaded", async () => {
+    const { app } = buildApp(organiser, query(failed));
+    const res = await request(app).get("/api/registrations/event/1");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to load registrations" });
+  });
+
+  it("reads missing rows as an empty roster", async () => {
+    const { app } = buildApp(organiser, query({ data: null, error: null }));
+    const res = await request(app).get("/api/registrations/event/1");
+    expect(res.body).toEqual({ registrations: [] });
+  });
+
+  it("says exactly why it refused", async () => {
+    clients.canViewEvent.mockResolvedValue({ status: "denied" });
+    expect((await request(buildApp(organiser).app).get("/api/registrations/event/1")).body).toEqual({ error: "Access denied" });
+    clients.canViewEvent.mockResolvedValue({ status: "error" });
+    expect((await request(buildApp(organiser).app).get("/api/registrations/event/1")).body).toEqual({ error: "Failed to load the event" });
+    expect((await request(buildApp(attendee).app).get("/api/registrations/event/x")).body).toEqual({ error: "Invalid event id" });
+    expect((await request(buildApp(attendee).app).get("/api/registrations/event/1")).body).toEqual({ error: "Access denied" });
+  });
+});
+
+describe("POST / (register): details", () => {
+  function setup(outcome: unknown, existing: unknown, saved: { data: unknown; error: unknown } = { data: row(), error: null }) {
+    const lookup = query({ data: null, error: null }, { data: existing, error: null });
+    const load = query({ data: null, error: null }, saved);
+    const built = buildApp(attendee, lookup, load);
+    const rpc = vi.fn().mockResolvedValue(outcome);
+    (globalThis as any).__mockSupabase.rpc = rpc;
+    return { ...built, rpc, lookup, load };
+  }
+  const ok = { data: "registered", error: null };
+
+  it.each([
+    ["a text id", "1", 1],
+    ["a one-item list", [1], 1],
+    ["a number", 1, 1],
+  ])("accepts %s", async (_name, eventId, expected) => {
+    const { app } = setup(ok, null);
+    const res = await request(app).post("/api/registrations").send({ eventId });
+    expect(res.status).toBe(201);
+    expect(clients.fetchAttendeeEvents).toHaveBeenCalledWith([expected], "Bearer test-token");
+  });
+
+  it.each([[0], [-1], [1.5], ["01"], ["abc"], [null], [{}], [true]])("refuses eventId %j", async (eventId) => {
+    const { app } = setup(ok, null);
+    const res = await request(app).post("/api/registrations").send({ eventId });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "eventId must be a positive integer", field: "eventId" });
+  });
+
+  it("refuses a missing body", async () => {
+    const { app } = setup(ok, null);
+    expect((await request(app).post("/api/registrations")).status).toBe(400);
+  });
+
+  it.each([
+    ["a list", [1]],
+    ["text", "veg"],
+    ["a number", 3],
+    ["too long", { note: "x".repeat(5000) }],
+  ])("refuses additionalInfo that is %s", async (_name, additionalInfo) => {
+    const { app } = setup(ok, null);
+    const res = await request(app).post("/api/registrations").send({ eventId: 1, additionalInfo });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "additionalInfo must be an object under 5000 characters", field: "additionalInfo" });
+  });
+
+  it("accepts additionalInfo of exactly the maximum size", async () => {
+    const { app } = setup(ok, null);
+    // {"note":"…"} adds 11 characters around the text.
+    const res = await request(app).post("/api/registrations").send({ eventId: 1, additionalInfo: { note: "x".repeat(4989) } });
+    expect(res.status).toBe(201);
+  });
+
+  it("clears additionalInfo for an explicit null, and keeps it when left out", async () => {
+    const cleared = setup(ok, null);
+    await request(cleared.app).post("/api/registrations").send({ eventId: 1, additionalInfo: null });
+    expect(cleared.rpc.mock.calls[0][1]).toMatchObject({ p_additional_info: null, p_set_info: true });
+
+    const kept = setup(ok, null);
+    await request(kept.app).post("/api/registrations").send({ eventId: 1 });
+    expect(kept.rpc.mock.calls[0][1]).toMatchObject({ p_additional_info: null, p_set_info: false });
+  });
+
+  it("answers exactly when the event can't be loaded or found", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "error" });
+    expect((await request(setup(ok, null).app).post("/api/registrations").send({ eventId: 1 })).body).toEqual({ error: "Failed to load the event" });
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ id: 2 })] });
+    expect((await request(setup(ok, null).app).post("/api/registrations").send({ eventId: 1 })).body).toEqual({ error: "Event not found" });
+  });
+
+  it("tells closed apart from not open yet", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ open: false, registrationState: "CLOSED" })] });
+    expect((await request(setup(ok, null).app).post("/api/registrations").send({ eventId: 1 })).body).toEqual({
+      error: "Registration for this event is closed",
+      code: "closed",
+    });
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ open: false, registrationState: "NOT_OPEN" })] });
+    expect((await request(setup(ok, null).app).post("/api/registrations").send({ eventId: 1 })).body).toEqual({
+      error: "This event is not open for registration",
+      code: "not_open",
+    });
+  });
+
+  it("looks up the caller's own row for this event", async () => {
+    const { app, lookup, from } = setup(ok, null);
+    await request(app).post("/api/registrations").send({ eventId: 1 });
+    expect(from).toHaveBeenCalledWith("registrations");
+    expect(lookup.select).toHaveBeenCalledWith(COLUMNS);
+    expect(lookup.eq).toHaveBeenCalledWith("event_id", 1);
+    expect(lookup.eq).toHaveBeenCalledWith("user_id", "ATT-0001");
+  });
+
+  it("answers 500 when the lookup fails", async () => {
+    const lookup = query({ data: null, error: null }, failed);
+    const res = await request(buildApp(attendee, lookup).app).post("/api/registrations").send({ eventId: 1 });
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to register" });
+  });
+
+  it("answers exactly for already registered and full", async () => {
+    expect((await request(setup(ok, row()).app).post("/api/registrations").send({ eventId: 1 })).body).toEqual({
+      error: "You are already registered for this event",
+      code: "already_registered",
+    });
+    expect((await request(setup({ data: "already_registered", error: null }, null).app).post("/api/registrations").send({ eventId: 1 })).status).toBe(409);
+    expect((await request(setup({ data: "full", error: null }, null).app).post("/api/registrations").send({ eventId: 1 })).body).toEqual({
+      error: "This event is full",
+      code: "event_full",
+    });
+  });
+
+  it("names the failure and notifies nobody when the RPC fails", async () => {
+    const res = await request(setup(failed, null).app).post("/api/registrations").send({ eventId: 1 });
+    expect(res.body).toEqual({ error: "Failed to register" });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("reads the saved row back, passing the capacity to the RPC", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ capacity: 40 })] });
+    const { app, load, rpc } = setup(ok, null);
+
+    const res = await request(app).post("/api/registrations").send({ eventId: 1 });
+
+    expect(rpc.mock.calls[0][1].p_capacity).toBe(40);
+    expect(load.select).toHaveBeenCalledWith(COLUMNS);
+    expect(load.eq).toHaveBeenCalledWith("event_id", 1);
+    expect(load.eq).toHaveBeenCalledWith("user_id", "ATT-0001");
+    expect(res.body.registration.registrationId).toBe(10);
+  });
+
+  it.each([
+    ["fails", failed],
+    ["finds nothing", { data: null, error: null }],
+  ])("answers 500 and notifies nobody when reading it back %s", async (_name, saved) => {
+    const res = await request(setup(ok, null, saved).app).post("/api/registrations").send({ eventId: 1 });
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to register" });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("publishes the whole confirmation", async () => {
+    await request(setup(ok, null).app).post("/api/registrations").send({ eventId: 1 });
+    expect(publish).toHaveBeenCalledWith({
+      type: "registration.confirmed",
+      eventId: 1,
+      actorId: "ATT-0001",
+      recipients: { userIds: ["ATT-0001"], roles: [] },
+      data: { eventName: "Freshman Orientation Fair" },
+    });
+  });
+});
+
+describe("PATCH /event/:eventId/withdraw: details", () => {
+  const held = () => query({ data: null, error: null }, { data: row(), error: null });
+  const written = () => query({ data: null, error: null }, { data: row({ status: "Withdrawn" }), error: null });
+
+  it("answers exactly for each refusal", async () => {
+    const withdraw = (...queries: Record<string, any>[]) => request(buildApp(attendee, ...queries).app).patch("/api/registrations/event/1/withdraw");
+
+    expect((await request(buildApp(attendee).app).patch("/api/registrations/event/x/withdraw")).body).toEqual({ error: "Invalid event id" });
+    expect((await withdraw(query({ data: null, error: null }, failed))).body).toEqual({ error: "Failed to withdraw" });
+    expect((await withdraw(query({ data: null, error: null }))).body).toEqual({ error: "You are not registered for this event" });
+    expect((await withdraw(query({ data: null, error: null }, { data: row({ status: "Withdrawn" }), error: null }))).body).toEqual({
+      error: "You have already withdrawn from this event",
+      code: "already_withdrawn",
+    });
+    expect((await withdraw(query({ data: null, error: null }, { data: row({ status: "Cancelled" }), error: null }))).body).toEqual({
+      error: "This event was cancelled by the organiser",
+      code: "event_cancelled",
+    });
+  });
+
+  it("reads the caller's own place, then writes that row", async () => {
+    const lookup = held();
+    const update = written();
+    const { app, from } = buildApp(attendee, lookup, update);
+
+    await request(app).patch("/api/registrations/event/1/withdraw");
+
+    expect(from.mock.calls).toEqual([["registrations"], ["registrations"]]);
+    expect(lookup.select).toHaveBeenCalledWith(COLUMNS);
+    expect(lookup.eq).toHaveBeenCalledWith("event_id", 1);
+    expect(lookup.eq).toHaveBeenCalledWith("user_id", "ATT-0001");
+    expect(update.select).toHaveBeenCalledWith(COLUMNS);
+    expect(clients.fetchAttendeeEvents).toHaveBeenCalledWith([1], "Bearer test-token");
+  });
+
+  it("says why when the event has started or can't be loaded", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ hasStarted: true })] });
+    expect((await request(buildApp(attendee, held()).app).patch("/api/registrations/event/1/withdraw")).body).toEqual({
+      error: "This event has already started, so you can no longer withdraw",
+      code: "event_started",
+    });
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "error" });
+    expect((await request(buildApp(attendee, held()).app).patch("/api/registrations/event/1/withdraw")).body).toEqual({
+      error: "Failed to load the event",
+    });
+  });
+
+  it("answers 500 and notifies nobody when the write fails", async () => {
+    const res = await request(buildApp(attendee, held(), query({ data: null, error: null }, failed)).app).patch("/api/registrations/event/1/withdraw");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to withdraw" });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("still withdraws from an event it can't find, without naming it", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [] });
+
+    const res = await request(buildApp(attendee, held(), written()).app).patch("/api/registrations/event/1/withdraw");
+
+    expect(res.status).toBe(200);
+    expect(publish).toHaveBeenCalledWith({
+      type: "registration.withdrawn",
+      eventId: 1,
+      actorId: "ATT-0001",
+      recipients: { userIds: ["ATT-0001"], roles: [] },
+      data: {},
+    });
+  });
+
+  it("doesn't take another event's start time for this one", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ id: 2, hasStarted: true })] });
+    const res = await request(buildApp(attendee, held(), written()).app).patch("/api/registrations/event/1/withdraw");
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("GET /event/:eventId/view: details", () => {
+  const place = (status: string | null) => query({ data: null, error: null }, { data: status ? { status } : null, error: null });
+
+  it("reads the caller's own status for this event", async () => {
+    const lookup = place("Registered");
+    const { app, from } = buildApp(attendee, lookup);
+
+    await request(app).get("/api/registrations/event/1/view");
+
+    expect(from).toHaveBeenCalledWith("registrations");
+    expect(lookup.select).toHaveBeenCalledWith("status");
+    expect(lookup.eq).toHaveBeenCalledWith("event_id", 1);
+    expect(lookup.eq).toHaveBeenCalledWith("user_id", "ATT-0001");
+    expect(clients.fetchAttendeeEvents).toHaveBeenCalledWith([1], "Bearer test-token");
+    expect(clients.fetchVenueNames).toHaveBeenCalledWith([1], "Bearer test-token");
+  });
+
+  it("answers exactly for each failure", async () => {
+    const view = (...queries: Record<string, any>[]) => request(buildApp(attendee, ...queries).app).get("/api/registrations/event/1/view");
+
+    const invalid = await request(buildApp(attendee).app).get("/api/registrations/event/x/view");
+    expect(invalid.body).toEqual({ error: "Invalid event id" });
+
+    const lookup = await view(query({ data: null, error: null }, failed));
+    expect(lookup.status).toBe(500);
+    expect(lookup.body).toEqual({ error: "Failed to load the event" });
+
+    clients.fetchAttendeeEvents.mockResolvedValueOnce({ status: "error" });
+    const events = await view(place("Registered"));
+    expect(events.status).toBe(502);
+    expect(events.body).toEqual({ error: "Failed to load the event" });
+
+    clients.fetchVenueNames.mockResolvedValueOnce({ status: "error" });
+    const venues = await view(place("Registered"));
+    expect(venues.status).toBe(502);
+    expect(venues.body).toEqual({ error: "Failed to load the event's venue" });
+  });
+
+  it("answers 500 when the places can't be counted", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ capacity: 3 })] });
+    const res = await request(buildApp(attendee, place("Registered"), query(failed)).app).get("/api/registrations/event/1/view");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to load the event" });
+  });
+
+  it("logs who was refused and answers the same as for a missing event", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ open: false })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await request(buildApp(attendee, place(null)).app).get("/api/registrations/event/1/view");
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "Access denied" });
+    expect(warn).toHaveBeenCalledWith("Attendee ATT-0001 denied access to event 1 (not registered, not listed)");
+    warn.mockRestore();
+  });
+
+  it("returns the full attendee shape, with what other services left out filled in", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({
+      status: "ok",
+      events: [eventInfo({ organiserName: undefined, capacity: 2, registrationState: "OPEN", internalNote: "secret" })],
+    });
+    clients.fetchVenueNames.mockResolvedValue({ status: "ok", venuesByEvent: new Map() });
+    const counts = query({ data: [{ event_id: 1 }, { event_id: 1 }], error: null });
+
+    const res = await request(buildApp(attendee, place("Registered"), counts).app).get("/api/registrations/event/1/view");
+
+    expect(res.body).toEqual({
+      event: {
+        id: 1,
+        name: "Freshman Orientation Fair",
+        description: "Booths and tours",
+        proposedDate: "2099-01-01",
+        startTime: "09:00",
+        endTime: "15:00",
+        venues: [],
+        accessibility: "Step-free entry",
+        organiserName: null,
+        capacity: 2,
+        slotsLeft: 0,
+        registrationNeeded: true,
+        registrationState: "FULL",
+        registrationStatus: "Registered",
+        open: true,
+        hasStarted: false,
+      },
+    });
+  });
+
+  it.each([
+    ["viewable wins over listed and open", { viewable: false, listed: true, open: true }, 403],
+    ["listed wins over open", { listed: false, open: true }, 403],
+    ["open is the last resort", { open: true }, 200],
+  ])("for someone with no place, %s", async (_name, flags, status) => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo(flags)] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await request(buildApp(attendee, place(null)).app).get("/api/registrations/event/1/view");
+    expect(res.status).toBe(status);
+    warn.mockRestore();
+  });
+});
+
+describe("exact refusals", () => {
+  it("tells a non-attendee and another attendee the same thing", async () => {
+    const asOrganiser = await request(buildApp(organiser).app).get("/api/registrations/open-events");
+    expect(asOrganiser.body).toEqual({ error: "Access denied" });
+    const asOther = await request(buildApp(attendee).app).get("/api/registrations/user/ATT-0002");
+    expect(asOther.body).toEqual({ error: "Access denied" });
+  });
+
+  it("names the failure when an open event's venues can't be loaded", async () => {
+    clients.fetchVenueNames.mockResolvedValue({ status: "error" });
+    const res = await request(buildApp(attendee).app).get("/api/registrations/open-events");
+    expect(res.body).toEqual({ error: "Failed to load the events' venues" });
+  });
+});
+
+describe("the right table and the right event", () => {
+  it("counts places on the registrations table", async () => {
+    clients.fetchOpenEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ capacity: 3 })] });
+    const { app, from } = buildApp(attendee, query({ data: [], error: null }), query({ data: [], error: null }));
+    await request(app).get("/api/registrations/open-events");
+    expect(from.mock.calls).toEqual([["registrations"], ["registrations"]]);
+  });
+
+  it("registering reads and reads back the registrations table", async () => {
+    const { app, from } = buildApp(
+      attendee,
+      query({ data: null, error: null }),
+      query({ data: null, error: null }, { data: row(), error: null }),
+    );
+    (globalThis as any).__mockSupabase.rpc = vi.fn().mockResolvedValue({ data: "registered", error: null });
+    await request(app).post("/api/registrations").send({ eventId: 1 });
+    expect(from.mock.calls).toEqual([["registrations"], ["registrations"]]);
+  });
+
+  it("the attendee view doesn't take another event in the reply for this one", async () => {
+    clients.fetchAttendeeEvents.mockResolvedValue({ status: "ok", events: [eventInfo({ id: 2 })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await request(buildApp(attendee, query({ data: null, error: null })).app).get("/api/registrations/event/1/view");
+    expect(res.status).toBe(403);
+    warn.mockRestore();
+  });
+});

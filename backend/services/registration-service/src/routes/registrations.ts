@@ -29,6 +29,9 @@ const REGISTRATION_COLUMNS = "registration_id, event_id, user_id, status, create
 /** additional_info is free-form, so cap it rather than let one row grow without bound. */
 const MAX_ADDITIONAL_INFO_CHARS = 5000;
 
+/** events.id is a Postgres integer: a bigger id would make the query error rather than find nothing. */
+const MAX_EVENT_ID = 2147483647;
+
 interface RegistrationRow {
   registration_id: number;
   event_id: number;
@@ -59,9 +62,10 @@ function requireAttendee(req: AuthedRequest, res: Response): boolean {
 }
 
 function parseEventId(raw: unknown): number | null {
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  const text = typeof value === "number" ? String(value) : value;
-  return typeof text === "string" && /^[1-9]\d*$/.test(text) ? Number(text) : null;
+  const text = String(Array.isArray(raw) ? raw[0] : raw);
+  if (!/^[1-9]\d*$/.test(text)) return null;
+  const id = Number(text);
+  return id <= MAX_EVENT_ID ? id : null;
 }
 
 /**
@@ -108,7 +112,7 @@ function cappedEventIds(events: AttendeeEventInfo[]): number[] {
 
 /** undefined/null → no info; a plain object within the size cap → itself; anything else → invalid. */
 function parseAdditionalInfo(raw: unknown): { ok: true; value: Record<string, unknown> | null } | { ok: false } {
-  if (raw === undefined || raw === null) return { ok: true, value: null };
+  if (raw == null) return { ok: true, value: null };
   if (typeof raw !== "object" || Array.isArray(raw)) return { ok: false };
   if (JSON.stringify(raw).length > MAX_ADDITIONAL_INFO_CHARS) return { ok: false };
   return { ok: true, value: raw as Record<string, unknown> };
@@ -184,8 +188,7 @@ registrationsRouter.get("/user/:userId", async (req: AuthedRequest, res) => {
   if (!requireAttendee(req, res)) return;
   const { supabase, user } = req;
 
-  const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
-  if (userId !== user!.id) {
+  if (req.params.userId !== user!.id) {
     res.status(403).json({ error: "Access denied" });
     return;
   }
@@ -296,6 +299,7 @@ registrationsRouter.get("/event/:eventId", async (req: AuthedRequest, res) => {
  * withdrawal reuses the same row (one row per attendee per event), keeping
  * its original created_at.
  */
+// Stryker disable next-line StringLiteral: a mounted router's "/" and "" match the same path.
 registrationsRouter.post("/", async (req: AuthedRequest, res) => {
   if (!requireAttendee(req, res)) return;
   const { supabase, user } = req;
@@ -306,7 +310,7 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const info = parseAdditionalInfo(req.body?.additionalInfo);
+  const info = parseAdditionalInfo(req.body.additionalInfo);
   if (!info.ok) {
     res.status(400).json({
       error: `additionalInfo must be an object under ${MAX_ADDITIONAL_INFO_CHARS} characters`,
@@ -363,7 +367,7 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
     p_user_id: user!.id,
     p_capacity: event.capacity ?? null,
     p_additional_info: info.value,
-    p_set_info: req.body?.additionalInfo !== undefined,
+    p_set_info: req.body.additionalInfo !== undefined,
   });
   if (registerError) {
     res.status(500).json({ error: "Failed to register" });
@@ -459,10 +463,16 @@ registrationsRouter.patch("/event/:eventId/withdraw", async (req: AuthedRequest,
     .from("registrations")
     .update({ status: REGISTRATION_STATUS.withdrawn })
     .eq("registration_id", (existing as RegistrationRow).registration_id)
+    // The event was fetched since the place was read, so the organiser may have cancelled it by now (`Cancelled` is final, §3b).
+    .eq("status", REGISTRATION_STATUS.registered)
     .select(REGISTRATION_COLUMNS)
-    .single();
-  if (updateError || !updated) {
+    .maybeSingle();
+  if (updateError) {
     res.status(500).json({ error: "Failed to withdraw" });
+    return;
+  }
+  if (!updated) {
+    res.status(409).json({ error: "You no longer hold a place for this event", code: "no_place" });
     return;
   }
 

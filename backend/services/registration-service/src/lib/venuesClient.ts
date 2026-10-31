@@ -14,19 +14,18 @@ export async function fetchVenueNames(eventIds: number[], authorization: string)
   const venuesByEvent = new Map<number, string[]>();
   if (eventIds.length === 0) return { status: "ok", venuesByEvent };
 
-  let res: Response;
   try {
-    res = await fetch(`${venueServiceUrl()}/api/venues/attendee-info?eventIds=${eventIds.join(",")}`, {
+    const res = await fetch(`${venueServiceUrl()}/api/venues/attendee-info?eventIds=${eventIds.join(",")}`, {
       headers: { Authorization: authorization },
     });
+    if (!res.ok) return { status: "error" };
+
+    const body = (await res.json()) as { venues?: { eventId: number; venueName: string }[] };
+    for (const { eventId, venueName } of body.venues ?? []) {
+      venuesByEvent.set(eventId, [...(venuesByEvent.get(eventId) ?? []), venueName]);
+    }
+    return { status: "ok", venuesByEvent };
   } catch {
     return { status: "error" };
   }
-  if (!res.ok) return { status: "error" };
-
-  const body = (await res.json()) as { venues?: { eventId: number; venueName: string }[] };
-  for (const { eventId, venueName } of body.venues ?? []) {
-    venuesByEvent.set(eventId, [...(venuesByEvent.get(eventId) ?? []), venueName]);
-  }
-  return { status: "ok", venuesByEvent };
 }

@@ -1,7 +1,5 @@
 import jwt from "jsonwebtoken";
 
-const JWT_EXPIRES_IN = "1d";
-
 export class TokenExpiredError extends Error {}
 
 export interface AppTokenPayload {
@@ -12,12 +10,9 @@ export interface AppTokenPayload {
 }
 
 /**
- * Read the secret lazily rather than at module load. jsonwebtoken throws a
- * cryptic "secretOrPrivateKey must have a value" if it's empty, which is a
- * confusing first failure for anyone who hasn't filled in their .env — and
- * a module-load throw would also break test files that set env vars in a
- * setup hook. index.ts additionally checks this at boot so the problem
- * surfaces on startup rather than on the first login attempt.
+ * Verify-only: user-service issues tokens, every other service just checks
+ * them with the shared JWT_SECRET. Read lazily so a missing secret fails
+ * with a clear message rather than at module load.
  */
 function getSecret(): string {
   const secret = process.env.JWT_SECRET ?? "";
@@ -25,10 +20,6 @@ function getSecret(): string {
     throw new Error("JWT_SECRET is not set — add it to backend/.env");
   }
   return secret;
-}
-
-export function signToken(payload: { sub: string; role: string }): string {
-  return jwt.sign(payload, getSecret(), { expiresIn: JWT_EXPIRES_IN });
 }
 
 /**
