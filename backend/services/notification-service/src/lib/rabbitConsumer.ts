@@ -70,14 +70,21 @@ export function connectAndConsume(url: string, handler: MessageHandler): RabbitC
     await channel.consume(QUEUE, (msg) => {
       if (!msg) return;
       void (async () => {
+        let processed = true;
         try {
           const parsed = JSON.parse(msg.content.toString("utf8")) as InboundMessage;
           console.log(`notification-service: consumed "${parsed.type}" from RabbitMQ (messageId=${parsed.messageId})`);
           await handler(parsed);
-          channel!.ack(msg);
         } catch (err) {
+          processed = false;
           console.error("notification-service: failed to process message, sending to DLQ", err);
-          channel!.nack(msg, false, false);
+        }
+        try {
+          if (processed) channel!.ack(msg);
+          else channel!.nack(msg, false, false);
+        } catch (err) {
+          // The channel closed while the handler ran. Thrown from here it would end the process; the broker redelivers the message.
+          console.error("notification-service: RabbitMQ channel closed before the message was settled", err);
         }
       })();
     });

@@ -42,6 +42,8 @@ async function startConsumer(handler = vi.fn().mockResolvedValue(undefined)) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  channel.ack.mockReset();
+  channel.nack.mockReset();
   connect.mockResolvedValue(connection);
   connection.createChannel.mockResolvedValue(channel);
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -164,6 +166,36 @@ describe("connectAndConsume", () => {
     listener(err);
 
     expect(console.error).toHaveBeenCalledWith(logged, err);
+  });
+
+  // ack and nack throw once the channel has closed. Thrown from here, that is an unhandled rejection, which ends the process.
+  it("logs instead of crashing when the channel closed before an ack", async () => {
+    const closed = new Error("Channel closed");
+    channel.ack.mockImplementation(() => {
+      throw closed;
+    });
+    const { deliver } = await startConsumer();
+
+    deliver(delivery(JSON.stringify(msg)));
+
+    await vi.waitFor(() =>
+      expect(console.error).toHaveBeenCalledWith("notification-service: RabbitMQ channel closed before the message was settled", closed),
+    );
+    expect(channel.nack).not.toHaveBeenCalled();
+  });
+
+  it("logs instead of crashing when the channel closed before a nack", async () => {
+    const closed = new Error("Channel closed");
+    channel.nack.mockImplementation(() => {
+      throw closed;
+    });
+    const { deliver } = await startConsumer(vi.fn().mockRejectedValue(new Error("insert failed")));
+
+    deliver(delivery(JSON.stringify(msg)));
+
+    await vi.waitFor(() =>
+      expect(console.error).toHaveBeenCalledWith("notification-service: RabbitMQ channel closed before the message was settled", closed),
+    );
   });
 
   it("stop closes the channel and the connection", async () => {
