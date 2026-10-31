@@ -109,7 +109,7 @@ describe("decideBooking: lapsed holds", () => {
     expect(r).toEqual({ status: "blocked", message: "This hold has expired, so it can no longer be decided" });
     expect(row(1)).toMatchObject({ status: "Expired", decided_by: null, decided_at: NOW.toISOString() });
     expect(published).toEqual([
-      { type: "hold.expired", eventId: 101, actorId: null, recipients: { userIds: ["COORD-101"], roles: [] }, data: { eventName: "Event 101", venueName: "Grand Hall" } },
+      { type: "hold.expired", eventId: 101, actorId: null, recipients: { userIds: ["COORD-101"], roles: [] }, data: { eventName: "Event 101", venueName: "Grand Hall", expiresAt: "2026-09-14T07:59:59.999Z" } },
     ]);
     expect(rec.reconcileBufferOverlapsSafely).toHaveBeenCalledWith(db, 1, AUTH);
   });

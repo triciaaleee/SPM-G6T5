@@ -948,7 +948,7 @@ describe("handleInboundMessage", () => {
       expect.objectContaining({
         recipient_id: "COORD-0001",
         title: "Grand Ballroom — hold expiring soon",
-        body: expect.stringContaining("2026-01-01T06:00:00.000Z"),
+        body: expect.stringContaining("1 Jan 2026, 2:00 pm"),
       }),
     ]);
   });
