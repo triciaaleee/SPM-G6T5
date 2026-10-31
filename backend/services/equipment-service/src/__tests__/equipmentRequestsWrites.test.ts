@@ -3,7 +3,6 @@ import request from "supertest";
 
 vi.mock("../lib/supabaseAdmin.js", async () => ({ supabaseAdmin: (await import("./helpers/mockDb.js")).supabaseAdminProxy }));
 
-import { TEST_NOW } from "./helpers/testClock.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 import { createFakePublisher } from "../lib/rabbitPublisher.fake.js";
 import { equipmentRequestsRouter } from "../routes/equipmentRequests.js";
@@ -682,7 +681,7 @@ describe("PUT /:id/items", () => {
 
   it("400s invalid items, including no body", async () => {
     const db = useDb(createFakeDb(seed()));
-    let res = await put("1", { items: [] });
+    const res = await put("1", { items: [] });
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "Validation failed", fields: { items: "At least one equipment item is required." } });
 
@@ -763,7 +762,6 @@ describe("PUT /:id/items", () => {
 
 describe("POST /:id/cancel", () => {
   const cancel = (id: string, token = COORD) => request(app()).post(`/api/equipment-requests/${id}/cancel`).set("Authorization", token);
-  const released = [{ equipmentType: "Projector", quantity: 2 }];
 
   it("releases nothing when the function reports no list, and falls back to 'Event #id'", async () => {
     const db = useDb(createFakeDb(seed()));

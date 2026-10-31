@@ -208,7 +208,7 @@ describe("POST /", () => {
   it("500s when the request can't be saved", async () => {
     const db = useDb(createFakeDb(seed()));
     db.failOn("equipment_requests", "insert");
-    let res = await post(good);
+    const res = await post(good);
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: "Failed to record the equipment request" });
 
@@ -703,7 +703,7 @@ describe("GET /items/:itemId/unit-preview", () => {
 
   it("404s when the item's request can't be found or read", async () => {
     useDb(createFakeDb({ ...world1(), equipment_requests: [] }));
-    let res = await get("1", "1");
+    const res = await get("1", "1");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "Equipment request not found" });
 

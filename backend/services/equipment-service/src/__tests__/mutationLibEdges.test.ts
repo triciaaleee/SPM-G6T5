@@ -3,7 +3,7 @@
  * left unchecked (library code: handlers, reservation flags, impact ordering,
  * validators, the users client).
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleEventRescheduled } from "../lib/eventRescheduledHandler.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 import { createFakePublisher } from "../lib/rabbitPublisher.fake.js";
