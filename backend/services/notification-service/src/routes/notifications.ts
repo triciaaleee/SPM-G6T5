@@ -53,15 +53,17 @@ const SELECT_COLUMNS = "id, type, title, body, link, event_id, actor_id, occurre
  * is only computed on the first page (no `before`): "load more" pages skip
  * it, since the bell already polls for the live count separately.
  */
+// Stryker disable next-line StringLiteral: a mounted router's "/" and "" match the same path.
 notificationsRouter.get("/", async (req: AuthedRequest, res) => {
   const supabase = req.supabase!;
   const userId = req.user!.id;
 
-  const rawLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : DEFAULT_LIMIT;
+  // A missing or repeated parameter reads as NaN, which falls back like any other invalid value.
+  const rawLimit = Number(req.query.limit);
   const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_LIMIT) : DEFAULT_LIMIT;
 
-  const rawBefore = typeof req.query.before === "string" ? Number(req.query.before) : undefined;
-  const before = Number.isInteger(rawBefore) && rawBefore! > 0 ? rawBefore : undefined;
+  const rawBefore = Number(req.query.before);
+  const before = Number.isSafeInteger(rawBefore) && rawBefore > 0 ? rawBefore : undefined;
 
   let listQuery = supabase
     .from("notifications")
@@ -120,7 +122,8 @@ notificationsRouter.post("/read", async (req: AuthedRequest, res) => {
  */
 notificationsRouter.post("/:id/read", async (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) {
+  // Safe integers only: 1e30 is an integer to JavaScript but doesn't fit the bigint column, so Postgres would error.
+  if (!Number.isSafeInteger(id) || id <= 0) {
     res.status(400).json({ error: "id must be a positive integer" });
     return;
   }

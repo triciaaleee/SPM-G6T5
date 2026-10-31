@@ -43,7 +43,15 @@ export function connectAndConsume(url: string, handler: MessageHandler): RabbitC
 
   async function start(): Promise<void> {
     connection = await amqp.connect(url);
+    // amqplib emits "error" when the broker drops; with no listener Node
+    // throws it and the whole service dies, taking the REST API with it.
+    connection.on("error", (err: unknown) => {
+      console.error("notification-service: RabbitMQ connection error", err);
+    });
     channel = await connection.createChannel();
+    channel.on("error", (err: unknown) => {
+      console.error("notification-service: RabbitMQ channel error", err);
+    });
 
     await channel.assertExchange(EXCHANGE, "topic", { durable: true });
     await channel.assertExchange(DLX, "topic", { durable: true });
