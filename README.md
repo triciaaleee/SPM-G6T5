@@ -142,6 +142,7 @@ cd backend/services/user-service && npm test
 cd backend/services/venue-service && npm test
 cd backend/services/notification-service && npm test
 cd backend/services/registration-service && npm test
+cd backend/services/equipment-service && npm test
 ```
 
 `user-service` and `venue-service` also have coverage, real-database integration tests and (venue-service) mutation testing:
@@ -162,6 +163,24 @@ The integration tests seed throwaway rows under a `ZINT-` prefix and delete them
 | `npm run test:coverage` | `npm test` with v8 coverage; report in `coverage/` (text, html, lcov). Fails below 100% statements, branches, functions and lines (`src/index.ts`, which only boots the server, is excluded and covered by the CI smoke test). |
 | `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. It creates `ZEVT-` throwaway users and events and deletes them in `afterAll` (and sweeps any a crashed run left behind). RabbitMQ is replaced by an in-memory publisher, so only Supabase is needed. |
 | `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Sets `MUTATION_RUN=1`, which leaves out `routeMatrix.test.ts` (the route sweep) so each mutant runs fast. The TypeScript checker drops mutants that could never compile. A full run takes about 20 minutes; add `-- --mutate 'src/lib/**/*.ts'` for a quicker run on the pure modules, or `--mutate 'src/routes/events/review.ts:100-200'` for a line range. Run only one Stryker at a time per folder, or give a second run its own `--tempDirName`. Mutants that cannot change behaviour are marked `// Stryker disable next-line <Mutator>: <why>` in the source. |
+
+`equipment-service` has the same three, run from `backend/services/equipment-service`:
+
+| Command | What it does |
+|---|---|
+| `npm run test:coverage` | `npm test` with v8 coverage; fails below 100% statements, branches, functions and lines. `src/index.ts` (boots the server) and `*.fake.ts` are excluded. Three branches that no input can reach carry a `/* v8 ignore next -- @preserve */` with the reason beside them. |
+| `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`: the catalog, unit and unavailability routes against real constraints, enums, cascades and stored functions, plus a contract test that runs the same queries on the real database and on the in-memory fake (`src/__tests__/helpers/fakeDb.ts`). Never part of `npm test`. It creates `ZINT` throwaway catalog items, units and one user, and deletes them in `afterAll`. It leaves bookings, requests and events alone, because `equipment_booking.event_id` points at events-service's table. |
+| `npm run test:mutation` | Stryker mutation testing of the unit suite; report in `reports/mutation/`. A full run takes about 9 minutes. Mutants that cannot change behaviour are marked `// Stryker disable next-line <Mutator>: <why>` in the source. |
+
+The unit suites run the real routers and the real auth middleware against `helpers/fakeDb.ts`, an in-memory Supabase stand-in that stores rows, so tests assert the resulting state rather than which methods were called. `helpers/world.ts` stubs events-service and user-service over `fetch`.
+
+`notification-service` has the same layers. Run these from `backend/services/notification-service`:
+
+| Command | What it does |
+|---|---|
+| `npm run test:coverage` | `npm test` with v8 coverage. Fails below 100% statements, branches, functions and lines (`src/index.ts` and `*.fake.ts` are excluded). |
+| `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. Rows use `ZINT-NOTIF-` recipients and are deleted in `afterAll`. No broker or user-service is needed: role lookups are stubbed, and the boot test blanks `RABBITMQ_URL` so it never consumes from the shared queue. |
+| `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Takes about 2 minutes. |
 
 `registration-service` has the same layers. Run these from `backend/services/registration-service`:
 

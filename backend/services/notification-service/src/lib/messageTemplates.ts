@@ -31,7 +31,7 @@ function supportEventLink(msg: InboundMessage): string | null {
 
 /** "2026-11-03" → "3 Nov 2026"; anything else is shown as given, and nothing gives "". */
 function formatUnavailabilityDate(value: unknown): string {
-  if (typeof value !== "string" || value === "") return "";
+  if (typeof value !== "string") return "";
   const date = new Date(`${value}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
@@ -671,6 +671,6 @@ const TEMPLATES: Record<string, Template> = {
 
 /** `null` for a type with no template yet — the caller logs and skips it. */
 export function renderNotification(msg: InboundMessage, recipientId: string): RenderedNotification | null {
-  const template = TEMPLATES[msg.type];
-  return template ? template(msg, recipientId) : null;
+  // Own keys only: a plain lookup of "constructor" or "toString" would find Object.prototype's.
+  return Object.hasOwn(TEMPLATES, msg.type) ? TEMPLATES[msg.type](msg, recipientId) : null;
 }

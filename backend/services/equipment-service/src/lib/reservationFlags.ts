@@ -63,6 +63,7 @@ export async function computeReservationFlags(
 
   const neededEventIds = [...new Set(allBookings.map((b) => b.event_id))].filter((id) => !knownWindows.has(id));
   const windows = new Map(knownWindows);
+  // Stryker disable next-line ConditionalExpression,EqualityOperator: fetchEventBookingInfo([]) answers without a request, so asking for no events is the same as skipping the call
   if (neededEventIds.length > 0) {
     const info = await fetchEventBookingInfo(neededEventIds, authorization);
     if (info.status === "ok") {
@@ -75,6 +76,7 @@ export async function computeReservationFlags(
 
   // E5-5: periods Technical Support marked on the units this event holds.
   let periodsByUnit = new Map<number, UnavailabilityRow[]>();
+  // Stryker disable BlockStatement: fetchUnavailability throws before periodsByUnit is touched, so it is still empty in the catch
   try {
     const periods = await fetchUnavailability(supabase, [...new Set(ownBookings.map((b) => b.equipment_id))]);
     for (const period of periods) {
@@ -84,6 +86,7 @@ export async function computeReservationFlags(
     periodsByUnit = new Map();
   }
 
+  // Stryker restore BlockStatement
   for (const booking of ownBookings) {
     const ownEventId = itemEventIds.get(booking.request_item_id);
     if (ownEventId === undefined) continue;

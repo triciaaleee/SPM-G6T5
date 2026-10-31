@@ -185,6 +185,7 @@ equipmentCatalogRouter.post("/:id/stock", async (req: AuthedRequest, res) => {
   });
 
   if (error) {
+    // Stryker disable next-line StringLiteral: a fallback message that matches none of the patterns is handled like an empty one
     const message = error.message ?? "";
     const cannotRemove = /only (\d+) can be removed/.exec(message);
     if (cannotRemove) {
