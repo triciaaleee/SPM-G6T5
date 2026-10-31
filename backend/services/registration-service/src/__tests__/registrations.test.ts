@@ -70,7 +70,7 @@ function row(overrides: Record<string, unknown> = {}) {
  */
 function query(result: { data: unknown; error: unknown }, single?: { data: unknown; error: unknown }) {
   const q: Record<string, any> = {};
-  for (const method of ["select", "eq", "in", "order", "update", "insert"]) q[method] = vi.fn(() => q);
+  for (const method of ["select", "eq", "in", "order", "update", "insert", "delete"]) q[method] = vi.fn(() => q);
   q.maybeSingle = vi.fn().mockResolvedValue(single ?? result);
   q.single = vi.fn().mockResolvedValue(single ?? result);
   q.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
@@ -1426,5 +1426,94 @@ describe("the right table and the right event", () => {
     const res = await request(buildApp(attendee, query({ data: null, error: null })).app).get("/api/registrations/event/1/view");
     expect(res.status).toBe(403);
     warn.mockRestore();
+  });
+});
+
+describe("POST /: the event closes while registering", () => {
+  const stillOpen = { status: "ok", events: [eventInfo()] };
+  const nowClosed = { status: "ok", events: [eventInfo({ open: false, registrationState: "CLOSED" })] };
+  const registered = { data: "registered", error: null };
+
+  /** The first event lookup says open, the second `recheck`. The queries are the lookup, then whatever the route does next. */
+  function setup(recheck: unknown, existing: unknown, next: Record<string, any>) {
+    clients.fetchAttendeeEvents.mockResolvedValueOnce(stillOpen).mockResolvedValueOnce(recheck);
+    const built = buildApp(attendee, query({ data: null, error: null }, { data: existing, error: null }), next);
+    (globalThis as any).__mockSupabase.rpc = vi.fn().mockResolvedValue(registered);
+    return built;
+  }
+
+  it("checks again after saving, with the caller's token", async () => {
+    const { app } = setup(stillOpen, null, query({ data: null, error: null }, { data: row(), error: null }));
+
+    const res = await request(app).post("/api/registrations").send({ eventId: 1 });
+
+    expect(res.status).toBe(201);
+    expect(clients.fetchAttendeeEvents.mock.calls).toEqual([
+      [[1], "Bearer test-token"],
+      [[1], "Bearer test-token"],
+    ]);
+  });
+
+  it("removes a new place, answers closed and notifies nobody", async () => {
+    const undo = query({ data: null, error: null });
+    const { app, from } = setup(nowClosed, null, undo);
+
+    const res = await request(app).post("/api/registrations").send({ eventId: 1 });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "Registration for this event is closed", code: "closed" });
+    expect(from.mock.calls).toEqual([["registrations"], ["registrations"]]);
+    expect(undo.delete).toHaveBeenCalledOnce();
+    expect(undo.update).not.toHaveBeenCalled();
+    expect(undo.eq).toHaveBeenCalledWith("event_id", 1);
+    expect(undo.eq).toHaveBeenCalledWith("user_id", "ATT-0001");
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it.each(["Cancelled", "Withdrawn"])("puts a %s row back as it was", async (status) => {
+    const undo = query({ data: null, error: null });
+    const { app, from } = setup(nowClosed, row({ status, additional_info: { diet: "veg" } }), undo);
+
+    const res = await request(app).post("/api/registrations").send({ eventId: 1, additionalInfo: { diet: "halal" } });
+
+    expect(res.status).toBe(409);
+    expect(from.mock.calls).toEqual([["registrations"], ["registrations"]]);
+    expect(undo.update).toHaveBeenCalledWith({ status, additional_info: { diet: "veg" } });
+    expect(undo.delete).not.toHaveBeenCalled();
+    expect(undo.eq).toHaveBeenCalledWith("registration_id", 10);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("treats an event no longer returned as closed", async () => {
+    const undo = query({ data: null, error: null });
+    const { app } = setup({ status: "ok", events: [eventInfo({ id: 2 })] }, null, undo);
+
+    const res = await request(app).post("/api/registrations").send({ eventId: 1 });
+
+    expect(res.status).toBe(409);
+    expect(undo.delete).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the registration when the second check can't be made: a brief outage shouldn't cost anyone a place", async () => {
+    const { app } = setup({ status: "error" }, null, query({ data: null, error: null }, { data: row(), error: null }));
+
+    const res = await request(app).post("/api/registrations").send({ eventId: 1 });
+
+    expect(res.status).toBe(201);
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
+  it("answers 500 and logs it when the place can't be undone", async () => {
+    const failure = { message: "boom" };
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { app } = setup(nowClosed, null, query({ data: null, error: failure }));
+
+    const res = await request(app).post("/api/registrations").send({ eventId: 1 });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to register" });
+    expect(error).toHaveBeenCalledWith("registration-service: couldn't undo a registration for closed event 1 (ATT-0001)", failure);
+    expect(publish).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 });

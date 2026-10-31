@@ -32,6 +32,8 @@ const MAX_ADDITIONAL_INFO_CHARS = 5000;
 /** events.id is a Postgres integer: a bigger id would make the query error rather than find nothing. */
 const MAX_EVENT_ID = 2147483647;
 
+const CLOSED_REPLY = { error: "Registration for this event is closed", code: "closed" };
+
 interface RegistrationRow {
   registration_id: number;
   event_id: number;
@@ -295,9 +297,9 @@ registrationsRouter.get("/event/:eventId", async (req: AuthedRequest, res) => {
 });
 
 /**
- * Register for an event. The event must be open. Registering again after a
- * withdrawal reuses the same row (one row per attendee per event), keeping
- * its original created_at.
+ * Register for an event. The event must be open, before and after the place
+ * is saved. Registering again after a withdrawal reuses the same row (one row
+ * per attendee per event), keeping its original created_at.
  */
 // Stryker disable next-line StringLiteral: a mounted router's "/" and "" match the same path.
 registrationsRouter.post("/", async (req: AuthedRequest, res) => {
@@ -332,7 +334,7 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
   if (!event.open) {
     res.status(409).json(
       event.registrationState === "CLOSED"
-        ? { error: "Registration for this event is closed", code: "closed" }
+        ? CLOSED_REPLY
         : { error: "This event is not open for registration", code: "not_open" },
     );
     return;
@@ -379,6 +381,29 @@ registrationsRouter.post("/", async (req: AuthedRequest, res) => {
   }
   if (outcome === "full") {
     res.status(409).json({ error: "This event is full", code: "event_full" });
+    return;
+  }
+
+  // The event may have closed since the check above. A cancellation is written before its message goes out,
+  // so either the event.cancelled handler sees this place, or this check sees the cancellation.
+  const recheck = await fetchAttendeeEvents([eventId], req.headers.authorization!);
+  const closedSince = recheck.status === "ok" && !recheck.events.find((e) => e.id === eventId)?.open;
+  if (closedSince) {
+    const { error: undoError } = existing
+      ? await supabase!
+          .from("registrations")
+          .update({
+            status: (existing as RegistrationRow).status,
+            additional_info: (existing as RegistrationRow).additional_info,
+          })
+          .eq("registration_id", (existing as RegistrationRow).registration_id)
+      : await supabase!.from("registrations").delete().eq("event_id", eventId).eq("user_id", user!.id);
+    if (undoError) {
+      console.error(`registration-service: couldn't undo a registration for closed event ${eventId} (${user!.id})`, undoError);
+      res.status(500).json({ error: "Failed to register" });
+      return;
+    }
+    res.status(409).json(CLOSED_REPLY);
     return;
   }
 

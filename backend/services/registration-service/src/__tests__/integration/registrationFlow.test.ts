@@ -216,6 +216,57 @@ describe("registrations (real Supabase project)", () => {
     expect(publisher.published.map((m) => m.type)).toEqual(["registration.cancelled_by_event"]);
   });
 
+  it("a cancellation landing just before the save leaves no new place, and tells nobody anything", async () => {
+    const eventId = await seedEvent();
+    // The gap: the first check says open, then the cancellation runs before the place exists, so the handler can't see it.
+    clients.fetchAttendeeEvents.mockImplementationOnce(async () => {
+      await handleEventCancelled(cancelMsg(eventId), { supabase: supabaseAdmin });
+      return eventsAnswer(eventId);
+    });
+    clients.fetchAttendeeEvents.mockResolvedValueOnce(eventsAnswer(eventId, { open: false, registrationState: "CLOSED" }));
+
+    const res = await register(eventId, attendeeId(1));
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("closed");
+    expect(await placeOf(eventId, attendeeId(1))).toBeNull();
+    expect(publisher.published).toEqual([]);
+  });
+
+  it("a cancellation landing during a re-registration restores the row exactly", async () => {
+    const eventId = await seedEvent();
+    clients.fetchAttendeeEvents.mockResolvedValue(eventsAnswer(eventId));
+    await register(eventId, attendeeId(1), { additionalInfo: { diet: "veg" } });
+    await withdraw(eventId, attendeeId(1));
+    const before = await placeOf(eventId, attendeeId(1));
+    publisher.published.length = 0;
+
+    clients.fetchAttendeeEvents.mockResolvedValueOnce(eventsAnswer(eventId));
+    clients.fetchAttendeeEvents.mockResolvedValueOnce(eventsAnswer(eventId, { open: false, registrationState: "CLOSED" }));
+    const res = await register(eventId, attendeeId(1), { additionalInfo: { diet: "halal" } });
+
+    expect(res.status).toBe(409);
+    expect(await placeOf(eventId, attendeeId(1))).toEqual(before);
+    expect(publisher.published).toEqual([]);
+  });
+
+  it("a place the organiser's cancellation ended stays Cancelled if someone registers late", async () => {
+    const eventId = await seedEvent();
+    clients.fetchAttendeeEvents.mockResolvedValue(eventsAnswer(eventId));
+    await register(eventId, attendeeId(1));
+    await handleEventCancelled(cancelMsg(eventId), { supabase: supabaseAdmin });
+    publisher.published.length = 0;
+
+    // The first check is stale and still says open.
+    clients.fetchAttendeeEvents.mockResolvedValueOnce(eventsAnswer(eventId));
+    clients.fetchAttendeeEvents.mockResolvedValueOnce(eventsAnswer(eventId, { open: false, registrationState: "CLOSED" }));
+    const res = await register(eventId, attendeeId(1));
+
+    expect(res.status).toBe(409);
+    expect((await placeOf(eventId, attendeeId(1)))?.status).toBe("Cancelled");
+    expect(publisher.published).toEqual([]);
+  });
+
   it("shows the roster oldest first with every status, and lists the attendee's own newest first", async () => {
     const eventId = await seedEvent();
     const laterId = await seedEvent();
