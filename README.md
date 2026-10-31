@@ -116,6 +116,22 @@ To run just one service on its own:
 cd backend/services/events-service && npm run dev   # or services/user-service, services/venue-service, services/notification-service, services/registration-service
 ```
 
+### Running everything in Docker
+
+Each backend service and the frontend has its own `Dockerfile`, and the root `docker-compose.yml` runs them all together with RabbitMQ:
+
+```bash
+docker compose up --build -d     # from the repo root; needs backend/.env
+docker compose ps                # every backend service should show (healthy)
+docker compose logs -f events-service
+docker compose down              # stop everything (add -v to also wipe RabbitMQ's data)
+```
+
+- The services publish the same host ports as `npm run dev` (4001–4007), and the frontend is at `http://localhost:5173`. **Stop any local `npm run dev` first**, or the ports clash.
+- Config comes from `backend/.env`. Compose overrides `RABBITMQ_URL` and every `*_SERVICE_URL` so the containers reach each other by service name (e.g. `http://events-service:4001`), so leave those as `localhost` in `.env`.
+- The frontend's `VITE_*` API URLs are baked in at build time and point at `localhost:400x`, since the browser calls the services directly. To change them, pass build args (`docker compose build --build-arg VITE_EVENTS_API_URL=... frontend`) and rebuild.
+- After changing code, run `docker compose up --build -d <service>` to rebuild. The images run the compiled `dist/` build, not `tsx watch`.
+
 ## Verify it's up
 
 ```bash

@@ -4,7 +4,7 @@ import { clock } from "./clock.js";
 
 /**
  * The envelope every publisher on `connectsphere.events` uses
- * (c4_diagrams/RabbitMQ.md section 2).
+ * (RabbitMQ.md section 2).
  */
 export interface OutboundMessage {
   /** Set by the outbox so a retry reuses the same id and consumers can skip a repeat; otherwise generated. */

@@ -1,8 +1,8 @@
 # RabbitMQ messaging: ConnectSphere
 
-**Version 1.0** | 2026-10-10 | Tricia Lee (@triciaa-leee)
+**Version 1.1** | 2026-10-31 | Tricia Lee (@triciaa-leee)
 
-The message catalogue behind the broker in `c2-containers.dsl` and the publishers and consumers in the per-service component views in `c3/` (`c3-<service>.dsl`). It traces every notification requirement to the message that delivers it. The rules every publisher and consumer must follow are in `ArchitectureDecisionRecord.md` section 4; the decision to use RabbitMQ is D6 there.
+The message catalogue behind the broker in `c4_diagrams/c2-containers.dsl` and the publishers and consumers in the per-service component views in `c4_diagrams/c3/` (`c3-<service>.dsl`). It traces every notification requirement to the message that delivers it. The rules every publisher and consumer must follow are in `c4_diagrams/ArchitectureDecisionRecord.md` section 4; the decision to use RabbitMQ is D6 there.
 
 ## 1. Topology
 
@@ -179,15 +179,21 @@ Delivery is at-least-once: a retry reuses the stored `messageId`, so every consu
 
 ### Known limitations
 
-**No reconnection after a broker drop.** No service reconnects its consumer once the RabbitMQ connection drops (the broker restarts, or the network blips). The team decided on 2026-10-31 not to fix this before the code freeze: writing reconnection code, or switching to a reconnecting library such as `amqp-connection-manager`, would mean retesting every service that uses RabbitMQ. What happens instead:
+**Consumers never reconnect.** The four consuming services (notification, registration, venue and equipment) connect to RabbitMQ once, at startup. If RabbitMQ isn't accepting connections at that moment, or the connection drops later, the consumer stops for good. The team decided on 2026-10-31 not to fix this before the code freeze: writing reconnection code, or switching to a reconnecting library such as `amqp-connection-manager`, would mean retesting every service that uses RabbitMQ.
 
-| Service | On a broker drop |
-|---|---|
-| notification-service, registration-service | The error is logged and the REST API keeps running, but the consumer stops taking messages. `/health` still returns `{"ok":true}`, so neither the healthcheck nor Docker's `restart: unless-stopped` notices. registration-service's publisher reconnects on its next publish. |
-| events-service, venue-service, equipment-service | Their connections have no `error` listener, so the drop ends the process. Under Docker the restart policy brings it back; under `npm run dev` it stays down until restarted (the other services keep running). |
-| chat-service | Publishes only. It logs the error and reconnects on its next publish. |
+What happens, as tested with the full Docker stack on 2026-10-31:
 
-Workaround: once RabbitMQ is back, restart the affected services (`docker compose restart notification-service registration-service`, or stop and rerun `npm run dev`). Queues are durable and messages are published as persistent, so whatever reached a queue while its consumer was stopped is processed after the restart. Messages published while the broker itself was down are dropped, except those events-service sends through its outbox (above).
+| When | notification-service, registration-service | venue-service, equipment-service |
+|---|---|---|
+| RabbitMQ isn't accepting connections yet when the service starts | Logs `failed to connect to RabbitMQ, consumer idle` and never retries | Same |
+| RabbitMQ shuts down normally (e.g. `docker compose restart rabbitmq`) | Nothing crashes and nothing is logged; the consumer stops | Same |
+| The connection breaks abruptly (RabbitMQ is killed, or the network fails) | Logs the error and keeps running; the consumer stops | No `error` listener, so the process crashes. Docker's `restart: unless-stopped` restarts it, but if RabbitMQ isn't back yet it fails to connect and stays idle; under `npm run dev` it stays down |
+
+In every case the REST API keeps answering and `/health` returns `{"ok":true}`, so neither a healthcheck nor Docker's restart policy notices, and no consumer comes back on its own. While a consumer is stopped nobody is notified, and a cancelled event's bookings, equipment and registrations are not released.
+
+Publishers connect on their first publish. registration-service's and chat-service's reconnect on their next publish after a drop. events-service's, venue-service's and equipment-service's have no `error` listener, so an abrupt drop while one is connected ends that process too.
+
+Workaround: once RabbitMQ is accepting connections again, restart all four consumers: `docker compose restart notification-service registration-service venue-service equipment-service`, or stop and rerun `npm run dev`. Queues are durable and messages are published as persistent, so whatever reached a queue while its consumer was stopped is processed after the restart. Messages published while RabbitMQ itself was down are dropped, except those events-service sends through its outbox (above).
 
 **A failed role lookup holds back the whole notification.** A message can name users and roles together, e.g. `event.cancelled` for an event with no coordinator yet goes to the Organiser and to every `coordinator_lead`. notification-service asks user-service who holds each role before writing anything. If that lookup fails, the message goes to `notification-service.dlq` and nobody on it is notified, including the users it names. This is deliberate: before, a failed lookup was treated as "nobody holds this role" and the message was acked and lost. Nothing replays the DLQ automatically; dead-lettered messages can be inspected in the management UI (section 6).
 
@@ -202,5 +208,7 @@ docker compose up -d rabbitmq
 ```
 
 (from the repo root, using `docker-compose.yml`; `docker compose down` stops it, and a named volume keeps queue state across restarts.)
+
+Wait until RabbitMQ is ready before starting the services, since a consumer that can't connect at startup never retries (Known limitations, section 4). It is ready once `docker logs connectsphere-rabbitmq` shows `Server startup complete`, a few seconds after the container starts.
 
 The management UI is at `http://localhost:15672` (guest / guest), where queues, bindings and dead-lettered messages can be inspected. Per AGENTS.md section 5, adding `RABBITMQ_URL` means updating `backend/.env.example` and `backend/README.md` in the same change.

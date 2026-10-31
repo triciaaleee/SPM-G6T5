@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 /**
  * The envelope every publisher on `connectsphere.events` uses
- * (c4_diagrams/RabbitMQ.md section 2).
+ * (RabbitMQ.md section 2).
  */
 export interface OutboundMessage {
   /** Set by a caller that must publish the same message twice as one (a redelivered trigger); otherwise generated. */
