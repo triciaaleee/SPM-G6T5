@@ -37,6 +37,26 @@ function formatUnavailabilityDate(value: unknown): string {
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }
 
+/**
+ * "2026-10-31T22:04:39.075455+00:00" → "1 Nov 2026, 6:04 am" in Singapore time
+ * (the app's one timezone, AGENTS.md §3). Anything that isn't a timestamp is
+ * shown as given, and nothing gives "".
+ */
+function formatSingaporeTime(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Singapore",
+  });
+}
+
 interface AmendedChange {
   kind: "quantity" | "type" | "added" | "removed";
   equipmentType: string;
@@ -358,20 +378,23 @@ const TEMPLATES: Record<string, Template> = {
   }),
 
   /** #21 in RabbitMQ.md section 3.3 (#106 row 4a) — to the assigned coordinator. */
-  "hold.expired": (msg) => ({
-    title: `${msg.data.venueName ?? "The venue"} — hold expired`,
-    body:
-      `The hold on ${msg.data.venueName ?? "the venue"} for ${msg.data.eventName ?? "your event"} expired before it was decided. ` +
-      "You can request another venue or another time.",
-    link: eventLink(msg),
-  }),
+  "hold.expired": (msg) => {
+    const expiredAt = formatSingaporeTime(msg.data.expiresAt);
+    return {
+      title: `${msg.data.venueName ?? "The venue"} — hold expired`,
+      body:
+        `The hold on ${msg.data.venueName ?? "the venue"} for ${msg.data.eventName ?? "your event"} expired${expiredAt ? ` at ${expiredAt}` : ""} before it was decided. ` +
+        "You can request another venue or another time.",
+      link: eventLink(msg),
+    };
+  },
 
   /** #20 in RabbitMQ.md section 3.3 (#106 row 4b) — to the assigned coordinator, before the hold lapses. */
   "hold.expiring": (msg) => ({
     title: `${msg.data.venueName ?? "The venue"} — hold expiring soon`,
     body:
       `The hold on ${msg.data.venueName ?? "the venue"} for ${msg.data.eventName ?? "your event"} expires at ` +
-      `${msg.data.expiresAt ?? "soon"}. Decide or it will be released automatically.`,
+      `${formatSingaporeTime(msg.data.expiresAt) || "soon"}. Decide or it will be released automatically.`,
     link: eventLink(msg),
   }),
 

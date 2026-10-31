@@ -439,6 +439,13 @@ const CASES: Case[] = [
   },
   {
     type: "hold.expired",
+    name: "with the expiry time, shown in Singapore time",
+    data: { venueName: "Hall", eventName: "Gala", expiresAt: "2026-10-31T22:04:39.075455+00:00" },
+    title: "Hall — hold expired",
+    body: "The hold on Hall for Gala expired at 1 Nov 2026, 6:04 am before it was decided. You can request another venue or another time.",
+  },
+  {
+    type: "hold.expired",
     name: "no details",
     title: "The venue — hold expired",
     body: "The hold on the venue for your event expired before it was decided. You can request another venue or another time.",
@@ -449,6 +456,13 @@ const CASES: Case[] = [
     data: { venueName: "Hall", eventName: "Gala", expiresAt: "5pm" },
     title: "Hall — hold expiring soon",
     body: "The hold on Hall for Gala expires at 5pm. Decide or it will be released automatically.",
+  },
+  {
+    type: "hold.expiring",
+    name: "formats a timestamp in Singapore time",
+    data: { venueName: "Hall", eventName: "Gala", expiresAt: "2026-10-31T22:04:39.075455+00:00" },
+    title: "Hall — hold expiring soon",
+    body: "The hold on Hall for Gala expires at 1 Nov 2026, 6:04 am. Decide or it will be released automatically.",
   },
   {
     type: "hold.expiring",
