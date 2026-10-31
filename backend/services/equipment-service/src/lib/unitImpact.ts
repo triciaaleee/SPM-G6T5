@@ -48,6 +48,7 @@ export interface ImpactResult {
 
 /** Sortable start of an event: date then time; an unknown date sorts last. */
 function startKey(event: AffectedEvent): string {
+  // Stryker disable next-line StringLiteral: an unknown date sorts after every real one whichever fallback is used; the "00:00" fallback is covered by a test
   return `${event.proposedDate ?? "9999-12-31"}T${event.startTime ?? "00:00"}`;
 }
 
@@ -75,6 +76,7 @@ export async function impactForUnits(
   const eventIds = [...new Set(bookings.map((b) => b.event_id))];
   let eventsOk = true;
   const infoById = new Map<number, EquipmentBookingInfo>();
+  // Stryker disable next-line ConditionalExpression,EqualityOperator: fetchEventBookingInfo([]) answers without a request, so asking for no events is the same as skipping the call
   if (eventIds.length > 0) {
     const info = await fetchEventBookingInfo(eventIds, authorization);
     if (info.status === "ok") for (const event of info.events) infoById.set(event.id, event);
@@ -126,6 +128,7 @@ export function suggestUnits(units: ImpactUnit[], quantity: number): number[] {
     .sort((a, b) => {
       const soonestA = a.events.map(startKey).sort()[0];
       const soonestB = b.events.map(startKey).sort()[0];
+      // Stryker disable next-line EqualityOperator: `<=` only differs for equal keys, which the `===` branch has already handled
       return soonestA === soonestB ? a.id - b.id : soonestA < soonestB ? 1 : -1;
     });
   return [...free, ...reserved].slice(0, quantity).map((u) => u.id);

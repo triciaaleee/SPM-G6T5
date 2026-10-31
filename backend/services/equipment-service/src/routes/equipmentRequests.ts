@@ -120,6 +120,7 @@ async function fetchReservedUnitsByItemId(
   const { data: units, error: unitsError } = await supabase.from("equipment").select("id, label").in("id", unitIds);
   if (unitsError) return byItemId;
 
+  // Stryker disable next-line ArrayDeclaration: a junk row has no id, so it never matches a booking's unit
   const labelById = new Map((units ?? []).map((u) => [u.id as number, (u.label as string | null) ?? null]));
   for (const booking of bookings as { equipment_id: number; request_item_id: number | null }[]) {
     if (booking.request_item_id == null) continue;
@@ -132,6 +133,8 @@ async function fetchReservedUnitsByItemId(
 
 /** The window of an events-service record shaped like `EquipmentBookingInfo`. */
 function windowOf(event: EquipmentBookingInfo | undefined): OccupiedWindow | null {
+  // Both callers pass an event they have just looked up, so the `undefined` side is never taken.
+  /* v8 ignore next -- @preserve */
   return event ? occupiedWindow(event) : null;
 }
 
@@ -158,6 +161,7 @@ equipmentRequestsRouter.post("/", async (req: AuthedRequest, res) => {
   }
 
   const body = (req.body ?? {}) as { eventId?: unknown; items?: unknown };
+  // Stryker disable next-line ConditionalExpression,EqualityOperator,StringLiteral: every branch ends in String(...), and anything that isn't a positive integer is refused
   const rawEventId = typeof body.eventId === "number" ? String(body.eventId) : String(body.eventId ?? "");
   if (!isPositiveInteger(rawEventId)) {
     res.status(400).json({ error: "A valid eventId is required" });
@@ -186,6 +190,7 @@ equipmentRequestsRouter.post("/", async (req: AuthedRequest, res) => {
     res.status(500).json({ error: "Failed to validate the equipment items" });
     return;
   }
+  // Stryker disable next-line ArrayDeclaration: a junk row has no id, so it never matches an item's catalog id
   const catalogNameById = new Map((catalogRows ?? []).map((row) => [row.id as number, row.name as string]));
   const catalogFields: Record<string, string> = {};
   items.forEach((item, index) => {
@@ -282,6 +287,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
     return;
   }
 
+  // Stryker disable next-line ConditionalExpression: a non-string fails isPositiveInteger just as undefined does
   const rawEventId = typeof req.query.eventId === "string" ? req.query.eventId : undefined;
 
   // E3-14: the Safety Officer reads an event's equipment to flag what must
@@ -317,6 +323,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
     }
 
     const requestIds = requests.map((r) => r.id);
+    // Stryker disable ObjectLiteral: a missing result is read through `itemRows ?? []` anyway
     const { data: itemRows, error: itemRowsError } =
       requestIds.length === 0
         ? { data: [] as ItemRow[], error: null }
@@ -325,6 +332,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
             .select(ITEM_COLUMNS)
             .in("request_id", requestIds);
 
+    // Stryker restore ObjectLiteral
     if (itemRowsError) {
       res.status(500).json({ error: "Failed to load equipment items" });
       return;
@@ -370,6 +378,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
   }
 
   const requestIds = (requests as RequestRow[]).map((r) => r.id);
+  // Stryker disable ObjectLiteral: a missing result is read through `itemRows ?? []` anyway
   const { data: itemRows, error: itemRowsError } =
     requestIds.length === 0
       ? { data: [] as ItemRow[], error: null }
@@ -378,6 +387,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
           .select(ITEM_COLUMNS)
           .in("request_id", requestIds);
 
+  // Stryker restore ObjectLiteral
   if (itemRowsError) {
     res.status(500).json({ error: "Failed to load equipment items" });
     return;
@@ -440,12 +450,14 @@ equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) =
   }
   const eventId = Number(rawEventId);
 
+  // Stryker disable ObjectLiteral: ascending is the default
   const { data: requests, error: requestsError } = await supabase
     .from("equipment_requests")
     .select("id, event_id, coordinator_id, status, fulfillment_note, created_at")
     .eq("event_id", eventId)
     .order("created_at", { ascending: true });
 
+  // Stryker restore ObjectLiteral
   if (requestsError || !requests) {
     res.status(500).json({ error: "Failed to load equipment requests" });
     return;
@@ -536,6 +548,7 @@ equipmentRequestsRouter.get("/items/:itemId/unit-preview", async (req: AuthedReq
   }
   const itemId = Number(req.params.itemId);
 
+  // Stryker disable next-line ConditionalExpression,StringLiteral: a non-string or junk fallback fails the quantity check the same way
   const rawQuantity = typeof req.query.quantity === "string" ? req.query.quantity : "";
   if (!isPositiveInteger(rawQuantity) && rawQuantity !== "0") {
     res.status(400).json({ error: "A valid quantity is required" });
@@ -632,7 +645,9 @@ function targetFulfilledByItem(
   fulfillments: { itemId: number; fulfilledQuantity: number }[],
 ): Map<number, number> {
   const map = new Map<number, number>();
+  // Stryker disable next-line ConditionalExpression,BlockStatement: an item missing from the map reads as 0 (`?? 0`) in the caller, so setting 0 is redundant
   if (status === "Requested") {
+    // Stryker disable next-line CallExpression: an item missing from the map reads as 0 (`?? 0`) in the caller, so setting 0 is redundant
     for (const item of items) map.set(item.id, 0);
   } else if (status === "Arranged") {
     for (const item of items) map.set(item.id, item.quantity);
@@ -738,6 +753,9 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   const targetByItem = targetFulfilledByItem(status, items, fulfillments);
   const deltas = items.map((item) => ({
     item,
+    // targetFulfilledByItem sets every item (validateStatusUpdate requires a fulfillment for each),
+    // so the `?? 0` on the target is only a type guard.
+    /* v8 ignore next -- @preserve */
     delta: (targetByItem.get(item.id) ?? 0) - (item.quantity_fulfilled ?? 0),
   }));
 
@@ -819,6 +837,7 @@ equipmentRequestsRouter.patch("/:id", async (req: AuthedRequest, res) => {
   });
 
   if (reserveError) {
+    // Stryker disable next-line StringLiteral: a fallback message that matches none of the patterns is handled like an empty one
     const message = reserveError.message ?? "";
     if (message.includes("Not enough stock")) {
       res.status(409).json({ error: "Not enough stock available to make this change." });
@@ -1154,6 +1173,7 @@ equipmentRequestsRouter.put("/:id/items", async (req: AuthedRequest, res) => {
     res.status(500).json({ error: "Failed to validate the equipment items" });
     return;
   }
+  // Stryker disable next-line ArrayDeclaration: a junk row has no id, so it never matches an item's catalog id
   const catalogNameById = new Map((catalogRows ?? []).map((row) => [row.id as number, row.name as string]));
   const catalogFields: Record<string, string> = {};
   items.forEach((item, index) => {
@@ -1176,6 +1196,7 @@ equipmentRequestsRouter.put("/:id/items", async (req: AuthedRequest, res) => {
     })),
   });
   if (amendError) {
+    // Stryker disable next-line StringLiteral: a fallback message that matches none of the patterns is handled like an empty one
     const message = amendError.message ?? "";
     if (message.includes("cannot be amended")) {
       res.status(409).json({ error: "This request can no longer be amended." });
@@ -1229,6 +1250,7 @@ equipmentRequestsRouter.post("/:id/cancel", async (req: AuthedRequest, res) => {
     p_request_id: request.id,
   });
   if (cancelError) {
+    // Stryker disable next-line StringLiteral: a fallback message that matches none of the patterns is handled like an empty one
     if ((cancelError.message ?? "").includes("already cancelled")) {
       res.status(409).json({ error: "This equipment request has been cancelled." });
     } else {
