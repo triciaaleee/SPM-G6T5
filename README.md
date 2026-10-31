@@ -1,230 +1,314 @@
-# SPM-G6T5
+# ConnectSphere
 
 [![CI](https://github.com/triciaaleee/SPM-G6T5/actions/workflows/ci.yml/badge.svg)](https://github.com/triciaaleee/SPM-G6T5/actions/workflows/ci.yml)
 
-# Backend
+**ConnectSphere plans client events from first request to completion.** Organisers submit requests, coordinators arrange venues and equipment, a safety officer signs off, and attendees discover and register for confirmed events.
 
-Express/TypeScript microservices:
+Built by team G6T5 with Vue 3, TypeScript, Express microservices, Supabase Postgres and RabbitMQ.
 
-- **`services/events-service`** (port 4001) — event CRUD, scoped by role
-- **`services/user-service`** (port 4002) — signup/login, JWT issuance, user records
-- **`services/venue-service`** (port 4003) — venue search/filters and venue recommendations for an event (reads events via events-service's API), venue staff schedule and block-out periods (E4-3)
-- **`services/notification-service`** (port 4004) — in-app notifications: each user's feed, filled by consuming RabbitMQ messages from the other services (there is no REST endpoint for creating them)
-- **`services/equipment-service`** (port 4005) — equipment requests (E5-1/E5-3/E5-4) and the equipment inventory. Technical Support open one event's requests with `GET /api/equipment-requests/event/:eventId` (the event's name, date, time and venue and the organiser's technical requirements only; 403 when the event has no request), and view and update stock with `GET`/`POST`/`PATCH /api/equipment-catalog`
-- **`services/registration-service`** (port 4007) — attendee registration (E6): register for / withdraw from an event, an attendee's own registrations, an event's roster (organiser/coordinator only), and the attendee-facing event view. Reads event, venue and user data through those services' REST APIs
+## Contents
 
-All share one config file and Supabase project.
+- [Who uses it](#who-uses-it)
+- [Architecture](#architecture)
+- [Event lifecycle](#event-lifecycle)
+- [Getting started](#getting-started)
+- [Run with Docker](#run-with-docker)
+- [Test accounts](#test-accounts)
+- [Testing](#testing)
+- [CI](#ci)
+- [Project layout](#project-layout)
+- [Documentation](#documentation)
+- [Troubleshooting](#troubleshooting)
 
-## First-time setup
+## Who uses it
+
+| Role | What they do |
+|---|---|
+| **Event Organiser** | Submits and edits event requests, answers clarifications, raises change requests, and cancels their own events |
+| **Event Coordinator Lead** | Watches the unassigned queue, assigns and reassigns coordinators, and oversees workload |
+| **Event Coordinator** | Reviews assigned requests, arranges venues and equipment, submits events for safety review, and decides change requests |
+| **Safety Officer** | Runs the Operational Safety Check: approves, rejects or requests changes |
+| **Venue Staff** | Maintains venues and block-out periods, and holds, approves or rejects booking requests |
+| **Technical Support** | Maintains the equipment inventory and reserves items for events |
+| **Attendee** | Discovers events, registers and withdraws |
+
+## Architecture
+
+Each entity has its own service, and each service reads and writes only its own tables. Services reach each other's data through REST APIs and announce changes through RabbitMQ.
+
+```mermaid
+flowchart TB
+    FE["Vue 3 frontend<br/>:5173"]
+
+    subgraph Services["Express microservices"]
+        EV["events-service<br/>:4001"]
+        US["user-service<br/>:4002"]
+        VE["venue-service<br/>:4003"]
+        NO["notification-service<br/>:4004"]
+        EQ["equipment-service<br/>:4005"]
+        CH["chat-service<br/>:4006"]
+        RE["registration-service<br/>:4007"]
+    end
+
+    MQ{{"RabbitMQ<br/>connectsphere.events"}}
+    DB[("Supabase Postgres")]
+
+    FE -->|"REST + JWT"| Services
+    Services --> DB
+    EV & VE & EQ & CH & RE -->|publish| MQ
+    MQ -->|consume| NO & VE & EQ & RE
+```
+
+| Service | Port | Responsible for |
+|---|---|---|
+| **events-service** | 4001 | Event requests, the lifecycle, assignment, safety review, change requests and the registration period |
+| **user-service** | 4002 | Sign-up, login, JWT issuing and user records |
+| **venue-service** | 4003 | Venues, search and recommendations, bookings, holds and block-out periods |
+| **notification-service** | 4004 | Each user's notification feed, filled only by RabbitMQ messages |
+| **equipment-service** | 4005 | Equipment requests, inventory, units and reservations |
+| **chat-service** | 4006 | Message threads between an event's organiser and coordinator |
+| **registration-service** | 4007 | Attendee registration, withdrawal and event rosters |
+
+**How the services work together**
+
+- **Login:** user-service issues JWTs, and every other service only verifies them with the shared `JWT_SECRET`.
+- **Service-to-service calls:** calls with no user token to forward, such as notification-service looking up who holds a role, use short-lived tokens signed with `INTERNAL_SERVICE_SECRET`.
+- **Messaging:** most messages are best effort, while critical ones such as `event.cancelled` are stored in an outbox and retried until RabbitMQ confirms them. [RabbitMQ.md](RabbitMQ.md) lists every message, who publishes it and who consumes it.
+
+## Event lifecycle
+
+The status machine is fixed and enforced by the backend. An illegal transition returns `409` or `400`.
+
+```mermaid
+stateDiagram-v2
+    direction TB
+    state "Clarification Requested" as Clarification
+    state "Safety Review" as SafetyReview
+    state "Needs Review" as NeedsReview
+
+    [*] --> Draft: save without submitting
+    [*] --> Unassigned: submit
+    Draft --> Unassigned: submit
+    Unassigned --> Requested: Lead assigns
+    Requested --> Planning: coordinator approves
+    Requested --> Rejected: coordinator rejects
+    Requested --> Clarification: coordinator asks
+    Planning --> Clarification: coordinator asks
+    Clarification --> Requested: organiser responds
+    Clarification --> Planning: organiser responds
+    Clarification --> Rejected: coordinator rejects
+    Planning --> SafetyReview: coordinator submits
+    SafetyReview --> Confirmed: Safety Officer approves
+    SafetyReview --> Planning: rejected, changes requested or arrangements lost
+    Confirmed --> NeedsReview: arrangements lost or change request raised
+    NeedsReview --> SafetyReview: coordinator resubmits
+    NeedsReview --> Confirmed: last change request rejected, nothing else changed
+    Confirmed --> Completed: coordinator, after the event ends
+    Rejected --> [*]
+    Completed --> [*]
+    Cancelled --> [*]
+```
+
+The Organiser can also move an event to **Cancelled** from any active status, which releases its venues and equipment and notifies everyone affected. The full rules are in [AGENTS.md](AGENTS.md).
+
+## Getting started
+
+### Prerequisites
+
+- Node.js 22
+- Docker, for RabbitMQ
+- A Supabase project
+
+### 1. Install
 
 ```bash
 cd backend
-npm install                              # installs concurrently
-cp .env.example .env                     # fill in real values below
-cd services/events-service && npm install
-cd ../user-service && npm install
-cd ../venue-service && npm install
-cd ../notification-service && npm install
-cd ../registration-service && npm install
+npm install
+for service in services/*/; do npm install --prefix "$service"; done
+
+cd ../frontend
+npm install
 ```
 
-Edit `backend/.env`:
+### 2. Configure
 
-```
-SUPABASE_URL=https://YOUR-PROJECT.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-JWT_SECRET=replace-with-a-long-random-string
-
-EVENTS_SERVICE_PORT=4001
-USER_SERVICE_PORT=4002
-VENUE_SERVICE_PORT=4003
-NOTIFICATION_SERVICE_PORT=4004
-REGISTRATION_SERVICE_PORT=4007
-
-# Where venue-service reaches events-service (defaults to localhost:EVENTS_SERVICE_PORT)
-EVENTS_SERVICE_URL=http://localhost:4001
-# Where events-service and registration-service reach user-service (defaults to localhost:USER_SERVICE_PORT)
-USER_SERVICE_URL=http://localhost:4002
-# Where registration-service reaches venue-service (defaults to localhost:VENUE_SERVICE_PORT)
-VENUE_SERVICE_URL=http://localhost:4003
+```bash
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
 ```
 
-Apply the SQL migrations in `supabase/migrations/` (in numeric order) against your Supabase project, then `supabase/seed.sql` for test data.
+Then fill these in `backend/.env`. Every service shares this one file, so don't add per-service `.env` files.
 
-## RabbitMQ (required)
+| Variable | What it is |
+|---|---|
+| `SUPABASE_URL` | Your Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Your project's service-role key |
+| `JWT_SECRET` | A long random string for signing logins |
+| `INTERNAL_SERVICE_SECRET` | A different long random string for service-to-service calls |
 
-events-service, registration-service, venue-service, equipment-service and chat-service publish notifications to RabbitMQ (`connectsphere.events` topic exchange), and notification-service consumes them — this is how most in-app notifications are delivered now. **Without it running, those notifications are silently never sent** — the services don't fail, they just log that the broker isn't configured and keep going.
+The ports, service URLs and `RABBITMQ_URL` already have working local values in the example file, along with the optional chat settings.
 
-Start it with Docker before running the backend:
+### 3. Set up the database
+
+Apply the files in `supabase/migrations/` in order to your Supabase project, then run `supabase/seed.sql` for test data.
+
+### 4. Start RabbitMQ
+
+From the repo root:
 
 ```bash
 docker compose up -d rabbitmq
+docker logs connectsphere-rabbitmq | grep "Server startup complete"
 ```
 
-(from the repo root, using the `docker-compose.yml` at the top level). The management UI is at `http://localhost:15672` (guest/guest) if you want to inspect queues or a dead-letter queue.
+**Wait for that line to appear before starting the backend**, because a service that can't reach RabbitMQ at startup doesn't retry. The management UI is at <http://localhost:15672> (guest / guest).
 
-Add to `backend/.env` (see the full env block above):
+### 5. Start the app
 
-```
-RABBITMQ_URL=amqp://guest:guest@localhost:5672
-INTERNAL_SERVICE_SECRET=replace-with-a-long-random-string
-```
-
-Who publishes what:
-
-- **events-service**: `request.submitted`, `request.edited`, `coordinator.assigned`, `coordinator.reassigned`, `clarification.requested`, `clarification.answered`, `request.decided`, `safety.submitted`/`safety.decided` — migrated off direct REST calls to notification-service's API.
-- **registration-service**: `registration.confirmed`/`registration.withdrawn` — its first notification integration ever, built straight onto the broker (there was no REST path to migrate off).
-- **venue-service**: `booking.requested`, `booking.decided` (on hold/approve/reject/auto-reject), `booking.replacement_required`/`booking.unavailability_clash` (venue marked unavailable), `booking.setup_conflict` (also notifies the venue staff member, not just the affected coordinators), `venue.capacity_reduced`, `hold.expired` and `hold.expiring` — migrated off direct REST. `hold.expiring` is new: a scheduled sweep (`setInterval` in `venue-service/src/index.ts`, every 15 minutes) warns a coordinator `HOLD_EXPIRY_WARNING_HOURS` (12h, `lib/bookingStatus.ts`) before a hold lapses, deduped via `venue_bookings.expiry_warning_sent_at` (migration `0033`). It has no end-user token to forward, so it reads events-service's `venue-booking-info` with an internal token instead (see below).
-- **chat-service**: `message.sent` — notifies the other party on an event's chat thread; migrated off direct REST, and the response's `notified` flag now reports whether the broker publish succeeded. Optional env: `CORS_ORIGIN` (comma-separated browser origins; unset = any) and `CHAT_SEND_LIMIT_PER_MINUTE` (per-user send cap, default 30, answered with `429` + `Retry-After`). History is paged: `GET /api/chat/:eventId/messages?limit=50&before=<id>` returns the newest page oldest-first plus `hasMore` and `nextBefore`.
-- **equipment-service**: `equipment.requested` and `equipment.status_changed` — its first notification integration, migrated straight onto the broker. `equipment.requested` also fixed a boundary violation: it used to query user-service's `users` table directly to find every Technical Support Staff member; now `recipients.roles: ["technical_support"]` lets notification-service resolve that itself.
-
-**Action messages are retried.** `event.cancelled` and `event.rejected` (which venue and equipment services act on, and registration service for `event.cancelled`) is stored in events-service's `event_outbox` table (migration `0045`) and republished every 10 seconds until RabbitMQ confirms it, so a broker outage doesn't leave a cancelled event with its bookings still held. Apply the migration before starting events-service. Every other message is still best effort.
-
-**Restart equipment-service and venue-service after pulling.** Each binds its queue to its routing keys when it starts, so a service that was already running keeps the old bindings. equipment-service listens for `event.cancelled`, `event.rejected` and `event.rescheduled` (without it, stored equipment booking windows stay at the old dates until the next claim); venue-service listens for `event.cancelled`, `event.rejected`, `event.rescheduled` and `event.attendance_changed` (without it, a Planning edit won't flag venue bookings that no longer fit).
-
-### Service-to-service auth
-
-`INTERNAL_SERVICE_SECRET` signs short-lived internal tokens for calls that have no end-user bearer token to forward. Two cases today:
-
-- notification-service resolving role-based recipients (`recipients.roles` in a broker message) via user-service.
-- venue-service's expiring-hold sweep reading events-service's `GET /api/events/venue-booking-info` (via `requireAuthOrInternal` on that one route; every other events-service route is unaffected).
-
-Separate from `JWT_SECRET` so a leaked value can't forge a user session or vice versa.
-
-### Accounts
-
-- **Attendees and Event Organisers** sign up themselves at `/signup` (role defaults to Attendee). Passwords need at least 8 characters with at least one letter and one number.
-- **Coordinator, Event Coordinator Lead, Venue Staff and Technical Support** are internal staff roles with no signup path — insert them directly into `users`. `seed.sql` creates `coordinator-one@`, `coordinator-two@`, `coordinator-lead@`, `venue-staff-one@` and `tech-support-one@example.com` (password `password123`) alongside two organisers.
-- After inserting users with hand-picked IDs, run `select sync_user_id_sequences();` so signups don't reuse those IDs (migration `0013`).
-
-## Running
-
-**Make sure RabbitMQ is up first** (`docker compose up -d rabbitmq`, from the repo root) — otherwise notifications silently don't get delivered. See [RabbitMQ (required)](#rabbitmq-required) above.
-
-Start every service together:
+In one terminal, start every backend service:
 
 ```bash
 cd backend
 npm run dev
 ```
 
-Output is prefixed per service (`[events]`, `[users]`, `[venues]`, `[notifications]`, `[registrations]`) so you can tell which one logged what. Ctrl+C stops them all.
-
-To run just one service on its own:
+In another, start the frontend:
 
 ```bash
-cd backend/services/events-service && npm run dev   # or services/user-service, services/venue-service, services/notification-service, services/registration-service
+cd frontend
+npm run dev
 ```
 
-### Running everything in Docker
+Open <http://localhost:5173>.
 
-Each backend service and the frontend has its own `Dockerfile`, and the root `docker-compose.yml` runs them all together with RabbitMQ:
+### 6. Check it's running
 
 ```bash
-docker compose up --build -d     # from the repo root; needs backend/.env
+for port in 4001 4002 4003 4004 4005 4006 4007; do curl -s "http://localhost:$port/health"; echo; done
+```
+
+Each line should say `{"ok":true}`. To check them all without starting them first, stop any running services and use `cd backend && npm run smoke`.
+
+## Run with Docker
+
+Once `backend/.env` is filled in, you can run the whole stack, including the frontend, with one command from the repo root:
+
+```bash
+docker compose up --build -d     # build and start everything
 docker compose ps                # every backend service should show (healthy)
 docker compose logs -f events-service
-docker compose down              # stop everything (add -v to also wipe RabbitMQ's data)
+docker compose down              # stop (add -v to also wipe RabbitMQ's data)
 ```
 
-- The services publish the same host ports as `npm run dev` (4001–4007), and the frontend is at `http://localhost:5173`. **Stop any local `npm run dev` first**, or the ports clash.
-- Config comes from `backend/.env`. Compose overrides `RABBITMQ_URL` and every `*_SERVICE_URL` so the containers reach each other by service name (e.g. `http://events-service:4001`), so leave those as `localhost` in `.env`.
-- The frontend's `VITE_*` API URLs are baked in at build time and point at `localhost:400x`, since the browser calls the services directly. To change them, pass build args (`docker compose build --build-arg VITE_EVENTS_API_URL=... frontend`) and rebuild.
-- After changing code, run `docker compose up --build -d <service>` to rebuild. The images run the compiled `dist/` build, not `tsx watch`.
+- The app is at <http://localhost:5173>, and the services use the same ports as `npm run dev`, so **stop any local `npm run dev` first**.
+- Leave the URLs in `backend/.env` as `localhost`. Compose overrides them so the containers reach each other by name.
+- Images run the compiled build, so rebuild after changing code: `docker compose up --build -d <service>`.
+- The frontend's API URLs are set at build time. To change them, pass build args, such as `docker compose build --build-arg VITE_EVENTS_API_URL=... frontend`.
 
-## Verify it's up
+## Test accounts
+
+`supabase/seed.sql` creates these accounts. The password for all of them is `password123`.
+
+| Role | Email |
+|---|---|
+| Event Organiser | `organiser-one@example.com`, `organiser-two@example.com` |
+| Event Coordinator Lead | `coordinator-lead@example.com` |
+| Event Coordinator | `coordinator-one@example.com`, `coordinator-two@example.com` |
+| Safety Officer | `safety-officer-one@example.com` |
+| Venue Staff | `venue-staff-one@example.com` |
+| Technical Support | `tech-support-one@example.com` |
+| Attendee | `attendee-one@example.com`, `attendee-two@example.com`, `attendee-three@example.com` |
+
+**Creating more accounts:** attendees and organisers can sign up at `/signup`, with a password of at least 8 characters including a letter and a number. Staff roles have no sign-up, so insert them into `users` directly, then run `select sync_user_id_sequences();` so new sign-ups don't reuse their IDs.
+
+## Testing
+
+| Layer | Command | Runs in CI? | What it checks |
+|---|---|---|---|
+| **Unit** | `npm test` | Yes | Each service and the frontend, with other services mocked |
+| **Coverage** | `npm run test:coverage` | No | Unit tests with a v8 coverage report |
+| **Integration** | `npm run test:integration` | No | A service against a real Supabase database |
+| **Mutation** | `npm run test:mutation` | No | Whether the unit tests notice deliberately broken code, using Stryker |
+| **End-to-end** | `npm run e2e` (in `frontend/`) | Yes | Full user flows with Playwright against the real services |
+
+Run the first four from any service's folder, for example:
 
 ```bash
-curl http://localhost:4001/health   # events-service
-curl http://localhost:4002/health   # user-service
-curl http://localhost:4003/health   # venue-service
-curl http://localhost:4004/health   # notification-service
-curl http://localhost:4007/health   # registration-service
+cd backend/services/registration-service
+npm test
+npm run test:coverage
+npm run test:integration
+npm run test:mutation
 ```
 
-Each should return `{"ok":true}`.
+> [!WARNING]
+> `npm run test:integration` writes to the Supabase project in `backend/.env`. The tests use throwaway rows and delete them afterwards, but check which database you're pointing at first. `npm run e2e` also writes to it unless you use a local Supabase, as described in [frontend/e2e/README.md](frontend/e2e/README.md).
 
-Or check every service in one go (starts them with `npm run dev`, checks each `/health`, then stops them; stop any running services first):
+**Things worth knowing, by service**
+
+| Service | Notes |
+|---|---|
+| **events-service** | Fails below 100% coverage. A full mutation run takes about 20 minutes, so use `npm run test:mutation -- --mutate 'src/lib/**/*.ts'` for a quicker one |
+| **equipment-service** | Fails below 100% coverage. Unit tests run the real routes against an in-memory database (`helpers/fakeDb.ts`), and a contract test checks it behaves like the real one. A full mutation run takes about 9 minutes |
+| **notification-service** | Fails below 100% coverage. A full mutation run takes about 2 minutes |
+| **registration-service** | Fails below 100% coverage. Integration tests include real races for the last place. A full mutation run takes about 3 minutes |
+| **venue-service** | Uses a fixed test clock and an in-memory database, with a contract test against the real one |
+
+Reports are written to `coverage/` and `reports/mutation/` in each service. A mutant that can't change behaviour is marked `// Stryker disable next-line <Mutator>: <why>` in the source.
+
+**Keeping tests deterministic:** events-service reads the time only through `lib/clock.ts`, and runs its tests with no sockets and no retries. To try a different time zone or order there:
 
 ```bash
-cd backend && npm run smoke
+TEST_TZ=Asia/Singapore npx vitest run --sequence.shuffle --sequence.seed=1
 ```
-
-## Tests
-
-```bash
-cd backend/services/events-service && npm test
-cd backend/services/user-service && npm test
-cd backend/services/venue-service && npm test
-cd backend/services/notification-service && npm test
-cd backend/services/registration-service && npm test
-cd backend/services/equipment-service && npm test
-```
-
-`user-service` and `venue-service` also have coverage, real-database integration tests and (venue-service) mutation testing:
-
-```bash
-cd backend/services/venue-service
-npm run test:coverage      # unit tests + v8 coverage report (text, coverage/index.html, lcov)
-npm run test:integration   # hits the real (shared dev) Supabase project; never part of `npm test`
-npm run test:mutation      # Stryker: mutates src/ and checks the unit tests notice (slow; report in reports/mutation/)
-```
-
-The integration tests seed throwaway rows under a `ZINT-` prefix and delete them in `afterAll`, so they are safe to run against the dev database. They need `backend/.env` to be filled in.
-
-`events-service` (like `user-service` and `chat-service`) also has coverage, real-database integration and mutation testing. Run these from `backend/services/events-service`:
-
-| Command | What it does |
-|---|---|
-| `npm run test:coverage` | `npm test` with v8 coverage; report in `coverage/` (text, html, lcov). Fails below 100% statements, branches, functions and lines (`src/index.ts`, which only boots the server, is excluded and covered by the CI smoke test). |
-| `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. It creates `ZEVT-` throwaway users and events and deletes them in `afterAll` (and sweeps any a crashed run left behind). RabbitMQ is replaced by an in-memory publisher, so only Supabase is needed. |
-| `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Sets `MUTATION_RUN=1`, which leaves out `routeMatrix.test.ts` (the route sweep) so each mutant runs fast. The TypeScript checker drops mutants that could never compile. A full run takes about 20 minutes; add `-- --mutate 'src/lib/**/*.ts'` for a quicker run on the pure modules, or `--mutate 'src/routes/events/review.ts:100-200'` for a line range. Run only one Stryker at a time per folder, or give a second run its own `--tempDirName`. Mutants that cannot change behaviour are marked `// Stryker disable next-line <Mutator>: <why>` in the source. |
-
-`equipment-service` has the same three, run from `backend/services/equipment-service`:
-
-| Command | What it does |
-|---|---|
-| `npm run test:coverage` | `npm test` with v8 coverage; fails below 100% statements, branches, functions and lines. `src/index.ts` (boots the server) and `*.fake.ts` are excluded. Three branches that no input can reach carry a `/* v8 ignore next -- @preserve */` with the reason beside them. |
-| `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`: the catalog, unit and unavailability routes against real constraints, enums, cascades and stored functions, plus a contract test that runs the same queries on the real database and on the in-memory fake (`src/__tests__/helpers/fakeDb.ts`). Never part of `npm test`. It creates `ZINT` throwaway catalog items, units and one user, and deletes them in `afterAll`. It leaves bookings, requests and events alone, because `equipment_booking.event_id` points at events-service's table. |
-| `npm run test:mutation` | Stryker mutation testing of the unit suite; report in `reports/mutation/`. A full run takes about 9 minutes. Mutants that cannot change behaviour are marked `// Stryker disable next-line <Mutator>: <why>` in the source. |
-
-The unit suites run the real routers and the real auth middleware against `helpers/fakeDb.ts`, an in-memory Supabase stand-in that stores rows, so tests assert the resulting state rather than which methods were called. `helpers/world.ts` stubs events-service and user-service over `fetch`.
-
-`notification-service` has the same layers. Run these from `backend/services/notification-service`:
-
-| Command | What it does |
-|---|---|
-| `npm run test:coverage` | `npm test` with v8 coverage. Fails below 100% statements, branches, functions and lines (`src/index.ts` and `*.fake.ts` are excluded). |
-| `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. Rows use `ZINT-NOTIF-` recipients and are deleted in `afterAll`. No broker or user-service is needed: role lookups are stubbed, and the boot test blanks `RABBITMQ_URL` so it never consumes from the shared queue. |
-| `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Takes about 2 minutes. |
-
-`registration-service` has the same layers. Run these from `backend/services/registration-service`:
-
-| Command | What it does |
-|---|---|
-| `npm run test:coverage` | `npm test` with v8 coverage. Fails below 100% statements, branches, functions and lines (`src/index.ts` and `*.fake.ts` are excluded). |
-| `npm run test:integration` | Runs `src/__tests__/integration/` against the **real** Supabase project in `backend/.env`. Never part of `npm test` or CI. It creates `ZINT-REG-` throwaway users and events and deletes them in `afterAll`. The other services are replaced at their client modules and RabbitMQ by a fake, and the boot test blanks `RABBITMQ_URL` so it never consumes from the shared queue. |
-| `npm run test:mutation` | Stryker mutation testing of the mocked unit suite; report in `reports/mutation/`. Takes about 3 minutes. |
-
-### How the tests stay deterministic
-
-`events-service` follows these rules, so a test never depends on when or where it runs:
-
-- **Time is injected.** Code reads the current time from `lib/clock.ts` (`clock.now()`), never `new Date()` / `Date.now()`. Every test starts with the clock pinned (`src/__tests__/setup.ts`); a test that needs another instant calls `setClockForTest("2026-11-10T10:00:00Z")`. JWT issue and expiry follow the same clock, so sign test tokens with the helper in `src/__tests__/tokens.ts` (events-service).
-- **No sockets.** `supertest` is aliased to an in-process stand-in (`src/__tests__/supertestInProcess.ts`, built on `light-my-request`), so requests go straight to the Express app: no ports, no connection reuse, nothing another app on the machine can collide with.
-- **No retries.** `retry: 0`: a test that passes only on a second attempt is a flaky test and should fail where it is seen.
-- **Any zone, any order.** Tests run in `America/Los_Angeles` by default; set `TEST_TZ=Asia/Singapore` (or any zone) to try another, and `npx vitest run --sequence.shuffle --sequence.seed=<n>` to shuffle the order. Fixtures that a route mutates must be copied per test.
 
 ## CI
 
-Every pull request and every push to `main` runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml): secret scan, lint, type-check, tests, frontend build and the smoke test above. See [CI.md](CI.md) for what each job does, how to run the same checks locally, and the decisions behind it.
+Every pull request and push to `main` runs [`ci.yml`](.github/workflows/ci.yml): secret scan, lint, type-check, unit tests for every service, a frontend build, a smoke test that boots every service, and Playwright end-to-end tests. See [CI.md](CI.md) for details.
+
+To run the main checks before pushing:
 
 ```bash
-cd backend && npm run lint      # ESLint for every service
-cd frontend && npm run lint     # ESLint for the Vue app
+cd backend && npm run lint && npm run smoke
+cd frontend && npm run lint && npm test && npm run build
+cd backend/services/<service> && npx tsc -p tsconfig.json --noEmit && npm test
 ```
 
-## Notes
+## Project layout
 
-- All Supabase/JWT config lives in the single `backend/.env` — don't add per-service `.env` files, both services load the shared one.
-- `user-service` issues and verifies tokens; `events-service` only verifies them (same `JWT_SECRET`), so a token from one works on the other.
+```text
+backend/
+  .env.example          One config file shared by every service
+  scripts/smoke.mjs     Boots every service and checks /health
+  services/             One folder per microservice
+c4_diagrams/            C4 model and Architecture Decision Record
+frontend/
+  src/                  Vue 3 app
+  e2e/                  Playwright tests
+supabase/
+  migrations/           Numbered SQL migrations
+  seed.sql              Test data
+docker-compose.yml      Runs RabbitMQ, or the whole stack
+```
+
+## Documentation
+
+| Document | What's in it |
+|---|---|
+| [AGENTS.md](AGENTS.md) | Project rules: microservices, the event lifecycle, venue bookings, registration and conventions |
+| [Style.md](Style.md) | The frontend design system |
+| [RabbitMQ.md](RabbitMQ.md) | Exchanges, queues, every message, reliable delivery and known limitations |
+| [CI.md](CI.md) | Every CI job, how to run the checks locally, and the decisions behind them |
+| [c4_diagrams/](c4_diagrams) | C4 diagrams and the [Architecture Decision Record](c4_diagrams/ArchitectureDecisionRecord.md) |
+| [frontend/e2e/README.md](frontend/e2e/README.md) | Running the Playwright tests, including against a local database |
+
+## Troubleshooting
+
+| Problem | What to do |
+|---|---|
+| **Notifications aren't arriving** | Check `RABBITMQ_URL` is set and RabbitMQ is running. Without it, services log the problem and carry on without sending anything |
+| **Notifications stopped after RabbitMQ restarted** | Restart the backend. Consumers don't reconnect on their own, even though `/health` still says `{"ok":true}`. See [Known limitations](RabbitMQ.md#known-limitations) |
+| **A change to message handling isn't taking effect** | Restart the affected service, as a service binds its queue to its routing keys when it starts |
+| **`Missing required environment variable(s)`** | Fill in the named variables in `backend/.env` |
+| **A port is already in use** | Stop any other `npm run dev` or `docker compose` stack, since both use the same ports |
+| **Files named like `app 2.ts` keep appearing** | iCloud is probably syncing the repo. Move it out of `~/Documents` and `~/Desktop`, or turn off Desktop & Documents in iCloud settings |
