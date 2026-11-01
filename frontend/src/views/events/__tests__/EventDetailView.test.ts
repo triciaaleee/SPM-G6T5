@@ -1222,6 +1222,14 @@ describe("EventDetailView — page layout", () => {
   const requestAnother = (wrapper: Awaited<ReturnType<typeof mountPage>>) =>
     wrapper.find('[data-testid="request-another-venue"]');
 
+  it("hides the Venue Recommendations card from a coordinator who is not assigned to the event", async () => {
+    mockedBookings.mockResolvedValue([]);
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }), { id: "COORD-0002", role: "coordinator" });
+    await openTab(wrapper, "Arrangements");
+
+    expect(recommendationsCard(wrapper).exists()).toBe(false);
+  });
+
   it("shows the Venue Recommendations card, and no Request another venue button, before any venue is requested", async () => {
     mockedBookings.mockResolvedValue([]);
     const wrapper = await mountPage(makeEvent({ status: "Planning" }));

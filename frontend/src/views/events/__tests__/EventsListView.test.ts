@@ -167,6 +167,31 @@ describe("EventsListView", () => {
     expect(wrapper.find(".badge").text()).toBe("Clarification Requested");
   });
 
+  it("lists events waiting on the organiser first, with a warning border, and keeps the rest in order", async () => {
+    const named = (id: number, name: string, status: string) =>
+      makeEvent({ id, status, submitted_details: { name, proposedDate: "2099-06-15" } });
+    const wrapper = await mountView([
+      named(1, "First", "Requested"),
+      named(2, "Second", "Clarification Requested"),
+      named(3, "Third", "Planning"),
+      named(4, "Fourth", "Clarification Requested"),
+    ]);
+
+    const cards = wrapper.findAll(".event-card");
+    expect(cards.map((c) => c.find(".card-title").text())).toEqual(["Second", "Fourth", "First", "Third"]);
+    expect(cards.map((c) => c.classes().includes("event-card--attention"))).toEqual([true, true, false, false]);
+  });
+
+  it("does not reorder or highlight anything for a coordinator", async () => {
+    const wrapper = await mountView(
+      [makeEvent({ id: 1 }), makeEvent({ id: 2, status: "Clarification Requested" })],
+      "coordinator",
+    );
+
+    expect(wrapper.findAll(".event-card").map((c) => c.attributes("href"))).toEqual(["/events/1", "/events/2"]);
+    expect(wrapper.find(".event-card--attention").exists()).toBe(false);
+  });
+
   it("does not ask a coordinator to reply", async () => {
     const wrapper = await mountView([makeEvent({ status: "Clarification Requested" })], "coordinator");
 

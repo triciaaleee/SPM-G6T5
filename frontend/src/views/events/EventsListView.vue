@@ -35,7 +35,12 @@ const activeTab = ref<EventsTab>(route.query.tab === "drafts" ? "drafts" : "subm
 
 const filteredEvents = computed(() => {
   if (activeTab.value === "drafts") return events.value.filter((event) => event.status === "Draft");
-  return events.value.filter((event) => event.status !== "Draft");
+  const submitted = events.value.filter((event) => event.status !== "Draft");
+  // Events waiting on the organiser come first; each group keeps its own order.
+  return [
+    ...submitted.filter((event) => needsClarificationReply(event)),
+    ...submitted.filter((event) => !needsClarificationReply(event)),
+  ];
 });
 
 // Client-side paging: 12 cards a page divides evenly into the grid's 3, 2 and 1 columns.
@@ -205,6 +210,7 @@ onMounted(async () => {
         <div v-for="event in pagedEvents" :key="event.id" class="card-cell">
           <EventCard
             :to="eventLink(event)"
+            :attention="needsClarificationReply(event)"
             :thumbnail="eventThumbnail(event.id)"
             :title="eventName(event)"
             :status-label="event.status"

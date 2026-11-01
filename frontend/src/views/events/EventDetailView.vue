@@ -2291,7 +2291,7 @@ onMounted(async () => {
 
           <!-- Venue search for the first request: opens pre-filled with this event's date, time and attendance.
                Once a venue is requested or confirmed, this card gives way to "Request another venue" above. -->
-          <AppPanel size="lg" class="venue-search-entry" v-if="isCoordinator && event.status !== 'Rejected' && !venuesRequested"
+          <AppPanel size="lg" class="venue-search-entry" v-if="isAssignedCoordinator && event.status !== 'Rejected' && !venuesRequested"
        data-testid="venue-recommendations">
             <h2 class="section-title">Venue Recommendations</h2>
             <!-- E4-17: what the next booking is for; recommendations and Find venues follow it. Re-keyed after

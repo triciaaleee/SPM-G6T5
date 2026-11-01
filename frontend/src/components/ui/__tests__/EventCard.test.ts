@@ -40,6 +40,11 @@ describe("EventCard", () => {
     expect(badge.classes()).toContain("status-warning");
   });
 
+  it("gets a warning border only when it needs attention", () => {
+    expect(mountCard().classes()).not.toContain("event-card--attention");
+    expect(mountCard({ attention: true }).classes()).toContain("event-card--attention");
+  });
+
   it("puts a dot on the status badge by default, and can leave it off", () => {
     expect(mountCard().find(".badge__dot").exists()).toBe(true);
     expect(mountCard({ dot: false }).find(".badge__dot").exists()).toBe(false);
