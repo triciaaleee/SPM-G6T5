@@ -362,4 +362,3 @@ docker-compose.yml      Runs RabbitMQ, or the whole stack
 | **A change to message handling isn't taking effect** | Restart the affected service, as a service binds its queue to its routing keys when it starts |
 | **`Missing required environment variable(s)`** | Fill in the named variables in `backend/.env` |
 | **A port is already in use** | Stop any other `npm run dev` or `docker compose` stack, since both use the same ports |
-| **Files named like `app 2.ts` keep appearing** | iCloud is probably syncing the repo. Move it out of `~/Documents` and `~/Desktop`, or turn off Desktop & Documents in iCloud settings |
