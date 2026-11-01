@@ -32,7 +32,7 @@ function buildApp(rows: Record<string, unknown>[], user = support, error: unknow
 
 describe("GET /api/venues/support-info (E5-1)", () => {
   it("returns only venue names for Approved bookings", async () => {
-    const { app, select, inFilter, eq } = buildApp([
+    const { app, from, select, inFilter, eq } = buildApp([
       { event_id: 1, venues: { name: "Lecture Theatre LT1" } },
       { event_id: 2, venues: [{ name: "Grand Ballroom" }] },
     ]);
@@ -46,6 +46,7 @@ describe("GET /api/venues/support-info (E5-1)", () => {
         { eventId: 2, venueName: "Grand Ballroom" },
       ],
     });
+    expect(from).toHaveBeenCalledWith("venue_bookings");
     expect(select).toHaveBeenCalledWith("event_id, venues (name)");
     expect(inFilter).toHaveBeenCalledWith("event_id", [1, 2]);
     expect(eq).toHaveBeenCalledWith("status", "Approved");
@@ -59,19 +60,32 @@ describe("GET /api/venues/support-info (E5-1)", () => {
     expect(res.body).toEqual({ venues: [] });
   });
 
+  it("answers an empty list when the lookup returns no rows at all", async () => {
+    const { app, eq } = buildApp([]);
+    eq.mockResolvedValue({ data: null, error: null });
+
+    const res = await request(app).get("/api/venues/support-info?eventIds=1");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ venues: [] });
+  });
+
   it("refuses every other role without querying", async () => {
     const { app, from } = buildApp([], { id: "COORD-0001", role: "coordinator" });
 
     const res = await request(app).get("/api/venues/support-info?eventIds=1");
 
     expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "Access denied" });
     expect(from).not.toHaveBeenCalled();
   });
 
   it("rejects missing or malformed event ids", async () => {
     const { app } = buildApp([]);
 
-    expect((await request(app).get("/api/venues/support-info")).status).toBe(400);
+    const missing = await request(app).get("/api/venues/support-info");
+    expect(missing.status).toBe(400);
+    expect(missing.body).toEqual({ error: "eventIds must be 1–100 comma-separated event ids" });
     expect((await request(app).get("/api/venues/support-info?eventIds=abc")).status).toBe(400);
   });
 
@@ -81,5 +95,6 @@ describe("GET /api/venues/support-info (E5-1)", () => {
     const res = await request(app).get("/api/venues/support-info?eventIds=1");
 
     expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to load venues" });
   });
 });
