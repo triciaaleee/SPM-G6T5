@@ -88,8 +88,8 @@ flowchart TB
 
 - **Login:** user-service issues JWTs, and every other service only verifies them with the shared `JWT_SECRET`.
 - **Service-to-service calls:** calls with no user token to forward use short-lived tokens signed with `INTERNAL_SERVICE_SECRET`. For example, notification-service looks up who holds a role in user-service, and venue-service's hold sweep reads `GET /api/events/venue-booking-info`.
-- **Hold warnings:** venue-service checks holds every 15 minutes and warns the coordinator 12 hours before one expires, recording this in `venue_bookings.expiry_warning_sent_at` so each hold is only warned about once.
-- **Chat limits:** `GET /api/chat/:eventId/messages?limit=50&before=<id>` returns a page of history with `hasMore` and `nextBefore`. Each user can send 30 messages a minute by default, set with `CHAT_SEND_LIMIT_PER_MINUTE`, after which the API returns `429` with `Retry-After`.
+- **Hold warnings:** venue-service checks holds every 15 minutes and warns the coordinator once, 12 hours before one expires.
+- **Chat limits:** each user can send 30 messages a minute by default, set with `CHAT_SEND_LIMIT_PER_MINUTE`, after which the API returns `429`.
 - **Messaging:** most messages are best effort, while critical ones such as `event.cancelled` are stored in an outbox and retried until RabbitMQ confirms them. [RabbitMQ.md](RabbitMQ.md) lists every message, who publishes it and who consumes it.
 
 ## Event lifecycle
@@ -167,7 +167,11 @@ The ports, service URLs and `RABBITMQ_URL` already have working local values in 
 
 ### 3. Set up the database
 
-**Using a hosted Supabase project:** apply the files in `supabase/migrations/` in order, then run `supabase/seed.sql` for test data.
+**Using a hosted Supabase project:** apply the files in `supabase/migrations/` in exact filename order, then run `supabase/seed.sql` for test data. Some number prefixes are used twice, so print the order to follow from the repo root:
+
+```bash
+find supabase/migrations -name '*.sql' | LC_ALL=C sort
+```
 
 **Using a throwaway local database,** which keeps your testing out of any shared data (needs the [Supabase CLI](https://supabase.com/docs/guides/local-development), `psql` and Docker):
 
@@ -217,7 +221,7 @@ Each line should say `{"ok":true}`. To check them all without starting them firs
 
 ## Run with Docker
 
-Once `backend/.env` is filled in, you can run the whole stack, including the frontend, with one command from the repo root:
+Once `backend/.env` is filled in and the database is set up ([steps 2 and 3](#2-configure) above), you can run the whole stack, including the frontend, with one command from the repo root:
 
 ```bash
 docker compose up --build -d     # build and start everything
@@ -227,7 +231,8 @@ docker compose down              # stop (add -v to also wipe RabbitMQ's data)
 ```
 
 - The app is at <http://localhost:5173>, and the services use the same ports as `npm run dev`, so **stop any local `npm run dev` first**.
-- Leave the URLs in `backend/.env` as `localhost`. Compose overrides them so the containers reach each other by name.
+- Leave the service URLs in `backend/.env` as `localhost`. Compose overrides them so the containers reach each other by name.
+- `SUPABASE_URL` isn't overridden, so it must be reachable from inside a container. A hosted project works as it is. For a local database on Docker Desktop, use `host.docker.internal` as the host instead of `127.0.0.1` or `localhost`.
 - Images run the compiled build, so rebuild after changing code: `docker compose up --build -d <service>`.
 - The frontend's API URLs are set at build time. To change them, pass build args, such as `docker compose build --build-arg VITE_EVENTS_API_URL=... frontend`.
 
@@ -293,24 +298,18 @@ npm run test:mutation
 > [!WARNING]
 > `npm run test:integration` writes to the Supabase project in `backend/.env`. The tests use throwaway rows and delete them afterwards, but check which database you're pointing at first. `npm run e2e` also writes to it unless you use a local Supabase, as described in [frontend/e2e/README.md](frontend/e2e/README.md).
 
-Every service has the same four commands. A full mutation run can take from a few minutes to about 20 minutes, depending on the service, so use `npm run test:mutation -- --mutate 'src/lib/**/*.ts'` for a quicker run. Reports are written to `coverage/` and `reports/mutation/`. A mutant that can't change behaviour is marked `// Stryker disable next-line <Mutator>: <why>` in the source.
-
-**Keeping tests deterministic:** events-service reads the time only through `lib/clock.ts`, and runs its tests with no sockets and no retries. To try a different time zone or order there:
-
-```bash
-TEST_TZ=Asia/Singapore npx vitest run --sequence.shuffle --sequence.seed=1
-```
+Every service has the same four commands. A full mutation run can take from a few minutes to about 20 minutes, depending on the service, so use `npm run test:mutation -- --mutate 'src/lib/**/*.ts'` for a quicker run. Reports are written to `coverage/` and `reports/mutation/`.
 
 ## CI
 
 Every pull request and push to `main` runs [`ci.yml`](.github/workflows/ci.yml): secret scan, lint, type-check, unit tests for every service, a frontend build, a smoke test that boots every service, and Playwright end-to-end tests. See [CI.md](CI.md) for details.
 
-To run the main checks before pushing:
+To run the main checks before pushing, from the repo root:
 
 ```bash
-cd backend && npm run lint && npm run smoke
-cd frontend && npm run lint && npm test && npm run build
-cd backend/services/<service> && npx tsc -p tsconfig.json --noEmit && npm test
+(cd backend && npm run lint && npm run smoke)
+(cd frontend && npm run lint && npm test && npm run build)
+(cd backend/services/<service> && npx tsc -p tsconfig.json --noEmit && npm test)
 ```
 
 ## Contributing
@@ -332,6 +331,7 @@ backend/
   scripts/smoke.mjs     Boots every service and checks /health
   services/             One folder per microservice
 c4_diagrams/            C4 model and Architecture Decision Record
+e2e/                    Swimlane pages of the end-to-end scenarios
 frontend/
   src/                  Vue 3 app
   e2e/                  Playwright tests
@@ -363,3 +363,4 @@ docker-compose.yml      Runs RabbitMQ, or the whole stack
 | [c4_diagrams/](c4_diagrams) | C4 diagrams as Structurizr DSL (`.dsl`) files, and the [Architecture Decision Record](c4_diagrams/ArchitectureDecisionRecord.md) |
 | [frontend/docs/frontend-audit.md](frontend/docs/frontend-audit.md) | A design-consistency audit of the frontend against Style.md |
 | [frontend/e2e/README.md](frontend/e2e/README.md) | Running the Playwright tests, including against a local database |
+| [e2e/index.html](e2e/index.html) | Swimlane pages showing the end-to-end scenarios the Playwright tests cover |
