@@ -59,6 +59,16 @@ describe("GET /api/venues/support-info (E5-1)", () => {
     expect(res.body).toEqual({ venues: [] });
   });
 
+  it("answers an empty list when the lookup returns no rows at all", async () => {
+    const { app, eq } = buildApp([]);
+    eq.mockResolvedValue({ data: null, error: null });
+
+    const res = await request(app).get("/api/venues/support-info?eventIds=1");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ venues: [] });
+  });
+
   it("refuses every other role without querying", async () => {
     const { app, from } = buildApp([], { id: "COORD-0001", role: "coordinator" });
 
