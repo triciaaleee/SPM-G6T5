@@ -18,6 +18,8 @@ export default defineConfig({
       reporter: ["text", "html", "lcov"],
       include: ["src/**/*.ts"],
       exclude: ["src/__tests__/**", "src/index.ts"],
+      // Every file is at 100% today; this keeps it there.
+      thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },
   },
 });
