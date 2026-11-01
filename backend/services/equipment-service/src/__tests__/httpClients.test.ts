@@ -7,6 +7,7 @@ import {
   toSupportEventInfo,
 } from "../lib/eventsClient.js";
 import { fetchUserNames } from "../lib/usersClient.js";
+import { fetchBookedVenueNames } from "../lib/venuesClient.js";
 
 const fetchMock = vi.fn();
 const reply = (status: number, body?: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
@@ -189,5 +190,70 @@ describe("fetchUserNames", () => {
     vi.stubEnv("USER_SERVICE_PORT", "5002");
     await fetchUserNames(["C1"], "t");
     expect(fetchMock.mock.calls[1][0]).toBe("http://localhost:5002/api/users/names?ids=C1");
+  });
+});
+
+describe("fetchBookedVenueNames", () => {
+  beforeEach(() => {
+    vi.stubEnv("VENUE_SERVICE_URL", "http://venues.test");
+  });
+
+  it("asks venue-service for the events with the caller's token, joining an event's venues", async () => {
+    fetchMock.mockResolvedValue(
+      reply(200, {
+        venues: [
+          { eventId: 1, venueName: "Hall A" },
+          { eventId: 1, venueName: "Hall B" },
+          { eventId: 2, venueName: "Lab" },
+        ],
+      }),
+    );
+
+    const names = await fetchBookedVenueNames([1, 2], "Bearer abc");
+
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith("http://venues.test/api/venues/support-info?eventIds=1,2", {
+      headers: { Authorization: "Bearer abc" },
+    });
+    expect(names).toEqual(
+      new Map([
+        [1, "Hall A, Hall B"],
+        [2, "Lab"],
+      ]),
+    );
+  });
+
+  it("does not call venue-service when there are no events", async () => {
+    expect(await fetchBookedVenueNames([], "Bearer abc")).toEqual(new Map());
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("is empty when venue-service refuses, even if the reply carries venues", async () => {
+    fetchMock.mockResolvedValue(reply(403, { venues: [{ eventId: 1, venueName: "Hall A" }] }));
+    expect(await fetchBookedVenueNames([1], "Bearer abc")).toEqual(new Map());
+  });
+
+  it("is empty on a network error, or when the reply has no venues list", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    expect(await fetchBookedVenueNames([1], "t")).toEqual(new Map());
+    fetchMock.mockResolvedValueOnce(reply(200, {}));
+    expect(await fetchBookedVenueNames([1], "t")).toEqual(new Map());
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => Promise.reject(new Error("not json")) });
+    expect(await fetchBookedVenueNames([1], "t")).toEqual(new Map());
+  });
+
+  it("falls back to localhost and the venue port", async () => {
+    vi.stubEnv("VENUE_SERVICE_URL", undefined);
+    vi.stubEnv("VENUE_SERVICE_PORT", undefined);
+    fetchMock.mockResolvedValue(reply(404));
+    await fetchBookedVenueNames([1], "t");
+    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:4003/api/venues/support-info?eventIds=1");
+  });
+
+  it("uses VENUE_SERVICE_PORT when no URL is set", async () => {
+    vi.stubEnv("VENUE_SERVICE_URL", undefined);
+    vi.stubEnv("VENUE_SERVICE_PORT", "4999");
+    fetchMock.mockResolvedValue(reply(404));
+    await fetchBookedVenueNames([1], "t");
+    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:4999/api/venues/support-info?eventIds=1");
   });
 });
