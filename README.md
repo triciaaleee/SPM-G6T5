@@ -293,19 +293,7 @@ npm run test:mutation
 > [!WARNING]
 > `npm run test:integration` writes to the Supabase project in `backend/.env`. The tests use throwaway rows and delete them afterwards, but check which database you're pointing at first. `npm run e2e` also writes to it unless you use a local Supabase, as described in [frontend/e2e/README.md](frontend/e2e/README.md).
 
-**Things worth knowing, by service**
-
-| Service | Notes |
-|---|---|
-| **events-service** | Fails below 100% coverage. A full mutation run takes about 20 minutes, so use `npm run test:mutation -- --mutate 'src/lib/**/*.ts'` for a quicker one |
-| **equipment-service** | Fails below 100% coverage. Unit tests run the real routes against an in-memory database (`helpers/fakeDb.ts`), and a contract test checks it behaves like the real one. A full mutation run takes about 9 minutes |
-| **notification-service** | Fails below 100% coverage. A full mutation run takes about 2 minutes |
-| **registration-service** | Fails below 100% coverage. Integration tests include real races for the last place. A full mutation run takes about 3 minutes |
-| **venue-service** | Uses a fixed test clock and an in-memory database, with a contract test against the real one |
-| **user-service** | Unit tests are mocked, and integration tests cover sign-up and login against the real database |
-| **chat-service** | Integration tests include a boot test that starts the real service and checks its env handling and `/health` |
-
-Reports are written to `coverage/` and `reports/mutation/` in each service. A mutant that can't change behaviour is marked `// Stryker disable next-line <Mutator>: <why>` in the source.
+Every service has the same four commands. A full mutation run can take from a few minutes to about 20 minutes, depending on the service, so use `npm run test:mutation -- --mutate 'src/lib/**/*.ts'` for a quicker run. Reports are written to `coverage/` and `reports/mutation/`. A mutant that can't change behaviour is marked `// Stryker disable next-line <Mutator>: <why>` in the source.
 
 **Keeping tests deterministic:** events-service reads the time only through `lib/clock.ts`, and runs its tests with no sockets and no retries. To try a different time zone or order there:
 
