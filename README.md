@@ -21,7 +21,6 @@ Built by team G6T5 with Vue 3, TypeScript, Express microservices, Supabase Postg
 - [Contributing](#contributing)
 - [Project layout](#project-layout)
 - [Documentation](#documentation)
-- [Troubleshooting](#troubleshooting)
 
 ## Who uses it
 
@@ -352,13 +351,3 @@ docker-compose.yml      Runs RabbitMQ, or the whole stack
 | [c4_diagrams/](c4_diagrams) | C4 diagrams as Structurizr DSL (`.dsl`) files, and the [Architecture Decision Record](c4_diagrams/ArchitectureDecisionRecord.md) |
 | [frontend/docs/frontend-audit.md](frontend/docs/frontend-audit.md) | A design-consistency audit of the frontend against Style.md |
 | [frontend/e2e/README.md](frontend/e2e/README.md) | Running the Playwright tests, including against a local database |
-
-## Troubleshooting
-
-| Problem | What to do |
-|---|---|
-| **Notifications aren't arriving** | Check `RABBITMQ_URL` is set and RabbitMQ is running. Without the URL, publishers skip sending with no warning and consumers stay idle, so don't rely on the logs to spot this |
-| **Notifications stopped after RabbitMQ restarted** | Restart the backend. Consumers don't reconnect on their own, even though `/health` still says `{"ok":true}`. See [Known limitations](RabbitMQ.md#known-limitations) |
-| **A change to message handling isn't taking effect** | Restart the affected service, as a service binds its queue to its routing keys when it starts |
-| **`Missing required environment variable(s)`** | Fill in the named variables in `backend/.env` |
-| **A port is already in use** | Stop any other `npm run dev` or `docker compose` stack, since both use the same ports |
