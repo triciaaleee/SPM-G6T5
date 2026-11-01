@@ -26,6 +26,7 @@ export function isRealDate(value: string): boolean {
   if (!match) return false;
   const [, year, month, day] = match.map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
+  // Stryker disable next-line ConditionalExpression: given a matching year, a rolled-over month or day always changes the other two parts, so each of those tests is redundant; the year test is covered by a test
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
@@ -33,6 +34,7 @@ export function validateUnavailability(input: unknown): UnavailabilityValidation
   const body = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const fields: Record<string, string> = {};
 
+  // Stryker disable next-line StringLiteral: any fallback that isn't a real reason fails the reason check the same way
   const reason = typeof body.reason === "string" ? body.reason.trim() : "";
   if (!(UNAVAILABILITY_REASONS as readonly string[]).includes(reason)) {
     fields.reason = `Choose one of: ${UNAVAILABILITY_REASONS.join(", ")}.`;
@@ -44,6 +46,7 @@ export function validateUnavailability(input: unknown): UnavailabilityValidation
 
   const rawEnd = typeof body.endDate === "string" ? body.endDate.trim() : "";
   let endDate: string | null = null;
+  // Stryker disable next-line ConditionalExpression,LogicalOperator: rawEnd is "" unless endDate is a non-blank string, so the other two tests are redundant
   if (body.endDate !== undefined && body.endDate !== null && rawEnd !== "") {
     if (!isRealDate(rawEnd)) fields.endDate = "Enter a valid date.";
     else if (!fields.startDate && rawEnd < startDate) fields.endDate = "End date can't be before the start date.";

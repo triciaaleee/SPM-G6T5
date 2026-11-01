@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 /**
  * The envelope every publisher on `connectsphere.events` uses
- * (c4_diagrams/RabbitMQ.md section 2).
+ * (RabbitMQ.md section 2).
  */
 export interface OutboundMessage {
   type: string;
@@ -36,7 +36,18 @@ function createRealPublisher(url: string): EventPublisher {
     if (!channelPromise) {
       channelPromise = (async () => {
         const connection = await amqp.connect(url);
+        // amqplib emits "error" when the broker drops; with no listener Node
+        // throws it and the whole service dies. Log it and reconnect lazily.
+        connection.on("error", (err: unknown) => {
+          console.error("registration-service: RabbitMQ connection error", err);
+        });
+        connection.on("close", () => {
+          channelPromise = undefined;
+        });
         const channel = await connection.createChannel();
+        channel.on("error", (err: unknown) => {
+          console.error("registration-service: RabbitMQ channel error", err);
+        });
         await channel.assertExchange(EXCHANGE, "topic", { durable: true });
         return channel;
       })();

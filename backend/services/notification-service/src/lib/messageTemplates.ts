@@ -31,10 +31,30 @@ function supportEventLink(msg: InboundMessage): string | null {
 
 /** "2026-11-03" → "3 Nov 2026"; anything else is shown as given, and nothing gives "". */
 function formatUnavailabilityDate(value: unknown): string {
-  if (typeof value !== "string" || value === "") return "";
+  if (typeof value !== "string") return "";
   const date = new Date(`${value}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+/**
+ * "2026-10-31T22:04:39.075455+00:00" → "1 Nov 2026, 6:04 am" in Singapore time
+ * (the app's one timezone, AGENTS.md §3). Anything that isn't a timestamp is
+ * shown as given, and nothing gives "".
+ */
+function formatSingaporeTime(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Singapore",
+  });
 }
 
 interface AmendedChange {
@@ -70,7 +90,7 @@ const TEMPLATES: Record<string, Template> = {
   /**
    * #18/#33 in RabbitMQ.md section 3.3. The coordinator-driven reasons
    * (E4-9: `coordinator_withdrew`/`coordinator_released`) and the E3-6
-   * cancellation reason (`event_cancelled`) each read differently; #19's
+   * cancellation reason (`event_cancelled`) and the rejection reason (`event_rejected`) each read differently; #19's
    * `replaced` still falls back to generic "withdrawn" wording, since
    * that publisher hasn't landed.
    */
@@ -82,6 +102,13 @@ const TEMPLATES: Record<string, Template> = {
       return {
         title: `${venueName} — booking released`,
         body: `${eventName} was cancelled, so its booking for ${venueName} was released and the venue is free again.`,
+        link,
+      };
+    }
+    if (msg.data.reason === "event_rejected") {
+      return {
+        title: `${venueName} — booking released`,
+        body: `${eventName} was rejected, so its booking for ${venueName} was released and the venue is free again.`,
         link,
       };
     }
@@ -351,20 +378,23 @@ const TEMPLATES: Record<string, Template> = {
   }),
 
   /** #21 in RabbitMQ.md section 3.3 (#106 row 4a) — to the assigned coordinator. */
-  "hold.expired": (msg) => ({
-    title: `${msg.data.venueName ?? "The venue"} — hold expired`,
-    body:
-      `The hold on ${msg.data.venueName ?? "the venue"} for ${msg.data.eventName ?? "your event"} expired before it was decided. ` +
-      "You can request another venue or another time.",
-    link: eventLink(msg),
-  }),
+  "hold.expired": (msg) => {
+    const expiredAt = formatSingaporeTime(msg.data.expiresAt);
+    return {
+      title: `${msg.data.venueName ?? "The venue"} — hold expired`,
+      body:
+        `The hold on ${msg.data.venueName ?? "the venue"} for ${msg.data.eventName ?? "your event"} expired${expiredAt ? ` at ${expiredAt}` : ""} before it was decided. ` +
+        "You can request another venue or another time.",
+      link: eventLink(msg),
+    };
+  },
 
   /** #20 in RabbitMQ.md section 3.3 (#106 row 4b) — to the assigned coordinator, before the hold lapses. */
   "hold.expiring": (msg) => ({
     title: `${msg.data.venueName ?? "The venue"} — hold expiring soon`,
     body:
       `The hold on ${msg.data.venueName ?? "the venue"} for ${msg.data.eventName ?? "your event"} expires at ` +
-      `${msg.data.expiresAt ?? "soon"}. Decide or it will be released automatically.`,
+      `${formatSingaporeTime(msg.data.expiresAt) || "soon"}. Decide or it will be released automatically.`,
     link: eventLink(msg),
   }),
 
@@ -477,9 +507,10 @@ const TEMPLATES: Record<string, Template> = {
         link: "/equipment-requests",
       };
     }
+    const outcome = msg.data.reason === "event_rejected" ? "rejected" : "cancelled";
     return {
       title: "Equipment reservations released",
-      body: `${eventName} was cancelled, so its equipment reservations were released back to inventory.`,
+      body: `${eventName} was ${outcome}, so its equipment reservations were released back to inventory.`,
       // The event's requests are cancelled with it; Technical Support can still open them, under Cancelled / Past.
       link: supportEventLink(msg),
     };
@@ -663,6 +694,6 @@ const TEMPLATES: Record<string, Template> = {
 
 /** `null` for a type with no template yet — the caller logs and skips it. */
 export function renderNotification(msg: InboundMessage, recipientId: string): RenderedNotification | null {
-  const template = TEMPLATES[msg.type];
-  return template ? template(msg, recipientId) : null;
+  // Own keys only: a plain lookup of "constructor" or "toString" would find Object.prototype's.
+  return Object.hasOwn(TEMPLATES, msg.type) ? TEMPLATES[msg.type](msg, recipientId) : null;
 }

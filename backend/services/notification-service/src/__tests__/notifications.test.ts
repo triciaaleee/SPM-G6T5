@@ -14,6 +14,9 @@ vi.mock("../middleware/auth.js", async () => {
   };
 });
 
+/** The instant vitest.setup.ts freezes `Date` at. */
+const FROZEN_NOW = "2026-10-28T04:00:00.000Z";
+
 /** A supabase-js style query: every filter returns the query, and awaiting it yields `result`. */
 function query(result: Record<string, unknown>) {
   const q: Record<string, any> = {};
@@ -34,10 +37,19 @@ const row = {
   created_at: "2026-10-08T01:00:00Z",
 };
 
-function buildApp(options: { user?: { id: string; role: string }; rows?: unknown[]; unread?: number } = {}) {
-  const listQuery = query({ data: options.rows ?? [row], error: null });
-  const countQuery = query({ data: null, count: options.unread ?? 1, error: null });
-  const updateQuery = query({ data: null, error: null });
+function buildApp(
+  options: {
+    user?: { id: string; role: string };
+    rows?: unknown[];
+    unread?: number;
+    listResult?: Record<string, unknown>;
+    countResult?: Record<string, unknown>;
+    updateResult?: Record<string, unknown>;
+  } = {},
+) {
+  const listQuery = query(options.listResult ?? { data: options.rows ?? [row], error: null });
+  const countQuery = query(options.countResult ?? { data: null, count: options.unread ?? 1, error: null });
+  const updateQuery = query(options.updateResult ?? { data: null, error: null });
 
   // GET makes two .from("notifications") calls: the list, then the unread count.
   let selects = 0;
@@ -159,5 +171,144 @@ describe("POST /api/notifications/:id/read", () => {
 
     expect(res.status).toBe(400);
     expect(updateQuery.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/notifications: query and paging details", () => {
+  it("reads the notifications table with the exact columns, newest first", async () => {
+    const { app, supabase, listQuery, countQuery } = buildApp();
+
+    await request(app).get("/api/notifications");
+
+    expect(supabase.from.mock.calls).toEqual([["notifications"], ["notifications"]]);
+    expect(listQuery.select).toHaveBeenCalledWith("id, type, title, body, link, event_id, actor_id, occurred_at, read_at, created_at");
+    expect(listQuery.order.mock.calls).toEqual([
+      ["created_at", { ascending: false }],
+      ["id", { ascending: false }],
+    ]);
+    expect(listQuery.lt).not.toHaveBeenCalled();
+    expect(countQuery.select).toHaveBeenCalledWith("id", { count: "exact", head: true });
+    expect(countQuery.eq).toHaveBeenCalledWith("recipient_id", "COORD-0001");
+  });
+
+  it("maps a read notification with its audit fields", async () => {
+    const { app } = buildApp({ rows: [{ ...row, actor_id: "ORG-0001", occurred_at: "2026-10-08T00:59:00Z", read_at: "2026-10-08T02:00:00Z" }] });
+
+    const res = await request(app).get("/api/notifications");
+
+    expect(res.body.notifications[0]).toMatchObject({ actorId: "ORG-0001", occurredAt: "2026-10-08T00:59:00Z", read: true });
+  });
+
+  it.each([
+    ["limit=abc"],
+    ["limit=0"],
+    ["limit=-1"],
+    ["limit=1.5"],
+    ["limit="],
+    ["limit=3&limit=4"],
+  ])("falls back to the default limit for %s", async (qs) => {
+    const { app, listQuery } = buildApp();
+    await request(app).get(`/api/notifications?${qs}`);
+    expect(listQuery.limit).toHaveBeenCalledWith(5);
+  });
+
+  it.each([
+    ["1", 1],
+    ["50", 50],
+    ["51", 50],
+  ])("honours limit=%s as %i", async (value, expected) => {
+    const { app, listQuery } = buildApp();
+    await request(app).get(`/api/notifications?limit=${value}`);
+    expect(listQuery.limit).toHaveBeenCalledWith(expected);
+  });
+
+  it.each([["abc"], ["0"], ["-5"], ["1.5"], [""], ["1e30"], ["3&before=4"]])("ignores before=%s and treats it as the first page", async (value) => {
+    const { app, listQuery, countQuery } = buildApp({ unread: 2 });
+
+    const res = await request(app).get(`/api/notifications?before=${value}`);
+
+    expect(res.status).toBe(200);
+    expect(listQuery.lt).not.toHaveBeenCalled();
+    expect(countQuery.select).toHaveBeenCalled();
+    expect(res.body.unreadCount).toBe(2);
+  });
+
+  it("accepts before=1, the smallest id", async () => {
+    const { app, listQuery } = buildApp();
+    await request(app).get("/api/notifications?before=1");
+    expect(listQuery.lt).toHaveBeenCalledWith("id", 1);
+  });
+
+  it("has no nextCursor on a short page", async () => {
+    const { app } = buildApp({ rows: [row] });
+    const res = await request(app).get("/api/notifications?limit=2");
+    expect(res.body.nextCursor).toBeNull();
+  });
+
+  it("reads missing rows and a missing count as empty", async () => {
+    const { app } = buildApp({ listResult: { data: null, error: null }, countResult: { count: null, error: null } });
+
+    const res = await request(app).get("/api/notifications");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ notifications: [], nextCursor: null, unreadCount: 0 });
+  });
+
+  it("returns 500 when the list query fails", async () => {
+    const { app } = buildApp({ listResult: { data: null, error: { message: "boom" } } });
+    const res = await request(app).get("/api/notifications");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to load notifications" });
+  });
+
+  it("returns 500 when the unread count fails", async () => {
+    const { app } = buildApp({ countResult: { count: null, error: { message: "boom" } } });
+    const res = await request(app).get("/api/notifications");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to load notifications" });
+  });
+});
+
+describe("POST /api/notifications/read: details", () => {
+  it("stamps read_at with the current time, on the notifications table", async () => {
+    const { app, supabase, updateQuery } = buildApp();
+    await request(app).post("/api/notifications/read");
+    expect(supabase.from).toHaveBeenCalledWith("notifications");
+    expect(updateQuery.update).toHaveBeenCalledWith({ read_at: FROZEN_NOW });
+  });
+
+  it("returns 500 when the update fails", async () => {
+    const { app } = buildApp({ updateResult: { data: null, error: { message: "boom" } } });
+    const res = await request(app).post("/api/notifications/read");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to mark notifications as read" });
+  });
+});
+
+describe("POST /api/notifications/:id/read: details", () => {
+  it("stamps read_at with the current time, on the notifications table", async () => {
+    const { app, supabase, updateQuery } = buildApp();
+    await request(app).post("/api/notifications/1/read");
+    expect(supabase.from).toHaveBeenCalledWith("notifications");
+    expect(updateQuery.update).toHaveBeenCalledWith({ read_at: FROZEN_NOW });
+    expect(updateQuery.eq).toHaveBeenCalledWith("id", 1);
+  });
+
+  // 1e30 is an integer to JavaScript, but it doesn't fit the bigint id column, so it must never reach Postgres.
+  it.each([["0"], ["-1"], ["1.5"], ["1e30"], ["9007199254740992"]])("returns 400 for id %s", async (id) => {
+    const { app, updateQuery } = buildApp();
+
+    const res = await request(app).post(`/api/notifications/${id}/read`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "id must be a positive integer" });
+    expect(updateQuery.update).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 when the update fails", async () => {
+    const { app } = buildApp({ updateResult: { data: null, error: { message: "boom" } } });
+    const res = await request(app).post("/api/notifications/3/read");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to mark notification as read" });
   });
 });

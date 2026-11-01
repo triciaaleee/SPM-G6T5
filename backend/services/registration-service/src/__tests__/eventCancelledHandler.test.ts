@@ -77,4 +77,60 @@ describe("handleEventCancelled (E3-6 AC4)", () => {
     const { supabase } = buildSupabase({ updateError: true });
     await expect(handleEventCancelled(buildMsg(), { supabase })).rejects.toBeTruthy();
   });
+
+  it("updates the registrations table, only for this event's Registered places, reading back who held them", async () => {
+    const { supabase, updateEqEvent, updateEqStatus, update } = buildSupabase();
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+
+    await handleEventCancelled(buildMsg(), { supabase });
+
+    expect(supabase.from).toHaveBeenCalledWith("registrations");
+    expect(update).toHaveBeenCalledWith({ status: "Cancelled" });
+    expect(updateEqEvent).toHaveBeenCalledWith("event_id", 7);
+    expect(updateEqStatus).toHaveBeenCalledWith("status", "Registered");
+    expect(updateEqStatus.mock.results[0].value.select).toHaveBeenCalledWith("user_id");
+    expect(publish).toHaveBeenCalledWith({
+      type: "registration.cancelled_by_event",
+      eventId: 7,
+      actorId: "ORG-0001",
+      recipients: { userIds: ["ATT-0001", "ATT-0002"], roles: [] },
+      data: { eventName: "Spring Gala" },
+    });
+  });
+
+  it("names each attendee once", async () => {
+    const { supabase } = buildSupabase({ withdrawn: [{ user_id: "ATT-0001" }, { user_id: "ATT-0001" }] });
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+
+    await handleEventCancelled(buildMsg(), { supabase });
+
+    expect(publish.mock.calls[0][0].recipients.userIds).toEqual(["ATT-0001"]);
+  });
+
+  it("reads missing rows as nobody affected", async () => {
+    const { supabase, updateEqStatus } = buildSupabase();
+    updateEqStatus.mockReturnValue({ select: vi.fn().mockResolvedValue({ data: null, error: null }) });
+    const publish = vi.fn();
+    setPublisherForTest({ publish });
+
+    await handleEventCancelled(buildMsg(), { supabase });
+
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a blank name", ""],
+    ["a name that isn't text", 7],
+    ["no name", undefined],
+  ])("leaves the event name out for %s", async (_name, eventName) => {
+    const { supabase } = buildSupabase();
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+
+    await handleEventCancelled(buildMsg({ data: { eventName } }), { supabase });
+
+    expect(publish.mock.calls[0][0].data).toEqual({ eventName: undefined });
+  });
 });

@@ -1,8 +1,8 @@
 # RabbitMQ messaging: ConnectSphere
 
-**Version 1.0** | 2026-10-10 | Tricia Lee (@triciaa-leee)
+**Version 1.1** | 2026-10-31 | Tricia Lee (@triciaa-leee)
 
-The message catalogue behind the broker in `c2-containers.dsl` and the publishers and consumers in the per-service component views in `c3/` (`c3-<service>.dsl`). It traces every notification requirement to the message that delivers it. The rules every publisher and consumer must follow are in `ArchitectureDecisionRecord.md` section 4; the decision to use RabbitMQ is D6 there.
+The message catalogue behind the broker in `c4_diagrams/c2-containers.dsl` and the publishers and consumers in the per-service component views in `c4_diagrams/c3/` (`c3-<service>.dsl`). It traces every notification requirement to the message that delivers it. The rules every publisher and consumer must follow are in `c4_diagrams/ArchitectureDecisionRecord.md` section 4; the decision to use RabbitMQ is D6 there.
 
 ## 1. Topology
 
@@ -19,8 +19,8 @@ One durable queue per consuming service, bound only to the routing keys it acts 
 |---|---|---|
 | `notification-service` | `#` (everything) | Every message names people to notify |
 | `events-service` | `booking.replacement_required` | Moves a `Confirmed` event to `Needs Review`, or a `Safety Review` event to `Planning` (AGENTS.md section 3). Today venue-service reports it over REST (`POST /api/events/:id/arrangements-changed`, internal token) after the booking write commits |
-| `venue-service` | `event.cancelled`, `event.rescheduled`, `event.attendance_changed` | Withdraws every active booking of the event (E3-6), or reviews its bookings after a Planning edit to its date, time or expected attendance (AGENTS.md section 3a) |
-| `equipment-service` | `event.cancelled`, `event.rescheduled` | Releases reservations (E3-6), or moves each reserved unit's stored booking window when the event's date, start time or end time changes and re-checks the reservations against it (E5-6 AC3) |
+| `venue-service` | `event.cancelled`, `event.rejected`, `event.rescheduled`, `event.attendance_changed` | Withdraws every active booking of the event (E3-6, or when a `Planning` event is rejected through a clarification), or reviews its bookings after a Planning edit to its date, time or expected attendance (AGENTS.md section 3a) |
+| `equipment-service` | `event.cancelled`, `event.rejected`, `event.rescheduled` | Releases reservations (E3-6, or when a `Planning` event is rejected through a clarification), or moves each reserved unit's stored booking window when the event's date, start time or end time changes and re-checks the reservations against it (E5-6 AC3) |
 | `registration-service` | `event.cancelled` | Closes registration and cancels every place (E3-6) |
 
 ## 2. Message envelope
@@ -91,6 +91,7 @@ Every message has the same outer shape, so notification-service can route any of
 | 14 | Organiser cancels the event | `event.cancelled` (with reason) | Organiser (confirmation); assigned coordinator with the reason (leads if `Unassigned`) | Wk4 A20 "cancellation"; E3-6 AC1 |
 | 14a | An event's date, start time or end time changes (an edit in `Planning`, or an approved change request) | `event.rescheduled` (`proposedDate`, `startTime`, `endTime`, `coordinatorId`) | None. Consumed by equipment-service and venue-service (section 4); notification-service skips it without a warning | Keeps equipment booking windows in step with the event (E5-6); has venue bookings re-checked (§3a) |
 | 14b | An event's expected attendance changes (an edit in `Planning`, or an approved change request) | `event.attendance_changed` (`expectedAttendance`, `coordinatorId`) | None. Consumed by venue-service (section 4); notification-service skips it without a warning | Has venue bookings checked against the new attendance (§3a) |
+| 14c | The coordinator rejects an event, including a `Planning` event rejected while a clarification is open (AGENTS.md section 3) | `event.rejected` (`eventName`, `reason`) | None. Consumed by venue-service and equipment-service (section 4), which release what the event holds; the Organiser is told by `request.decided`, and notification-service skips it without a warning | Releases the venue bookings and equipment reservations of a rejected event |
 
 ### 3.3 Venue bookings (venue-service)
 
@@ -145,8 +146,8 @@ Organiser cancels
 
 | # | Trigger | Message | Recipients | Source |
 |---|---|---|---|---|
-| 33 | Bookings withdrawn because the event was cancelled | `booking.withdrawn` (`reason: event_cancelled`) | The venue's staff member | Wk4 A20 "cancellation"; E3-6 AC2; E7-2 |
-| 34 | Reservations released because the event was cancelled | `equipment.released` (`reason: event_cancelled`) | Technical Support | Wk4 A20 "cancellation"; E3-6 AC3; E7-2 |
+| 33 | Bookings withdrawn because the event was cancelled or rejected | `booking.withdrawn` (`reason: event_cancelled` or `event_rejected`) | The venue's staff member | Wk4 A20 "cancellation"; E3-6 AC2; E7-2 |
+| 34 | Reservations released because the event was cancelled or rejected | `equipment.released` (`reason: event_cancelled` or `event_rejected`) | Technical Support | Wk4 A20 "cancellation"; E3-6 AC3; E7-2 |
 | 35 | Registrations cancelled because the event was cancelled | `registration.cancelled_by_event` | Every registered attendee | Wk4 A20 "cancellation"; E3-6 AC4; E7-2 |
 
 An event with no bookings, equipment or registrations produces only `event.cancelled`.
@@ -163,8 +164,10 @@ An event with no bookings, equipment or registrations produces only `event.cance
 |---|---|---|
 | `booking.replacement_required` | events-service | Moves a `Confirmed` event to `Needs Review` or a `Safety Review` event back to `Planning`, then publishes `event.needs_review` / `event.returned_to_planning` (#11) |
 | `event.cancelled` | venue-service | Withdraws every active booking, then publishes #33 |
+| `event.rejected` | venue-service | Withdraws every active booking, then publishes #33 with `reason: event_rejected` |
 | `event.rescheduled`, `event.attendance_changed` | venue-service | Checks the event's `Requested`, `On Hold` and `Approved` bookings against the new time (block-outs and other bookings, setup and turnaround included) or attendance (whole-attendance bookings only). An `Approved` one that no longer fits becomes `Replacement Required`; a pending one keeps its status. Publishes #25a, and tells events-service the arrangements changed if an Approved booking was flagged (a `Confirmed` event moves to `Needs Review`, one in `Planning` is left as it is). Safe to process twice |
 | `event.cancelled` | equipment-service | Releases reservations, then publishes #34 |
+| `event.rejected` | equipment-service | Releases reservations, then publishes #34 with `reason: event_rejected` |
 | `event.cancelled` | registration-service | Cancels registrations, then publishes #35 |
 | `event.rescheduled` | equipment-service | Sets the stored window (`window_start_ms`, `window_end_ms`) on every `Reserved` booking of the event to the new date and time, then checks them for clashes. If any unit now clashes, tells events-service the arrangements changed (a `Confirmed` event moves to `Needs Review`, one in `Planning` is left as it is) and publishes #29a. Safe to process twice: the notification keeps one `messageId` |
 
@@ -173,6 +176,26 @@ An event with no bookings, equipment or registrations produces only `event.cance
 The messages above are best effort: if the broker is down when a service publishes, the message is logged and dropped. That is fine for a notification. It is not fine for `event.cancelled`, which three services act on, so events-service stores it (and `event.rescheduled`, which equipment-service must also act on) in its own `event_outbox` table (migration `0045`) right after the cancellation, publishes it, and retries from a relay (every 10 seconds) until the broker confirms it. The publisher uses a confirm channel, so "published" means the broker accepted the message.
 
 Delivery is at-least-once: a retry reuses the stored `messageId`, so every consumer of `event.cancelled` must be safe to run twice. Today they are (each only matches rows still active). The store is not in the same transaction as the cancellation, so a crash between the two can still lose the message; the window is far smaller than a broker outage.
+
+### Known limitations
+
+**Consumers never reconnect.** The four consuming services (notification, registration, venue and equipment) connect to RabbitMQ once, at startup. If RabbitMQ isn't accepting connections at that moment, or the connection drops later, the consumer stops for good. The team decided on 2026-10-31 not to fix this before the code freeze: writing reconnection code, or switching to a reconnecting library such as `amqp-connection-manager`, would mean retesting every service that uses RabbitMQ.
+
+What happens, as tested with the full Docker stack on 2026-10-31:
+
+| When | notification-service, registration-service | venue-service, equipment-service |
+|---|---|---|
+| RabbitMQ isn't accepting connections yet when the service starts | Logs `failed to connect to RabbitMQ, consumer idle` and never retries | Same |
+| RabbitMQ shuts down normally (e.g. `docker compose restart rabbitmq`) | Nothing crashes and nothing is logged; the consumer stops | Same |
+| The connection breaks abruptly (RabbitMQ is killed, or the network fails) | Logs the error and keeps running; the consumer stops | No `error` listener, so the process crashes. Docker's `restart: unless-stopped` restarts it, but if RabbitMQ isn't back yet it fails to connect and stays idle; under `npm run dev` it stays down |
+
+In every case the REST API keeps answering and `/health` returns `{"ok":true}`, so neither a healthcheck nor Docker's restart policy notices, and no consumer comes back on its own. While a consumer is stopped nobody is notified, and a cancelled event's bookings, equipment and registrations are not released.
+
+Publishers connect on their first publish. registration-service's and chat-service's reconnect on their next publish after a drop. events-service's, venue-service's and equipment-service's have no `error` listener, so an abrupt drop while one is connected ends that process too.
+
+Workaround: once RabbitMQ is accepting connections again, restart all four consumers: `docker compose restart notification-service registration-service venue-service equipment-service`, or stop and rerun `npm run dev`. Queues are durable and messages are published as persistent, so whatever reached a queue while its consumer was stopped is processed after the restart. Messages published while RabbitMQ itself was down are dropped, except those events-service sends through its outbox (above).
+
+**A failed role lookup holds back the whole notification.** A message can name users and roles together, e.g. `event.cancelled` for an event with no coordinator yet goes to the Organiser and to every `coordinator_lead`. notification-service asks user-service who holds each role before writing anything. If that lookup fails, the message goes to `notification-service.dlq` and nobody on it is notified, including the users it names. This is deliberate: before, a failed lookup was treated as "nobody holds this role" and the message was acked and lost. Nothing replays the DLQ automatically; dead-lettered messages can be inspected in the management UI (section 6).
 
 ## 5. Backlog alignment
 
@@ -185,5 +208,7 @@ docker compose up -d rabbitmq
 ```
 
 (from the repo root, using `docker-compose.yml`; `docker compose down` stops it, and a named volume keeps queue state across restarts.)
+
+Wait until RabbitMQ is ready before starting the services, since a consumer that can't connect at startup never retries (Known limitations, section 4). It is ready once `docker logs connectsphere-rabbitmq` shows `Server startup complete`, a few seconds after the container starts.
 
 The management UI is at `http://localhost:15672` (guest / guest), where queues, bindings and dead-lettered messages can be inspected. Per AGENTS.md section 5, adding `RABBITMQ_URL` means updating `backend/.env.example` and `backend/README.md` in the same change.

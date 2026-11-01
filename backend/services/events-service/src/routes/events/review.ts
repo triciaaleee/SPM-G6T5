@@ -3,8 +3,10 @@ import type { AuthedRequest } from "../../middleware/auth.js";
 import { isPositiveInteger } from "../../lib/validation.js";
 import { EVENT_STATUS } from "../../lib/eventStatus.js";
 import { getPublisher } from "../../lib/rabbitPublisher.js";
+import { publishDurably } from "../../lib/outbox.js";
 import {
   routeParam,
+  recordEventHistory,
   EVENT_COLUMNS,
   authorizeCoordinatorReview,
   loadEventForClarification,
@@ -101,7 +103,13 @@ reviewRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
  * E1-4.2 AC2/AC3/AC5: reject — requires a reason, allowed from "Requested"
  * or "Clarification Requested" (an event already in Planning is out of
  * this story's scope; already-Rejected is blocked upstream in
- * authorizeCoordinatorReview per AC5).
+ * authorizeCoordinatorReview per AC5). A Planning event reaches "Rejected"
+ * only through a clarification (AGENTS.md section 3), so it may already
+ * hold venue bookings and equipment: `event.rejected` tells venue-service
+ * and equipment-service to release them, like `event.cancelled` does. It goes
+ * through the outbox so it is retried until the broker confirms it. The
+ * update below overwrites review_outcome/decided_at/decided_by, so the
+ * rejection goes into the event history to keep the earlier decision traceable.
  */
 reviewRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
   const eventId = routeParam(req.params.id);
@@ -137,6 +145,28 @@ reviewRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
     return;
   }
 
+  await recordEventHistory(
+    supabase,
+    event.id,
+    [
+      { field: "Status", oldValue: event.status, newValue: EVENT_STATUS.Rejected },
+      { field: "Rejection reason", oldValue: null, newValue: reason },
+    ],
+    user.id,
+  );
+
+  const eventName = eventDisplayName(data as unknown as AssignmentEventRow);
+
+  // Nobody is notified by this message (the organiser gets request.decided
+  // below); it only tells the other services to release what they hold.
+  await publishDurably(supabase, {
+    type: "event.rejected",
+    eventId: event.id,
+    actorId: user.id,
+    recipients: { userIds: [], roles: [] },
+    data: { eventName, reason },
+  });
+
   // #104 row 7: the organiser is the only recipient of the decision.
   if (event.organiser_id) {
     await getPublisher().publish({
@@ -144,7 +174,7 @@ reviewRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
       eventId: event.id,
       actorId: user.id,
       recipients: { userIds: [event.organiser_id], roles: [] },
-      data: { eventName: eventDisplayName(data as unknown as AssignmentEventRow), decision: "rejected", reason },
+      data: { eventName, decision: "rejected", reason },
     });
   }
 

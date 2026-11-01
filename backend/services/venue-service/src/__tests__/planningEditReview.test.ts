@@ -23,21 +23,32 @@ vi.mock("../lib/eventsClient.js", async (importOriginal) => {
 type Row = Record<string, any>;
 
 /** A tiny in-memory supabase: eq / in / lte / gte filters, select, and update(...).eq(...).select().maybeSingle(). */
-function buildSupabase(tables: Record<string, Row[]>, options: { failTable?: string } = {}) {
+function buildSupabase(
+  tables: Record<string, Row[]>,
+  options: {
+    failTable?: string;
+    /** Tables whose reads answer with no data and no error. */
+    nullTables?: string[];
+    /** The update of a booking answers with an error. */
+    updateError?: boolean;
+  } = {},
+) {
   const updates: { table: string; patch: Row; id: number }[] = [];
+  const selects: { table: string; columns: string }[] = [];
 
   function query(table: string) {
     const filters: ((row: Row) => boolean)[] = [];
     let patch: Row | null = null;
     const matches = () => (tables[table] ?? []).filter((row) => filters.every((f) => f(row)));
     const q: any = {
-      select: vi.fn(() => q),
+      select: vi.fn((columns: string) => { selects.push({ table, columns }); return q; }),
       update: vi.fn((p: Row) => { patch = p; return q; }),
       eq: vi.fn((field: string, value: unknown) => { filters.push((r) => r[field] === value); return q; }),
       in: vi.fn((field: string, values: unknown[]) => { filters.push((r) => values.includes(r[field])); return q; }),
       lte: vi.fn((field: string, value: string) => { filters.push((r) => r[field] <= value); return q; }),
       gte: vi.fn((field: string, value: string) => { filters.push((r) => r[field] >= value); return q; }),
       maybeSingle: vi.fn(async () => {
+        if (options.updateError && patch) return { data: null, error: { message: "boom" } };
         const [row] = matches();
         if (patch && row) {
           Object.assign(row, patch);
@@ -49,13 +60,15 @@ function buildSupabase(tables: Record<string, Row[]>, options: { failTable?: str
         Promise.resolve(
           options.failTable === table
             ? { data: null, error: { message: "boom" } }
-            : { data: matches().map((r) => ({ ...r })), error: null },
+            : options.nullTables?.includes(table)
+              ? { data: null, error: null }
+              : { data: matches().map((r) => ({ ...r })), error: null },
         ).then(resolve, reject),
     };
     return q;
   }
 
-  return { supabase: { from: vi.fn((table: string) => query(table)) } as any, updates, tables };
+  return { supabase: { from: vi.fn((table: string) => query(table)) } as any, updates, selects, tables };
 }
 
 const NEW_DAY = "2099-02-02";
@@ -382,6 +395,158 @@ describe("handleEventEdited: delivery", () => {
   });
 });
 
+describe("handleEventEdited: edges", () => {
+  it("does nothing when the bookings come back as no data", async () => {
+    const { supabase, updates } = buildSupabase({ venue_bookings: [booking()], venues: [venue()] }, { nullTables: ["venue_bookings"] });
+
+    await handleEventEdited(buildMsg(), { supabase });
+
+    expect(updates).toHaveLength(0);
+    expect(publish).not.toHaveBeenCalled();
+    expect(supabase.from).not.toHaveBeenCalledWith("venues");
+  });
+
+  it("leaves a booking alone when its venue can't be found, even if the venue lookup returns no data", async () => {
+    const { supabase, updates } = buildSupabase(
+      { venue_bookings: [booking()], venues: [venue()], venue_unavailability: [blockOut()] },
+      { nullTables: ["venues"] },
+    );
+
+    await handleEventEdited(buildMsg(), { supabase });
+
+    expect(updates).toHaveLength(0);
+    expect(publish).not.toHaveBeenCalled();
+    expect(clients.reportArrangementsChanged).not.toHaveBeenCalled();
+  });
+
+  it("skips only the booking whose venue is missing and still reviews the others", async () => {
+    const { supabase, updates } = buildSupabase({
+      venue_bookings: [booking({ id: 901, venue_id: 2 }), booking()],
+      venues: [venue()],
+      venue_unavailability: [blockOut()],
+    });
+
+    await handleEventEdited(buildMsg(), { supabase });
+
+    expect(updates.map((u) => u.id)).toEqual([900]);
+    expect(invalidated()).toHaveLength(1);
+  });
+
+  it("throws when the venues can't be read", async () => {
+    const { supabase } = buildSupabase({ venue_bookings: [booking()], venues: [venue()] }, { failTable: "venues" });
+
+    await expect(handleEventEdited(buildMsg(), { supabase })).rejects.toMatchObject({ message: "boom" });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("throws when the venue's block-out periods can't be read", async () => {
+    const { supabase } = buildSupabase({ venue_bookings: [booking()], venues: [venue()] }, { failTable: "venue_unavailability" });
+
+    await expect(handleEventEdited(buildMsg(), { supabase })).rejects.toThrow("Failed to check the venue's block-out periods");
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("throws when flagging the booking fails, and tells nobody", async () => {
+    const { supabase, updates } = buildSupabase(
+      { venue_bookings: [booking()], venues: [venue()], venue_unavailability: [blockOut()] },
+      { updateError: true },
+    );
+
+    await expect(handleEventEdited(buildMsg(), { supabase })).rejects.toMatchObject({ message: "boom" });
+    expect(updates).toHaveLength(0);
+    expect(publish).not.toHaveBeenCalled();
+    expect(clients.reportArrangementsChanged).not.toHaveBeenCalled();
+  });
+
+  it("tells events-service in the plural when several bookings were flagged", async () => {
+    const { supabase, updates } = buildSupabase({
+      venue_bookings: [booking(), booking({ id: 901, purpose: "Breakout", headcount: 20 })],
+      venues: [venue()],
+      venue_unavailability: [blockOut()],
+    });
+
+    await handleEventEdited(buildMsg(), { supabase });
+
+    expect(updates).toHaveLength(2);
+    expect(clients.reportArrangementsChanged).toHaveBeenCalledTimes(1);
+    expect(clients.reportArrangementsChanged).toHaveBeenCalledWith(7, "2 venue bookings no longer fit after the event was edited");
+  });
+
+  it("names the event by its number when the message carries no name", async () => {
+    const { supabase } = buildSupabase({ venue_bookings: [booking()], venues: [venue()], venue_unavailability: [blockOut()] });
+
+    await handleEventEdited(
+      buildMsg({ data: { coordinatorId: "COORD-0001", proposedDate: NEW_DAY, startTime: "13:00", endTime: "15:00" } }),
+      { supabase },
+    );
+
+    expect(invalidated()[0].data.eventName).toBe("Event #7");
+  });
+});
+
+describe("handleEventEdited: details the review depends on", () => {
+  it("reads nothing at all for an attendance edit that carries no number", async () => {
+    const { supabase } = buildSupabase({ venue_bookings: [booking()], venues: [venue({ capacity: 0 })] });
+
+    await handleEventEdited(attendanceMsg(null), { supabase });
+
+    expect(supabase.from).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("asks only for the booking's id back when it flags one", async () => {
+    const { supabase, selects } = buildSupabase({ venue_bookings: [booking()], venues: [venue()], venue_unavailability: [blockOut()] });
+
+    await handleEventEdited(buildMsg(), { supabase });
+
+    expect(selects.filter((s) => s.table === "venue_bookings").map((s) => s.columns)).toContain("id");
+  });
+
+  it("gives each flagged booking its own notification id, the same one when the message is redelivered", async () => {
+    const tables = () => ({
+      venue_bookings: [booking(), booking({ id: 901, status: "Requested" })],
+      venues: [venue()],
+      venue_unavailability: [blockOut()],
+    });
+    await handleEventEdited(buildMsg(), { supabase: buildSupabase(tables()).supabase });
+    const first = invalidated().map((m) => m.messageId);
+    expect(first).toHaveLength(2);
+    expect(first[0]).not.toBe(first[1]);
+    expect(first[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+    publish.mockClear();
+    await handleEventEdited(buildMsg(), { supabase: buildSupabase(tables()).supabase });
+    expect(invalidated().map((m) => m.messageId)).toEqual(first);
+  });
+
+  it("names the failure when another event's bookings can't be read", async () => {
+    const { supabase } = buildSupabase({
+      venue_bookings: [booking(), booking({ id: 950, event_id: 8, status: "Approved" })],
+      venues: [venue()],
+      venue_unavailability: [],
+    });
+    clients.fetchVenueBookingInfoInternal.mockResolvedValue({ status: "error" });
+
+    await expect(handleEventEdited(buildMsg(), { supabase })).rejects.toThrow("Failed to check the venue's other bookings");
+  });
+
+  it("treats a booking with a headcount but no purpose as meant for the whole attendance", async () => {
+    const { supabase, updates } = buildSupabase({ venue_bookings: [booking({ purpose: null, headcount: 20 })], venues: [venue({ capacity: 100 })] });
+
+    await handleEventEdited(attendanceMsg(150), { supabase });
+
+    expect(updates).toHaveLength(1);
+  });
+
+  it("treats a booking with a purpose but no headcount as meant for the whole attendance", async () => {
+    const { supabase, updates } = buildSupabase({ venue_bookings: [booking({ purpose: "Breakout", headcount: null })], venues: [venue({ capacity: 100 })] });
+
+    await handleEventEdited(attendanceMsg(150), { supabase });
+
+    expect(updates).toHaveLength(1);
+  });
+});
+
 describe("handleMessage", () => {
   it("sends both edit messages to the review", async () => {
     const { supabase } = buildSupabase({ venue_bookings: [booking()], venues: [venue({ capacity: 10 })], venue_unavailability: [blockOut()] });
@@ -401,6 +566,8 @@ describe("handleMessage", () => {
     await handleMessage(buildMsg({ type: "something.else" }), { supabase });
 
     expect(supabase.from).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('venue-service: no handler for "something.else", skipping');
     warn.mockRestore();
   });
 });

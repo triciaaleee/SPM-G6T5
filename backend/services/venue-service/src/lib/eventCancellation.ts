@@ -32,15 +32,23 @@ export interface ReleaseForCancellationResult {
 }
 
 /**
+ * Why the event's bookings are being released: the Organiser cancelled it
+ * (E3-6) or the coordinator rejected it (`event.rejected`, a Planning event
+ * rejected through a clarification, AGENTS.md section 3).
+ */
+export type EventReleaseReason = "event_cancelled" | "event_rejected";
+
+/**
  * RabbitMQ.md #33: each released booking tells its venue's staff member,
  * the same `booking.withdrawn` type a coordinator's own withdraw/release
- * uses, told apart by `data.reason: "event_cancelled"`.
+ * uses, told apart by `data.reason` (`event_cancelled` or `event_rejected`).
  */
 export async function releaseBookingsForCancelledEvent(
   supabase: Supabase,
   eventId: number,
   actorId: string | null,
   eventName: string,
+  reason: EventReleaseReason = "event_cancelled",
 ): Promise<ReleaseForCancellationResult> {
   const { data: updatedData, error: updateError } = await supabase
     .from("venue_bookings")
@@ -74,7 +82,7 @@ export async function releaseBookingsForCancelledEvent(
       eventId,
       actorId,
       recipients: { userIds: [venue.staff_id], roles: [] },
-      data: { bookingId: booking.id, venueName: venue.name, eventName, reason: "event_cancelled" },
+      data: { bookingId: booking.id, venueName: venue.name, eventName, reason },
     });
   }
 

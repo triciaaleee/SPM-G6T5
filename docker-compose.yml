@@ -1,3 +1,28 @@
+# Runs the whole stack: RabbitMQ, every backend service and the frontend.
+#   docker compose up --build        (from the repo root)
+# Secrets/config come from backend/.env (copy backend/.env.example first).
+# The service URLs below override the localhost ones in that file so the
+# services reach each other by container name on the compose network.
+#
+# Just the broker, for running the services with `npm run dev` instead:
+#   docker compose up rabbitmq
+
+x-backend-service: &backend-service
+  env_file: backend/.env
+  restart: unless-stopped
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+  environment: &backend-env
+    RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+    EVENTS_SERVICE_URL: http://events-service:4001
+    USER_SERVICE_URL: http://user-service:4002
+    VENUE_SERVICE_URL: http://venue-service:4003
+    NOTIFICATION_SERVICE_URL: http://notification-service:4004
+    EQUIPMENT_SERVICE_URL: http://equipment-service:4005
+    CHAT_SERVICE_URL: http://chat-service:4006
+    REGISTRATION_SERVICE_URL: http://registration-service:4007
+
 services:
   rabbitmq:
     image: rabbitmq:3-management
@@ -7,6 +32,104 @@ services:
       - "15672:15672" # management UI
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      # check_port_connectivity, not ping: ping passes before port 5672 accepts
+      # connections, and a consumer that can't connect at startup never retries.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+
+  events-service:
+    <<: *backend-service
+    build: backend/services/events-service
+    environment:
+      <<: *backend-env
+      EVENTS_SERVICE_PORT: 4001
+    ports: ["4001:4001"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4001/health"]
+      interval: 15s
+
+  user-service:
+    <<: *backend-service
+    build: backend/services/user-service
+    environment:
+      <<: *backend-env
+      USER_SERVICE_PORT: 4002
+    ports: ["4002:4002"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4002/health"]
+      interval: 15s
+
+  venue-service:
+    <<: *backend-service
+    build: backend/services/venue-service
+    environment:
+      <<: *backend-env
+      VENUE_SERVICE_PORT: 4003
+    ports: ["4003:4003"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4003/health"]
+      interval: 15s
+
+  notification-service:
+    <<: *backend-service
+    build: backend/services/notification-service
+    environment:
+      <<: *backend-env
+      NOTIFICATION_SERVICE_PORT: 4004
+    ports: ["4004:4004"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4004/health"]
+      interval: 15s
+
+  equipment-service:
+    <<: *backend-service
+    build: backend/services/equipment-service
+    environment:
+      <<: *backend-env
+      EQUIPMENT_SERVICE_PORT: 4005
+    ports: ["4005:4005"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4005/health"]
+      interval: 15s
+
+  chat-service:
+    <<: *backend-service
+    build: backend/services/chat-service
+    environment:
+      <<: *backend-env
+      CHAT_SERVICE_PORT: 4006
+    ports: ["4006:4006"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4006/health"]
+      interval: 15s
+
+  registration-service:
+    <<: *backend-service
+    build: backend/services/registration-service
+    environment:
+      <<: *backend-env
+      REGISTRATION_SERVICE_PORT: 4007
+    ports: ["4007:4007"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4007/health"]
+      interval: 15s
+
+  # The browser calls the services on their published host ports
+  # (localhost:4001-4007), so the frontend's API URLs keep their defaults.
+  frontend:
+    build: frontend
+    ports: ["5173:80"]
+    depends_on:
+      - events-service
+      - user-service
+      - venue-service
+      - notification-service
+      - equipment-service
+      - chat-service
+      - registration-service
 
 volumes:
   rabbitmq-data:

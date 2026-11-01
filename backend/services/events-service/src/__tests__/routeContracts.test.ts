@@ -369,8 +369,8 @@ describe("POST /api/events/:id/change-requests", () => {
           "change_requests.select("id").eq("event_id", 7).eq("status", "Pending").maybeSingle()",
           "change_requests.insert({"event_id":7,"organiser_id":"ORG-1","status":"Pending","decided_at":null,"decision_reason":null}).select("id").single()",
           "change_request_fields.upsert([{"request_id":11,"field":"venue","old_value":"Hall","new_value":"Other hall","is_critical":true}], {"onConflict":"request_id,field"})",
-          "event_history.insert([{"event_id":7,"field":"venue","old_value":"Hall","new_value":"requested: Other hall (pending coordinator review)","changed_by":"ORG-1"}])",
           "events.update({"status":"Needs Review"}).eq("id", 7).eq("status", "Confirmed")",
+          "event_history.insert([{"event_id":7,"field":"venue","old_value":"Hall","new_value":"requested: Other hall (pending coordinator review)","changed_by":"ORG-1"}])",
           "event_history.insert([{"event_id":7,"field":"Status","old_value":"Confirmed","new_value":"Needs Review","changed_by":"ORG-1"}])",
         ],
         "published": [
@@ -576,9 +576,9 @@ describe("POST /api/events/:id/change-requests", () => {
           "change_requests.insert({"event_id":7,"organiser_id":"ORG-1","status":"Pending","decided_at":null,"decision_reason":null}).select("id").single()",
           "change_request_fields.upsert([{"request_id":13,"field":"venue","old_value":"Hall","new_value":"Other hall","is_critical":true},{"request_id":13,"field":"description","old_value":"Movies","new_value":"New text","is_critical":false}], {"onConflict":"request_id,field"})",
           "events.update({"submitted_details":{"name":"Film Night","purpose":"Social","description":"New text","proposedDate":"2099-06-01","startTime":"10:00","endTime":"12:00","expectedAttendance":30,"venue":"Hall","accessibility":"Ramp","equipment":"Projector","technicalSupport":"Tech","registrationNeeded":true}}).eq("id", 7)",
+          "events.update({"status":"Needs Review"}).eq("id", 7).eq("status", "Confirmed")",
           "event_history.insert([{"event_id":7,"field":"description","old_value":"Movies","new_value":"New text","changed_by":"ORG-1"}])",
           "event_history.insert([{"event_id":7,"field":"venue","old_value":"Hall","new_value":"requested: Other hall (pending coordinator review)","changed_by":"ORG-1"}])",
-          "events.update({"status":"Needs Review"}).eq("id", 7).eq("status", "Confirmed")",
           "event_history.insert([{"event_id":7,"field":"Status","old_value":"Confirmed","new_value":"Needs Review","changed_by":"ORG-1"}])",
         ],
         "published": [
@@ -908,6 +908,7 @@ describe("POST /api/events/:id/change-requests", () => {
           "change_requests.select("id").eq("event_id", 7).eq("status", "Pending").maybeSingle()",
           "change_requests.insert({"event_id":7,"organiser_id":"ORG-1","status":"Pending","decided_at":null,"decision_reason":null}).select("id").single()",
           "change_request_fields.upsert([{"request_id":11,"field":"venue","old_value":"Hall","new_value":"Other hall","is_critical":true}], {"onConflict":"request_id,field"})",
+          "change_requests.delete().eq("id", 11)",
         ],
         "published": [],
         "status": 500,
@@ -924,6 +925,7 @@ describe("POST /api/events/:id/change-requests", () => {
           "change_requests.insert({"event_id":7,"organiser_id":"ORG-1","status":"Approved","decided_at":"2026-01-01T00:00:00.000Z","decision_reason":"Applied automatically — name"}).select("id").single()",
           "change_request_fields.upsert([{"request_id":11,"field":"name","old_value":"Film Night","new_value":"New name","is_critical":false}], {"onConflict":"request_id,field"})",
           "events.update({"submitted_details":{"name":"New name","purpose":"Social","description":"Movies","proposedDate":"2099-06-01","startTime":"10:00","endTime":"12:00","expectedAttendance":30,"venue":"Hall","accessibility":"Ramp","equipment":"Projector","technicalSupport":"Tech","registrationNeeded":true}}).eq("id", 7)",
+          "change_requests.delete().eq("id", 11)",
         ],
         "published": [],
         "status": 500,
@@ -939,8 +941,8 @@ describe("POST /api/events/:id/change-requests", () => {
           "change_requests.select("id").eq("event_id", 7).eq("status", "Pending").maybeSingle()",
           "change_requests.insert({"event_id":7,"organiser_id":"ORG-1","status":"Pending","decided_at":null,"decision_reason":null}).select("id").single()",
           "change_request_fields.upsert([{"request_id":11,"field":"venue","old_value":"Hall","new_value":"Other hall","is_critical":true}], {"onConflict":"request_id,field"})",
-          "event_history.insert([{"event_id":7,"field":"venue","old_value":"Hall","new_value":"requested: Other hall (pending coordinator review)","changed_by":"ORG-1"}])",
           "events.update({"status":"Needs Review"}).eq("id", 7).eq("status", "Confirmed")",
+          "change_requests.delete().eq("id", 11)",
         ],
         "published": [],
         "status": 500,
@@ -960,6 +962,7 @@ describe("POST /api/events/:id/change-requests", () => {
           "change_requests.select("id").eq("event_id", 7).eq("status", "Pending").maybeSingle()",
           "change_request_fields.select("id, field, old_value, new_value, is_critical").eq("request_id", 3)",
           "change_request_fields.delete().eq("request_id", 3).in("field", ["venue"])",
+          "change_request_fields.upsert([{"request_id":3,"field":"venue","old_value":"Hall","new_value":"Other hall","is_critical":true}], {"onConflict":"request_id,field"})",
         ],
         "published": [],
         "status": 500,
@@ -977,6 +980,7 @@ describe("POST /api/events/:id/change-requests", () => {
           "change_request_fields.delete().eq("request_id", 3).in("field", ["venue"])",
           "event_history.insert([{"event_id":7,"field":"venue","old_value":"Other hall","new_value":"reverted to Hall (no longer pending)","changed_by":"ORG-1"}])",
           "change_requests.update({"status":"Auto-Withdrawn","decided_at":"2026-01-01T00:00:00.000Z","decided_by":null,"decision_reason":"The requested change to venue was reverted before it was reviewed."}).eq("id", 3)",
+          "change_request_fields.upsert([{"request_id":3,"field":"venue","old_value":"Hall","new_value":"Other hall","is_critical":true}], {"onConflict":"request_id,field"})",
         ],
         "published": [],
         "status": 500,
@@ -1722,27 +1726,10 @@ describe("PATCH /api/events/:id", () => {
             "events.select("id, status, organiser_id, coordinator_id, submitted_details, status_before_clarification").eq("id", 7).maybeSingle()",
             "events.update({"submitted_details":{"name":"Film Night","purpose":"Social","description":"Movies","proposedDate":"2099-06-01","startTime":"11:00","endTime":"13:00","expectedAttendance":30,"venue":"Hall","accessibility":"Ramp","equipment":"Projector","technicalSupport":"Tech","registrationNeeded":true},"status":"Requested","status_before_clarification":null}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
             "event_history.insert([{"event_id":7,"field":"Start time","old_value":"10:00","new_value":"11:00","changed_by":"ORG-1"},{"event_id":7,"field":"End time","old_value":"12:00","new_value":"13:00","changed_by":"ORG-1"}])",
-            "event_outbox.insert({"type":"event.rescheduled","event_id":7,"actor_id":"ORG-1","recipients":{"userIds":[],"roles":[]},"data":{"eventName":"Film Night","coordinatorId":"COORD-1","proposedDate":"2099-06-01","startTime":"11:00","endTime":"13:00"}}).select("id, message_id, type, event_id, actor_id, recipients, data, occurred_at").single()",
             "event_clarifications.select("id").eq("event_id", 7).is("parent_id", null).eq("resolved", false).order("created_at", {"ascending":false}).limit(1).maybeSingle()",
             "event_clarifications.insert({"event_id":7,"parent_id":55,"author_id":"ORG-1","author_role":"organiser","message":"Start time changed from '10:00' to '11:00'\\nEnd time changed from '12:00' to '13:00'"})",
           ],
           "published": [
-            {
-              "actorId": "ORG-1",
-              "data": {
-                "coordinatorId": "COORD-1",
-                "endTime": "13:00",
-                "eventName": "Film Night",
-                "proposedDate": "2099-06-01",
-                "startTime": "11:00",
-              },
-              "eventId": 7,
-              "recipients": {
-                "roles": [],
-                "userIds": [],
-              },
-              "type": "event.rescheduled",
-            },
             {
               "actorId": "ORG-1",
               "data": {
@@ -4252,8 +4239,23 @@ describe("coordinator review routes", () => {
           "calls": [
             "events.select("id, status, coordinator_id, organiser_id, submitted_details").eq("id", 7).maybeSingle()",
             "events.update({"status":"Rejected","review_outcome":"Not suitable","decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
+            "event_history.insert([{"event_id":7,"field":"Status","old_value":"Requested","new_value":"Rejected","changed_by":"COORD-1"},{"event_id":7,"field":"Rejection reason","old_value":null,"new_value":"Not suitable","changed_by":"COORD-1"}])",
+            "event_outbox.insert({"type":"event.rejected","event_id":7,"actor_id":"COORD-1","recipients":{"userIds":[],"roles":[]},"data":{"eventName":"Film Night","reason":"Not suitable"}}).select("id, message_id, type, event_id, actor_id, recipients, data, occurred_at").single()",
           ],
           "published": [
+            {
+              "actorId": "COORD-1",
+              "data": {
+                "eventName": "Film Night",
+                "reason": "Not suitable",
+              },
+              "eventId": 7,
+              "recipients": {
+                "roles": [],
+                "userIds": [],
+              },
+              "type": "event.rejected",
+            },
             {
               "actorId": "COORD-1",
               "data": {
@@ -4319,7 +4321,8 @@ describe("coordinator review routes", () => {
         }
       `);
       const outcome = await post("reject", { reason: "No" }, { reply: replyFor("Requested", { organiser_id: null }) });
-      expect([outcome.status, outcome.published]).toEqual([200, []]);
+      // No organiser to tell, so only the message that releases the event's arrangements goes out.
+      expect([outcome.status, (outcome.published as { type: string }[]).map((message) => message.type)]).toEqual([200, ["event.rejected"]]);
     });
   });
 

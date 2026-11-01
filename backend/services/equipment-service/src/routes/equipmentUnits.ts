@@ -66,6 +66,7 @@ equipmentUnitsRouter.get("/", async (req: AuthedRequest, res) => {
   if (!requireSupport(req, res)) return;
   const supabase = req.supabase!;
 
+  // Stryker disable next-line ConditionalExpression,MethodExpression,StringLiteral: a blank type trims to "", which is falsy, so it filters nothing either way
   const type = typeof req.query.type === "string" && req.query.type.trim() !== "" ? req.query.type.trim() : null;
   let catalogId: number | null = null;
   if (type) {
@@ -126,6 +127,7 @@ equipmentUnitsRouter.get("/impact", async (req: AuthedRequest, res) => {
   const supabase = req.supabase!;
 
   const type = typeof req.query.type === "string" ? req.query.type.trim() : "";
+  // Stryker disable next-line StringLiteral: any fallback that isn't a real date fails the date check the same way
   const startDate = typeof req.query.startDate === "string" ? req.query.startDate.trim() : "";
   const endDate = typeof req.query.endDate === "string" && req.query.endDate.trim() !== "" ? req.query.endDate.trim() : null;
   const quantityRaw = typeof req.query.quantity === "string" && req.query.quantity.trim() !== "" ? Number(req.query.quantity) : null;
@@ -211,6 +213,7 @@ equipmentUnitsRouter.post("/mark", async (req: AuthedRequest, res) => {
   const type = typeof body.type === "string" ? body.type.trim() : "";
   if (type === "") fields.type = "Choose an equipment type.";
 
+  // Stryker disable next-line ArrayDeclaration: a junk id is NaN and fails the integer test, like an empty list
   const rawIds = Array.isArray(body.unitIds) ? body.unitIds : [];
   const unitIds = [...new Set(rawIds.map(Number))];
   if (unitIds.length === 0 || unitIds.some((id) => !Number.isInteger(id) || id < 1)) {
@@ -321,7 +324,11 @@ equipmentUnitsRouter.post("/unavailability/clear", async (req: AuthedRequest, re
   if (!requireSupport(req, res)) return;
   const supabase = req.supabase!;
 
+  // Stryker disable ArrayDeclaration: a junk id is NaN and fails the integer test, like an empty list
+  // The second `?? {}` only runs once the first has found a body, so it is never taken.
+  /* v8 ignore next -- @preserve */
   const rawIds = Array.isArray((req.body ?? {}).periodIds) ? ((req.body ?? {}).periodIds as unknown[]) : [];
+  // Stryker restore ArrayDeclaration
   const periodIds = [...new Set(rawIds.map(Number))];
   if (periodIds.length === 0 || periodIds.length > MAX_UNITS_PER_REQUEST || periodIds.some((id) => !Number.isInteger(id) || id < 1)) {
     res.status(400).json({ error: "Validation failed", fields: { periodIds: "Choose at least one period." } });

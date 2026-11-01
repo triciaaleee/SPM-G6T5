@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+reports
+.stryker-tmp
+.env
+src/__tests__
+**/*.test.ts

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleEventCancelled } from "../lib/eventCancelledHandler.js";
+import { handleEventRejected } from "../lib/eventRejectedHandler.js";
+import { handleMessage } from "../lib/handleMessage.js";
 import type { InboundMessage } from "../lib/rabbitConsumer.js";
 import { setPublisherForTest } from "../lib/rabbitPublisher.js";
 
@@ -94,5 +96,56 @@ describe("handleEventCancelled (E3-6 / E5-6 AC4)", () => {
   it("propagates a failure from the release RPC", async () => {
     const { supabase } = buildSupabase({ rpcError: { message: "boom" } });
     await expect(handleEventCancelled(buildMsg(), { supabase })).rejects.toBeTruthy();
+  });
+});
+
+describe("handleEventRejected (a Planning event rejected through a clarification)", () => {
+  it("releases the event's reservations and tells Technical Support it was rejected", async () => {
+    const { supabase, rpc } = buildSupabase();
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+
+    await handleEventRejected(buildMsg({ type: "event.rejected" }), { supabase });
+
+    expect(rpc).toHaveBeenCalledWith("release_equipment_for_event", { p_event_id: 7 });
+    expect(publish).toHaveBeenCalledWith({
+      type: "equipment.released",
+      eventId: 7,
+      actorId: "ORG-0001",
+      recipients: { userIds: [], roles: ["technical_support"] },
+      data: { eventName: "Spring Gala", reason: "event_rejected" },
+    });
+    setPublisherForTest(undefined);
+  });
+
+  it("skips the notification when nothing was reserved, as when it is rejected from Requested", async () => {
+    const { supabase, rpc } = buildSupabase({ bookings: [] });
+    const publish = vi.fn().mockResolvedValue(true);
+    setPublisherForTest({ publish });
+
+    await handleEventRejected(buildMsg({ type: "event.rejected" }), { supabase });
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(publish).not.toHaveBeenCalled();
+    setPublisherForTest(undefined);
+  });
+
+  it("is a no-op when the message carries no eventId", async () => {
+    const { supabase, rpc } = buildSupabase();
+    await handleEventRejected(buildMsg({ type: "event.rejected", eventId: null }), { supabase });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("propagates a failed release, so the message goes to the dead-letter queue", async () => {
+    const { supabase } = buildSupabase({ rpcError: { message: "boom" } });
+    await expect(handleEventRejected(buildMsg({ type: "event.rejected" }), { supabase })).rejects.toBeTruthy();
+  });
+
+  it("is reached through handleMessage", async () => {
+    const { supabase, rpc } = buildSupabase();
+    setPublisherForTest({ publish: vi.fn().mockResolvedValue(true) });
+    await handleMessage(buildMsg({ type: "event.rejected" }), { supabase });
+    expect(rpc).toHaveBeenCalledWith("release_equipment_for_event", { p_event_id: 7 });
+    setPublisherForTest(undefined);
   });
 });

@@ -107,6 +107,53 @@ async function dbHistory(id: number) {
   return data ?? [];
 }
 
+/**
+ * Lets every database call through for real except the first one `shouldFail` picks, which answers with an
+ * error instead. The route under test uses this same `supabaseAdmin`, so this is how a write that fails
+ * part-way is reproduced against the real tables. Call `restore()` when done.
+ */
+function failFirstMatching(shouldFail: (table: string, operation: string, args: unknown[]) => boolean) {
+  const realFrom = supabaseAdmin.from.bind(supabaseAdmin);
+  let fired = false;
+  const failure: Record<string, unknown> = {};
+  for (const method of ["eq", "in", "select", "single", "maybeSingle"]) failure[method] = () => failure;
+  failure.then = (resolve: (value: unknown) => unknown) => resolve({ data: null, error: { message: "injected failure" } });
+
+  const spy = vi.spyOn(supabaseAdmin, "from").mockImplementation(((table: string) => {
+    const builder = realFrom(table) as unknown as Record<string, unknown>;
+    return new Proxy(builder, {
+      get(target, property) {
+        const value = target[property as string];
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]) => {
+          if (!fired && shouldFail(table, String(property), args)) {
+            fired = true;
+            return failure;
+          }
+          return (value as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    });
+  }) as never);
+
+  return { restore: () => spy.mockRestore(), didFire: () => fired };
+}
+
+async function confirm(id: number): Promise<void> {
+  const { error } = await supabaseAdmin.from("events").update({ status: "Confirmed" }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+async function dbChangeRequests(id: number) {
+  const { data } = await supabaseAdmin.from("change_requests").select("id, status").eq("event_id", id);
+  return (data ?? []) as { id: number; status: string }[];
+}
+
+async function dbChangeRequestFields(requestId: number) {
+  const { data } = await supabaseAdmin.from("change_request_fields").select("field, new_value").eq("request_id", requestId).order("field");
+  return (data ?? []) as { field: string; new_value: string }[];
+}
+
 /** Deletes everything this suite (or a crashed earlier run) created. FK order: children without cascade first. */
 async function purge(): Promise<void> {
   const { data: events } = await supabaseAdmin.from("events").select("id").like("organiser_id", `${PREFIX}%`);
@@ -146,6 +193,74 @@ afterAll(async () => {
   setPublisherForTest(undefined);
   await purge();
 }, 30_000);
+
+describe("a failed change request is undone (real Supabase project)", () => {
+  async function confirmedEvent(): Promise<number> {
+    const id = await submitEvent();
+    await request(app).post(`/api/events/${id}/assign`).set(auth(tokens.lead)).send({ coordinatorId: COORD });
+    await request(app).post(`/api/events/${id}/approve`).set(auth(tokens.coord));
+    await confirm(id);
+    return id;
+  }
+
+  it("deletes the request it created, and its fields with it, when the move to Needs Review fails", async () => {
+    const id = await confirmedEvent();
+    const heldVenue = `ZEVT-undo-venue-${RUN}`;
+    const failure = failFirstMatching((table, operation, args) => table === "events" && operation === "update" && (args[0] as { status?: string })?.status === "Needs Review");
+
+    let res;
+    try {
+      res = await request(app).post(`/api/events/${id}/change-requests`).set(auth(tokens.org)).send({ venue: heldVenue });
+    } finally {
+      failure.restore();
+    }
+
+    expect(failure.didFire()).toBe(true);
+    expect(res.status).toBe(500);
+
+    // The request row is gone. Its field row could not have been left behind: it references the request, so
+    // the delete only succeeds if the fields go with it (on delete cascade, migration 0036).
+    expect(await dbChangeRequests(id)).toEqual([]);
+    const { data: leftover } = await supabaseAdmin.from("change_request_fields").select("id").eq("new_value", heldVenue);
+    expect(leftover).toEqual([]);
+
+    // Nothing about the event moved, and no history says it did.
+    const row = await dbEvent(id);
+    expect(row.status).toBe("Confirmed");
+    expect((await dbHistory(id)).some((h) => String(h.new_value).includes(heldVenue))).toBe(false);
+    expect(published.some((m) => m.eventId === id && m.type === "change.requested")).toBe(false);
+  });
+
+  it("puts an open request back as it was when a later write fails", async () => {
+    const id = await confirmedEvent();
+    const first = await request(app).post(`/api/events/${id}/change-requests`).set(auth(tokens.org)).send({ venue: `ZEVT-held-A-${RUN}` });
+    expect(first.status).toBe(201);
+    const requestId = first.body.changeRequestId as number;
+    expect((await dbEvent(id)).status).toBe("Needs Review");
+    expect(await dbChangeRequestFields(requestId)).toEqual([{ field: "venue", new_value: `ZEVT-held-A-${RUN}` }]);
+    const detailsBefore = (await dbEvent(id)).submitted_details;
+
+    // Overwrite the held venue and add a non-critical edit; the fields are written, then the details update fails.
+    const failure = failFirstMatching((table, operation, args) => table === "events" && operation === "update" && "submitted_details" in ((args[0] as object) ?? {}));
+    let res;
+    try {
+      res = await request(app)
+        .post(`/api/events/${id}/change-requests`)
+        .set(auth(tokens.org))
+        .send({ venue: `ZEVT-held-B-${RUN}`, description: `ZEVT-undo description ${RUN}` });
+    } finally {
+      failure.restore();
+    }
+
+    expect(failure.didFire()).toBe(true);
+    expect(res.status).toBe(500);
+
+    // The same request, still Pending, holding the venue it held before; the field added by the failed call is gone.
+    expect(await dbChangeRequests(id)).toEqual([{ id: requestId, status: "Pending" }]);
+    expect(await dbChangeRequestFields(requestId)).toEqual([{ field: "venue", new_value: `ZEVT-held-A-${RUN}` }]);
+    expect((await dbEvent(id)).submitted_details).toEqual(detailsBefore);
+  });
+});
 
 describe("event lifecycle (real Supabase project)", () => {
   it("submit → Unassigned → Lead assigns → Requested → coordinator approves → Planning, with history", async () => {
@@ -195,6 +310,72 @@ describe("event lifecycle (real Supabase project)", () => {
       .send(eventBody({ venue: "Main hall" }));
     expect(replied.status).toBe(200);
     expect((await dbEvent(id)).status).toBe("Requested");
+  });
+
+  it("answering a clarification raised from Requested with a new date announces no reschedule", async () => {
+    const id = await submitEvent();
+    await request(app).post(`/api/events/${id}/assign`).set(auth(tokens.lead)).send({ coordinatorId: COORD });
+    await request(app).post(`/api/events/${id}/request-clarification`).set(auth(tokens.coord)).send({ message: "Which day?" });
+
+    const replied = await request(app)
+      .patch(`/api/events/${id}`)
+      .set(auth(tokens.org))
+      .send(eventBody({ proposedDate: "2099-07-01", expectedAttendance: 40 }));
+    expect(replied.status).toBe(200);
+    expect((await dbEvent(id)).status).toBe("Requested");
+
+    // Nothing can be booked before Planning, so neither message is stored or published.
+    const { data: outbox } = await supabaseAdmin.from("event_outbox").select("type").eq("event_id", id);
+    expect(outbox ?? []).toEqual([]);
+    expect(published.filter((m) => m.eventId === id && (m.type === "event.rescheduled" || m.type === "event.attendance_changed"))).toEqual([]);
+  });
+
+  it("a Planning event can be rejected through a clarification: Rejected, history written, event.rejected stored, terminal", async () => {
+    const id = await submitEvent();
+    await request(app).post(`/api/events/${id}/assign`).set(auth(tokens.lead)).send({ coordinatorId: COORD });
+    await request(app).post(`/api/events/${id}/approve`).set(auth(tokens.coord));
+    const asked = await request(app)
+      .post(`/api/events/${id}/request-clarification`)
+      .set(auth(tokens.coord))
+      .send({ message: "Can this move to another week?" });
+    expect(asked.status).toBe(200);
+    expect((await dbEvent(id)).status_before_clarification).toBe("Planning");
+
+    const noReason = await request(app).post(`/api/events/${id}/reject`).set(auth(tokens.coord)).send({ reason: "   " });
+    expect(noReason.status).toBe(400);
+    const notAssigned = await request(app).post(`/api/events/${id}/reject`).set(auth(tokens.otherCoord)).send({ reason: "mine now" });
+    expect([403, 404]).toContain(notAssigned.status);
+    expect((await dbEvent(id)).status).toBe("Clarification Requested");
+
+    const rejected = await request(app).post(`/api/events/${id}/reject`).set(auth(tokens.coord)).send({ reason: "No suitable week is free" });
+    expect(rejected.status).toBe(200);
+    const row = await dbEvent(id);
+    expect(row.status).toBe("Rejected");
+    expect(row.review_outcome).toBe("No suitable week is free");
+    expect(row.decided_by).toBe(COORD);
+
+    expect(await dbHistory(id)).toEqual(
+      expect.arrayContaining([
+        { field: "Status", old_value: "Clarification Requested", new_value: "Rejected", changed_by: COORD },
+        { field: "Rejection reason", old_value: null, new_value: "No suitable week is free", changed_by: COORD },
+      ]),
+    );
+
+    // The message venue-service and equipment-service release the event's arrangements on.
+    const { data: outbox } = await supabaseAdmin.from("event_outbox").select("type, data, recipients, published_at").eq("event_id", id);
+    expect(outbox).toHaveLength(1);
+    expect(outbox?.[0]).toMatchObject({
+      type: "event.rejected",
+      data: { reason: "No suitable week is free" },
+      recipients: { userIds: [], roles: [] },
+    });
+    expect(outbox?.[0].published_at).not.toBeNull();
+    expect(published.some((m) => m.type === "request.decided" && m.eventId === id)).toBe(true);
+
+    const twice = await request(app).post(`/api/events/${id}/reject`).set(auth(tokens.coord)).send({ reason: "again" });
+    expect(twice.status).toBe(409);
+    const edit = await request(app).patch(`/api/events/${id}`).set(auth(tokens.org)).send(eventBody());
+    expect(edit.status).toBe(409);
   });
 
   it("an illegal transition returns 409 and leaves the row exactly as it was", async () => {
