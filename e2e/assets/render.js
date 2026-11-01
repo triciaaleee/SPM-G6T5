@@ -18,7 +18,6 @@
   var SHORT_MODE = { ui: "UI", check: "API + UI", api: "API", none: "No test" };
   var MODE_RANK = { ui: 3, check: 2, api: 1, none: 0 };
   var STATE_LABELS = { event: "Event", booking: "Booking", equipment: "Equipment", registration: "Registration" };
-  var FLAG_LABELS = { spec: "Code differs from AGENTS.md", assumption: "Unconfirmed assumption", gap: "Coverage gap" };
   var LOCAL_TITLE = "Needs time to pass, so it only runs against a local Supabase; it is skipped against the shared dev database";
 
   // ---------------------------------------------------------------- helpers
@@ -134,12 +133,6 @@
         modeChip("api"),
         modeChip("none"),
         localChip(),
-      ]),
-      h("div", { class: "legend-group" }, [
-        h("b", { text: "Notes:" }),
-        h("span", {}, [h("span", { class: "flag-key f-spec" }), FLAG_LABELS.spec]),
-        h("span", {}, [h("span", { class: "flag-key f-assumption" }), FLAG_LABELS.assumption]),
-        h("span", {}, [h("span", { class: "flag-key f-gap" }), FLAG_LABELS.gap]),
       ]),
     ]);
   }
@@ -315,7 +308,9 @@
       remaining.splice(remaining.indexOf(node), 1);
 
       var col;
-      if (!node.in.length) col = node.alongside ? node.alongside.col + 1 : maxCol + 1;
+      // A new flow skips a column, so the last flow's end label and this
+      // flow's start label get room and don't run into each other.
+      if (!node.in.length) col = node.alongside ? node.alongside.col + 1 : maxCol < 0 ? 0 : maxCol + 2;
       else
         col = Math.max.apply(
           null,
@@ -499,7 +494,9 @@
     var down = ty > sy;
     if (gateway(a)) {
       var y0 = down ? a.bottom : a.top;
-      return { d: "M" + a.cx + "," + y0 + " V" + ty + " H" + b.left, lx: a.cx + 6, ly: y0 + (down ? 14 : -6) };
+      // Label each branch where it turns towards its own task, so two branches
+      // leaving the same corner don't print their labels on top of each other.
+      return { d: "M" + a.cx + "," + y0 + " V" + ty + " H" + b.left, lx: a.cx + 10, ly: ty - 8 };
     }
     if (gateway(b)) {
       var y1 = down ? b.top : b.bottom;
@@ -571,15 +568,6 @@
     g.appendChild(cov);
 
     var mx = x + G.TASK_W - 12;
-    (step.flags || [])
-      .slice()
-      .reverse()
-      .forEach(function (flag) {
-        var dot = svgEl("circle", { class: "dg-flag f-" + flag.kind, cx: mx, cy: by + 5, r: 4.5 });
-        dot.appendChild(title(FLAG_LABELS[flag.kind]));
-        g.appendChild(dot);
-        mx -= 12;
-      });
     if (step.notifies && step.notifies.length) {
       var env = svgEl("g", { class: "dg-mail" }, [
         title("Notifies: " + step.notifies.join(", ")),
@@ -737,11 +725,6 @@
         return h("li", { text: n });
       }))]) : null,
     ]
-      .concat(
-        (step.flags || []).map(function (flag) {
-          return h("div", { class: "flag f-" + flag.kind }, [h("b", { text: FLAG_LABELS[flag.kind] }), flag.text]);
-        }),
-      )
       .concat([
         h("div", { class: "drawer-block" }, [h("h3", { text: "ConnectSphere Online services" }), h("p", { class: "mono svc-full", text: step.services.join(" · ") })]),
         h("div", { class: "drawer-block" }, [
@@ -992,7 +975,7 @@
       scroller,
       h("p", { class: "dg-key dim" }, [
         "Each task: the status it moves to (above), its step number and Playwright coverage (inside), and the ConnectSphere Online services behind it (below). ",
-        "✉ = sends important notifications. Coloured dots = notes (code vs AGENTS.md, assumption, coverage gap).",
+        "✉ = sends important notifications.",
       ]),
       h("h2", { text: "All steps" }),
       stepsTable(p),
@@ -1157,24 +1140,6 @@
     ]);
   }
 
-  function flagList(kind) {
-    var items = [];
-    prepared.forEach(function (p) {
-      p.steps.forEach(function (step) {
-        (step.flags || []).forEach(function (flag) {
-          if (flag.kind !== kind) return;
-          items.push(
-            h("li", { class: "f-" + kind }, [
-              h("a", { href: p.sc.file + "#step-" + step.n, text: "S" + p.number + " step " + step.n + " (" + step.title + ")" }),
-              ": " + flag.text,
-            ]),
-          );
-        });
-      });
-    });
-    return h("ul", { class: "gap-list flag-list" }, items);
-  }
-
   function renderIndex() {
     var places = testPlacements();
     var totalSteps = 0;
@@ -1231,14 +1196,6 @@
 
         h("h2", { text: "Every Playwright test and where it sits" }),
         allTestsTable(places),
-
-        h("h2", { text: "Where the code differs from AGENTS.md" }),
-        flagList("spec"),
-
-        h("h2", { text: "Unconfirmed assumptions" }),
-        flagList("assumption"),
-
-        h("footer", { class: "page-foot", text: "Generated from e2e/assets/data.js. Edit that file to change a scenario; every page and table here is drawn from it." }),
       ]),
     );
   }

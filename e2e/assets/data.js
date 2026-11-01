@@ -746,7 +746,7 @@ window.SWIMLANE_DATA = {
             {
               lane: "venue_staff",
               after: null,
-              startLabel: "Venue can't take it",
+              startLabel: "Venue Staff decline a request",
               title: "Reject a request with a reason",
               state: { booking: ["Requested / On Hold", "Rejected"] },
               detail: "A reason is required. There is no coordinator override; to try again the coordinator makes a new request.",

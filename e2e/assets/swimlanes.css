@@ -90,10 +90,6 @@ h2 { font-size: 20px; margin: 40px 0 12px; }
 .status.st-bad { background: var(--st-bad-bg); color: var(--st-bad-fg); }
 .status.st-none { background: transparent; color: var(--muted); font-weight: 400; padding: 1px 2px; }
 
-.flag-key { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 4px; border-left: 3px solid; }
-.flag-key.f-spec { background: var(--f-spec-bg); border-color: var(--f-spec-bd); }
-.flag-key.f-assumption { background: var(--f-assumption-bg); border-color: var(--f-assumption-bd); }
-.flag-key.f-gap { background: var(--f-gap-bg); border-color: var(--f-gap-bd); }
 
 /* ---------- diagram ---------- */
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 0 0 8px; }
@@ -124,7 +120,7 @@ h2 { font-size: 20px; margin: 40px 0 12px; }
 
 .dg-edge { fill: none; stroke: var(--flow); stroke-width: 1.5; }
 #dg-arrow path { fill: var(--flow); }
-.dg-edge-label { fill: var(--text); font-size: 11px; font-weight: 600; }
+.dg-edge-label { fill: var(--text); font-size: 11px; font-weight: 600; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
 
 .dg-event circle { fill: var(--surface); stroke: var(--flow); stroke-width: 1.6; }
 .dg-event.end circle { stroke-width: 3.6; }
@@ -145,9 +141,6 @@ h2 { font-size: 20px; margin: 40px 0 12px; }
 .dg-svc { fill: var(--muted); font-size: 9.5px; font-family: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace; }
 .dg-mail rect { fill: var(--task-fill); stroke: var(--muted); stroke-width: 1.1; }
 .dg-mail path { fill: none; stroke: var(--muted); stroke-width: 1.1; }
-.dg-flag.f-spec { fill: var(--f-spec-bd); }
-.dg-flag.f-assumption { fill: var(--f-assumption-bd); }
-.dg-flag.f-gap { fill: var(--f-gap-bd); }
 
 .dg-cov text { font-size: 9.5px; font-weight: 600; }
 .dg-cov.m-ui rect { fill: var(--m-ui-bg); } .dg-cov.m-ui text { fill: var(--m-ui-fg); }
@@ -197,11 +190,6 @@ h2 { font-size: 20px; margin: 40px 0 12px; }
 .state-row .state-label { color: var(--muted); margin-right: 2px; }
 .state-row .arrow { color: var(--muted); }
 .detail { margin: 10px 0 0; }
-.flag { margin: 10px 0 0; padding: 6px 8px; border-left: 3px solid; border-radius: 4px; font-size: 12px; }
-.flag b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
-.flag.f-spec { background: var(--f-spec-bg); border-color: var(--f-spec-bd); }
-.flag.f-assumption { background: var(--f-assumption-bg); border-color: var(--f-assumption-bd); }
-.flag.f-gap { background: var(--f-gap-bg); border-color: var(--f-gap-bd); }
 @media (min-width: 901px) { body.drawer-open .page { padding-right: 412px; } }
 @media (max-width: 900px) {
   .drawer { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 60vh; }
@@ -222,8 +210,6 @@ td .step-links a { margin-right: 6px; white-space: nowrap; }
 
 .gap-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 .gap-list li { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--f-gap-bd); border-radius: 6px; padding: 8px 12px; font-size: 13px; }
-.flag-list li { border-left-color: var(--f-spec-bd); }
-.flag-list li.f-assumption { border-left-color: var(--f-assumption-bd); }
 
 /* ---------- index ---------- */
 .scenario-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
