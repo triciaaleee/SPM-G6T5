@@ -135,8 +135,9 @@ The event status machine is **fixed**. Use exactly these status values (exact ca
                                             └───────────────┘
 
   Unassigned ──▶ Requested: the Event Coordinator Lead assigns the request.
-  Clarification Requested always returns to the status it came from
-  (Requested or Planning), or is rejected by the coordinator from either.
+  Clarification Requested returns to the status it came from (Requested or
+  Planning) when the organiser responds. From either, the coordinator can
+  reject it, or approve it to Planning once every question is resolved.
 
   Cancelled (END): the Organiser can cancel from any active status
   (Unassigned, Requested, Clarification Requested, Planning,
@@ -164,6 +165,7 @@ The event status machine is **fixed**. Use exactly these status values (exact ca
 | `Clarification Requested` | `Requested` | Organiser responds (when `status_before_clarification = 'Requested'`). |
 | `Planning` | `Clarification Requested` | Set `status_before_clarification = 'Planning'`. |
 | `Clarification Requested` | `Planning` | Organiser responds (when `status_before_clarification = 'Planning'`). |
+| `Clarification Requested` | `Planning` | Assigned coordinator approves once every clarification question is resolved, from either origin (`status_before_clarification` = `Requested` or `Planning`). Blocked with `409` while any question is unresolved. |
 | `Planning` | `Safety Review` | Assigned coordinator submits for safety review once all venue bookings are confirmed and all requested equipment is reserved (E3-4; blocked and the outstanding arrangements named otherwise). Equipment counts as requested whenever the organiser's Equipment Requirements isn't NA/None/empty (or a phrase like "None required"), so an event with such text and no equipment request recorded yet is blocked too (it is never read as "nothing requested"); partly reserved still blocks. Safety notes (equipment placement, crowd movement, emergency access, venue restrictions) are required and stored per submission in `event_safety_submissions` (migration `0026`). Appears in the Safety Officer's queue (E1-10). |
 | `Safety Review` | `Confirmed` | Safety Officer **approves**; the assigned coordinator and Organiser are notified (E3-12). |
 | `Safety Review` | `Planning` | Safety Officer **rejects** the safety arrangement with a required reason; the coordinator is notified (E3-13). |
@@ -178,7 +180,7 @@ The event status machine is **fixed**. Use exactly these status values (exact ca
 
 Rules:
 
-- `Clarification Requested` must always return to the status it came from, tracked in `events.status_before_clarification` (migration `0010`). It can never jump straight to `Safety Review`, `Confirmed` or `Completed`. The one exception is `Rejected`: the assigned coordinator may reject it while the clarification is open (see the transitions table).
+- `Clarification Requested` must always return to the status it came from, tracked in `events.status_before_clarification` (migration `0010`). It can never jump straight to `Safety Review`, `Confirmed` or `Completed`. There are two exceptions, both by the assigned coordinator (see the transitions table): `Rejected`, while the clarification is open, and `Planning`, by approving once every clarification question is resolved, even when it came from `Requested`.
 - `Draft` is outside the process: coordinators don't see or act on drafts, and a draft's only exit is `Draft → Unassigned`. Nothing ever moves back into `Draft`.
 - `Rejected`, `Completed` and `Cancelled` are terminal. No transitions out.
 - **Cancelling an event** (E3-6) releases every venue booking and equipment reservation for it (freeing the venue and returning equipment quantities to inventory immediately), and notifies the assigned coordinator (with the reason), the affected Venue Staff and Technical Support, and every registered attendee. The event's record and history stay viewable. `Cancelled` is set only by the owning Organiser; coordinators `Reject`, they do not `Cancel`. Further edits and change requests are blocked (E3-9).
