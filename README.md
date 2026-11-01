@@ -112,7 +112,7 @@ stateDiagram-v2
     Requested --> Clarification: coordinator asks
     Planning --> Clarification: coordinator asks
     Clarification --> Requested: organiser responds
-    Clarification --> Planning: organiser responds
+    Clarification --> Planning: organiser responds, or coordinator approves once questions are resolved
     Clarification --> Rejected: coordinator rejects
     Planning --> SafetyReview: coordinator submits
     SafetyReview --> Confirmed: Safety Officer approves
