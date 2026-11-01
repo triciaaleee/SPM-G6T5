@@ -1400,6 +1400,17 @@ describe("EventDetailView — page layout", () => {
     expect(clarify!.classes()).toContain("btn--block");
   });
 
+  it("lets only the assigned coordinator reply to a clarification: a coordinator who is not assigned reads it read-only", async () => {
+    const event = makeEvent({ status: "Clarification Requested", status_before_clarification: "Planning" } as Partial<EventSummary>);
+    const panelReadOnly = async (user: { id: string; role: string }) => {
+      const wrapper = await mountPage(event, user);
+      return wrapper.findComponent({ name: "ClarificationPanel" }).props("readOnly");
+    };
+
+    expect(await panelReadOnly(coordinator)).toBe(false);
+    expect(await panelReadOnly({ id: "COORD-0002", role: "coordinator" })).toBe(true);
+  });
+
   it("offers a Registrations tab with the count only when registration is needed", async () => {
     const without = await mountPage(makeEvent());
     expect(without.find(".tab-bar").text()).not.toContain("Registrations");

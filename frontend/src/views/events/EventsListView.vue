@@ -7,7 +7,7 @@ import PaginationBar from "../../components/ui/PaginationBar.vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { deleteDraft, fetchMyEvents, getCurrentUser, type EventSummary } from "../../lib/eventsApi";
-import { statusBadgeClass, statusLabel } from "../../lib/eventStatus";
+import { statusBadgeClass } from "../../lib/eventStatus";
 import { eventThumbnail, formatCardDate, formatCardTimeRange } from "../../lib/attendeeEvents";
 
 const route = useRoute();
@@ -207,14 +207,14 @@ onMounted(async () => {
             :to="eventLink(event)"
             :thumbnail="eventThumbnail(event.id)"
             :title="eventName(event)"
-            :status-label="statusLabel(event.status)"
+            :status-label="event.status"
             :status-class="statusBadgeClass(event.status)"
             :extra-badges="isRegistrationRequired(event) ? ['Registration Required'] : []"
             :facts="cardFacts(event)"
             person-label="Coordinator"
             :person-name="event.coordinator?.name"
             person-empty="Unassigned"
-            :meta="`Submitted: ${formatCreatedDate(event.created_at)}`"
+            :meta="event.status === 'Draft' ? undefined : `Submitted: ${formatCreatedDate(event.created_at)}`"
           >
             <template v-if="needsClarificationReply(event) || event.status === 'Draft'" #footer-actions>
               <span v-if="needsClarificationReply(event)" class="reply-action">Reply Needed</span>

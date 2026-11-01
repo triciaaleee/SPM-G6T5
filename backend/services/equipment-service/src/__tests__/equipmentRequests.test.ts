@@ -175,6 +175,10 @@ function buildApp(
     unavailabilityRows?: Record<string, unknown>[];
     /** What /api/users/names answers for requestedBy — defaults to no names resolved. */
     userNames?: { id: string; name: string }[];
+    /** What venue-service's /api/venues/support-info answers: the Approved bookings' venue names. Defaults to none. */
+    bookedVenues?: { eventId: number; venueName: string }[];
+    /** Make venue-service answer with this status instead. */
+    venueServiceStatus?: number;
   } = {},
 ) {
   const requestInsert = vi.fn((row: Record<string, unknown>) =>
@@ -275,6 +279,10 @@ function buildApp(
   const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
     if (url.includes("venue-booking-info")) {
       return { ok: true, status: 200, json: async () => ({ events: options.bookingInfoEvents ?? defaultBookingInfoEvents }) };
+    }
+    if (url.includes("/api/venues/support-info")) {
+      const status = options.venueServiceStatus ?? 200;
+      return { ok: status < 300, status, json: async () => ({ venues: options.bookedVenues ?? [] }) };
     }
     if (url.includes("/api/users/names")) {
       return { ok: true, status: 200, json: async () => ({ users: options.userNames ?? [] }) };
@@ -560,6 +568,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
       items: [
         { id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0, equipment_catalog_id: 1 },
       ],
+      bookedVenues: [{ eventId: 7, venueName: "Grand Ballroom" }],
       bookingInfoEvents: [
         {
           id: 7,
@@ -567,7 +576,7 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
           proposedDate: "2026-02-01",
           startTime: "18:00",
           endTime: "21:00",
-          venue: "Grand Ballroom",
+          venue: "Indoor room for 60",
           equipment: "2 projectors",
           technicalSupport: "Wireless mics",
           coordinatorId: "COORD-0001",
@@ -597,6 +606,25 @@ describe("GET /api/equipment-requests (E5-1 AC1)", () => {
         },
       },
     ]);
+  });
+
+  it("shows the booked venue, never the organiser's venue requirement, and null when none is booked or venue-service fails", async () => {
+    const event = { id: 7, name: "Alumni Gala", proposedDate: "2026-02-01", startTime: "18:00", endTime: "21:00", venue: "Indoor room for 60" };
+    const base = {
+      user: technicalSupport,
+      requests: [{ id: 55, event_id: 7, status: "Requested", created_at: "2026-01-01T00:00:00Z" }],
+      items: [{ id: 1, request_id: 55, equipment_type: "Projector", quantity: 2, quantity_fulfilled: 0, equipment_catalog_id: 1 }],
+      bookingInfoEvents: [event],
+    };
+
+    const two = buildApp({ ...base, bookedVenues: [{ eventId: 7, venueName: "LT1" }, { eventId: 7, venueName: "LT2" }] });
+    expect((await request(two.app).get("/api/equipment-requests")).body.equipmentRequests[0].event.venue).toBe("LT1, LT2");
+
+    const none = buildApp(base);
+    expect((await request(none.app).get("/api/equipment-requests")).body.equipmentRequests[0].event.venue).toBeNull();
+
+    const down = buildApp({ ...base, venueServiceStatus: 502 });
+    expect((await request(down.app).get("/api/equipment-requests")).body.equipmentRequests[0].event.venue).toBeNull();
   });
 
   // E5-6 AC3: a unit already claimed by this request now overlaps a rival
@@ -648,7 +676,7 @@ describe("GET /api/equipment-requests/event/:eventId (E5-1 AC1, AC2)", () => {
     proposedDate: "2026-02-01",
     startTime: "18:00",
     endTime: "21:00",
-    venue: "Grand Ballroom",
+    venue: "Indoor room for 60",
     equipment: "2 projectors",
     technicalSupport: "  Wireless mics and a lectern mic.  ",
     coordinatorId: "COORD-0001",
@@ -664,10 +692,12 @@ describe("GET /api/equipment-requests/event/:eventId (E5-1 AC1, AC2)", () => {
       requests: [requestRow],
       items: [itemRow],
       bookingInfoEvents: [infoEvent],
+      bookedVenues: [{ eventId: 7, venueName: "Grand Ballroom" }],
     });
     const res = await request(app).get("/api/equipment-requests/event/7");
 
     expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain("Indoor room for 60");
     expect(res.body).toEqual({
       event: {
         id: 7,

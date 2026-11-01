@@ -160,11 +160,11 @@ describe("EventsListView", () => {
     expect(assigned.find(".card-footer__meta").text()).toBe("Submitted: 12/10/2026");
   });
 
-  it("flags an event awaiting the organiser's reply, and shows Clarification Requested as Awaiting Clarification", async () => {
+  it("flags an event awaiting the organiser's reply, and keeps the exact Clarification Requested status name", async () => {
     const wrapper = await mountView([makeEvent({ status: "Clarification Requested" })]);
 
     expect(wrapper.find(".reply-action").text()).toBe("Reply Needed");
-    expect(wrapper.find(".badge").text()).toBe("Awaiting Clarification");
+    expect(wrapper.find(".badge").text()).toBe("Clarification Requested");
   });
 
   it("does not ask a coordinator to reply", async () => {
@@ -185,6 +185,15 @@ describe("EventsListView", () => {
       expect(wrapper.findAll(".event-card")).toHaveLength(1);
       expect(wrapper.find("a.event-card").attributes("href")).toBe("/events/5/edit");
       expect(wrapper.find(".delete-draft-action").text()).toBe("Delete");
+    });
+
+    it("does not say a draft was submitted", async () => {
+      const wrapper = await mountView([draft()]);
+      await wrapper.findAll("[role='tab']")[1].trigger("click");
+
+      expect(wrapper.find(".event-card").exists()).toBe(true);
+      expect(wrapper.find(".card-footer__meta").exists()).toBe(false);
+      expect(wrapper.find(".event-card").text()).not.toContain("Submitted");
     });
 
     it("asks for confirmation before deleting, and removes the draft once confirmed", async () => {

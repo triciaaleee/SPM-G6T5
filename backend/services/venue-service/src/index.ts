@@ -4,6 +4,7 @@ import express from "express";
 import { attendeeInfoRouter } from "./routes/attendeeInfo.js";
 import { publicVenuesRouter } from "./routes/publicVenues.js";
 import { eventBookingsRouter } from "./routes/eventBookings.js";
+import { supportVenueInfoRouter } from "./routes/supportVenueInfo.js";
 import { staffRouter } from "./routes/staff.js";
 import { suitabilityRouter } from "./routes/suitability.js";
 import { unavailabilityRouter } from "./routes/unavailability.js";
@@ -45,6 +46,8 @@ app.use("/api/venues/events", eventBookingsRouter);
 app.use("/api/venues/suitability", suitabilityRouter);
 // E6: attendees' view of where an event is held — names only, ahead of venuesRouter.
 app.use("/api/venues/attendee-info", attendeeInfoRouter);
+// E5-1: where an event is held, for Technical Support — names only, ahead of venuesRouter.
+app.use("/api/venues/support-info", supportVenueInfoRouter);
 // Guests' view of venues and of where listed events are held — no login, ahead of venuesRouter.
 app.use("/api/venues/public", publicVenuesRouter);
 app.use("/api/venues", venuesRouter);

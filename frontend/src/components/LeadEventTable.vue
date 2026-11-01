@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import StatusBadge from "./ui/StatusBadge.vue";
 import type { EventSummary } from "../lib/eventsApi";
-import { statusBadgeClass, statusLabel } from "../lib/eventStatus";
+import { statusBadgeClass } from "../lib/eventStatus";
 import { eventDateLabel, eventName, eventOrganiser, eventTimeLabel, eventVenue, eventWhen } from "../lib/leadAssignments";
 import { computed } from "vue";
 import DataTable from "./ui/DataTable.vue";
@@ -71,7 +71,7 @@ const columnWidths = computed(() => (props.compact ? COMPACT_WIDTHS : FULL_WIDTH
       <span :class="{ 'cell--empty': !eventOrganiser(row) }">{{ eventOrganiser(row) ?? "Unknown" }}</span>
     </template>
     <template #cell-status="{ row }">
-      <StatusBadge :status-class="statusBadgeClass(row.status)">{{ statusLabel(row.status) }}</StatusBadge>
+      <StatusBadge :status-class="statusBadgeClass(row.status)">{{ row.status }}</StatusBadge>
     </template>
     <template #group-header="{ group }">
       <div class="group-header" :class="`group-header--${group.key}`">

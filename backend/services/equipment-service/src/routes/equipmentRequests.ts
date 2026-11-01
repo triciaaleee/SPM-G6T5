@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { fetchEvent, fetchEventBookingInfo, toSupportEventInfo, type EquipmentBookingInfo } from "../lib/eventsClient.js";
+import { fetchBookedVenueNames } from "../lib/venuesClient.js";
 import { fetchUserNames } from "../lib/usersClient.js";
 import { claimUnits } from "../lib/equipmentConflicts.js";
 import { getPublisher } from "../lib/rabbitPublisher.js";
@@ -388,6 +389,7 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
   const eventsById = new Map(
     infoResult.status === "ok" ? infoResult.events.map((event) => [event.id, event]) : [],
   );
+  const venueNamesByEventId = await fetchBookedVenueNames(eventIds, req.headers.authorization!);
 
   // AC3: same re-check as the per-event branch above, batched across every
   // request Technical Support can see in one go.
@@ -405,7 +407,9 @@ equipmentRequestsRouter.get("/", async (req: AuthedRequest, res) => {
     equipmentRequests: (requests as RequestRow[]).map((r) => ({
       ...toRequest(r, allItems, flagsByItemId),
       // Whitelisted: only the event's name, date, time and venue reach the browser.
-      event: eventsById.has(r.event_id) ? toSupportEventInfo(eventsById.get(r.event_id)!) : null,
+      event: eventsById.has(r.event_id)
+        ? toSupportEventInfo(eventsById.get(r.event_id)!, venueNamesByEventId.get(r.event_id) ?? null)
+        : null,
     })),
   });
 });
@@ -495,7 +499,7 @@ equipmentRequestsRouter.get("/event/:eventId", async (req: AuthedRequest, res) =
   const namesByCoordinatorId = await fetchUserNames(coordinatorIds, req.headers.authorization!);
 
   res.json({
-    event: toSupportEventInfo(info),
+    event: toSupportEventInfo(info, (await fetchBookedVenueNames([eventId], req.headers.authorization!)).get(eventId) ?? null),
     // The organiser's own words on what technical support the event needs (AC1).
     technicalRequirements: info.technicalSupport?.trim() ? info.technicalSupport.trim() : null,
     equipmentRequests: typedRequests.map((r) => ({

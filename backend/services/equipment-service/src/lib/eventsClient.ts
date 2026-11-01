@@ -127,13 +127,17 @@ export interface SupportEventInfo {
   venue: string | null;
 }
 
-export function toSupportEventInfo(info: EquipmentBookingInfo): SupportEventInfo {
+/**
+ * `bookedVenue` is the venue(s) booked for the event (venue-service). It is never
+ * taken from `info.venue`, which is only what the organiser typed as a requirement.
+ */
+export function toSupportEventInfo(info: EquipmentBookingInfo, bookedVenue: string | null): SupportEventInfo {
   return {
     id: info.id,
     name: info.name ?? null,
     proposedDate: info.proposedDate ?? null,
     startTime: info.startTime ?? null,
     endTime: info.endTime ?? null,
-    venue: info.venue ?? null,
+    venue: bookedVenue,
   };
 }

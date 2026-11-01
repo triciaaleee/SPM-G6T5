@@ -3,7 +3,7 @@ import BackLink from "../../components/ui/BackLink.vue";
 import StatusBadge from "../../components/ui/StatusBadge.vue";
 import { onMounted, ref } from "vue";
 import { fetchUnassignedQueue, type EventSummary } from "../../lib/eventsApi";
-import { formatEventDate, statusBadgeClass, statusLabel } from "../../lib/eventStatus";
+import { formatEventDate, statusBadgeClass } from "../../lib/eventStatus";
 import { eventName, eventOrganiser } from "../../lib/leadAssignments";
 import DataTable from "../../components/ui/DataTable.vue";
 
@@ -91,7 +91,7 @@ onMounted(async () => {
           <span :class="{ 'cell--empty': !eventOrganiser(row) }">{{ eventOrganiser(row) ?? "Unknown" }}</span>
         </template>
         <template #cell-status="{ row }">
-          <StatusBadge :status-class="statusBadgeClass(row.status)">{{ statusLabel(row.status) }}</StatusBadge>
+          <StatusBadge :status-class="statusBadgeClass(row.status)">{{ row.status }}</StatusBadge>
         </template>
       </DataTable>
     </div>

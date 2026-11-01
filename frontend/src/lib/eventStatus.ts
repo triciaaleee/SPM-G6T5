@@ -27,16 +27,6 @@ export function formatEventDate(value: string | null | undefined): string {
 }
 
 /**
- * The events list flags an event awaiting the Organiser's reply with
- * "Awaiting Clarification" rather than the raw "Clarification Requested"
- * status value, so it reads as an action prompt rather than internal state.
- */
-export function statusLabel(status: string): string {
-  if (status === "Clarification Requested") return "Awaiting Clarification";
-  return status;
-}
-
-/**
  * The "Review outcome" field shows one of a fixed set of labels rather
  * than the free-text review_outcome column (which holds the rejection
  * reason or clarification message — detail that belongs to the
