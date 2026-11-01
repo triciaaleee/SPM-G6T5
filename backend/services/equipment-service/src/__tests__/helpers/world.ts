@@ -9,6 +9,7 @@ import { vi } from "vitest";
  * - events-service `GET /api/events/venue-booking-info?ids=` answers from `info`
  * - events-service `POST /api/events/:id/arrangements-changed` is recorded
  * - user-service `GET /api/users/names` answers from `names`
+ * - venue-service `GET /api/venues/support-info?eventIds=` answers from `bookedVenues` (the Approved bookings' venue names)
  */
 export interface World {
   info: Record<string, any>[];
@@ -18,6 +19,7 @@ export interface World {
   eventDetail: Map<number, { status: number; body?: unknown }>;
   names: { id: string; name: string }[] | null;
   namesOk: boolean;
+  bookedVenues: { eventId: number; venueName: string }[];
   urls: string[];
   arrangementsChanged: { eventId: number; reason: string }[];
 }
@@ -32,12 +34,13 @@ export const detailEvent = (id: number, over: Record<string, any> = {}) => ({
 
 export const infoEvent = (id: number, over: Record<string, any> = {}) => ({
   id, name: `E${id}`, proposedDate: "2026-12-01", startTime: "10:00", endTime: "12:00",
-  equipment: null, venue: "Hall A", technicalSupport: null, coordinatorId: "COORD-1", ...over,
+  equipment: null, venue: "Indoor room for 60", technicalSupport: null, coordinatorId: "COORD-1", ...over,
 });
 
 export function installWorld(): World {
-  const world: World = { info: [], infoOk: true, infoUnfiltered: false, eventDetail: new Map(), names: [], namesOk: true, urls: [], arrangementsChanged: [] };
+  const world: World = { info: [], infoOk: true, infoUnfiltered: false, eventDetail: new Map(), names: [], namesOk: true, bookedVenues: [], urls: [], arrangementsChanged: [] };
   vi.stubEnv("EVENTS_SERVICE_URL", "http://events.test");
+  vi.stubEnv("VENUE_SERVICE_URL", "http://venues.test");
   vi.stubEnv("USER_SERVICE_URL", "http://users.test");
   vi.stubEnv("INTERNAL_SERVICE_SECRET", "internal");
   vi.stubGlobal("fetch", async (input: string, init?: any) => {
@@ -50,6 +53,10 @@ export function installWorld(): World {
       if (world.infoUnfiltered) return reply(200, { events: world.info });
       const ids = url.searchParams.get("ids")!.split(",").map(Number);
       return reply(200, { events: world.info.filter((e) => ids.includes(e.id)) });
+    }
+    if (url.pathname === "/api/venues/support-info") {
+      const ids = url.searchParams.get("eventIds")!.split(",").map(Number);
+      return reply(200, { venues: world.bookedVenues.filter((v) => ids.includes(v.eventId)) });
     }
     if (url.pathname === "/api/users/names") {
       if (!world.namesOk || world.names === null) return reply(500);

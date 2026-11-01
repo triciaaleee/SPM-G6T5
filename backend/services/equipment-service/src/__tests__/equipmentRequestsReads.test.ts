@@ -361,6 +361,8 @@ describe("GET / for Technical Support", () => {
 
   it("lists every request newest first, cancelled ones included, with the event's whitelisted details", async () => {
     world.info = [infoEvent(7, { coordinatorId: "secret", equipment: "secret notes" }), infoEvent(8)];
+    // The venue is the booked one (venue-service), never the organiser's "Indoor room for 60".
+    world.bookedVenues = [{ eventId: 7, venueName: "Hall A" }];
     useDb(createFakeDb(seed({
       equipment_requests: [requestRow(1, 7), requestRow(2, 8, { status: "Cancelled" }), requestRow(3, 9)],
       equipment_request_items: [itemRow(1, 1), itemRow(2, 2), itemRow(3, 3)],
@@ -444,6 +446,7 @@ describe("GET /event/:eventId", () => {
 
   beforeEach(() => {
     world.info = [infoEvent(7, { technicalSupport: "  needs a clicker  " })];
+    world.bookedVenues = [{ eventId: 7, venueName: "Hall A" }];
     world.names = [{ id: "COORD-1", name: "Ann" }];
   });
 
