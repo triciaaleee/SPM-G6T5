@@ -20,6 +20,7 @@ Built by team G6T5 with Vue 3, TypeScript, Express microservices, Supabase Postg
 - [CI](#ci)
 - [Contributing](#contributing)
 - [Project layout](#project-layout)
+- [Team](#team)
 - [Documentation](#documentation)
 
 ## Who uses it
@@ -339,6 +340,17 @@ supabase/
   seed.sql              Test data
 docker-compose.yml      Runs RabbitMQ, or the whole stack
 ```
+
+## Team
+
+| Member | GitHub |
+|---|---|
+| Alethea | [@AletheaChan](https://github.com/AletheaChan) |
+| Josette | [@josetteong](https://github.com/josetteong) |
+| Michelle | [@michelletan2024](https://github.com/michelletan2024) |
+| Nicole | [@nicolearagones](https://github.com/nicolearagones) |
+| Tricia | [@triciaaleee](https://github.com/triciaaleee) |
+| Zoey | [@Jiajjang](https://github.com/Jiajjang) |
 
 ## Documentation
 
