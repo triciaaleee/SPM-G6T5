@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ChevronDownIcon } from "@heroicons/vue/16/solid";
 import { ArrowRightStartOnRectangleIcon } from "@heroicons/vue/20/solid";
-import { formatRole, getStoredUser, logout } from "./lib/auth";
+import { formatRole, getStoredUser, landingRouteForRole, logout } from "./lib/auth";
 import NotificationBell from "./components/notifications/NotificationBell.vue";
 import ChatDrawer from "./components/chat/ChatDrawer.vue";
 
@@ -113,7 +113,9 @@ async function handleLogout() {
 
 <template>
   <header v-if="user" class="app-header">
-    <img :src="LOGO_URL" alt="ConnectSphere" class="brand" />
+    <RouterLink :to="{ name: landingRouteForRole(user.role) }" class="brand-link" aria-label="ConnectSphere home">
+      <img :src="LOGO_URL" alt="ConnectSphere" class="brand" />
+    </RouterLink>
     <nav v-if="navTabs.length > 0" class="nav" aria-label="Main">
       <RouterLink v-for="tab in navTabs" :key="tab.name" :to="{ name: tab.name }" class="nav__tab"
         :class="{ 'nav__tab--active': isTabActive(tab) }"
@@ -194,6 +196,16 @@ async function handleLogout() {
   .app-header {
     padding: var(--spacing-12) var(--grid-mobile-margin);
   }
+}
+
+/* The logo takes the user back to their default page. */
+.brand-link {
+  display: inline-flex;
+}
+
+.brand-link:focus-visible {
+  outline: 2px solid var(--ring-brand);
+  outline-offset: 2px;
 }
 
 /* Logo mark (public/logoo.svg, 121x155): fixed height, width follows the aspect ratio. */

@@ -17,6 +17,8 @@ const router = createRouter({
   routes: [
     { path: "/", name: "home", component: { render: () => h("div") } },
     { path: "/login", name: "login", component: { render: () => h("div") } },
+    { path: "/events", name: "events-list", component: { render: () => h("div") } },
+    { path: "/safety-review", name: "safety-review-queue", component: { render: () => h("div") } },
     { path: "/attendee/events", name: "attendee-events", component: { render: () => h("div") } },
     { path: "/attendee/discover", name: "attendee-discover", component: { render: () => h("div") } },
     { path: "/coordinator", name: "coordinator-workload", component: { render: () => h("div") } },
@@ -145,5 +147,30 @@ describe("top navigation for the coordinator roles", () => {
   it("gives venue staff a Schedule and a Venue catalogue tab", async () => {
     const wrapper = await mountAs("venue_staff");
     expect(tabLabels(wrapper)).toEqual(["Schedule", "Venue catalogue"]);
+  });
+});
+
+describe("the header logo", () => {
+  it.each([
+    ["organiser", "/events"],
+    ["coordinator", "/coordinator"],
+    ["coordinator_lead", "/lead"],
+    ["attendee", "/attendee/events"],
+    ["venue_staff", "/venue-schedule"],
+    ["technical_support", "/equipment-requests"],
+    ["safety_officer", "/safety-review"],
+  ])("takes a %s back to their default page", async (role, path) => {
+    const wrapper = await mountAs(role);
+    const link = wrapper.find("a.brand-link");
+    expect(link.attributes("href")).toBe(path);
+    expect(link.attributes("aria-label")).toBe("ConnectSphere home");
+  });
+
+  it("navigates there when clicked", async () => {
+    const wrapper = await mountAs("coordinator");
+    await router.push("/all-events");
+    await wrapper.find("a.brand-link").trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.fullPath).toBe("/coordinator");
   });
 });

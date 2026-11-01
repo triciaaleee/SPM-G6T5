@@ -351,6 +351,7 @@ describe("event lifecycle (real Supabase project)", () => {
     expect(rejected.status).toBe(200);
     const row = await dbEvent(id);
     expect(row.status).toBe("Rejected");
+    expect(row.status_before_clarification).toBeNull();
     expect(row.review_outcome).toBe("No suitable week is free");
     expect(row.decided_by).toBe(COORD);
 
@@ -376,6 +377,30 @@ describe("event lifecycle (real Supabase project)", () => {
     expect(twice.status).toBe(409);
     const edit = await request(app).patch(`/api/events/${id}`).set(auth(tokens.org)).send(eventBody());
     expect(edit.status).toBe(409);
+  });
+
+  it("approving after the clarification is resolved moves to Planning and clears where the clarification came from", async () => {
+    const id = await submitEvent();
+    await request(app).post(`/api/events/${id}/assign`).set(auth(tokens.lead)).send({ coordinatorId: COORD });
+    const asked = await request(app)
+      .post(`/api/events/${id}/request-clarification`)
+      .set(auth(tokens.coord))
+      .send({ message: "Which hall?" });
+    expect(asked.status).toBe(200);
+    expect((await dbEvent(id)).status_before_clarification).toBe("Requested");
+
+    const { data: questions } = await supabaseAdmin.from("event_clarifications").select("id").eq("event_id", id).is("parent_id", null);
+    expect(questions).toHaveLength(1);
+    const resolved = await request(app)
+      .post(`/api/events/${id}/clarifications/${questions?.[0].id}/resolve`)
+      .set(auth(tokens.coord));
+    expect(resolved.status).toBe(200);
+
+    const approved = await request(app).post(`/api/events/${id}/approve`).set(auth(tokens.coord));
+    expect(approved.status).toBe(200);
+    const row = await dbEvent(id);
+    expect(row.status).toBe("Planning");
+    expect(row.status_before_clarification).toBeNull();
   });
 
   it("an illegal transition returns 409 and leaves the row exactly as it was", async () => {
