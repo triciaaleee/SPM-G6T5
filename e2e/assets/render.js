@@ -66,6 +66,16 @@
     return h("span", { class: "mode m-local", title: LOCAL_TITLE, text: "local DB only" });
   }
 
+  function bullets(items, cls) {
+    return h(
+      "ul",
+      { class: cls },
+      items.map(function (item) {
+        return h("li", { text: item });
+      }),
+    );
+  }
+
   function laneChip(lane) {
     return h("span", { class: "lane-chip lane-" + lane, text: D.lanes[lane].label });
   }
@@ -969,8 +979,8 @@
 
     var page = h("main", { class: "page" }, [
       h("nav", { class: "crumb" }, [h("a", { href: "index.html", text: "← All scenarios" })]),
-      h("h1", {}, [h("span", { class: "kicker", text: "Scenario " + p.number + " · " + sc.short }), sc.title]),
-      h("p", { class: "lede", text: sc.summary }),
+      h("h1", {}, [h("span", { class: "kicker", text: "Scenario " + p.number }), sc.title]),
+      bullets(sc.summary, "lede-list"),
       h("div", { class: "meta" }, [
         h("span", {}, [h("b", { text: "Starts: " }), sc.starts]),
         h("span", {}, [h("b", { text: "Ends: " }), sc.ends]),
@@ -1042,7 +1052,7 @@
     return h("a", { class: "scenario-card", href: p.sc.file }, [
       h("span", { class: "num", text: "Scenario " + p.number }),
       h("h3", { text: p.sc.title }),
-      h("p", { text: p.sc.summary }),
+      bullets(p.sc.summary, "card-bullets"),
       h("div", { class: "lane-chips" }, p.lanes.map(laneChip)),
       h(
         "div",

@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --bg: #f5f6f8;
   --surface: #ffffff;
   --surface-2: #eef0f4;
@@ -39,49 +40,6 @@
   --f-gap-bg: #fff4dc; --f-gap-bd: #d08a00;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #12151a;
-    --surface: #1b1f26;
-    --surface-2: #232832;
-    --stripe-0: #161a20;
-    --stripe-1: #1a1e25;
-    --text: #e6e9ee;
-    --muted: #9aa3af;
-    --border: #2f3542;
-    --link: #6c7686;
-    --accent: #7ea2ff;
-    --flow: #c9cfd8;
-    --task-fill: #2e2c1d;
-    --task-stroke: #bdb68a;
-
-    --lane-organiser: #6b9bff;
-    --lane-lead: #a98af0;
-    --lane-coordinator: #3fc2b3;
-    --lane-venue_staff: #f0904c;
-    --lane-technical_support: #d4b43a;
-    --lane-safety_officer: #f07390;
-    --lane-attendee: #5cc777;
-    --lane-guest: #9aa3af;
-    --lane-system: #a8b3c4;
-
-    --st-active-bg: #1f2c4d; --st-active-fg: #a9c0ff;
-    --st-ok-bg: #18341f; --st-ok-fg: #8fdca3;
-    --st-warn-bg: #3a2d10; --st-warn-fg: #f2c66d;
-    --st-end-bg: #2a2d33; --st-end-fg: #b8bec8;
-    --st-bad-bg: #3d1d1d; --st-bad-fg: #f3a0a0;
-
-    --m-ui-bg: #18341f; --m-ui-fg: #8fdca3;
-    --m-check-bg: #2c2347; --m-check-fg: #c3b2f5;
-    --m-api-bg: #1f2c4d; --m-api-fg: #a9c0ff;
-    --m-none-bg: #3a2a10; --m-none-fg: #f2c66d;
-
-    --f-spec-bg: #3a1c1c; --f-spec-bd: #e06666;
-    --f-assumption-bg: #2a2142; --f-assumption-bd: #a98af0;
-    --f-gap-bg: #362a12; --f-gap-bd: #e0a53a;
-  }
-}
-
 * { box-sizing: border-box; }
 
 body {
@@ -102,6 +60,8 @@ h1 { font-size: 28px; line-height: 1.2; margin: 0 0 6px; }
 h1 .kicker { display: block; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 4px; }
 h2 { font-size: 20px; margin: 40px 0 12px; }
 .lede { color: var(--muted); max-width: 900px; margin: 0 0 16px; font-size: 15px; }
+.lede-list { max-width: 900px; margin: 4px 0 16px; padding-left: 20px; font-size: 15px; color: var(--text); }
+.lede-list li { margin: 3px 0; }
 
 .meta { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0 0 16px; font-size: 13px; color: var(--muted); }
 .meta b { color: var(--text); font-weight: 600; }
@@ -272,6 +232,8 @@ td .step-links a { margin-right: 6px; white-space: nowrap; }
 .scenario-card h3 { margin: 0; font-size: 17px; }
 .scenario-card .num { font-size: 12px; font-weight: 700; color: var(--accent); letter-spacing: 0.04em; text-transform: uppercase; }
 .scenario-card p { margin: 0; color: var(--muted); font-size: 13px; }
+.card-bullets { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+.card-bullets li { margin: 2px 0; }
 .cov-bar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: var(--surface-2); }
 .cov-bar span { display: block; height: 100%; }
 .cov-bar .m-ui { background: var(--m-ui-fg); }

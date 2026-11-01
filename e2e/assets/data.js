@@ -140,10 +140,14 @@ window.SWIMLANE_DATA = {
     {
       id: "s1",
       file: "scenario-1-happy-path.html",
-      title: "From setup to a completed event",
-      short: "Happy path",
-      summary:
-        "The full journey with nothing going wrong: staff set up venues and equipment, an Organiser requests an event, it is assigned, planned, passes the safety check, attendees register, and the coordinator closes it after it runs.",
+      title: "Happy path: an event from request to completion",
+      summary: [
+        "Venue Staff and Technical Support set up venues and equipment; the Organiser signs up",
+        "The Organiser submits a request, the Lead assigns a coordinator, and the coordinator approves it",
+        "The coordinator books a venue (Venue Staff approve) and equipment (Technical Support reserve it)",
+        "The Safety Officer approves the safety review, so the event is Confirmed",
+        "Attendees, including guests who sign up, register; after the event the coordinator marks it Completed",
+      ],
       starts: "No event yet",
       ends: "Completed",
       phases: [
@@ -377,10 +381,13 @@ window.SWIMLANE_DATA = {
     {
       id: "s2",
       file: "scenario-2-before-confirmation.html",
-      title: "Getting it right before confirmation",
-      short: "Clarifications, reassignment and safety pushback",
-      summary:
-        "The loops an event can go through before it is Confirmed: the coordinator asks questions (before and after approving), the Lead hands the event to another coordinator, a date change invalidates a booking, and the Safety Officer pushes back twice.",
+      title: "Before confirmation: clarifications, reassignment and safety review changes",
+      summary: [
+        "The coordinator asks the Organiser for clarification, both before and after approving the request",
+        "The Lead reassigns the event to a different coordinator",
+        "A date change during Planning makes the booked venue no longer fit, so a replacement is booked",
+        "The Safety Officer requests changes, then rejects, before finally approving the event",
+      ],
       starts: "Unassigned",
       ends: "Confirmed",
       phases: [
@@ -591,10 +598,13 @@ window.SWIMLANE_DATA = {
     {
       id: "s3",
       file: "scenario-3-venue-contention.html",
-      title: "Competing for a venue",
-      short: "Holds, auto-rejection and expiry",
-      summary:
-        "Three events in Planning want the same room at the same time. Shows the rule that the first booking to reach On Hold or Approved wins, the 72-hour hold, what happens when a hold lapses, and how a venue's own changes affect existing bookings.",
+      title: "Two events want the same venue: holds, auto-rejection and expiry",
+      summary: [
+        "Three events in Planning request the same room for the same time",
+        "Venue Staff put one booking on a 72-hour hold; the overlapping request is auto-rejected and new ones are refused",
+        "Either the hold is approved in time, or it lapses and the room is free again",
+        "Also covers a venue's setup, turnaround or capacity changing, and a booking being withdrawn or rejected",
+      ],
       starts: "Three events in Planning",
       ends: "One booking Approved (or the hold Expired)",
       phases: [
@@ -753,10 +763,14 @@ window.SWIMLANE_DATA = {
     {
       id: "s4",
       file: "scenario-4-after-confirmation.html",
-      title: "After confirmation",
-      short: "Change requests and lost arrangements",
-      summary:
-        "A Confirmed event can no longer be edited directly. Shows the Organiser's change requests, a venue that becomes unavailable, and equipment that breaks — each moves the event to Needs Review until the coordinator settles it and it passes safety review again.",
+      title: "After confirmation: change requests, venue block-outs and broken equipment",
+      summary: [
+        "A Confirmed event can't be edited directly, so the Organiser raises change requests",
+        "Non-critical changes apply at once; critical ones send the event to Needs Review for the coordinator to approve or reject",
+        "Venue Staff block out the booked venue, so the booking is cancelled and the coordinator books a replacement",
+        "Technical Support mark reserved equipment as damaged",
+        "Each time, the event goes back through safety review before it is Confirmed again",
+      ],
       starts: "Confirmed",
       ends: "Confirmed",
       phases: [
@@ -956,10 +970,13 @@ window.SWIMLANE_DATA = {
     {
       id: "s5",
       file: "scenario-5-ending-early.html",
-      title: "Ending early, and the attendee's side",
-      short: "Rejection, registration rules and cancellation",
-      summary:
-        "The ways an event stops before it runs — rejected by the coordinator, or cancelled by the Organiser — and what the system releases and who it tells. Also the registration rules attendees run into on a Confirmed event.",
+      title: "Rejection, cancellation and attendee registration rules",
+      summary: [
+        "The coordinator rejects a request at review, or through a clarification during Planning (its venue and equipment are released)",
+        "Attendees run into the registration rules: not open yet, already registered, event full, withdrawing",
+        "The coordinator can force registration open or closed",
+        "The Organiser cancels a Confirmed event: bookings, equipment and registrations are released and everyone is notified",
+      ],
       starts: "Requested, Planning or Confirmed",
       ends: "Rejected or Cancelled",
       phases: [
