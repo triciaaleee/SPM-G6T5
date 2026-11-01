@@ -73,6 +73,7 @@ reviewRouter.post("/:id/approve", async (req: AuthedRequest, res) => {
     .from("events")
     .update({
       status: "Planning",
+      status_before_clarification: null,
       decided_at: clock.now().toISOString(),
       decided_by: user.id,
     })
@@ -132,6 +133,7 @@ reviewRouter.post("/:id/reject", async (req: AuthedRequest, res) => {
     .from("events")
     .update({
       status: "Rejected",
+      status_before_clarification: null,
       review_outcome: reason,
       decided_at: clock.now().toISOString(),
       decided_by: user.id,

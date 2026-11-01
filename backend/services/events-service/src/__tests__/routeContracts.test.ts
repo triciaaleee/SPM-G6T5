@@ -4071,7 +4071,7 @@ describe("coordinator review routes", () => {
           },
           "calls": [
             "events.select("id, status, coordinator_id, organiser_id, submitted_details").eq("id", 7).maybeSingle()",
-            "events.update({"status":"Planning","decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
+            "events.update({"status":"Planning","status_before_clarification":null,"decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
           ],
           "published": [
             {
@@ -4154,7 +4154,7 @@ describe("coordinator review routes", () => {
           "calls": [
             "events.select("id, status, coordinator_id, organiser_id, submitted_details").eq("id", 7).maybeSingle()",
             "event_clarifications.select("id, resolved").eq("event_id", 7).is("parent_id", null)",
-            "events.update({"status":"Planning","decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
+            "events.update({"status":"Planning","status_before_clarification":null,"decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
           ],
           "published": [
             {
@@ -4202,7 +4202,7 @@ describe("coordinator review routes", () => {
           },
           "calls": [
             "events.select("id, status, coordinator_id, organiser_id, submitted_details").eq("id", 7).maybeSingle()",
-            "events.update({"status":"Planning","decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
+            "events.update({"status":"Planning","status_before_clarification":null,"decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
           ],
           "published": [],
           "status": 500,
@@ -4238,7 +4238,7 @@ describe("coordinator review routes", () => {
           },
           "calls": [
             "events.select("id, status, coordinator_id, organiser_id, submitted_details").eq("id", 7).maybeSingle()",
-            "events.update({"status":"Rejected","review_outcome":"Not suitable","decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
+            "events.update({"status":"Rejected","status_before_clarification":null,"review_outcome":"Not suitable","decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
             "event_history.insert([{"event_id":7,"field":"Status","old_value":"Requested","new_value":"Rejected","changed_by":"COORD-1"},{"event_id":7,"field":"Rejection reason","old_value":null,"new_value":"Not suitable","changed_by":"COORD-1"}])",
             "event_outbox.insert({"type":"event.rejected","event_id":7,"actor_id":"COORD-1","recipients":{"userIds":[],"roles":[]},"data":{"eventName":"Film Night","reason":"Not suitable"}}).select("id, message_id, type, event_id, actor_id, recipients, data, occurred_at").single()",
           ],
@@ -4314,7 +4314,7 @@ describe("coordinator review routes", () => {
           },
           "calls": [
             "events.select("id, status, coordinator_id, organiser_id, submitted_details").eq("id", 7).maybeSingle()",
-            "events.update({"status":"Rejected","review_outcome":"No","decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
+            "events.update({"status":"Rejected","status_before_clarification":null,"review_outcome":"No","decided_at":"2026-01-01T00:00:00.000Z","decided_by":"COORD-1"}).eq("id", 7).select("id, status, submitted_details, coordinator_id, coordinator:coordinator_id(name), organiser:organiser_id(name), review_outcome, decided_at, decided_by, created_at, registration_open_date, registration_override").single()",
           ],
           "published": [],
           "status": 500,

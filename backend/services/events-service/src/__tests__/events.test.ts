@@ -634,6 +634,22 @@ describe("POST /api/events/:id/approve", () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: "Planning" }));
   });
 
+  it("clears status_before_clarification when it approves, as the organiser's response does", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Planning" },
+      openQuestions: [{ id: 1, resolved: true }],
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/approve");
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Planning", status_before_clarification: null }),
+    );
+  });
+
   it("approves a Requested event as its assigned coordinator", async () => {
     const { from, update, updateEq } = buildReviewSupabase({
       event: { id: 1, status: "Requested", coordinator_id: coordinator.id },
@@ -768,6 +784,21 @@ describe("POST /api/events/:id/reject", () => {
     const res = await request(app).post("/api/events/1/reject").send({ reason: "No venue found at all" });
 
     expect(res.status).toBe(200);
+  });
+
+  it("clears status_before_clarification when it rejects an open clarification", async () => {
+    const { from, update } = buildReviewSupabase({
+      event: { id: 1, status: "Clarification Requested", coordinator_id: coordinator.id },
+      updatedEvent: { id: 1, status: "Rejected" },
+    });
+    const app = buildApp({ from }, coordinator);
+
+    const res = await request(app).post("/api/events/1/reject").send({ reason: "No venue found at all" });
+
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Rejected", status_before_clarification: null }),
+    );
   });
 
   it("records the rejection in the event history, since the decision columns are overwritten", async () => {
