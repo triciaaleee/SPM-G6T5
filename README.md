@@ -9,13 +9,16 @@ Built by team G6T5 with Vue 3, TypeScript, Express microservices, Supabase Postg
 ## Contents
 
 - [Who uses it](#who-uses-it)
+- [Features](#features)
 - [Architecture](#architecture)
 - [Event lifecycle](#event-lifecycle)
 - [Getting started](#getting-started)
 - [Run with Docker](#run-with-docker)
 - [Test accounts](#test-accounts)
+- [Frontend](#frontend)
 - [Testing](#testing)
 - [CI](#ci)
+- [Contributing](#contributing)
 - [Project layout](#project-layout)
 - [Documentation](#documentation)
 - [Troubleshooting](#troubleshooting)
@@ -31,6 +34,18 @@ Built by team G6T5 with Vue 3, TypeScript, Express microservices, Supabase Postg
 | **Venue Staff** | Maintains venues and block-out periods, and holds, approves or rejects booking requests |
 | **Technical Support** | Maintains the equipment inventory and reserves items for events |
 | **Attendee** | Discovers events, registers and withdraws |
+
+## Features
+
+| Area | What it covers |
+|---|---|
+| **Event requests** | Drafts, submitting and editing requests, clarification questions, an unassigned queue for the Lead, assigning and reassigning coordinators, and coordinator workload views |
+| **Planning and safety** | Approving or rejecting requests, submitting events for the Operational Safety Check, safety outcomes with reasons, change requests that hold critical fields for review, completing events, and organiser cancellation |
+| **Venues** | Search and recommendations, suitability checks per booking, several venues per event, booking requests, 72-hour holds, automatic rejection of overlapping requests, setup and turnaround times, block-out periods, schedules and finding replacements |
+| **Equipment** | Requests per event, reserving individual units, partial fulfilment, inventory by date, and marking units out of use |
+| **Registration** | Event discovery, registering and withdrawing, capacity limits, coordinator-set opening dates and manual open or close, and event rosters |
+| **Communication** | An in-app notification feed, and a chat thread between an event's organiser and its assigned coordinator |
+| **Public pages** | Guests can browse a welcome page, events and venues without logging in |
 
 ## Architecture
 
@@ -72,7 +87,9 @@ flowchart TB
 **How the services work together**
 
 - **Login:** user-service issues JWTs, and every other service only verifies them with the shared `JWT_SECRET`.
-- **Service-to-service calls:** calls with no user token to forward, such as notification-service looking up who holds a role, use short-lived tokens signed with `INTERNAL_SERVICE_SECRET`.
+- **Service-to-service calls:** calls with no user token to forward use short-lived tokens signed with `INTERNAL_SERVICE_SECRET`. For example, notification-service looks up who holds a role in user-service, and venue-service's hold sweep reads `GET /api/events/venue-booking-info`.
+- **Hold warnings:** venue-service checks holds every 15 minutes and warns the coordinator 12 hours before one expires, recording this in `venue_bookings.expiry_warning_sent_at` so each hold is only warned about once.
+- **Chat limits:** `GET /api/chat/:eventId/messages?limit=50&before=<id>` returns a page of history with `hasMore` and `nextBefore`. Each user can send 30 messages a minute by default, set with `CHAT_SEND_LIMIT_PER_MINUTE`, after which the API returns `429` with `Retry-After`.
 - **Messaging:** most messages are best effort, while critical ones such as `event.cancelled` are stored in an outbox and retried until RabbitMQ confirms them. [RabbitMQ.md](RabbitMQ.md) lists every message, who publishes it and who consumes it.
 
 ## Event lifecycle
@@ -150,7 +167,16 @@ The ports, service URLs and `RABBITMQ_URL` already have working local values in 
 
 ### 3. Set up the database
 
-Apply the files in `supabase/migrations/` in order to your Supabase project, then run `supabase/seed.sql` for test data.
+**Using a hosted Supabase project:** apply the files in `supabase/migrations/` in order, then run `supabase/seed.sql` for test data.
+
+**Using a throwaway local database,** which keeps your testing out of any shared data (needs the [Supabase CLI](https://supabase.com/docs/guides/local-development), `psql` and Docker):
+
+```bash
+supabase start
+supabase/scripts/build_database.sh "$(supabase status -o env | sed -n 's/^DB_URL="\(.*\)"$/\1/p')"
+```
+
+Then set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env` to the `API_URL` and `SERVICE_ROLE_KEY` values from `supabase status`. Run `build_database.sh` only against an empty local database, and use `supabase stop --no-backup` to throw it away.
 
 ### 4. Start RabbitMQ
 
@@ -219,7 +245,30 @@ docker compose down              # stop (add -v to also wipe RabbitMQ's data)
 | Technical Support | `tech-support-one@example.com` |
 | Attendee | `attendee-one@example.com`, `attendee-two@example.com`, `attendee-three@example.com` |
 
-**Creating more accounts:** attendees and organisers can sign up at `/signup`, with a password of at least 8 characters including a letter and a number. Staff roles have no sign-up, so insert them into `users` directly, then run `select sync_user_id_sequences();` so new sign-ups don't reuse their IDs.
+**Creating more accounts:** attendees and organisers can sign up at `/signup`, with a password of 8 to 72 characters including a letter and a number. Staff roles have no sign-up, so insert them into `users` directly, then run `select sync_user_id_sequences();` so new sign-ups don't reuse their IDs.
+
+## Frontend
+
+The frontend is a Vue 3 and TypeScript app built with Vite, using Vue Router and Tailwind CSS. All UI work must follow [Style.md](Style.md), the design system.
+
+| Folder (in `frontend/src/`) | What's in it |
+|---|---|
+| `views/` | One folder of pages per area, such as `attendee/`, `coordinator/`, `lead/`, `safety/` and `venue-staff/` |
+| `components/` | Shared components, including the `ui/` building blocks |
+| `lib/` | API clients and shared logic |
+| `router/` | Routes and the role guard |
+
+Run these from `frontend/`:
+
+```bash
+npm run dev       # start the dev server at http://localhost:5173
+npm test          # unit tests with Vitest
+npm run lint      # ESLint
+npm run build     # type-check and build for production
+npm run e2e       # Playwright tests (needs the backend running)
+```
+
+The API URLs come from `frontend/.env`. The defaults in `.env.example` work for local development.
 
 ## Testing
 
@@ -253,6 +302,8 @@ npm run test:mutation
 | **notification-service** | Fails below 100% coverage. A full mutation run takes about 2 minutes |
 | **registration-service** | Fails below 100% coverage. Integration tests include real races for the last place. A full mutation run takes about 3 minutes |
 | **venue-service** | Uses a fixed test clock and an in-memory database, with a contract test against the real one |
+| **user-service** | Unit tests are mocked, and integration tests cover sign-up and login against the real database |
+| **chat-service** | Integration tests include a boot test that starts the real service and checks its env handling and `/health` |
 
 Reports are written to `coverage/` and `reports/mutation/` in each service. A mutant that can't change behaviour is marked `// Stryker disable next-line <Mutator>: <why>` in the source.
 
@@ -273,6 +324,17 @@ cd backend && npm run lint && npm run smoke
 cd frontend && npm run lint && npm test && npm run build
 cd backend/services/<service> && npx tsc -p tsconfig.json --noEmit && npm test
 ```
+
+## Contributing
+
+1. Branch from `main`, using a short descriptive name such as `RegistrationServiceTesting`.
+2. Read [AGENTS.md](AGENTS.md) first. Its rules are mandatory, including the fixed event lifecycle and one service owning each table.
+3. Add or update tests, and run the [checks above](#ci) before pushing.
+4. Open a pull request into `main`, and get a teammate's review with CI passing.
+
+- **Database changes** go in a new numbered file in `supabase/migrations/`, named `NNNN_description.sql`.
+- **A new entity** gets a new service. The checklist is in [AGENTS.md](AGENTS.md), and CI picks up the new folder automatically.
+- **New env vars, ports or scripts** must also be added to `backend/.env.example` and the docs in the same change.
 
 ## Project layout
 
@@ -299,14 +361,15 @@ docker-compose.yml      Runs RabbitMQ, or the whole stack
 | [Style.md](Style.md) | The frontend design system |
 | [RabbitMQ.md](RabbitMQ.md) | Exchanges, queues, every message, reliable delivery and known limitations |
 | [CI.md](CI.md) | Every CI job, how to run the checks locally, and the decisions behind them |
-| [c4_diagrams/](c4_diagrams) | C4 diagrams and the [Architecture Decision Record](c4_diagrams/ArchitectureDecisionRecord.md) |
+| [c4_diagrams/](c4_diagrams) | C4 diagrams as Structurizr DSL (`.dsl`) files, and the [Architecture Decision Record](c4_diagrams/ArchitectureDecisionRecord.md) |
+| [frontend/docs/frontend-audit.md](frontend/docs/frontend-audit.md) | A design-consistency audit of the frontend against Style.md |
 | [frontend/e2e/README.md](frontend/e2e/README.md) | Running the Playwright tests, including against a local database |
 
 ## Troubleshooting
 
 | Problem | What to do |
 |---|---|
-| **Notifications aren't arriving** | Check `RABBITMQ_URL` is set and RabbitMQ is running. Without it, services log the problem and carry on without sending anything |
+| **Notifications aren't arriving** | Check `RABBITMQ_URL` is set and RabbitMQ is running. Without the URL, publishers skip sending with no warning and consumers stay idle, so don't rely on the logs to spot this |
 | **Notifications stopped after RabbitMQ restarted** | Restart the backend. Consumers don't reconnect on their own, even though `/health` still says `{"ok":true}`. See [Known limitations](RabbitMQ.md#known-limitations) |
 | **A change to message handling isn't taking effect** | Restart the affected service, as a service binds its queue to its routing keys when it starts |
 | **`Missing required environment variable(s)`** | Fill in the named variables in `backend/.env` |
