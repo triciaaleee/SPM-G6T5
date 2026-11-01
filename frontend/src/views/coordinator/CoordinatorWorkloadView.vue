@@ -13,7 +13,7 @@ import {
 import DataTable from "../../components/ui/DataTable.vue";
 import PaginationBar from "../../components/ui/PaginationBar.vue";
 import { fetchMyEvents, getCurrentUser, type EventSummary } from "../../lib/eventsApi";
-import { statusBadgeClass, statusLabel } from "../../lib/eventStatus";
+import { statusBadgeClass } from "../../lib/eventStatus";
 import { formatCardDate, formatCardTimeRange } from "../../lib/attendeeEvents";
 import { hasEventEnded } from "../../lib/eventTiming";
 import { GROUP_DEFS } from "../../lib/eventGroups";
@@ -476,7 +476,7 @@ onMounted(async () => {
               <span class="cell-time">{{ eventTimeLabel(event) }}</span>
             </template>
             <template #cell-status="{ row: event }">
-              <StatusBadge :status-class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</StatusBadge>
+              <StatusBadge :status-class="statusBadgeClass(event.status)">{{ event.status }}</StatusBadge>
             </template>
             <template #cell-chevron>
               <svg class="row-chevron" aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none"

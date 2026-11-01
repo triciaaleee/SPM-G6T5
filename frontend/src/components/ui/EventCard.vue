@@ -43,8 +43,10 @@ const props = withDefaults(
     personEmpty?: string;
     /** A small line in the footer, e.g. "Submitted: 12/10/2026". */
     meta?: string;
+    /** The viewer has to act on this event: it gets a warning border. */
+    attention?: boolean;
   }>(),
-  { description: null, dot: true, extraBadges: () => [], facts: () => [], titleAside: null, personName: null },
+  { attention: false, description: null, dot: true, extraBadges: () => [], facts: () => [], titleAside: null, personName: null },
 );
 
 const slots = useSlots();
@@ -77,7 +79,7 @@ const ICONS: Record<CardFact["icon"], string[]> = {
 </script>
 
 <template>
-  <RouterLink :to="to" class="event-card">
+  <RouterLink :to="to" class="event-card" :class="{ 'event-card--attention': attention }">
     <img :src="thumbnail" alt="" class="card-thumbnail" loading="lazy" decoding="async" />
 
     <div class="card-content">
@@ -159,6 +161,11 @@ const ICONS: Record<CardFact["icon"], string[]> = {
 .event-card:hover {
   border-color: var(--color-purple-300);
   box-shadow: var(--shadow-card-hover);
+}
+
+.event-card--attention,
+.event-card--attention:hover {
+  border: 2px solid var(--color-warning-300);
 }
 
 .event-card:focus-visible {

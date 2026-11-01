@@ -1222,6 +1222,14 @@ describe("EventDetailView — page layout", () => {
   const requestAnother = (wrapper: Awaited<ReturnType<typeof mountPage>>) =>
     wrapper.find('[data-testid="request-another-venue"]');
 
+  it("hides the Venue Recommendations card from a coordinator who is not assigned to the event", async () => {
+    mockedBookings.mockResolvedValue([]);
+    const wrapper = await mountPage(makeEvent({ status: "Planning" }), { id: "COORD-0002", role: "coordinator" });
+    await openTab(wrapper, "Arrangements");
+
+    expect(recommendationsCard(wrapper).exists()).toBe(false);
+  });
+
   it("shows the Venue Recommendations card, and no Request another venue button, before any venue is requested", async () => {
     mockedBookings.mockResolvedValue([]);
     const wrapper = await mountPage(makeEvent({ status: "Planning" }));
@@ -1398,6 +1406,17 @@ describe("EventDetailView — page layout", () => {
     const clarify = card.findAll("button").find((b) => b.text() === "Request clarification");
     expect(clarify).toBeDefined();
     expect(clarify!.classes()).toContain("btn--block");
+  });
+
+  it("lets only the assigned coordinator reply to a clarification: a coordinator who is not assigned reads it read-only", async () => {
+    const event = makeEvent({ status: "Clarification Requested", status_before_clarification: "Planning" } as Partial<EventSummary>);
+    const panelReadOnly = async (user: { id: string; role: string }) => {
+      const wrapper = await mountPage(event, user);
+      return wrapper.findComponent({ name: "ClarificationPanel" }).props("readOnly");
+    };
+
+    expect(await panelReadOnly(coordinator)).toBe(false);
+    expect(await panelReadOnly({ id: "COORD-0002", role: "coordinator" })).toBe(true);
   });
 
   it("offers a Registrations tab with the count only when registration is needed", async () => {

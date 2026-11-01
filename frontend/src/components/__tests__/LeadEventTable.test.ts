@@ -58,14 +58,14 @@ describe("LeadEventTable", () => {
       expect(row.find(".badge").text()).toBe("Planning");
     });
 
-    it("says Not set when the venue is missing and shows Awaiting Clarification for that status", () => {
+    it("says Not set when the venue is missing and shows Clarification Requested for that status", () => {
       const row = mountTable(
         [makeEvent({ status: "Clarification Requested", submitted_details: { name: "X", proposedDate: "2099-10-16" } })],
         true,
       ).find(".row");
 
       expect(row.find(".row__details").text()).toContain("Not set");
-      expect(row.find(".badge").text()).toBe("Awaiting Clarification");
+      expect(row.find(".badge").text()).toBe("Clarification Requested");
     });
   });
 });

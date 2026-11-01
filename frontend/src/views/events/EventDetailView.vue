@@ -52,7 +52,7 @@ import {
   type ChangeRequestResult,
   type ChangeRequestEntry,
 } from "../../lib/eventsApi";
-import { formatEventDate, statusBadgeClass, statusLabel, statusLastChangedAt } from "../../lib/eventStatus";
+import { formatEventDate, statusBadgeClass, statusLastChangedAt } from "../../lib/eventStatus";
 import { hasEventEnded } from "../../lib/eventTiming";
 import { REGISTRATION_STATE_LABEL, registrationState } from "../../lib/registrationPeriod";
 import EventStatusTracker from "../../components/EventStatusTracker.vue";
@@ -1276,7 +1276,7 @@ onMounted(async () => {
               <p class="body-default muted event-id">
                 Event #{{ event.id }}
               </p>
-              <StatusBadge :status-class="statusBadgeClass(event.status)">{{ statusLabel(event.status) }}</StatusBadge>
+              <StatusBadge :status-class="statusBadgeClass(event.status)">{{ event.status }}</StatusBadge>
             </div>
             <h1 class="event-header text-3xl">{{ asSubmittedDetails(event.submitted_details).name || `Event #${event.id}`
               }}</h1>
@@ -1882,7 +1882,7 @@ onMounted(async () => {
               </section>
 
               <ClarificationPanel ref="clarificationPanelRef" :event-id="event.id" :can-manage="canManageClarifications"
-                :current-user-id="currentUser.id" :read-only="isLead" />
+                :current-user-id="currentUser.id" :read-only="isLead || (isCoordinator && !isAssignedCoordinator)" />
             </template>
 
             <template v-else>
@@ -2291,7 +2291,7 @@ onMounted(async () => {
 
           <!-- Venue search for the first request: opens pre-filled with this event's date, time and attendance.
                Once a venue is requested or confirmed, this card gives way to "Request another venue" above. -->
-          <AppPanel size="lg" class="venue-search-entry" v-if="isCoordinator && event.status !== 'Rejected' && !venuesRequested"
+          <AppPanel size="lg" class="venue-search-entry" v-if="isAssignedCoordinator && event.status !== 'Rejected' && !venuesRequested"
        data-testid="venue-recommendations">
             <h2 class="section-title">Venue Recommendations</h2>
             <!-- E4-17: what the next booking is for; recommendations and Find venues follow it. Re-keyed after

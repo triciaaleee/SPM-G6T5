@@ -126,24 +126,27 @@ describe("fetchEventBookingInfo", () => {
 });
 
 describe("toSupportEventInfo", () => {
-  it("keeps only what Technical Support may see", () => {
-    const out = toSupportEventInfo({
-      id: 1,
-      name: "Fest",
-      proposedDate: "2026-11-01",
-      startTime: "09:00",
-      endTime: "10:00",
-      venue: "Hall",
-      equipment: "secret notes",
-      technicalSupport: "secret",
-      coordinatorId: "C1",
-    });
+  it("keeps only what Technical Support may see, with the booked venue rather than the organiser's venue text", () => {
+    const out = toSupportEventInfo(
+      {
+        id: 1,
+        name: "Fest",
+        proposedDate: "2026-11-01",
+        startTime: "09:00",
+        endTime: "10:00",
+        venue: "Indoor room for 60",
+        equipment: "secret notes",
+        technicalSupport: "secret",
+        coordinatorId: "C1",
+      },
+      "Hall",
+    );
     expect(out).toEqual({ id: 1, name: "Fest", proposedDate: "2026-11-01", startTime: "09:00", endTime: "10:00", venue: "Hall" });
   });
 
   it("fills missing fields with null", () => {
-    expect(toSupportEventInfo({ id: 2 } as any)).toEqual({ id: 2, name: null, proposedDate: null, startTime: null, endTime: null, venue: null });
-    expect(toSupportEventInfo({ id: 3, name: null, proposedDate: null, startTime: null, endTime: null, equipment: null })).toEqual({
+    expect(toSupportEventInfo({ id: 2 } as any, null)).toEqual({ id: 2, name: null, proposedDate: null, startTime: null, endTime: null, venue: null });
+    expect(toSupportEventInfo({ id: 3, name: null, proposedDate: null, startTime: null, endTime: null, equipment: null }, null)).toEqual({
       id: 3, name: null, proposedDate: null, startTime: null, endTime: null, venue: null,
     });
   });

@@ -465,9 +465,15 @@ onMounted(async () => {
   }
 }
 
+/* Registration needed: a grid item stretches, so keep the Yes/No toggle (and its outline) as wide as its two buttons. */
+.requirement :deep(.view-toggle) {
+  justify-self: start;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--spacing-16);
 }
 </style>

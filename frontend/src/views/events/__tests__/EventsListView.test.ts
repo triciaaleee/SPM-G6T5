@@ -160,11 +160,36 @@ describe("EventsListView", () => {
     expect(assigned.find(".card-footer__meta").text()).toBe("Submitted: 12/10/2026");
   });
 
-  it("flags an event awaiting the organiser's reply, and shows Clarification Requested as Awaiting Clarification", async () => {
+  it("flags an event awaiting the organiser's reply, and keeps the exact Clarification Requested status name", async () => {
     const wrapper = await mountView([makeEvent({ status: "Clarification Requested" })]);
 
     expect(wrapper.find(".reply-action").text()).toBe("Reply Needed");
-    expect(wrapper.find(".badge").text()).toBe("Awaiting Clarification");
+    expect(wrapper.find(".badge").text()).toBe("Clarification Requested");
+  });
+
+  it("lists events waiting on the organiser first, with a warning border, and keeps the rest in order", async () => {
+    const named = (id: number, name: string, status: string) =>
+      makeEvent({ id, status, submitted_details: { name, proposedDate: "2099-06-15" } });
+    const wrapper = await mountView([
+      named(1, "First", "Requested"),
+      named(2, "Second", "Clarification Requested"),
+      named(3, "Third", "Planning"),
+      named(4, "Fourth", "Clarification Requested"),
+    ]);
+
+    const cards = wrapper.findAll(".event-card");
+    expect(cards.map((c) => c.find(".card-title").text())).toEqual(["Second", "Fourth", "First", "Third"]);
+    expect(cards.map((c) => c.classes().includes("event-card--attention"))).toEqual([true, true, false, false]);
+  });
+
+  it("does not reorder or highlight anything for a coordinator", async () => {
+    const wrapper = await mountView(
+      [makeEvent({ id: 1 }), makeEvent({ id: 2, status: "Clarification Requested" })],
+      "coordinator",
+    );
+
+    expect(wrapper.findAll(".event-card").map((c) => c.attributes("href"))).toEqual(["/events/1", "/events/2"]);
+    expect(wrapper.find(".event-card--attention").exists()).toBe(false);
   });
 
   it("does not ask a coordinator to reply", async () => {
@@ -185,6 +210,15 @@ describe("EventsListView", () => {
       expect(wrapper.findAll(".event-card")).toHaveLength(1);
       expect(wrapper.find("a.event-card").attributes("href")).toBe("/events/5/edit");
       expect(wrapper.find(".delete-draft-action").text()).toBe("Delete");
+    });
+
+    it("does not say a draft was submitted", async () => {
+      const wrapper = await mountView([draft()]);
+      await wrapper.findAll("[role='tab']")[1].trigger("click");
+
+      expect(wrapper.find(".event-card").exists()).toBe(true);
+      expect(wrapper.find(".card-footer__meta").exists()).toBe(false);
+      expect(wrapper.find(".event-card").text()).not.toContain("Submitted");
     });
 
     it("asks for confirmation before deleting, and removes the draft once confirmed", async () => {
